@@ -97,6 +97,10 @@ function put(m: Mapped, key: string, value: string | null, azureName: string, fi
 }
 
 const SEX: Record<string, string> = { F: "Female", M: "Male" };
+const AU_STATE_NAMES: Record<string, string> = { "NEW SOUTH WALES": "NSW", VICTORIA: "VIC", QUEENSLAND: "QLD", "SOUTH AUSTRALIA": "SA", "WESTERN AUSTRALIA": "WA", TASMANIA: "TAS", "NORTHERN TERRITORY": "NT", "AUSTRALIAN CAPITAL TERRITORY": "ACT" };
+const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+const auState = (value: unknown): string | null => { const t = text(value)?.toUpperCase().replace(/\./g, ""); return t ? (Object.values(AU_STATE_NAMES).includes(t) ? t : AU_STATE_NAMES[t] ?? null) : null; };
+const isAustralia = (value: unknown) => ["AUS", "AU", "AUSTRALIA"].includes(text(value)?.toUpperCase() ?? "");
 const expectedDocType: Partial<Record<ExtractionCategory, RegExp>> = { Passport: /passport/, "Driving Licence": /driver(s)?licen[cs]e/ };
 
 function mapIdDocument(doc: Json, category: ExtractionCategory): { mapped: Mapped; mismatch: boolean } {
@@ -118,13 +122,19 @@ function mapIdDocument(doc: Json, category: ExtractionCategory): { mapped: Mappe
   } else if (isObject(f.Address)) {
     const address = isObject(f.Address.valueAddress) ? f.Address.valueAddress : null;
     if (address) {
-      const street = typeof address.streetAddress === "string" ? address.streetAddress : [address.houseNumber, address.road ?? address.streetName].filter((x) => typeof x === "string" && x).join(" ");
-      if (String(address.countryRegion ?? "").toUpperCase() === "AUS") {
+      const state = auState(address.state) ?? auState(scalar(f.Region));
+      // Australian licences usually print no country: accept an explicit AUS/AU/Australia, else an Australian state with a 4-digit postcode.
+      const country = text(address.countryRegion) ?? scalar(f.CountryRegion);
+      const australian = country ? isAustralia(country) : !!state && /^\d{4}$/.test(text(address.postalCode) ?? "");
+      if (australian) {
+        const building = [text(address.houseNumber), text(address.road) ?? text(address.streetName)].filter(Boolean).join(" ");
+        const street = text(address.streetAddress) ?? (text(address.unit) && building ? `${text(address.unit)}/${building}` : building);
         m.fields.address_type = "Australian Address"; m.evidence.push({ field: "address_type", page: pageOf(f.Address), source: "Azure Address" });
         put(m, "au_street", street || null, "Address", f.Address);
-        put(m, "au_suburb", typeof address.city === "string" ? address.city : null, "Address", f.Address);
-        put(m, "au_state", typeof address.state === "string" ? address.state : null, "Address", f.Address);
-        put(m, "au_zip", typeof address.postalCode === "string" ? address.postalCode : null, "Address", f.Address);
+        put(m, "au_suburb", text(address.city) ?? text(address.suburb) ?? text(address.cityDistrict), "Address", f.Address);
+        put(m, "au_state", state, "Address", f.Address);
+        put(m, "au_zip", text(address.postalCode), "Address", f.Address);
+        put(m, "au_country", "Australia", "Address", f.Address);
       } else m.warnings.push("Address is not an Australian address and was not mapped.");
     } else m.warnings.push("Address was not structured and was not mapped.");
   }

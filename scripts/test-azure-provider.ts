@@ -234,11 +234,68 @@ test("driving licence maps a structured Australian address and keeps unstructure
     Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Sydney", state: "NSW", postalCode: "2000", countryRegion: "AUS" } }),
   } };
   const outcome = ok(await harness([accepted(), succeeded([doc])]).provider.extract(req("Driving Licence")));
-  assert.deepEqual(outcome.fields, { first_name: "Asha", last_name: "Testperson", dob: "1999-04-05", address_type: "Australian Address", au_street: "1 Example Street", au_suburb: "Sydney", au_state: "NSW", au_zip: "2000" });
+  assert.deepEqual(outcome.fields, { first_name: "Asha", last_name: "Testperson", dob: "1999-04-05", address_type: "Australian Address", au_street: "1 Example Street", au_suburb: "Sydney", au_state: "NSW", au_zip: "2000", au_country: "Australia" });
   const plain = { docType: "idDocument.driverLicense", fields: { Address: field({ type: "string", valueString: "1 Example St Sydney NSW" }) } };
   const text = ok(await harness([accepted(), succeeded([plain])]).provider.extract(req("Driving Licence")));
   assert.deepEqual(text.fields, {});
   assert.ok(text.warnings.some((w) => /address/i.test(w)));
+});
+
+// Realistic Australian licence as prebuilt-idDocument returns it: no printed country, licence number in DocumentNumber,
+// the separate card number in DocumentDiscriminator, class in VehicleClassifications, state also in Region.
+const auLicence = (fields: Record<string, unknown> = {}) => ({ docType: "idDocument.driverLicense", fields: {
+  FirstName: field({ type: "string", valueString: "Asha" }, 1, 0.96), LastName: field({ type: "string", valueString: "Testperson" }, 1, 0.95),
+  DateOfBirth: field({ type: "date", valueDate: "1999-04-05" }), DateOfIssue: field({ type: "date", valueDate: "2023-06-01" }), DateOfExpiration: field({ type: "date", valueDate: "2028-06-01" }),
+  DocumentNumber: field({ type: "string", valueString: "12345678" }), DocumentDiscriminator: field({ type: "string", valueString: "4012345678" }),
+  VehicleClassifications: field({ type: "string", valueString: "C" }), Region: field({ type: "string", valueString: "NSW" }), Sex: field({ type: "string", valueString: "F" }),
+  Address: field({ type: "address", valueAddress: { houseNumber: "12", road: "Example Street", city: "Parramatta", state: "NSW", postalCode: "2150" } }, 1, 0.9),
+  ...fields,
+} });
+const licenceFields = async (doc: unknown) => ok(await harness([accepted(), succeeded([doc])]).provider.extract(req("Driving Licence")));
+
+test("driving licence (Australian): address without a printed country is mapped; licence/card number, class and expiry have no application field and are not invented", async () => {
+  const outcome = await licenceFields(auLicence());
+  assert.deepEqual(outcome.fields, { first_name: "Asha", last_name: "Testperson", dob: "1999-04-05", gender: "Female", address_type: "Australian Address", au_street: "12 Example Street", au_suburb: "Parramatta", au_state: "NSW", au_zip: "2150", au_country: "Australia" });
+  assert.equal(outcome.categoryMismatch, false);
+  assert.equal(outcome.confidence?.au_street, 0.9);
+  const envelope = buildExtractionEnvelope(createAzureProvider({ endpoint: ENDPOINT, apiKey: KEY, modelMap: {} }), outcome, "t");
+  assert.deepEqual(Object.keys(envelope.extracted).filter((k) => /licen|card|class|expiry|discriminator|number/i.test(k)), []);
+  assert.ok(!JSON.stringify(outcome.fields).includes("12345678") && !JSON.stringify(outcome.fields).includes("4012345678"));
+});
+
+test("driving licence: explicit AUS/Australia, document-level country, unit numbers and state names are handled; foreign addresses are not mapped", async () => {
+  const withCountry = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "3/12 Example Street", city: "Parramatta", state: "New South Wales", postalCode: "2150", countryRegion: "Australia" } }) }));
+  assert.deepEqual([withCountry.fields.au_street, withCountry.fields.au_state], ["3/12 Example Street", "NSW"]);
+  const unit = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { unit: "3", houseNumber: "12", road: "Example Street", suburb: "Parramatta", postalCode: "2150" } }) }));
+  assert.deepEqual([unit.fields.au_street, unit.fields.au_suburb, unit.fields.au_state], ["3/12 Example Street", "Parramatta", "NSW"]);
+  const docCountry = await licenceFields(auLicence({ CountryRegion: field({ type: "countryRegion", valueCountryRegion: "AUS" }), Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Perth", state: "WA", postalCode: "6000" } }) }));
+  assert.equal(docCountry.fields.address_type, "Australian Address");
+  const usa = await licenceFields(auLicence({ Region: field({ type: "string", valueString: "WA" }), Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Seattle", state: "WA", postalCode: "98101" } }) }));
+  assert.equal(usa.fields.address_type, undefined);
+  assert.ok(usa.warnings.some((w) => /not an Australian address/i.test(w)));
+  const foreign = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Road", city: "London", postalCode: "N1 1AA", countryRegion: "GBR" } }) }));
+  assert.equal(foreign.fields.address_type, undefined);
+  assert.equal(foreign.fields.first_name, "Asha");
+});
+
+test("driving licence: missing, empty or malformed fields never fail the whole result", async () => {
+  const sparse = await licenceFields({ docType: "idDocument.driverLicense", fields: { FirstName: { type: "string" }, LastName: null, DateOfBirth: { type: "date", content: "05/04/1999" }, Address: field({ type: "address" }), Sex: field({ type: "string", valueString: "X" }) } });
+  assert.deepEqual(sparse.fields, {});
+  assert.ok(sparse.warnings.some((w) => /address/i.test(w)) && sparse.warnings.some((w) => /sex/i.test(w)));
+  const noFields = await licenceFields({ docType: "idDocument.driverLicense" });
+  assert.deepEqual([noFields.ok, noFields.fields, noFields.categoryMismatch], [true, {}, false]);
+  const noState = await licenceFields(auLicence({ Region: undefined, Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Perth", postalCode: "6000", countryRegion: "AUS" } }) }));
+  assert.deepEqual([noState.fields.au_street, noState.fields.au_state], ["1 Example Street", undefined]);
+});
+
+test("driving licence: the declared category must match the detected document type", async () => {
+  const asPassport = await licenceFields(passportDoc());
+  assert.equal(asPassport.categoryMismatch, true);
+  assert.deepEqual(asPassport.fields, {});
+  const card = await licenceFields({ ...auLicence(), docType: "idDocument.nationalIdentityCard" });
+  assert.deepEqual([card.categoryMismatch, card.fields, card.detectedType], [true, {}, "idDocument.nationalIdentityCard"]);
+  const passportRequest = ok(await harness([accepted(), succeeded([auLicence()])]).provider.extract(req("Passport")));
+  assert.deepEqual([passportRequest.categoryMismatch, passportRequest.fields], [true, {}]);
 });
 
 test("custom models map only fields named with the application's identifiers", async () => {

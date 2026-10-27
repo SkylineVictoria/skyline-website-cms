@@ -71,7 +71,7 @@ export default defineConfig({
   ],
   base,
   build: {
-    sourcemap: true,
+    sourcemap: false,
     outDir: 'out',
   },
   resolve: {
@@ -82,5 +82,9 @@ export default defineConfig({
   server: {
     port: 3000,
     host: "0.0.0.0",
+    watch: {
+      // Reports and disposable fixtures are written while tests/development run.
+      ignored: ["**/docs/*-evidence/**", "**/tmp/**"],
+    },
   },
 });

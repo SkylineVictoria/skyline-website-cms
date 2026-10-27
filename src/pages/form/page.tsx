@@ -4,7 +4,7 @@ import FormFieldControl from "@/components/feature/FormFieldControl";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import { breadcrumbSchema } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 /**
  * Public renderer for CMS-authored forms (cms_forms + cms_form_fields).
@@ -17,6 +17,7 @@ export default function CmsFormPage() {
   const { id } = useParams();
   const { data } = usePublicSite();
   const form = data.forms.find((item) => item.id === id);
+  const submitUrl = data.tenantSite ? (form?.submissionApproved ? form.submitUrl : undefined) : SUBMIT_ADDR;
 
   const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
@@ -54,6 +55,7 @@ export default function CmsFormPage() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!submitUrl) { setStatus("error"); setMessage("Form submissions are not configured for this website."); return; }
     const element = event.currentTarget;
     const formData = new FormData(element);
 
@@ -82,10 +84,11 @@ export default function CmsFormPage() {
     setMessage("");
 
     try {
-      const response = await fetch(SUBMIT_ADDR, {
+      const response = await fetch(submitUrl, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: payload.toString(),
+        signal: AbortSignal.timeout(15000),
       });
 
       const responseText = await response.text();
@@ -121,10 +124,10 @@ export default function CmsFormPage() {
   return (
     <>
       <Seo
-        title={`${form.name} | Skyline Institute Of Technology`}
-        description={form.description || `Complete the ${form.name} form for Skyline Institute Of Technology.`}
+        title={`${form.name} | ${data.settings.name}`}
+        description={form.description || `Complete the ${form.name} form for ${data.settings.name}.`}
         path={`/forms/${form.id}`}
-        jsonLd={[
+        jsonLd={data.tenantSite ? [] : [
           breadcrumbSchema([
             { name: "Home", path: "/" },
             { name: form.name, path: `/forms/${form.id}` },

@@ -1,16 +1,19 @@
 // =====================================================================
 // portal-admin-users — Skyline Agency Portal account provisioning
 //
-// All agency account creation / invitation / role changes / deactivation
-// for the Agency Portal go through this function. It uses the official
-// Supabase Auth Admin API (inviteUserByEmail / createUser / generateLink /
-// deleteUser) with the service-role key. The `auth` schema is NEVER written
-// directly from application tables and no password is ever stored.
-//
-// Caller must be a signed-in, Active SLIT Admin (an Active CMS Admin row in
-// cms_users with role = 'Admin').
+// Invitations, resends, revokes, role/status changes and agency creation for
+// the Agency Portal go through this function. Authorization is decided by the
+// database (migration 86 portal_* functions) from the verified JWT subject:
+// organization (SLIT) admins may act on any agency, agency admins only on the
+// agency of their own membership, agents never. The agency is never trusted
+// from the request for an agency admin. Auth identities are created or mailed
+// only through the official Supabase Auth Admin API; no password is stored.
+// Invitation mail is the Auth mailer (it carries the one-time setup link), not
+// the notification-delivery outbox, so migration 84 activation rules do not apply.
 // =====================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { cleanEmail, cleanName } from "../_shared/user-input.ts";
+import { backendConfiguration } from "../_shared/config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,8 +32,18 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function normalizeRole(role: string): "agency_admin" | "agent" {
-  return role === "agency_admin" ? "agency_admin" : "agent";
+// Database errors raised by the portal_* functions carry user-facing messages and a class code.
+function rpcFailure(error: { code?: string; message?: string }) {
+  const message = error.message || "The request could not be completed.";
+  switch (error.code) {
+    case "42501": return json({ error: message }, 403);
+    case "23505":
+    case "23514": return json({ error: message }, 409);
+    case "22023":
+    case "23503": return json({ error: message }, 400);
+    case "P0002": return json({ error: message }, 404);
+    default: return json({ error: "The request could not be completed." }, 500);
+  }
 }
 
 async function findAuthUserByEmail(admin: any, email: string) {
@@ -46,59 +59,32 @@ async function findAuthUserByEmail(admin: any, email: string) {
   return { user: null, error: null };
 }
 
-async function upsertPortalProfile(
-  admin: any,
-  payload: { authUserId: string; email: string; name: string },
-) {
-  const { data: existing } = await admin
-    .from("portal_profiles")
-    .select("id")
-    .eq("auth_user_id", payload.authUserId)
-    .maybeSingle();
-
-  if (existing && existing.id) {
-    const { error } = await admin
-      .from("portal_profiles")
-      .update({ full_name: payload.name, email: payload.email })
-      .eq("id", existing.id);
-    if (error) return { profileId: null as string | null, error: error.message };
-    return { profileId: String(existing.id), error: null };
+/**
+ * Mail the one-time setup link for an invitation. Existing confirmed identities are never sent a credential
+ * reset: they simply sign in and the pending invitation is accepted. `inviteLink` is only produced for the
+ * fallback path and is only returned to organization administrators.
+ */
+async function deliverInvite(admin: any, anon: any, email: string, name: string, redirectTo?: string) {
+  const existing = await findAuthUserByEmail(admin, email);
+  if (existing.error) return { error: existing.error };
+  if (existing.user) {
+    if (existing.user.email_confirmed_at) return { emailSent: false, existingIdentity: true, inviteLink: null as string | null };
+    const { error } = await anon.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined);
+    return error ? { error: error.message } : { emailSent: true, existingIdentity: false, inviteLink: null as string | null };
   }
-
-  const { data, error } = await admin
-    .from("portal_profiles")
-    .insert({
-      auth_user_id: payload.authUserId,
-      email: payload.email,
-      full_name: payload.name,
-      status: "Active",
-    })
-    .select("id")
-    .maybeSingle();
-  if (error) return { profileId: null as string | null, error: error.message };
-  return { profileId: data ? String(data.id) : null, error: null };
-}
-
-async function upsertMembership(
-  admin: any,
-  payload: { profileId: string; agencyId: string; role: string; status?: string },
-) {
-  const { error } = await admin
-    .from("agency_memberships")
-    .upsert(
-      {
-        user_id: payload.profileId,
-        agency_id: payload.agencyId,
-        role: normalizeRole(payload.role),
-        status: payload.status ?? "Active",
-      },
-      { onConflict: "user_id" },
-    );
-  return error ? error.message : null;
+  const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, { data: { name }, redirectTo });
+  if (!inviteErr) return { emailSent: true, existingIdentity: false, inviteLink: null as string | null };
+  const { error: createErr } = await admin.auth.admin.createUser({ email, email_confirm: true, user_metadata: { name } });
+  if (createErr) return { error: createErr.message || inviteErr.message };
+  const { data: link, error: linkErr } = await admin.auth.admin.generateLink({ type: "recovery", email, options: redirectTo ? { redirectTo } : undefined });
+  if (linkErr) return { error: linkErr.message };
+  return { emailSent: false, existingIdentity: false, inviteLink: (link?.properties?.action_link as string | undefined) ?? null };
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const configuration = backendConfiguration(SUPABASE_URL, SERVICE_KEY, ANON_KEY);
+  if (configuration) return json(configuration, 503);
 
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
@@ -116,24 +102,13 @@ Deno.serve(async (req) => {
     });
 
     const caller = callerData.user;
-    let profile: { role?: string; status?: string; name?: string } | null = null;
-    const { data: byId } = await admin
-      .from("cms_users")
-      .select("role, status, name")
-      .eq("auth_user_id", caller.id)
-      .maybeSingle();
-    profile = byId ?? null;
-    if (!profile && caller.email) {
-      const { data: byEmail } = await admin
-        .from("cms_users")
-        .select("role, status, name")
-        .ilike("email", caller.email)
-        .maybeSingle();
-      profile = byEmail ?? null;
-    }
-    if (!profile || profile.status !== "Active" || profile.role !== "Admin") {
-      return json({ error: "SLIT Administrator access required." }, 403);
-    }
+    if (req.headers.has("x-tenant-domain")) return json({ error: "Use tenant membership administration for a scoped request." }, 403);
+
+    // The caller's authority is read from the database for the verified JWT subject only.
+    const { data: ctx, error: ctxErr } = await admin.rpc("portal_actor_context", { p_actor: caller.id });
+    if (ctxErr) return json({ error: "Unable to verify your access." }, 503);
+    const isSlit = ctx?.slit === true;
+    if (!isSlit && ctx?.role !== "agency_admin") return json({ error: "Organization or agency administrator access required." }, 403);
 
     let parsed: Record<string, unknown> = {};
     try {
@@ -142,86 +117,97 @@ Deno.serve(async (req) => {
       parsed = {};
     }
     const action = String(parsed.action ?? "");
-    const actorName = String(profile.name ?? caller.email ?? "SLIT Admin");
+    const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
+    const optionalText = (key: string) => (parsed[key] === undefined || parsed[key] === null || parsed[key] === "" ? null : String(parsed[key]).trim());
 
-    const audit = async (
-      act: string,
-      targetId: string,
-      agencyId: string | null,
-      detail: Record<string, unknown>,
-    ) => {
-      await admin.from("portal_audit_log").insert({
-        actor: caller.id,
-        actor_name: actorName,
-        actor_role: "slit_admin",
-        action: act,
-        target_type: "portal_user",
-        target_id: targetId,
-        agency_id: agencyId,
-        detail,
+    // Auth mail is sent after the database has recorded the invitation, so a mail failure leaves a pending,
+    // resendable invitation rather than an orphan or a missing record.
+    const respondDelivered = async (invitation: { invitationId: string; email: string; name: string; role?: string }, extra: Record<string, unknown> = {}) => {
+      const delivery = await deliverInvite(admin, anon, invitation.email, invitation.name || invitation.email.split("@")[0], redirectTo);
+      if (delivery.error) {
+        return json({ ok: true, ...extra, invitationId: invitation.invitationId, emailSent: false, warning: "The invitation was saved but the email could not be sent. Use Resend to try again." });
+      }
+      return json({
+        ok: true, ...extra, invitationId: invitation.invitationId, emailSent: delivery.emailSent === true,
+        existingIdentity: delivery.existingIdentity === true,
+        inviteLink: isSlit ? delivery.inviteLink : null,
       });
     };
 
     switch (action) {
       case "invite": {
-        const email = String(parsed.email ?? "").trim().toLowerCase();
-        const name = String(parsed.name ?? "").trim() || email.split("@")[0];
-        const role = normalizeRole(String(parsed.role ?? "agent"));
-        const agencyId = String(parsed.agencyId ?? "").trim();
-        const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
-        if (!email) return json({ error: "Email is required." }, 400);
-        if (!agencyId) return json({ error: "An agency must be selected." }, 400);
-
-        let authUserId = "";
-        let inviteLink: string | null = null;
-        let emailSent = false;
-
-        const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-          data: { name },
-          redirectTo,
+        const emailCheck = cleanEmail(parsed.email);
+        if (!emailCheck.ok) return json({ error: emailCheck.error }, 400);
+        const nameCheck = cleanName(parsed.name);
+        if (!nameCheck.ok) return json({ error: nameCheck.error }, 400);
+        // For an agency admin the database ignores any agencyId other than their own membership's agency.
+        const { data, error } = await admin.rpc("portal_invitation_create", {
+          p_actor: caller.id,
+          p_agency: optionalText("agencyId"),
+          p_email: emailCheck.value,
+          p_name: nameCheck.value,
+          p_role: String(parsed.role ?? "agent"),
         });
+        if (error) return rpcFailure(error);
+        return respondDelivered(data);
+      }
 
-        if (!inviteErr && invited && invited.user) {
-          authUserId = invited.user.id;
-          emailSent = true;
-        } else {
-          const { error: createErr } = await admin.auth.admin.createUser({
-            email,
-            email_confirm: true,
-            user_metadata: { name },
-          });
-          let found = await findAuthUserByEmail(admin, email);
-          if (!found.user) found = await findAuthUserByEmail(admin, email);
-          if (!found.user) {
-            const msg = (createErr && createErr.message) || (inviteErr && inviteErr.message) || "Could not create user.";
-            return json({ error: msg }, 400);
-          }
-          authUserId = found.user.id;
+      case "create_agency": {
+        const adminEmail = cleanEmail(parsed.adminEmail);
+        if (!adminEmail.ok) return json({ error: adminEmail.error }, 400);
+        const adminName = cleanName(parsed.adminName);
+        if (!adminName.ok) return json({ error: adminName.error }, 400);
+        const agency = (parsed.agency && typeof parsed.agency === "object" ? parsed.agency : {}) as Record<string, unknown>;
+        const { data, error } = await admin.rpc("portal_agency_create_with_admin", {
+          p_actor: caller.id,
+          p_agency: agency,
+          p_admin_email: adminEmail.value,
+          p_admin_name: adminName.value,
+        });
+        if (error) return rpcFailure(error);
+        return respondDelivered(data, { agencyId: data.agencyId, agencyName: data.agencyName });
+      }
 
-          const { data: link, error: linkErr } = await admin.auth.admin.generateLink({
-            type: "recovery",
-            email,
-            options: redirectTo ? { redirectTo } : undefined,
-          });
-          if (linkErr) return json({ error: linkErr.message }, 400);
-          inviteLink = (link && link.properties && link.properties.action_link) || null;
-        }
+      case "resend": {
+        const { data, error } = await admin.rpc("portal_invitation_resend", { p_actor: caller.id, p_invitation: String(parsed.invitationId ?? "") });
+        if (error) return rpcFailure(error);
+        return respondDelivered(data);
+      }
 
-        const profRes = await upsertPortalProfile(admin, { authUserId, email, name });
-        if (profRes.error || !profRes.profileId) {
-          return json({ error: profRes.error ?? "Could not create the portal profile." }, 500);
-        }
-        const memErr = await upsertMembership(admin, { profileId: profRes.profileId, agencyId, role });
-        if (memErr) return json({ error: memErr }, 500);
+      case "revoke": {
+        const { data, error } = await admin.rpc("portal_invitation_revoke", { p_actor: caller.id, p_invitation: String(parsed.invitationId ?? "") });
+        if (error) return rpcFailure(error);
+        return json({ ok: true, ...data });
+      }
 
-        await audit("provision_user", profRes.profileId, agencyId, { email, role, emailSent });
-        return json({ ok: true, authUserId, emailSent, inviteLink });
+      case "update":
+      case "delete": {
+        // "delete" keeps its historical meaning: revoke this module's access, never the shared Auth identity.
+        const profileId = String(parsed.profileId ?? "").trim();
+        if (!profileId) return json({ error: "Portal user not found." }, 404);
+        const { data, error } = await admin.rpc("portal_member_update", {
+          p_actor: caller.id,
+          p_profile: profileId,
+          p_role: action === "delete" ? null : optionalText("role"),
+          p_status: action === "delete" ? "Inactive" : optionalText("status"),
+          p_agency: action === "delete" ? null : optionalText("agencyId"),
+        });
+        if (error) return rpcFailure(error);
+        return json({ ok: true, ...data, identityPreserved: true });
       }
 
       case "reset": {
+        if (!isSlit) return json({ error: "Organization administrator access required." }, 403);
         const email = String(parsed.email ?? "").trim().toLowerCase();
-        const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
         if (!email) return json({ error: "Email is required." }, 400);
+        const { data: mapped } = await admin.from("portal_profiles").select("auth_user_id").ilike("email", email).eq("status", "Active").maybeSingle();
+        if (!mapped?.auth_user_id) return json({ error: "Mapped active profile not found." }, 404);
+        const { data: shared } = await admin.from("cms_users").select("id").eq("auth_user_id", mapped.auth_user_id).limit(1).maybeSingle();
+        const { data: membership, error: membershipError } = await admin.from("tenant_memberships").select("tenant_id").eq("auth_user_id", mapped.auth_user_id).limit(1).maybeSingle();
+        if (membershipError) return json({ error: "Unable to verify account scope." }, 503);
+        if (shared || membership) return json({ error: "Shared accounts must use account self-service recovery." }, 403);
+        const { data: targetAuth, error: targetError } = await admin.auth.admin.getUserById(mapped.auth_user_id);
+        if (targetError || targetAuth?.user?.email?.toLowerCase() !== email) return json({ error: "Verified account mapping required." }, 403);
         const { data: link, error } = await admin.auth.admin.generateLink({
           type: "recovery",
           email,
@@ -229,52 +215,6 @@ Deno.serve(async (req) => {
         });
         if (error) return json({ error: error.message }, 400);
         return json({ ok: true, link: (link && link.properties && link.properties.action_link) || null });
-      }
-
-      case "update": {
-        const email = String(parsed.email ?? "").trim().toLowerCase();
-        const profileId = String(parsed.profileId ?? "").trim();
-        const role = parsed.role ? normalizeRole(String(parsed.role)) : undefined;
-        const agencyId = parsed.agencyId ? String(parsed.agencyId).trim() : undefined;
-        const status = parsed.status ? String(parsed.status) : undefined;
-
-        let pid = profileId;
-        if (!pid && email) {
-          const { data } = await admin.from("portal_profiles").select("id").ilike("email", email).maybeSingle();
-          pid = data ? String(data.id) : "";
-        }
-        if (!pid) return json({ error: "Portal user not found." }, 404);
-
-        if (status) {
-          const { error } = await admin.from("portal_profiles").update({ status }).eq("id", pid);
-          if (error) return json({ error: error.message }, 500);
-        }
-        if (role || agencyId || status) {
-          const patch: Record<string, unknown> = {};
-          if (role) patch.role = role;
-          if (agencyId) patch.agency_id = agencyId;
-          if (status) patch.status = status;
-          const { error } = await admin.from("agency_memberships").update(patch).eq("user_id", pid);
-          if (error) return json({ error: error.message }, 500);
-        }
-        await audit("update_user", pid, agencyId ?? null, { role, status });
-        return json({ ok: true });
-      }
-
-      case "delete": {
-        const email = String(parsed.email ?? "").trim().toLowerCase();
-        const authUserId = String(parsed.authUserId ?? "").trim();
-        let resolvedAuthId = authUserId;
-        if (!resolvedAuthId && email) {
-          const found = await findAuthUserByEmail(admin, email);
-          resolvedAuthId = found.user ? found.user.id : "";
-        }
-        if (resolvedAuthId) {
-          await admin.from("portal_profiles").delete().eq("auth_user_id", resolvedAuthId);
-          await admin.auth.admin.deleteUser(resolvedAuthId);
-        }
-        await audit("delete_user", resolvedAuthId || email, null, { email });
-        return json({ ok: true });
       }
 
       default:

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { ROLE_LABELS } from "@/pages/agency/lib/portalData";
 
 interface NavEntry {
@@ -25,6 +25,7 @@ const SLIT_NAV: NavEntry[] = [
   { to: "/agency/agencies", label: "Agencies", icon: "ri-building-2-line" },
   { to: "/agency/users", label: "Users", icon: "ri-group-line" },
   { to: "/agency/all-applications", label: "All Applications", icon: "ri-file-list-3-line" },
+  { to: "/agency/registrations", label: "Registrations", icon: "ri-file-shield-2-line" },
   { to: "/agency/notifications", label: "Notifications", icon: "ri-notification-3-line" },
   { to: "/agency/audit-log", label: "Audit Log", icon: "ri-history-line" },
 ];
@@ -41,6 +42,7 @@ const CRUMB_LABELS: Record<string, string> = {
   users: "Users",
   "all-applications": "All Applications",
   "audit-log": "Audit Log",
+  registrations: "Registrations",
 };
 
 function buildCrumbs(pathname: string): { label: string; to?: string }[] {
@@ -65,7 +67,7 @@ function initialsOf(name: string): string {
 }
 
 export default function PortalLayout() {
-  const { authUser, role, profile, agency, signOut } = usePortalAuth();
+  const { authUser, role, profile, agency, signOut, scopeEpoch, selectedScope } = usePortalAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -87,13 +89,13 @@ export default function PortalLayout() {
 
   const displayName = profile?.fullName?.trim() || authUser?.name || "User";
   const isSlit = role === "slit_admin";
-  const nav = isSlit ? SLIT_NAV : AGENCY_NAV;
+  const nav = isSlit ? SLIT_NAV : role === "agency_admin" ? [...AGENCY_NAV, { to: "/agency/users", label: selectedScope?.tenantId ? "Institution agents" : "Team", icon: "ri-group-line" }] : AGENCY_NAV;
   const crumbs = buildCrumbs(location.pathname);
-  const workspaceName = isSlit ? "SLIT Administration" : agency?.name || "Agency";
+  const workspaceName = isSlit ? selectedScope?.tenantId ? selectedScope.name : "SLIT Administration" : agency?.name || "Agency";
 
   const handleSignOut = async () => {
-    await signOut();
-    navigate("/agency/login");
+    try { await signOut(); navigate("/login"); }
+    catch { /* The active editor displays its save error and retains values. */ }
   };
 
   const sidebar = (
@@ -267,7 +269,7 @@ export default function PortalLayout() {
           </header>
 
           <main className="px-4 py-6 md:px-6 md:py-7">
-            <Outlet />
+            <Outlet key={scopeEpoch} />
           </main>
         </div>
       </div>

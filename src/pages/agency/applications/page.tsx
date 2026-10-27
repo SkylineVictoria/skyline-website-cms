@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import {
   listApplications,
   listAssignableAgents,
@@ -21,7 +21,7 @@ export default function PortalApplicationsPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await listApplications();
+      const data = [] as ApplicationListRow[];
       setRows(data);
       if (role === "agency_admin") {
         setAgents(await listAssignableAgents(agency?.id));
@@ -63,7 +63,7 @@ export default function PortalApplicationsPage() {
       />
 
       <div className="mt-6">
-        <ApplicationsTable
+        <ApplicationsTable remote
           rows={rows}
           loading={loading}
           error={error}

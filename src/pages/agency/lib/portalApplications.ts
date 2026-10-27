@@ -10,6 +10,25 @@ import type { ApplicationStatus } from "@/pages/agency/lib/portalData";
  * rows across every agency. Nothing here trusts a client-supplied scope.
  */
 
+const draftVersions = new Map<string, number>();
+const draftQueues = new Map<string, Promise<unknown>>();
+if (typeof window !== "undefined") window.addEventListener("portal-scope-changed", () => {
+  draftVersions.clear(); draftQueues.clear();
+});
+export async function flushApplicationEdits(id: string): Promise<void> { await draftQueues.get(id); }
+async function draftCommand(id: string, fn: string, args: Record<string, unknown>): Promise<unknown> {
+  const prior = draftQueues.get(id) ?? Promise.resolve();
+  const task = prior.catch(() => undefined).then(async () => {
+    if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");
+    const { data, error } = await supabase.rpc(fn, { p_application_id: id, p_expected_version: draftVersions.get(id), ...args });
+    if (error) throw new Error(error.message);
+    draftVersions.set(id, Number(typeof data === "number" ? data : data.draft_version));
+    return data;
+  });
+  draftQueues.set(id, task);
+  return task;
+}
+
 const APP_COLUMNS =
   "id, reference, status, student_name, student_email, intake, completion, agency_id, assigned_agent_id, created_at, updated_at, submitted_at, is_test";
 
@@ -68,66 +87,21 @@ async function profileNames(ids: string[]): Promise<Map<string, string>> {
 /** Every application the caller is authorised to see, with agency/agent/course detail. */
 export async function listApplications(filters: ApplicationFilters = {}): Promise<ApplicationListRow[]> {
   countPortalMetric("applications.list");
-  let query = supabase
-    .from("enrollment_applications")
-    .select(APP_COLUMNS)
-    .order("updated_at", { ascending: false })
-    .limit(1000);
+  const rows: ApplicationListRow[] = [];
+  let total = 1;
+  while (rows.length < total) {
+    const page = await queryApplications({ ...filters, limit: 100, offset: rows.length });
+    total = page.total;
+    rows.push(...page.rows);
+    if (!page.rows.length) break;
+  }
+  return rows;
+}
 
-  if (filters.status) query = query.eq("status", filters.status);
-  if (filters.agencyId) query = query.eq("agency_id", filters.agencyId);
-  if (filters.agentId) query = query.eq("assigned_agent_id", filters.agentId);
-
-  const { data, error } = await query;
+export async function queryApplications(filters: ApplicationFilters & { sort?: string; direction?: string; limit?: number; offset?: number } = {}): Promise<{ total: number; rows: ApplicationListRow[] }> {
+  const { data, error } = await supabase.rpc("portal_query_applications", { p_search: filters.search ?? "", p_status: filters.status ?? "", p_agency: filters.agencyId || null, p_agent: filters.agentId || null, p_course: filters.courseCode ?? "", p_intake: filters.intake ?? "", p_sort: filters.sort ?? "updated", p_direction: filters.direction ?? "desc", p_limit: filters.limit ?? 25, p_offset: filters.offset ?? 0 });
   if (error) throw new Error(error.message);
-
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const appIds = rows.map((r) => str(r.id));
-  const agentIds = rows.map((r) => str(r.assigned_agent_id)).filter(Boolean);
-  const agencyIds = Array.from(new Set(rows.map((r) => str(r.agency_id)).filter(Boolean)));
-
-  const [nameMap, agencyMap, courseMap] = await Promise.all([
-    profileNames(agentIds),
-    fetchAgencyNames(agencyIds),
-    fetchCoursesByApplication(appIds),
-  ]);
-
-  const mapped: ApplicationListRow[] = rows.map((r) => {
-    const id = str(r.id);
-    const agentId = str(r.assigned_agent_id) || null;
-    const agencyId = str(r.agency_id);
-    return {
-      id,
-      reference: str(r.reference),
-      status: (str(r.status, "draft") as ApplicationStatus) ?? "draft",
-      studentName: str(r.student_name),
-      studentEmail: str(r.student_email),
-      intake: str(r.intake),
-      completion: Number(r.completion ?? 0),
-      agencyId,
-      agencyName: agencyMap.get(agencyId) ?? "",
-      agentId,
-      agentName: agentId ? nameMap.get(agentId) ?? "" : "",
-      courses: courseMap.get(id) ?? [],
-      createdAt: str(r.created_at),
-      updatedAt: str(r.updated_at),
-      submittedAt: r.submitted_at ? str(r.submitted_at) : null,
-      isTest: Boolean(r.is_test),
-    };
-  });
-
-  const search = (filters.search ?? "").trim().toLowerCase();
-  const intake = (filters.intake ?? "").trim().toLowerCase();
-
-  return mapped.filter((row) => {
-    if (search) {
-      const haystack = `${row.studentName} ${row.studentEmail} ${row.reference}`.toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
-    if (filters.courseCode && !row.courses.some((c) => c.code === filters.courseCode)) return false;
-    if (intake && !row.intake.toLowerCase().includes(intake)) return false;
-    return true;
-  });
+  return { total: data.total, rows: (data.rows ?? []).map((r: Record<string, unknown>) => ({ id: str(r.id), reference: str(r.reference), status: str(r.status) as ApplicationStatus, studentName: str(r.student_name), studentEmail: str(r.student_email), intake: str(r.intake), completion: Number(r.completion), agencyId: str(r.agency_id), agencyName: str(r.agency_name), agentId: r.assigned_agent_id ? str(r.assigned_agent_id) : null, agentName: str(r.agent_name), courses: r.courses as ApplicationCourseRow[], createdAt: str(r.created_at), updatedAt: str(r.updated_at), submittedAt: r.submitted_at ? str(r.submitted_at) : null, isTest: Boolean(r.is_test) })) };
 }
 
 async function fetchAgencyNames(ids: string[]): Promise<Map<string, string>> {
@@ -173,6 +147,8 @@ export interface StatBucket {
   total: number;
   drafts: number;
   submitted: number;
+  offerAccepted: number;
+  statuses?: Record<string, number>;
   actionRequired: number;
   enrolled: number;
 }
@@ -181,22 +157,24 @@ export interface DashboardStats {
   total: number;
   drafts: number;
   submitted: number;
-  inReview: number;
+  offerAccepted: number;
   actionRequired: number;
   enrolled: number;
   byAgency: StatBucket[];
   byAgent: StatBucket[];
   recent: ApplicationListRow[];
+  statuses?: Record<string, number>;
 }
 
 function emptyBucket(id: string, name: string): StatBucket {
-  return { id, name, total: 0, drafts: 0, submitted: 0, actionRequired: 0, enrolled: 0 };
+  return { id, name, total: 0, drafts: 0, submitted: 0, offerAccepted: 0, actionRequired: 0, enrolled: 0 };
 }
 
 function addToBucket(bucket: StatBucket, status: ApplicationStatus): void {
   bucket.total += 1;
   if (status === "draft") bucket.drafts += 1;
-  else if (status === "submitted" || status === "under_review") bucket.submitted += 1;
+  else if (status === "submitted") bucket.submitted += 1;
+  else if (status === "offer_accepted") bucket.offerAccepted += 1;
   else if (status === "action_required") bucket.actionRequired += 1;
   else if (status === "enrolled") bucket.enrolled += 1;
 }
@@ -207,7 +185,7 @@ export function summarizeApplications(rows: ApplicationListRow[]): DashboardStat
     total: 0,
     drafts: 0,
     submitted: 0,
-    inReview: 0,
+    offerAccepted: 0,
     actionRequired: 0,
     enrolled: 0,
     byAgency: [],
@@ -222,7 +200,7 @@ export function summarizeApplications(rows: ApplicationListRow[]): DashboardStat
     stats.total += 1;
     if (row.status === "draft") stats.drafts += 1;
     else if (row.status === "submitted") stats.submitted += 1;
-    else if (row.status === "under_review") stats.inReview += 1;
+    else if (row.status === "offer_accepted") stats.offerAccepted += 1;
     else if (row.status === "action_required") stats.actionRequired += 1;
     else if (row.status === "enrolled") stats.enrolled += 1;
 
@@ -245,7 +223,11 @@ export function summarizeApplications(rows: ApplicationListRow[]): DashboardStat
 
 /** Convenience wrapper that fetches the caller's scope then summarises it. */
 export async function getDashboardStats(): Promise<DashboardStats> {
-  return summarizeApplications(await listApplications());
+  const [{ data, error }, recent] = await Promise.all([supabase.rpc("portal_dashboard"), queryApplications({limit:6})]);
+  if (error) throw new Error(error.message);
+  const counts = (statuses: Record<string, number>) => ({ drafts: statuses.draft ?? 0, submitted: statuses.submitted ?? 0, offerAccepted: statuses.offer_accepted ?? 0, actionRequired: statuses.action_required ?? 0, enrolled: statuses.enrolled ?? 0 });
+  const buckets = (rows: Array<{ id: string; name: string; total: number; statuses: Record<string, number> }>) => rows.map(row => ({ ...row, id: row.id ?? "unassigned", ...counts(row.statuses) }));
+  return { total: data.total, ...counts(data.statuses), statuses: data.statuses, byAgent: buckets(data.byAgent), byAgency: buckets(data.byAgency), recent: recent.rows };
 }
 
 /* -------------------------------------------------------------- Detail */
@@ -279,6 +261,8 @@ export interface ApplicationDetail {
   updatedAt: string;
   submittedAt: string | null;
   version: number;
+  draftVersion: number;
+  tenantId: string | null;
   isTest: boolean;
   courses: ApplicationCourseRow[];
   consents: ConsentRow[];
@@ -307,17 +291,18 @@ export interface DocumentRow {
   metadata: Record<string, unknown>;
 }
 
-export async function getApplication(id: string): Promise<ApplicationDetail | null> {
+export async function getApplication(id: string, refreshDraftRevision = true): Promise<ApplicationDetail | null> {
   countPortalMetric("applications.detail");
   const { data, error } = await supabase
     .from("enrollment_applications")
-    .select(`${APP_COLUMNS}, created_by, submitted_by, data, version`)
+    .select(`${APP_COLUMNS}, created_by, submitted_by, data, version, draft_version, tenant_id`)
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
 
   const r = data as Record<string, unknown>;
+  if (refreshDraftRevision) draftVersions.set(id, Number(r.draft_version ?? 0));
   const agencyId = str(r.agency_id);
   const [nameMap, agencyMap, courseMap, consents] = await Promise.all([
     profileNames([str(r.created_by), str(r.assigned_agent_id), str(r.submitted_by)]),
@@ -346,6 +331,8 @@ export async function getApplication(id: string): Promise<ApplicationDetail | nu
     updatedAt: str(r.updated_at),
     submittedAt: r.submitted_at ? str(r.submitted_at) : null,
     version: Number(r.version ?? 1),
+    draftVersion: Number(r.draft_version ?? 0),
+    tenantId: r.tenant_id ? String(r.tenant_id) : null,
     isTest: Boolean(r.is_test),
     courses: courseMap.get(id) ?? [],
     consents,
@@ -428,20 +415,15 @@ export interface DraftPatch {
   completion: number;
 }
 
-/** Persists the current draft values (RLS-only permits draft/submitted status). */
+/** Atomically saves form values while retaining wizard/review metadata under RLS. */
 export async function saveApplicationDraft(id: string, patch: DraftPatch): Promise<void> {
-  const { error } = await supabase
-    .from("enrollment_applications")
-    .update({
-      data: patch.data,
-      student_name: patch.studentName,
-      student_email: patch.studentEmail,
-      intake: patch.intake,
-      completion: patch.completion,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", id);
+  await draftCommand(id, "portal_save_draft_v2", { p_patch: patch.data });
+}
+
+export async function listInstitutionCourses(): Promise<ApplicationCourseRow[]> {
+  const { data, error } = await supabase.rpc("portal_course_options");
   if (error) throw new Error(error.message);
+  return data ?? [];
 }
 
 /** Replaces the selected course rows for an application. */
@@ -540,12 +522,13 @@ export async function submitApplication(
   applicationId: string,
   snapshot: Record<string, unknown>,
 ): Promise<string> {
-  const { data, error } = await supabase.rpc("portal_submit_application", {
-    p_application_id: applicationId,
-    p_snapshot: snapshot,
+  const key = "submission:" + applicationId + ":" + (draftVersions.get(applicationId) ?? "unknown");
+  const { data, error } = await supabase.rpc("portal_submit_v2", {
+    p_application_id: applicationId, p_expected_version: draftVersions.get(applicationId),
+    p_request_key: key, p_consent: snapshot.consent,
   });
   if (error) throw new Error(error.message);
-  return String(data ?? "");
+  return String(data?.reference ?? "");
 }
 
 export async function setApplicationStatus(applicationId: string, status: string, note = ""): Promise<void> {
@@ -738,11 +721,10 @@ export async function saveDocumentReview(input: {
   confirmed: string[]; resolutions?: Array<{ field: string; documentId?: string | null; candidateValue?: string; state: "confirmed" | "corrected" | "rejected" }>;
   wizard?: Record<string, unknown>; studentName?: string;
 }): Promise<void> {
-  const { error } = await supabase.rpc("portal_save_document_review", {
-    p_application_id: input.applicationId, p_values: input.values, p_provenance: input.provenance,
+  await draftCommand(input.applicationId, "portal_review_draft_v2", {
+    p_values: input.values, p_provenance: input.provenance,
     p_confirmed: input.confirmed, p_resolutions: input.resolutions ?? [], p_wizard: input.wizard ?? {}, p_student_name: input.studentName ?? null,
   });
-  if (error) throw new Error(error.message);
 }
 
 /** Persist document-local OCR review data. RLS constrains the row to the caller's application scope. */
@@ -795,34 +777,12 @@ export interface ApplicationDataPatch {
  * caller is authorised to write (RLS enforces the agency/agent scope).
  */
 export async function patchApplicationData(id: string, patch: ApplicationDataPatch): Promise<void> {
-  const { data: current, error: readError } = await supabase
-    .from("enrollment_applications")
-    .select("data")
-    .eq("id", id)
-    .maybeSingle();
-  if (readError) throw new Error(readError.message);
-
-  const existing = ((current?.data as Record<string, unknown>) ?? {}) as Record<string, unknown>;
-  const nextData: Record<string, unknown> = { ...existing };
-
-  if (patch.values) {
-    const currentValues = (existing.values as Record<string, unknown> | undefined) ?? {};
-    nextData.values = { ...currentValues, ...patch.values };
-  }
-  if (patch.wizard) {
-    const currentWizard = (existing.wizard as Record<string, unknown> | undefined) ?? {};
-    nextData.wizard = { ...currentWizard, ...patch.wizard };
-  }
-  if (patch.academicQualifications) nextData.academicQualifications = patch.academicQualifications;
-
-  const update: Record<string, unknown> = { data: nextData, updated_at: new Date().toISOString() };
-  if (patch.studentName !== undefined) update.student_name = patch.studentName;
-  if (patch.studentEmail !== undefined) update.student_email = patch.studentEmail;
-  if (patch.intake !== undefined) update.intake = patch.intake;
-  if (patch.completion !== undefined) update.completion = patch.completion;
-
-  const { error } = await supabase.from("enrollment_applications").update(update).eq("id", id);
-  if (error) throw new Error(error.message);
+  const data: Record<string, unknown> = {};
+  if (patch.values) data.values = patch.values;
+  if (patch.wizard) data.wizard = patch.wizard;
+  if (patch.academicQualifications) data.academicQualifications = patch.academicQualifications;
+  if (patch.completion !== undefined) data.progress = { overall: patch.completion };
+  await draftCommand(id, "portal_save_draft_v2", { p_patch: data });
 }
 
 /** Removes a draft the caller owns (used only when a wizard session is abandoned empty). */

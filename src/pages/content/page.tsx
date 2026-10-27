@@ -5,7 +5,7 @@ import LatestNews from "@/components/feature/LatestNews";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import { breadcrumbSchema, siteName } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 function buildDescription(page: ContentPageData): string {
   if (page.lead) return page.lead;

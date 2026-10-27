@@ -1,5 +1,6 @@
-import { Navigate, useNavigate } from "react-router-dom";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { hadSession, loginUrl } from "@/lib/loginRouting";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import PortalLayout from "@/pages/agency/components/PortalLayout";
 
 function WorkspaceLoader() {
@@ -22,9 +23,10 @@ function WorkspaceLoader() {
 export default function RequirePortal() {
   const { authUser, role, authLoading, identityLoading, identityError, signOut, reloadIdentity } = usePortalAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   if (authLoading) return <WorkspaceLoader />;
-  if (!authUser) return <Navigate to="/agency/login" replace />;
+  if (!authUser) return <Navigate to={loginUrl(location.pathname + location.search, hadSession())} replace />;
   if (identityLoading) return <WorkspaceLoader />;
 
   if (identityError) {
@@ -46,7 +48,7 @@ export default function RequirePortal() {
             </button>
             <button
               type="button"
-              onClick={() => void signOut().then(() => navigate("/agency/login"))}
+              onClick={() => void signOut().then(() => navigate("/login"))}
               className="cursor-pointer whitespace-nowrap rounded-md border border-background-300 px-4 py-2.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"
             >
               Sign out
@@ -80,7 +82,7 @@ export default function RequirePortal() {
             </button>
             <button
               type="button"
-              onClick={() => void signOut().then(() => navigate("/agency/login"))}
+              onClick={() => void signOut().then(() => navigate("/login"))}
               className="cursor-pointer whitespace-nowrap rounded-md bg-primary-500 px-4 py-2.5 text-sm font-semibold text-background-50 hover:bg-primary-600"
             >
               Sign out

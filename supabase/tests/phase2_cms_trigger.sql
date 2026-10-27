@@ -1,0 +1,12 @@
+begin;
+select plan(8);
+select lives_ok($$insert into cms_pages(id,slug,title,status) values('native-trigger-page','native-trigger-page','Fixture','Published')$$,'published page insert queues without document-only field');
+select lives_ok($$insert into cms_courses(id,slug,name,status) values('native-trigger-course','native-trigger-course','Fixture','Published')$$,'published course insert queues without document-only field');
+select is((select count(*)::int from public_assistant_index_jobs where source_key in ('native-trigger-page','native-trigger-course') and state='queued'),2,'both published source types enqueue');
+select lives_ok($$insert into cms_documents(id,name,status,assistant_publication_approved) values('native-trigger-doc','Private fixture','Published',false)$$,'unapproved published document remains excluded');
+select is((select count(*)::int from public_assistant_index_jobs where source_key='native-trigger-doc'),0,'unapproved document does not enqueue');
+select lives_ok($$update cms_pages set status='Draft' where id='native-trigger-page'$$,'page unpublication succeeds');
+select lives_ok($$delete from cms_courses where id='native-trigger-course'$$,'course deletion succeeds');
+select is((select count(*)::int from public_assistant_index_jobs where source_key in ('native-trigger-page','native-trigger-course') and state='queued'),0,'unpublish/delete cancel queued indexing');
+select * from finish();
+rollback;

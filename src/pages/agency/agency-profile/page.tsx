@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { listAgencyMembers, ROLE_LABELS, type AgencyMemberRow } from "@/pages/agency/lib/portalData";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 

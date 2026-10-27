@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
-import { listAgencies, ROLE_LABELS } from "@/pages/agency/lib/portalData";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { listAgencies, ROLE_LABELS, STATUS_META } from "@/pages/agency/lib/portalData";
 import {
-  listApplications,
+  getDashboardStats,
   listAssignableAgents,
   summarizeApplications,
   type AgentOption,
@@ -14,7 +14,7 @@ import ApplicationsTable from "@/pages/agency/components/ApplicationsTable";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 interface CardDef {
-  key: keyof Pick<DashboardStats, "total" | "drafts" | "submitted" | "inReview" | "actionRequired" | "enrolled">;
+  key: keyof Pick<DashboardStats, "total" | "drafts" | "submitted" | "offerAccepted" | "actionRequired" | "enrolled">;
   label: string;
   icon: string;
   tone: string;
@@ -24,7 +24,7 @@ const CARDS: CardDef[] = [
   { key: "total", label: "Total applications", icon: "ri-file-list-3-line", tone: "bg-primary-100 text-primary-700" },
   { key: "drafts", label: "Drafts", icon: "ri-file-edit-line", tone: "bg-background-200 text-foreground-700" },
   { key: "submitted", label: "Submitted", icon: "ri-send-plane-line", tone: "bg-secondary-100 text-secondary-900" },
-  { key: "inReview", label: "Under review", icon: "ri-search-eye-line", tone: "bg-secondary-100 text-secondary-900" },
+  { key: "offerAccepted", label: "Offer accepted", icon: "ri-checkbox-circle-line", tone: "bg-accent-100 text-accent-900" },
   { key: "actionRequired", label: "Action required", icon: "ri-alert-line", tone: "bg-primary-100 text-primary-800" },
   { key: "enrolled", label: "Enrolled", icon: "ri-graduation-cap-line", tone: "bg-accent-500 text-background-50" },
 ];
@@ -37,6 +37,7 @@ function initialsOf(name: string): string {
 
 export default function PortalDashboardPage() {
   const { role, profile, agency } = usePortalAuth();
+  const [serverStats, setServerStats] = useState<DashboardStats | null>(null);
   const [rows, setRows] = useState<ApplicationListRow[]>([]);
   const [agencies, setAgencies] = useState<Array<{ id: string; name: string }>>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -50,8 +51,9 @@ export default function PortalDashboardPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await listApplications();
-      setRows(data);
+      const data = await getDashboardStats();
+      setServerStats(data);
+      setRows(data.recent);
       if (isSlit) {
         const agencyList = await listAgencies();
         setAgencies(agencyList.map((a) => ({ id: a.id, name: a.name })));
@@ -74,7 +76,7 @@ export default function PortalDashboardPage() {
     void load();
   }, [load]);
 
-  const stats = useMemo(() => summarizeApplications(rows), [rows]);
+  const stats = useMemo(() => serverStats ?? summarizeApplications(rows), [rows, serverStats]);
   const firstName = (profile?.fullName || "").trim().split(/\s+/)[0] || "there";
 
   const breakdown = isSlit ? stats.byAgency : stats.byAgent;
@@ -132,6 +134,7 @@ export default function PortalDashboardPage() {
             ))}
           </section>
 
+          <div className="mt-4 flex flex-wrap gap-3" aria-label="All application statuses">{Object.entries(STATUS_META).map(([status, meta]) => <span className="rounded border bg-background-50 px-3 py-2 text-sm" key={status}>{meta.label}: {stats.statuses?.[status] ?? 0}</span>)}</div>
           <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
             <section className="rounded-card border border-background-200 bg-background-50 p-5">
               <div className="flex items-center justify-between gap-3">
@@ -201,7 +204,7 @@ export default function PortalDashboardPage() {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-foreground-900">{bucket.name}</p>
                         <p className="text-xs text-foreground-500">
-                          {bucket.total} total &middot; {bucket.drafts} draft &middot; {bucket.submitted} submitted
+                          {bucket.total} total &middot; {bucket.drafts} draft &middot; {bucket.submitted} submitted &middot; {bucket.offerAccepted} offer accepted
                           {bucket.actionRequired ? ` \u00b7 ${bucket.actionRequired} action` : ""}
                         </p>
                       </div>

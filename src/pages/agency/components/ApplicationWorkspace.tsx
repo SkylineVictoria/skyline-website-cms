@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AppField, AppSection } from "@/data/applicationForms";
-import {
-  ApplicationFieldControl,
-  isConditionMet,
-  isFieldFilled,
-  sectionHeading,
-  sectionIcon,
-} from "@/components/feature/applicationFieldKit";
+import { ApplicationFieldControl } from "@/components/feature/applicationFieldKit";
+import { isConditionMet, isFieldFilled, sectionHeading, sectionIcon } from "@/components/feature/applicationFieldHelpers";
 import TermsDeclaration from "@/components/feature/TermsDeclaration";
 import { applyFormValues, collectFormValues, type DraftValues } from "@/lib/applicationDraft";
 import {
@@ -16,8 +11,9 @@ import {
   resolveCourseOption,
 } from "@/pages/agency/lib/portalSections";
 import {
-  recordConsent,
-  replaceApplicationCourses,
+  listInstitutionCourses,
+  flushApplicationEdits,
+  type ApplicationCourseRow,
   saveApplicationDraft,
   submitApplication,
   deleteApplicationDocument,
@@ -30,6 +26,7 @@ import {
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/documentAttachments";
+import { canSubmitApplicationStatus } from "@/pages/agency/lib/applicationAccess";
 import ApplicationReview, { type ConsentState } from "@/pages/agency/components/ApplicationReview";
 import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAttachmentField";
 import { PortalError } from "@/pages/agency/components/PortalUI";
@@ -59,7 +56,15 @@ export default function ApplicationWorkspace({
   readOnly,
   onSaved,
 }: WorkspaceProps) {
-  const sections = portalSections;
+  const [courseOptions, setCourseOptions] = useState<ApplicationCourseRow[]>([]);
+  const sections = useMemo(() => application.tenantId ? portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseOptions.map(course => course.code + " - " + course.title) } : field) })) : portalSections, [application.tenantId, courseOptions]);
+  useEffect(() => { if (application.tenantId) void listInstitutionCourses().then(setCourseOptions).catch(e => setSaveError(e.message)); }, [application.tenantId]);
+  const resolveCourse = useCallback((label: string) => {
+    if (!application.tenantId) return resolveCourseOption(label);
+    const course = courseOptions.find(item => item.code + " - " + item.title === label);
+    if (!course) throw new Error("This course is no longer available. Reload the application.");
+    return course;
+  }, [application.tenantId, courseOptions]);
   const reviewIndex = sections.length;
 
   const storedValues = useMemo<DraftValues>(() => {
@@ -121,6 +126,12 @@ export default function ApplicationWorkspace({
   const dirtyRef = useRef(false);
   const hydratingRef = useRef(true);
   const progressRef = useRef(progress);
+  const initialCoursesRef = useRef(storedValues[COURSE_FIELD] ?? []);
+
+  useEffect(() => {
+    if (!courseOptions.length || !formRef.current) return;
+    applyFormValues(formRef.current, { [COURSE_FIELD]: initialCoursesRef.current });
+  }, [courseOptions]);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -180,6 +191,11 @@ export default function ApplicationWorkspace({
     const form = formRef.current;
     if (!form) return null;
     const collected = collectFormValues(form);
+    for (const element of Array.from(form.elements)) {
+      if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) || !element.name || element instanceof HTMLInputElement && ["file","button","submit"].includes(element.type)) continue;
+      const key = element.name.replace(/\[\]$/, "");
+      if (!(key in collected)) collected[key] = element instanceof HTMLInputElement && element.type === "checkbox" ? [] : "";
+    }
     const coursesRaw = (collected[COURSE_FIELD] as string[] | undefined) ?? [];
     return { values: collected, courses: coursesRaw };
   }, []);
@@ -194,7 +210,8 @@ export default function ApplicationWorkspace({
       await saveApplicationDraft(application.id, {
         data: {
           values: snapshot.values,
-          courses: snapshot.courses,
+          courses: snapshot.courses.map(resolveCourse),
+          progress: progressRef.current,
           savedAt: new Date().toISOString(),
           preparedBy: agentName,
         },
@@ -206,20 +223,22 @@ export default function ApplicationWorkspace({
         intake: String(snapshot.values.preferred_intake ?? ""),
         completion: progressRef.current.overall,
       });
-      await replaceApplicationCourses(application.id, snapshot.courses.map(resolveCourseOption));
+
       setSaveState("saved");
       setLastSavedAt(new Date().toISOString());
       onSaved?.();
     } catch (error) {
+      dirtyRef.current = true;
       setSaveState("error");
       setSaveError(error instanceof Error ? error.message : "We could not save your draft.");
+      throw error;
     }
-  }, [application.id, collectSnapshot, agentName, onSaved]);
+  }, [application.id, collectSnapshot, agentName, onSaved, resolveCourse]);
 
   /** Serialises saves so an older save can never overwrite a newer change. */
   const enqueueSave = useCallback(() => {
     pendingRef.current = true;
-    queueRef.current = queueRef.current.then(async () => {
+    queueRef.current = queueRef.current.catch(() => undefined).then(async () => {
       if (!pendingRef.current) return;
       pendingRef.current = false;
       await runSave();
@@ -227,13 +246,15 @@ export default function ApplicationWorkspace({
     return queueRef.current;
   }, [runSave]);
 
-  const scheduleSave = useCallback(() => {
-    if (readOnly || hydratingRef.current) return;
+  const scheduleSave = useCallback((userInput = false) => {
+    // Restoration dispatches synthetic changes. Suppress those, but preserve a
+    // real user's edit made during the short conditional-field hydration window.
+    if (readOnly || (hydratingRef.current && !userInput)) return;
     dirtyRef.current = true;
     setSaveState("saving");
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
-      void enqueueSave();
+      void enqueueSave().catch(() => undefined);
     }, DEBOUNCE_MS);
   }, [readOnly, enqueueSave]);
 
@@ -243,7 +264,15 @@ export default function ApplicationWorkspace({
       timerRef.current = null;
     }
     if (dirtyRef.current) await enqueueSave();
-  }, [enqueueSave]);
+    await queueRef.current;
+    await flushApplicationEdits(application.id);
+  }, [enqueueSave, application.id]);
+
+  useEffect(() => {
+    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushSave());
+    window.addEventListener("portal-before-scope-switch", flush);
+    return () => window.removeEventListener("portal-before-scope-switch", flush);
+  }, [flushSave]);
 
   /* --------------------------------------------------------- hydrate */
 
@@ -265,7 +294,7 @@ export default function ApplicationWorkspace({
   useEffect(
     () => () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
-      if (dirtyRef.current) void enqueueSave();
+      if (dirtyRef.current) void enqueueSave().catch(() => undefined);
     },
     [enqueueSave],
   );
@@ -281,7 +310,7 @@ export default function ApplicationWorkspace({
       setValues((prev) => ({ ...prev, [target.name]: target.value }));
     }
     window.requestAnimationFrame(() => computeProgress());
-    scheduleSave();
+    scheduleSave(event.nativeEvent.isTrusted);
   };
 
   const uploadAttachment = useCallback(async (field: AppField, files: FileList | null) => {
@@ -331,12 +360,12 @@ export default function ApplicationWorkspace({
   }, [onSaved, refreshAttachments]);
 
   const goTo = (index: number) => {
-    void flushSave();
+    void flushSave().catch(() => undefined);
     setStep(index);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const fieldMissing = (field: AppField): boolean => {
+  const fieldMissing = useCallback((field: AppField): boolean => {
     const form = formRef.current;
     if (!form) return true;
     const documentCategory = field.type === "file" ? documentCategoryForField(field.name) : null;
@@ -349,7 +378,7 @@ export default function ApplicationWorkspace({
     );
     if (control && !control.checkValidity()) return true;
     return false;
-  };
+  }, [attachments]);
 
   /** Required field labels still missing, grouped by the section they live in. */
   const collectMissing = useCallback(() => {
@@ -369,7 +398,7 @@ export default function ApplicationWorkspace({
     });
     const firstIndex = firstBySection.findIndex((v) => v !== null);
     return { missing, firstIndex };
-  }, [sections, values]);
+  }, [sections, values, fieldMissing]);
 
   const openReview = () => {
     const form = formRef.current;
@@ -396,15 +425,10 @@ export default function ApplicationWorkspace({
     setSubmitting(true);
     try {
       await flushSave();
-      if (consent.file) await uploadConsentDocument(application.id, consent.file);
+      const signedDocumentRef = consent.file ? await uploadConsentDocument(application.id, consent.file) : "";
       const snapshot = collectSnapshot();
-      await recordConsent(application.id, {
-        method: consent.method,
-        signedDocumentRef: consent.fileName,
-        declarationVersion: DECLARATION_VERSION,
-        recordedByName: agentName,
-      });
       const reference = await submitApplication(application.id, {
+        consent: { method: consent.method, confirmed: consent.confirmed, authorised: consent.authorised, declarationVersion: DECLARATION_VERSION, signedDocumentRef },
         values: snapshot?.values ?? {},
         courses: snapshot?.courses ?? [],
         meta: {
@@ -444,7 +468,6 @@ export default function ApplicationWorkspace({
     );
   }
 
-  const currentSection = sections[step] as AppSection | undefined;
   const isReview = step === reviewIndex;
 
   const saveIndicator = () => {
@@ -535,7 +558,7 @@ export default function ApplicationWorkspace({
             onExtract={extractAttachment}
             onDelete={deleteAttachment}
           />
-        ) : <ApplicationFieldControl field={field} formId={FORM_ID} value={(storedValues[field.name] as string) ?? seed[field.name]} locked={locked} />}
+        ) : <ApplicationFieldControl field={field.name === "agent_agency" ? { ...field, options: [seed.agent_agency] } : field} formId={FORM_ID} value={(storedValues[field.name] as string) ?? seed[field.name]} locked={locked} />}
         {missing ? (
           <p className="mt-1.5 flex items-center gap-1 text-xs text-primary-700">
             <i className="ri-error-warning-line" aria-hidden="true" />
@@ -643,7 +666,7 @@ export default function ApplicationWorkspace({
         {!readOnly ? (
           <button
             type="button"
-            onClick={() => void flushSave()}
+            onClick={() => void flushSave().catch(() => undefined)}
             className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
           >
             <i className="ri-save-3-line" aria-hidden="true" />
@@ -684,14 +707,18 @@ export default function ApplicationWorkspace({
             submitting={submitting}
             submitError={submitError}
             readOnly={readOnly}
+            canSubmit={canSubmitApplicationStatus(application.status)}
             onSubmit={() => void handleSubmit()}
           />
-        ) : currentSection ? (
-          <div className="rounded-card border border-background-200 bg-background-50 p-5 md:p-6">
+        ) : null}
+        {/* Keep controls mounted across navigation/review so snapshots and
+            validation include every section and never discard earlier input. */}
+        {sections.map((section, index) => (
+          <div key={index} hidden={isReview || index !== step || !isConditionMet(section.showIf, values)} className="rounded-card border border-background-200 bg-background-50 p-5 md:p-6">
             <h3 className="font-heading text-lg font-bold text-foreground-950">
-              {sectionHeading(currentSection.title, step)}
+              {sectionHeading(section.title, index)}
             </h3>
-            <div className="mt-4">{renderSectionBody(currentSection)}</div>
+            <div className="mt-4">{renderSectionBody(section)}</div>
 
             <div className="mt-6 flex flex-col gap-3 border-t border-background-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
               <button
@@ -716,7 +743,7 @@ export default function ApplicationWorkspace({
               </button>
             </div>
           </div>
-        ) : null}
+        ))}
 
         <span
           ref={(element) => {

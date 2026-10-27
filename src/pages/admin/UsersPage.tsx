@@ -1,21 +1,13 @@
 import { useState } from "react";
-import { useAuth, passwordResetUrl } from "@/pages/admin/lib/auth";
+import { useAuth, passwordResetUrl } from "@/pages/admin/lib/authContext";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { useAdminData } from "@/pages/admin/lib/store";
-import {
-  Badge,
-  Button,
-  Card,
-  ConfirmDialog,
-  Field,
-  Modal,
-  PageHeader,
-  Select,
-  TextInput,
-  Toggle,
-  useToast,
-} from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Badge, Button, Card, ConfirmDialog, Field, Modal, PageHeader, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminUser, Role } from "@/pages/admin/lib/types";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import DraftResume from "@/pages/admin/components/DraftResume";
+import { useSlotDraft } from "@/pages/admin/lib/useSlotDraft";
 
 const PERMISSIONS: { area: string; admin: boolean; editor: boolean }[] = [
   { area: "Dashboard", admin: true, editor: true },
@@ -75,7 +67,9 @@ export default function UsersPage() {
   const { logActivity, reload } = useAdminData();
   const { push } = useToast();
   const [editing, setEditing] = useState<AdminUser | null>(null);
-  const [draft, setDraft] = useState<AdminUser | null>(null);
+  const slot = useSlotDraft<AdminUser>("user", (id) => users.find((u) => u.id === id) ?? null, emptyUser);
+  const draft = slot.draft;
+  const setDraft = slot.setDraft;
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
@@ -84,14 +78,15 @@ export default function UsersPage() {
 
   const openNew = () => {
     setEditing(null);
-    setDraft(emptyUser());
+    slot.openNew();
   };
   const openEdit = (u: AdminUser) => {
     setEditing(u);
-    setDraft({ ...u });
+    slot.openEdit(u.id, { ...u });
   };
+  const resumeDraft = (id: string) => { setEditing(id === "new" ? null : users.find((u) => u.id === id) ?? null); slot.resume(id); };
   const close = () => {
-    setDraft(null);
+    slot.close();
     setEditing(null);
   };
 
@@ -196,6 +191,7 @@ export default function UsersPage() {
           ) : undefined
         }
       />
+      <DraftResume items={slot.pending.map((d) => ({ id: d.id, label: d.id === "new" ? "New user invitation (not sent yet)" : `User: ${users.find((u) => u.id === d.id)?.name ?? d.id}` }))} onResume={resumeDraft} onDiscard={slot.dropPending} />
 
       {readOnly ? (
         <div className="mb-4 flex items-center gap-2 rounded-md border border-primary-200 bg-primary-50 px-4 py-3 text-[13px] text-primary-900">
@@ -324,6 +320,7 @@ export default function UsersPage() {
       >
         {draft ? (
           <div className="space-y-4">
+            <DraftStatus draft={slot} />
             <Field label="Full name" required>
               <TextInput value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
             </Field>

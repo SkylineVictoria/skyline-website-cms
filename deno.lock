@@ -1,16 +1,24 @@
 {
   "version": "5",
+  "specifiers": {
+    "jsr:@supabase/functions-js@*": "2.117.3"
+  },
+  "jsr": {
+    "@supabase/functions-js@2.117.3": {
+      "integrity": "ecc3b8567ecf8758e01a008717a542bebfeaa993a1719bda599e98e721721e8b"
+    }
+  },
   "redirects": {
     "https://esm.sh/@supabase/supabase-js@2": "https://esm.sh/@supabase/supabase-js@2.117.3"
   },
   "remote": {
-    "https://esm.sh/@supabase/supabase-js@2.117.3": "614f9e550b12b4be7054f947cc4949ebcc0eceeb8e83f7e226cc875356e9b126"
+    "https://esm.sh/@supabase/supabase-js@2.117.3": "614f9e550b12b4be7054f947cc4949ebcc0eceeb8e83f7e226cc875356e9b126",
+    "https://esm.sh/pdfjs-dist@4.10.38/legacy/build/pdf.mjs": "5f5858fd93f59d17c4aecb835bfdec767ec272a67531ce923e350de04429ea30"
   },
   "workspace": {
     "packageJson": {
       "dependencies": [
         "npm:@eslint/js@^9.30.1",
-        "npm:@stripe/react-stripe-js@4.0.2",
         "npm:@supabase/supabase-js@2.57.4",
         "npm:@types/react-dom@^19.1.6",
         "npm:@types/react@^19.1.8",
@@ -23,14 +31,11 @@
         "npm:i18next-browser-languagedetector@^8.2.0",
         "npm:i18next@^25.3.2",
         "npm:jiti@^2.6.1",
-        "npm:lucide-react@0.469",
         "npm:postcss@^8.5.6",
         "npm:react-dom@^19.1.2",
         "npm:react-i18next@^15.6.0",
         "npm:react-router-dom@^7.6.3",
         "npm:react@^19.1.2",
-        "npm:recharts@3.2.0",
-        "npm:source-map@~0.7.6",
         "npm:tailwindcss@^3.4.17",
         "npm:typescript-eslint@^8.35.1",
         "npm:typescript@~5.8.3",

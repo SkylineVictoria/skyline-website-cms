@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+  title: Skyline public form provider test contract
+  version: 1.0.0
+  description: Observed from the existing CMS public form caller; no live provider verification.
+servers:
+  - url: http://127.0.0.1:4900/forms
+paths:
+  /submit-a:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [form_name]
+              properties:
+                form_name: {type: string}
+      responses:
+        '200':
+          description: Provider accepted the synthetic form
+          content:
+            application/json:
+              schema: {type: object}
+              example: {code: OK, meta: {message: Synthetic form accepted}}
+        '503':
+          description: Retryable provider failure
+          content:
+            application/json:
+              schema: {type: object}
+              example: {code: ERROR, message: Synthetic provider unavailable}

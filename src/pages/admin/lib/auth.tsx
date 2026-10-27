@@ -1,85 +1,19 @@
+import { defaultUsers, passwordResetUrl, SessionUser, LoginResult, AuthContextValue, AuthContext, useAuth } from "./authContext";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { AdminUser, Role } from "@/pages/admin/lib/types";
 import { passwordRecoveryUrl } from "@/lib/siteUrl";
-
-/**
- * Real Supabase Auth (email + password).
- *
- * - The identity lives in Supabase Auth (auth.users). The CMS never writes the
- *   auth schema directly; new staff are provisioned through the
- *   `cms-admin-users` Edge Function (official Auth Admin API).
- * - The role/profile lives in `cms_users`, keyed to Auth by `auth_user_id`.
- * - `must_change_password` forces a password rotation on the next sign-in for
- *   any account whose credentials have been exposed.
- */
-
-export const defaultUsers: AdminUser[] = [
-  {
-    id: "u-1",
-    name: "IT Administrator",
-    email: "gourav.gupta@siyanainfo.com",
-    role: "Admin",
-    status: "Active",
-    lastLogin: "",
-  },
-  {
-    id: "u-2",
-    name: "Marketing Editor",
-    email: "gourav.gupta@slit.edu.au",
-    role: "Editor",
-    status: "Active",
-    lastLogin: "",
-  },
-];
+import { markSessionSeen } from "@/lib/loginRouting";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { resolveTenantSite } from "@/lib/tenantSite";
 
 function basePathPrefix(): string {
   const base = __BASE_PATH__.split("/").filter(Boolean).join("/");
   return base ? `/${base}` : "";
 }
 
-/**
- * Public URL that Supabase recovery / invite emails must send people to.
- *
- * Computed from the live origin at runtime — never hardcoded — so the exact
- * same build works on the Readdy preview link, a custom domain, and localhost.
- * This URL (along with `.../admin/set-password`) must be whitelisted in
- * Supabase → Authentication → URL Configuration → Redirect URLs, otherwise
- * Supabase silently ignores it and falls back to the Site URL.
- */
-export const passwordResetUrl = passwordRecoveryUrl;
-
-export interface SessionUser {
-  id: string;
-  name: string;
-  email: string;
-  role: Role;
-  mustChangePassword: boolean;
-}
-
-export interface LoginResult {
-  ok: boolean;
-  error?: string;
-  mustChangePassword?: boolean;
-}
-
-interface AuthContextValue {
-  user: SessionUser | null;
-  authLoading: boolean;
-  users: AdminUser[];
-  login: (email: string, password: string) => Promise<LoginResult>;
-  logout: () => Promise<void>;
-  can: (area: "governance") => boolean;
-  saveUsers: (next: AdminUser[]) => void;
-  refreshUsers: () => Promise<void>;
-  changePassword: (password: string) => Promise<{ ok: boolean; error?: string }>;
-  verifyAndChangePassword: (currentPassword: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
-
 async function fetchProfiles(): Promise<AdminUser[]> {
+  if (requestWebsiteDomain()) return [];
   const { data, error } = await supabase.from("cms_users").select("*").order("email");
   if (error) return [];
   return (data ?? []).map((u) => ({
@@ -96,6 +30,15 @@ async function fetchProfiles(): Promise<AdminUser[]> {
  * user has no (active) CMS profile — i.e. they must not access the CMS. */
 async function resolveSessionUser(authUserId: string | undefined, email: string | undefined): Promise<SessionUser | null> {
   if (!authUserId && !email) return null;
+  if (requestWebsiteDomain()) {
+    try {
+      await resolveTenantSite();
+      // Claim any pending invitation for this institution (needs a confirmed email); a failure must not block sign-in.
+      try { await supabase.rpc("tenant_accept_pending_invites"); } catch { /* the invitation stays pending */ }
+      const { data, error } = await supabase.rpc("tenant_cms_identity");
+      return error || !data ? null : data as SessionUser;
+    } catch { return null; }
+  }
   const base = supabase
     .from("cms_users")
     .select("id, name, email, role, status, must_change_password");
@@ -177,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
+    markSessionSeen(false);
     setUser(null);
     setUsers([]);
   }, []);
@@ -244,10 +188,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
-  return ctx;
 }

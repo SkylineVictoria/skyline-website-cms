@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { NavItem } from "@/data/site";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
+import { useSignedIn } from "@/hooks/useSignedIn";
+import { headerAccountLink } from "@/lib/loginRouting";
 
 function Logo({ src, alt }: { src: string; alt: string }) {
   return <img src={src} alt={alt} className="h-11 w-auto object-contain md:h-12" />;
@@ -12,8 +14,8 @@ function DesktopDropdown({ item }: { item: NavItem }) {
     <div className="absolute left-0 top-full z-50 hidden pt-3 group-hover:block group-focus-within:block">
       <div className="min-w-[240px] rounded-card border border-background-200 bg-background-50 p-3 shadow-xl">
         <ul className="space-y-1">
-          {(item.children ?? []).map((child) => (
-            <li key={child.to}>
+          {(item.children ?? []).map((child, index) => (
+            <li key={`${child.to}-${index}`}>
               <Link
                 to={child.to}
                 className="block rounded-md px-3 py-2 text-sm text-foreground-700 transition-colors hover:bg-background-100 hover:text-primary-600"
@@ -28,7 +30,16 @@ function DesktopDropdown({ item }: { item: NavItem }) {
   );
 }
 
-export default function SiteHeader() {
+export interface HeaderViewSettings {
+  logo: string; logoAlt: string; phone: string; phoneHref: string; email: string; emailHref: string;
+  social: { label: string; href: string; icon: string }[];
+}
+
+/**
+ * The one header renderer: the public site feeds it the published navigation, the CMS preview feeds it unsaved edits.
+ * In preview mode it is not sticky and the surrounding editor blocks navigation.
+ */
+export function SiteHeaderView({ navigation, settings, preview = false }: { navigation: NavItem[]; settings: HeaderViewSettings; preview?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -36,8 +47,9 @@ export default function SiteHeader() {
   const [query, setQuery] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
-  const { data } = usePublicSite();
-  const { navigation, settings } = data;
+  // Preview mode never reads the session; the public header swaps Sign In for Dashboard once signed in (both go through /login).
+  const signedIn = useSignedIn();
+  const account = headerAccountLink(signedIn && !preview);
 
   const courseMenu = navigation.find((item) => item.columns);
   const courseColumns = courseMenu?.columns ?? [];
@@ -49,6 +61,68 @@ export default function SiteHeader() {
     setCoursesOpen(false);
   }, [location.pathname]);
 
+  // How many top-level items fit on one line; the rest go under "More". Re-measured when the menu or the width changes.
+  const navRef = useRef<HTMLElement | null>(null);
+  const [fit, setFit] = useState(navigation.length);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) { setFit(navigation.length); return undefined; }
+    const MORE_WIDTH = 92;
+    const measure = () => {
+      const widths = Array.from(nav.querySelectorAll<HTMLElement>("[data-nav-measure] > span")).map((el) => el.offsetWidth);
+      const available = nav.clientWidth;
+      if (!available || !widths.length) { setFit(navigation.length); return; }
+      const total = widths.reduce((sum, w) => sum + w + 4, 0);
+      if (total <= available) { setFit(widths.length); return; }
+      let used = MORE_WIDTH, count = 0;
+      for (const w of widths) { if (used + w + 4 > available) break; used += w + 4; count += 1; }
+      setFit(Math.max(1, count));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(nav);
+    void document.fonts?.ready.then(measure);
+    return () => observer?.disconnect();
+  }, [navigation]);
+
+  const renderDesktopItem = (item: NavItem, index: number) => (
+    <div
+                key={`${item.label}-${index}`}
+                className="group relative"
+                onMouseEnter={() => setCoursesOpen(Boolean(item.columns))}
+              >
+                {item.to && !item.children && !item.columns ? (
+                  <Link
+                    to={item.to}
+                    className="flex items-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
+                  >
+                    {item.label}
+                  </Link>
+                ) : item.to ? (
+                  <Link
+                    to={item.to}
+                    aria-haspopup="true"
+                    aria-expanded={item.columns ? coursesOpen : undefined}
+                    onFocus={() => setCoursesOpen(Boolean(item.columns))}
+                    className="flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
+                  >
+                    {item.label}
+                    <i className="ri-arrow-down-s-line text-base" aria-hidden="true" />
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    aria-haspopup="true"
+                    className="flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
+                  >
+                    {item.label}
+                    <i className="ri-arrow-down-s-line text-base" aria-hidden="true" />
+                  </button>
+                )}
+                {item.children ? <DesktopDropdown item={item} /> : null}
+              </div>
+  );
+
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
     const value = query.trim();
@@ -58,7 +132,7 @@ export default function SiteHeader() {
   };
 
   return (
-    <header className="sticky top-0 z-50 w-full">
+    <header className={`${preview ? "relative" : "sticky top-0 z-50"} w-full`}>
       <div className="hidden border-b border-background-200 bg-background-100 md:block">
         <div className="site-container flex items-center justify-between py-2.5">
           <div className="flex items-center gap-3">
@@ -99,44 +173,36 @@ export default function SiteHeader() {
             <Logo src={settings.logo} alt={settings.logoAlt} />
           </Link>
 
-          <nav className="hidden items-center gap-1 lg:flex" aria-label="Main navigation">
-            {navigation.map((item) => (
-              <div
-                key={item.label}
-                className="group relative"
-                onMouseEnter={() => setCoursesOpen(Boolean(item.columns))}
-              >
-                {item.to && !item.children && !item.columns ? (
-                  <Link
-                    to={item.to}
-                    className="flex items-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
-                  >
-                    {item.label}
-                  </Link>
-                ) : item.to ? (
-                  <Link
-                    to={item.to}
-                    aria-haspopup="true"
-                    aria-expanded={item.columns ? coursesOpen : undefined}
-                    onFocus={() => setCoursesOpen(Boolean(item.columns))}
-                    className="flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
-                  >
-                    {item.label}
-                    <i className="ri-arrow-down-s-line text-base" aria-hidden="true" />
-                  </Link>
-                ) : (
-                  <button
-                    type="button"
-                    aria-haspopup="true"
-                    className="flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600"
-                  >
-                    {item.label}
-                    <i className="ri-arrow-down-s-line text-base" aria-hidden="true" />
-                  </button>
-                )}
-                {item.children ? <DesktopDropdown item={item} /> : null}
+          <nav ref={navRef} className="relative hidden min-w-0 flex-1 items-center justify-center gap-1 lg:flex" aria-label="Main navigation">
+            {/* Invisible copy used only to measure label widths, so extra items can move into "More" before they would wrap or overlap. */}
+            <div aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 flex gap-1 whitespace-nowrap" data-nav-measure>
+              {navigation.map((item, index) => (
+                <span key={`${item.label}-${index}`} className="px-3 py-2 text-sm font-medium">{item.label}{item.children || item.columns ? <i className="ri-arrow-down-s-line text-base" /> : null}</span>
+              ))}
+            </div>
+            {navigation.slice(0, fit).map((item, index) => renderDesktopItem(item, index))}
+            {fit < navigation.length ? (
+              <div className="group relative" onMouseEnter={() => setCoursesOpen(false)}>
+                <button type="button" aria-haspopup="true" className="flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:text-primary-600">
+                  More
+                  <i className="ri-arrow-down-s-line text-base" aria-hidden="true" />
+                </button>
+                <div className="absolute right-0 top-full z-50 hidden pt-3 group-hover:block group-focus-within:block">
+                  <div className="max-h-[70vh] min-w-[240px] max-w-[320px] overflow-y-auto rounded-card border border-background-200 bg-background-50 p-3 shadow-xl">
+                    <ul className="space-y-1">
+                      {navigation.slice(fit).map((item, index) => (
+                        <li key={`${item.label}-${index}`}>
+                          {item.to ? <Link to={item.to} className="block rounded-md px-3 py-2 text-sm font-medium text-foreground-800 transition-colors hover:bg-background-100 hover:text-primary-600">{item.label}</Link> : <p className="px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">{item.label}</p>}
+                          {item.children?.map((child, childIndex) => (
+                            <Link key={`${child.to}-${childIndex}`} to={child.to} className="block rounded-md py-1.5 pl-6 pr-3 text-sm text-foreground-700 transition-colors hover:bg-background-100 hover:text-primary-600">{child.label}</Link>
+                          ))}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               </div>
-            ))}
+            ) : null}
           </nav>
 
           <div className="flex items-center gap-2">
@@ -150,17 +216,10 @@ export default function SiteHeader() {
               <i className="ri-search-line text-lg" aria-hidden="true" />
             </button>
             <Link
-              to="/agency/login"
-              className="hidden items-center gap-1.5 whitespace-nowrap rounded-md border border-primary-200 bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-100 md:inline-flex"
-            >
-              <i className="ri-user-3-line text-base" aria-hidden="true" />
-              Agency Portal
-            </Link>
-            <Link
-              to="/admin/login"
+              to={account.to}
               className="hidden whitespace-nowrap text-sm font-medium text-foreground-700 transition-colors hover:text-primary-600 md:block"
             >
-              Sign In
+              {account.label}
             </Link>
             <Link
               to="/enroll-now"
@@ -312,23 +371,16 @@ export default function SiteHeader() {
             </ul>
             <div className="mt-5 flex flex-col gap-3">
               <Link
-                to="/agency/login"
-                className="flex items-center justify-center gap-2 rounded-md border border-primary-300 bg-primary-50 px-5 py-3 text-center text-sm font-semibold text-primary-700"
-              >
-                <i className="ri-user-3-line text-base" aria-hidden="true" />
-                Agency Portal
-              </Link>
-              <Link
                 to="/enroll-now"
                 className="rounded-md bg-primary-500 px-5 py-3 text-center text-sm font-semibold text-background-50"
               >
                 Enroll Now
               </Link>
               <Link
-                to="/admin/login"
+                to={account.to}
                 className="rounded-md border border-background-300 px-5 py-3 text-center text-sm font-semibold text-foreground-800"
               >
-                Sign In
+                {account.label}
               </Link>
             </div>
           </nav>
@@ -336,4 +388,9 @@ export default function SiteHeader() {
       ) : null}
     </header>
   );
+}
+
+export default function SiteHeader() {
+  const { data } = usePublicSite();
+  return <SiteHeaderView navigation={data.navigation} settings={data.settings} />;
 }

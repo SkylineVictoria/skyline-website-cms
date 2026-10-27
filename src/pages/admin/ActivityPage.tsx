@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useAdminData } from "@/pages/admin/lib/store";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Card, EmptyState, PageHeader, Select, StatCard, TextInput } from "@/pages/admin/components/ui";
 
 export default function ActivityPage() {

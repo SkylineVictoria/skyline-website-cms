@@ -1,0 +1,6 @@
+simulation: skyline-phase3
+routing: path
+mocks:
+  - name: Skyline form provider
+    routeKey: forms
+    path: postman/mocks/skyline-forms/config.yaml

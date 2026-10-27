@@ -1,5 +1,5 @@
 import { formsPoliciesPage } from "@/data/pages";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 type DocGroup = {
   title: string;

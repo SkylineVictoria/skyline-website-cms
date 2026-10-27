@@ -1,18 +1,12 @@
 import { useMemo, useState } from "react";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import { useDraft } from "@/pages/admin/lib/useDraft";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useAdminData } from "@/pages/admin/lib/store";
-import {
-  Button,
-  Card,
-  Field,
-  SectionTabs,
-  Select,
-  StatusBadge,
-  TextArea,
-  TextInput,
-  Toggle,
-  useToast,
-} from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { Button, Card, Field, SectionTabs, Select, StatusBadge, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminForm, AdminFormField, FieldType } from "@/pages/admin/lib/types";
 import { WorkflowActions } from "@/pages/admin/components/workflow";
 import FormFieldControl from "@/components/feature/FormFieldControl";
@@ -137,16 +131,19 @@ function FieldPreview({ field }: { field: AdminFormField }) {
 }
 
 export default function FormBuilderPage() {
+  const { user } = useAuth();
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data, update, logActivity, recordRevision } = useAdminData();
+  const { data, saveNow, logActivity, recordRevision } = useAdminData();
   const { push } = useToast();
 
   const original = useMemo(() => data.forms.find((f) => f.id === id), [data.forms, id]);
-  const [draft, setDraft] = useState<AdminForm | null>(original ?? null);
+  const draftApi = useDraft<AdminForm | null>("form", id ?? "new", original ?? null);
+  const draft = draftApi.value;
+  const setDraft = draftApi.setValue;
   const [tab, setTab] = useState("fields");
   const [activeField, setActiveField] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const dirty = draftApi.dirty;
 
   if (!original || !draft) {
     return (
@@ -163,7 +160,6 @@ export default function FormBuilderPage() {
 
   const set = <K extends keyof AdminForm>(key: K, value: AdminForm[K]) => {
     setDraft((d) => (d ? { ...d, [key]: value } : d));
-    setDirty(true);
   };
 
   const setField = (fid: string, patch: Partial<AdminFormField>) => {
@@ -197,14 +193,15 @@ export default function FormBuilderPage() {
     set("fields", next);
   };
 
-  const save = (publish?: boolean) => {
+  const save = async (publish?: boolean) => {
     if (!draft) return;
     const next = {
       ...draft,
       status: publish === undefined ? draft.status : publish ? "Published" : "Draft",
       updatedAt: "2026-10-12 09:14",
     } as AdminForm;
-    update((d) => ({ ...d, forms: d.forms.map((f) => (f.id === next.id ? next : f)) }));
+    try {
+    await saveNow((d) => ({ ...d, forms: d.forms.map((f) => (f.id === next.id ? next : f)) }));
     recordRevision({
       entity: "form",
       entityId: next.id,
@@ -214,9 +211,9 @@ export default function FormBuilderPage() {
       snapshot: next,
     });
     logActivity(publish === undefined ? "Updated" : publish ? "Published" : "Saved draft", next.name, "Forms");
-    setDraft(next);
-    setDirty(false);
+    draftApi.markSaved(next);
     push(publish === undefined ? "Form saved" : publish ? "Form published" : "Draft saved");
+    } catch (e) { push(e instanceof Error ? e.message : "Form save failed", "error"); }
   };
 
   const current = draft.fields.find((f) => f.id === activeField) ?? null;
@@ -232,7 +229,7 @@ export default function FormBuilderPage() {
           <h1 className="font-heading text-xl font-bold text-foreground-950">{draft.name}</h1>
           <div className="mt-1.5 flex items-center gap-2">
             <StatusBadge status={draft.status} />
-            {dirty ? <span className="text-xs font-medium text-primary-600">Unsaved changes</span> : null}
+            <DraftStatus draft={draftApi} />
           </div>
         </div>
         <WorkflowActions
@@ -244,7 +241,6 @@ export default function FormBuilderPage() {
           onPublish={() => save(true)}
           onRestore={(snap) => {
             setDraft(snap as AdminForm);
-            setDirty(false);
           }}
         />
       </div>
@@ -439,6 +435,10 @@ export default function FormBuilderPage() {
       {tab === "settings" ? (
         <Card className="max-w-2xl p-5">
           <div className="space-y-4">
+            {requestWebsiteDomain() ? <>
+              <Field label="Public form submission endpoint" hint="Tenant administrators approve the public HTTPS endpoint. No credentials belong in this URL."><TextInput disabled={user?.role !== "Admin"} value={draft.submitUrl ?? ""} onChange={(e) => set("submitUrl", e.target.value)} /></Field>
+              <Toggle label="Approved form submission endpoint" checked={draft.submissionApproved ?? false} onChange={(value) => { if (user?.role === "Admin") set("submissionApproved", value); }} />
+            </> : null}
             <Field label="Form name" required>
               <TextInput value={draft.name} onChange={(e) => set("name", e.target.value)} />
             </Field>

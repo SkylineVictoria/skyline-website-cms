@@ -6,7 +6,7 @@ import Seo from "@/components/feature/Seo";
 import Reveal from "@/components/base/Reveal";
 import { getCourseDetail } from "@/data/courseDetails";
 import { breadcrumbSchema, courseSchema } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 type Detail = { label: string; value: string; icon: string; wide?: boolean };
 

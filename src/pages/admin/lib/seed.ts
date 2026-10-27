@@ -5,7 +5,7 @@ import { site, navigation as publicNav } from "@/data/site";
 import { socialIconFor } from "@/lib/socialPlatforms";
 import { contentPages, formsPoliciesPage, type Block } from "@/data/pages";
 import { enrolSections, agentSections, type AppFieldType, type AppSection } from "@/data/applicationForms";
-import { defaultUsers } from "./auth";
+import { defaultUsers } from "./authContext";
 import type {
   AdminCourse,
   AdminData,

@@ -59,3 +59,6 @@ __pycache__/
 *.sqlite3
 migration-backups/
 migration-reports/
+
+# Backup task output
+docs/release-evidence/

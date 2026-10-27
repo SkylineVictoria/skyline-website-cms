@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import { useAuth } from "@/pages/admin/lib/auth";
+import { Link, Navigate, useNavigate } from "react-router-dom";
+import { useAuth } from "@/pages/admin/lib/authContext";
 import { AdminLoading, Button, Field, TextInput } from "@/pages/admin/components/ui";
+import { hadSession, loginUrl } from "@/lib/loginRouting";
 
 const MIN_LENGTH = 10;
 
@@ -28,7 +29,7 @@ export default function AdminSetPasswordPage() {
   }
 
   // No session (e.g. an expired reset link) → back to sign in.
-  if (!user) return <Navigate to="/admin/login" replace />;
+  if (!user) return <Navigate to={loginUrl("/admin", hadSession())} replace />;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -82,6 +83,7 @@ export default function AdminSetPasswordPage() {
 
       <div className="flex w-full flex-1 items-center justify-center px-5 py-10 lg:w-[54%]">
         <div className="w-full max-w-sm">
+          <Link to="/" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-foreground-600 hover:text-primary-700"><i className="ri-arrow-left-line" aria-hidden="true" />Back to site</Link>
           <h2 className="font-heading text-2xl font-bold text-foreground-950">Set a new password</h2>
           <p className="mt-1.5 text-sm text-foreground-600">
             {user.mustChangePassword

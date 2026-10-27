@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { Badge, Button, EmptyState, Modal, StatusBadge, useToast } from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Badge, Button, EmptyState, Modal, StatusBadge } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { Revision, RevisionEntity } from "@/pages/admin/lib/types";
 
 /* ------------------------------------------------------------ Snapshot view */

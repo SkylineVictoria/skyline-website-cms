@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { currentTenantSite, resolveTenantSite } from "@/lib/tenantSite";
 import { buildSeed } from "@/pages/admin/lib/seed";
 import { socialIconFor } from "@/lib/socialPlatforms";
 import type {
@@ -30,17 +31,14 @@ function fmtTs(v: unknown): string {
   return d.toISOString().slice(0, 16).replace("T", " ");
 }
 
-async function fetchRows(table: string): Promise<Row[]> {
-  const { data, error } = await supabase.from(table).select("*");
-  if (error) throw new Error(`${table}: ${error.message}`);
-  return (data ?? []) as Row[];
-}
+let loadedVersion = 0;
+let initializeSingletons = false;
 
 /* --------------------------------------------------------- Model -> DB rows */
 
 function settingsRow(s: AdminSettings): Row {
   return {
-    id: 1,
+    id: currentTenantSite()?.settingsId ?? 1,
     name: s.name,
     short_name: s.shortName,
     logo: s.logo,
@@ -54,18 +52,27 @@ function settingsRow(s: AdminSettings): Row {
     sign_in_url: s.signInUrl,
     home_hero_images: s.homeHeroImages,
     home_about_image: s.homeAboutImage,
+    primary_color: s.primaryColor ?? "#2563eb",
+    heading_font: s.headingFont ?? "Arial",
+    body_font: s.bodyFont ?? "Arial",
+    theme_configured: s.themeConfigured ?? false,
+    map_embed_src: s.mapEmbedSrc ?? "",
+    ...(s.accentColor !== undefined || s.loaderStyle !== undefined ? { accent_color: s.accentColor ? s.accentColor : null, loader_style: s.loaderStyle || "ring" } : {}),
   };
 }
 
 function footerRow(f: FooterConfig): Row {
   return {
-    id: 1,
+    id: currentTenantSite()?.footerId ?? 1,
     about: f.about,
     quick_links_title: f.quickLinksTitle,
     student_links_title: f.studentLinksTitle,
     acknowledgement: f.acknowledgement,
     copyright: f.copyright,
     show_acknowledgement: f.showAcknowledgement,
+    quick_links: f.quickLinks ?? [],
+    student_links: f.studentLinks ?? [],
+    links_configured: f.linksConfigured ?? false,
   };
 }
 
@@ -74,7 +81,7 @@ function tableSets(d: AdminData): Record<string, Row[]> {
     cms_settings: [settingsRow(d.settings)],
     cms_social_links: d.settings.social.map((s, i) => ({
       id: s.id,
-      settings_id: 1,
+      settings_id: currentTenantSite()?.settingsId ?? 1,
       label: s.label,
       href: s.href,
       icon: s.icon,
@@ -143,6 +150,8 @@ function tableSets(d: AdminData): Record<string, Row[]> {
       updated_by: p.updatedBy || null,
     })),
     cms_forms: d.forms.map((f) => ({
+      submit_url: f.submitUrl ?? "",
+      submission_approved: f.submissionApproved ?? false,
       id: f.id,
       name: f.name,
       description: f.description,
@@ -347,6 +356,8 @@ function pageFromRow(r: Row): AdminPage {
 
 function formFromRow(r: Row, fields: Row[]): AdminForm {
   return {
+    submitUrl: str(r.submit_url),
+    submissionApproved: bool(r.submission_approved),
     id: str(r.id),
     name: str(r.name),
     description: str(r.description),
@@ -411,6 +422,11 @@ export interface LoadResult {
 }
 
 export async function loadAdminData(): Promise<LoadResult> {
+  const tenant = await resolveTenantSite();
+  const { data: snapshot, error } = await supabase.rpc("cms_admin_snapshot");
+  if (error) throw new Error(error.message);
+  loadedVersion = Number(snapshot.version);
+  const fetchRows = async (table: string): Promise<Row[]> => snapshot[table] ?? [];
   const [
     settingsRows,
     socialRows,
@@ -464,6 +480,13 @@ export async function loadAdminData(): Promise<LoadResult> {
   const settings: AdminSettings = settingsRow
     ? {
         name: str(settingsRow.name),
+        primaryColor: str(settingsRow.primary_color),
+        headingFont: str(settingsRow.heading_font),
+        bodyFont: str(settingsRow.body_font),
+        themeConfigured: bool(settingsRow.theme_configured),
+        accentColor: settingsRow.accent_color ? str(settingsRow.accent_color) : undefined,
+        loaderStyle: settingsRow.loader_style ? str(settingsRow.loader_style) : undefined,
+        mapEmbedSrc: str(settingsRow.map_embed_src),
         shortName: str(settingsRow.short_name),
         logo: str(settingsRow.logo),
         favicon: str(settingsRow.favicon),
@@ -477,8 +500,8 @@ export async function loadAdminData(): Promise<LoadResult> {
         homeHeroImages: Array.isArray(settingsRow.home_hero_images)
           ? (settingsRow.home_hero_images as unknown[]).map((v) => str(v)).filter(Boolean)
           : seed.settings.homeHeroImages,
-        homeAboutImage: str(settingsRow.home_about_image) || seed.settings.homeAboutImage,
-        social: social.length ? social : seed.settings.social,
+        homeAboutImage: tenant ? str(settingsRow.home_about_image) : str(settingsRow.home_about_image) || seed.settings.homeAboutImage,
+        social: tenant ? social : social.length ? social : seed.settings.social,
       }
     : { ...seed.settings, social: social.length ? social : seed.settings.social };
 
@@ -486,6 +509,9 @@ export async function loadAdminData(): Promise<LoadResult> {
   const footer: FooterConfig = footerRowVal
     ? {
         about: str(footerRowVal.about),
+        quickLinks: footerRowVal.quick_links,
+        studentLinks: footerRowVal.student_links,
+        linksConfigured: bool(footerRowVal.links_configured),
         quickLinksTitle: str(footerRowVal.quick_links_title),
         studentLinksTitle: str(footerRowVal.student_links_title),
         acknowledgement: str(footerRowVal.acknowledgement),
@@ -552,21 +578,22 @@ export async function loadAdminData(): Promise<LoadResult> {
       snapshot: r.snapshot,
     }));
 
-  const isEmpty = courses.length === 0 && pages.length === 0 && forms.length === 0;
+  const isEmpty = !tenant && settingsRows.length === 0 && courses.length === 0 && pages.length === 0 && forms.length === 0;
+  initializeSingletons = isEmpty;
 
   return {
     data: {
       settings,
       courses,
       pages,
-      navigation: navigation.length ? navigation : seed.navigation,
+      navigation: tenant ? navigation : navigation.length ? navigation : seed.navigation,
       footer,
       forms,
-      media: seed.media,
+      media: tenant ? [] : seed.media,
       documents,
-      links: seed.links,
+      links: tenant ? [] : seed.links,
       seo,
-      users: users.length ? users : seed.users,
+      users: tenant ? [] : users.length ? users : seed.users,
       activity,
       revisions,
     },
@@ -598,45 +625,28 @@ export function emptyAdminData(): AdminData {
   };
 }
 
-async function reconcile(table: string, prevRows: Row[], nextRows: Row[], forceUpsert = false): Promise<void> {
-  const prevMap = new Map(prevRows.map((r) => [String(r.id), r]));
-  const nextMap = new Map(nextRows.map((r) => [String(r.id), r]));
-
-  const upserts: Row[] = [];
-  nextMap.forEach((row, id) => {
-    const before = prevMap.get(id);
-    // Singleton tables (settings/footer) are always rewritten: their value diff
-    // can be identical even when the row does not exist yet, and cms_social_links
-    // has an FK on cms_settings(id) — the parent must always be guaranteed first.
-    if (forceUpsert || !before || JSON.stringify(before) !== JSON.stringify(row)) upserts.push(row);
-  });
-
-  const deletes: string[] = [];
-  prevMap.forEach((_row, id) => {
-    if (!nextMap.has(id)) deletes.push(id);
-  });
-
-  if (upserts.length) {
-    const { error } = await supabase.from(table).upsert(upserts);
-    if (error) throw new Error(`${table} upsert: ${error.message}`);
-  }
-  if (deletes.length) {
-    const { error } = await supabase.from(table).delete().in("id", deletes);
-    if (error) throw new Error(`${table} delete: ${error.message}`);
-  }
-}
-
-/**
- * Tables with a single, fixed-id row. Their diff can report "no change" while
- * the row is actually absent from the database, so they are always upserted.
- * cms_settings MUST be written before cms_social_links (FK dependency).
- */
-const SINGLETON_TABLES = new Set(["cms_settings", "cms_footer"]);
-
+/** A single RPC retains relational rows, RLS and server-enforced version checks. */
 export async function persistAdminData(prev: AdminData, next: AdminData): Promise<void> {
   const prevSets = tableSets(prev);
   const nextSets = tableSets(next);
-  for (const table of TABLE_ORDER) {
-    await reconcile(table, prevSets[table] ?? [], nextSets[table] ?? [], SINGLETON_TABLES.has(table));
+  const changes = TABLE_ORDER.filter((table) => table !== "cms_users").map((table) => {
+    const before = new Map((prevSets[table] ?? []).map((row) => [String(row.id), row]));
+    const after = new Map((nextSets[table] ?? []).map((row) => [String(row.id), row]));
+    const history = table === "cms_revisions" || table === "cms_activity_log";
+    return {
+      table,
+      upserts: [...after].filter(([id, row]) => history ? !before.has(id) : !before.has(id) || JSON.stringify(before.get(id)) !== JSON.stringify(row) || initializeSingletons && ["cms_settings", "cms_footer"].includes(table)).map(([, row]) => row),
+      deletes: history ? [] : [...before.keys()].filter((id) => !after.has(id)),
+    };
+  }).filter((change) => change.upserts.length || change.deletes.length);
+  if (!changes.length) return;
+  const { data, error } = await supabase.rpc("cms_commit", { p_expected_version: loadedVersion, p_changes: changes });
+  if (error) throw new Error(error.code === "PT409" ? "Another editor saved changes. Reload the CMS before saving again." : error.message);
+  loadedVersion = Number(data);
+  initializeSingletons = false;
+  if (typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel("skyline-public-content");
+    channel.postMessage({ tenantId: currentTenantSite()?.tenantId ?? null });
+    channel.close();
   }
 }

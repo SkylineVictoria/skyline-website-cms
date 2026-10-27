@@ -1,19 +1,24 @@
-import { useState } from "react";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { Button, Card, Field, PageHeader, TextInput, useToast } from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Button, Card, Field, PageHeader, TextInput } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminSettings } from "@/pages/admin/lib/types";
 import { HistoryButton } from "@/pages/admin/components/workflow";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import { useDraft } from "@/pages/admin/lib/useDraft";
 
 export default function ContactPage() {
   const { data, update, logActivity, recordRevision } = useAdminData();
   const { push } = useToast();
-  const [draft, setDraft] = useState<AdminSettings>(data.settings);
+  const draftApi = useDraft<AdminSettings>("contact", "contact", data.settings);
+  const draft = draftApi.value;
+  const setDraft = draftApi.setValue;
 
   const set = <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
   const save = () => {
     update((d) => ({ ...d, settings: draft }));
+    draftApi.markSaved();
     recordRevision({ entity: "contact", entityId: "contact", title: "Contact Information", action: "Saved draft", status: "Draft", snapshot: draft });
     logActivity("Updated", "Contact information", "Contact");
     push("Contact information saved");
@@ -26,7 +31,8 @@ export default function ContactPage() {
         description="Phone, email and address shown in the header, footer, contact page and structured data."
         breadcrumb="Global"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <DraftStatus draft={draftApi} />
             <HistoryButton entity="contact" entityId="contact" title="Contact Information" onRestore={(snap) => setDraft(snap as AdminSettings)} />
             <Button icon="ri-save-line" onClick={save}>Save changes</Button>
           </div>

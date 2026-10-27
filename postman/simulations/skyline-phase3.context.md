@@ -1,0 +1,7 @@
+# Phase 3 local form provider simulation
+
+Local only. No cloud mock search, login, push, deployment or live-provider call is authorized. The response contract is inferred from the existing `src/pages/form/page.tsx` caller (`application/x-www-form-urlencoded`, `form_name`, JSON `code: OK` and `meta.message`), not verified against the real provider. The OpenAPI source and generated mock config are retained; the handler adds deterministic retry/error behavior and validates the observed request shape.
+
+Start: `postman simulation run postman/simulations/skyline-phase3.sim.yaml --port 4900 --no-history --output ndjson`. Save output to `docs/phase3-evidence/forms-simulation.ndjson` and errors separately. Take the bound URL from the listening event. App endpoints are `http://127.0.0.1:4900/forms/submit-a`, `/submit-b`, `/retry`, `/failure` and `/malformed`. The `forms` simulation prefix is removed before the handler sees the request. `/forms/__stats` and `/forms/__reset` are local test controls; unsupported API routes return 501.
+
+Only synthetic form inputs are used. No provider credentials exist in this mock. Both RTO endpoints return success; retry returns 503 once then success, failure returns 503, malformed returns HTML with HTTP 500. Browser tests allow only the loopback app, fixture gateway and this simulation. Read request events to establish actual wiring. The absence of a run log is NOT RUN, not a pass.

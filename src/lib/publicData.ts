@@ -1,4 +1,9 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { resolveTenantSite, type TenantSite } from "@/lib/tenantSite";
+import type { SiteTheme } from "@/lib/tenantTheme";
+import { LOADER_STYLES, type LoaderStyle } from "@/config/cmsLimits";
+import { safeContentUrl } from "@/lib/contentUrl";
+import { indexCmsPages } from "@/lib/cmsPath";
 import {
   site as staticSite,
   navigation as staticNavigation,
@@ -51,6 +56,8 @@ export interface PublicSocialLink {
 }
 
 export interface PublicSettings {
+  /** The logo saved in Website Settings, or "" when none is set (logo itself falls back to the default image). */
+  logoConfigured: string;
   name: string;
   shortName: string;
   logo: string;
@@ -88,6 +95,8 @@ export interface PublicFooter {
 export interface PublicPageContent {
   title: string;
   body: string;
+  seoTitle?: string;
+  seoDescription?: string;
 }
 
 export interface PublicDocumentGroup {
@@ -96,6 +105,8 @@ export interface PublicDocumentGroup {
 }
 
 export interface PublicForm {
+  submitUrl?: string;
+  submissionApproved?: boolean;
   id: string;
   name: string;
   description: string;
@@ -103,6 +114,11 @@ export interface PublicForm {
 }
 
 export interface PublicSiteData {
+  publicVersion?: number;
+  courseContent?: Record<string, { description: string; sections: { title: string; body: string }[] }>;
+  theme?: SiteTheme;
+  tenantSite?: TenantSite;
+  seo?: { path: string; title: string; description: string; keywords: string }[];
   settings: PublicSettings;
   navigation: NavItem[];
   footer: PublicFooter;
@@ -131,10 +147,6 @@ function socialIcon(label: string): string {
   return match?.icon ?? "ri-share-line";
 }
 
-function normalizeSlug(slug: string): string {
-  return slug.replace(/^\/+/, "").replace(/\/+$/, "").toLowerCase();
-}
-
 function orderCategories(categories: string[]): string[] {
   const present = new Set(categories.filter(Boolean));
   const ordered = staticCategories.filter((category) => present.has(category));
@@ -144,7 +156,9 @@ function orderCategories(categories: string[]): string[] {
 
 /* -------------------------------------------------------------- Mappings */
 
-function buildSettings(rows: Row[], socialRows: Row[]): PublicSettings {
+const loaderStyleOf = (value: unknown): LoaderStyle => ((LOADER_STYLES as readonly unknown[]).includes(value) ? (value as LoaderStyle) : "ring");
+
+function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSettings {
   const row = rows[0] ?? {};
   const social = socialRows
     .slice()
@@ -152,7 +166,7 @@ function buildSettings(rows: Row[], socialRows: Row[]): PublicSettings {
     .filter((item) => (item.visible === undefined ? true : Boolean(item.visible)))
     .map((item): PublicSocialLink => ({
       label: str(item.label),
-      href: str(item.href),
+      href: safeContentUrl(str(item.href)),
       icon: str(item.icon) || socialIcon(str(item.label)),
     }))
     .filter((item) => item.label && item.href);
@@ -166,7 +180,19 @@ function buildSettings(rows: Row[], socialRows: Row[]): PublicSettings {
     ? (row.home_hero_images as unknown[]).map((v) => str(v)).filter(Boolean)
     : [];
 
+  if (tenant) {
+    return {
+      logoConfigured: str(row.logo), name: str(row.name), shortName: str(row.short_name), logo: str(row.logo), favicon: str(row.favicon),
+      phone: str(row.phone), phoneHref: telHref(str(row.phone)), email: str(row.email), emailHref: `mailto:${str(row.email)}`,
+      admissionsEmail: str(row.admissions_email), admissionsHref: `mailto:${str(row.admissions_email)}`,
+      address: str(row.address), rto, cricos, legal: [rto && `RTO ${rto}`, cricos && `CRICOS ${cricos}`].filter(Boolean).join(" "),
+      signInUrl: str(row.sign_in_url), homeHeroImages: heroImages, homeAboutImage: str(row.home_about_image),
+      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), acknowledgement: "", footerIntro: "", copyright: "", social,
+    };
+  }
+
   return {
+    logoConfigured: str(row.logo),
     name: str(row.name) || staticSite.name,
     shortName: str(row.short_name) || staticSite.shortName,
     logo: str(row.logo) || DEFAULT_LOGO,
@@ -193,8 +219,12 @@ function buildSettings(rows: Row[], socialRows: Row[]): PublicSettings {
   };
 }
 
-function buildFooter(rows: Row[]): PublicFooter {
+function buildFooter(rows: Row[], tenant = false): PublicFooter {
   const row = rows[0] ?? {};
+  if (tenant) return {
+    about: str(row.about), quickLinksTitle: str(row.quick_links_title), studentLinksTitle: str(row.student_links_title),
+    acknowledgement: str(row.acknowledgement), copyright: str(row.copyright), showAcknowledgement: row.show_acknowledgement === true,
+  };
   return {
     about: str(row.about) || staticSite.footerIntro,
     quickLinksTitle: str(row.quick_links_title) || "Quick Links",
@@ -232,7 +262,7 @@ function toCourse(row: Row, sections: Row[], units: Row[], attachments: Row[]): 
     .map((attachment) => ({
       id: str(attachment.id),
       name: str(attachment.name) || str(attachment.original_file_name) || "Course document",
-      url: str(attachment.url),
+      url: safeContentUrl(str(attachment.url)),
     }))
     .filter((attachment) => attachment.url && attachment.url !== "#");
 
@@ -242,7 +272,7 @@ function toCourse(row: Row, sections: Row[], units: Row[], attachments: Row[]): 
     cricos: str(row.cricos) || undefined,
     name: str(row.name),
     category: str(row.category),
-    image: str(row.image),
+    image: safeContentUrl(str(row.image), "image"),
     imageAlt: str(row.name),
     summary: str(row.short_description) || undefined,
     mode: str(row.mode) || undefined,
@@ -310,12 +340,12 @@ function buildNavigation(rows: Row[], courseColumns: NavColumn[]): NavItem[] {
       const children = shown
         .filter((row) => row.parent_id === parent.id)
         .sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0))
-        .map((row): NavChild => ({ label: str(row.label), to: str(row.to_path) }))
+        .map((row): NavChild => ({ label: str(row.label), to: safeContentUrl(str(row.to_path)) }))
         .filter((child) => child.label);
 
       const item: NavItem = {
         label: str(parent.label),
-        to: str(parent.to_path) || undefined,
+        to: safeContentUrl(str(parent.to_path)) || undefined,
         external: truthy(parent.external),
       };
       if (children.length) item.children = children;
@@ -326,15 +356,12 @@ function buildNavigation(rows: Row[], courseColumns: NavColumn[]): NavItem[] {
 }
 
 function buildPages(rows: Row[]): Record<string, PublicPageContent> {
-  const pages: Record<string, PublicPageContent> = {};
-  rows
+  return indexCmsPages(rows
     .filter((row) => str(row.status) === "Published")
-    .forEach((row) => {
-      const key = normalizeSlug(str(row.slug));
-      if (!key) return;
-      pages[key] = { title: str(row.title) || str(row.name), body: str(row.body) };
-    });
-  return pages;
+    .map((row) => ({ slug: str(row.slug), page: {
+      title: str(row.title) || str(row.name), body: str(row.body),
+      seoTitle: str(row.seo_title), seoDescription: str(row.seo_description),
+    } })));
 }
 
 /* ------------------------------------------------------------------ Forms */
@@ -359,6 +386,8 @@ function buildForms(formRows: Row[], fieldRows: Row[]): PublicForm[] {
   return formRows
     .filter((f) => str(f.status) === "Published")
     .map((f): PublicForm => ({
+      submitUrl: f.submission_approved ? safeContentUrl(str(f.submit_url)) : undefined,
+      submissionApproved: f.submission_approved === true,
       id: str(f.id),
       name: str(f.name),
       description: str(f.description),
@@ -393,7 +422,7 @@ function buildDocumentGroups(rows: Row[]): PublicDocumentGroup[] {
     .forEach((row) => {
       const title = str(row.category) || "Documents";
       const group = groups.get(title) ?? { title, items: [] };
-      const url = str(row.url);
+    const url = safeContentUrl(str(row.url));
       group.items.push({ label: str(row.name), href: url, external: /^https?:/i.test(url) });
       groups.set(title, group);
     });
@@ -416,16 +445,15 @@ function buildDocumentGroups(rows: Row[]): PublicDocumentGroup[] {
 
 /* ----------------------------------------------------------------- Loading */
 
-async function fetchRows(table: string, orderBy?: string): Promise<Row[]> {
-  const builder = supabase.from(table).select("*");
-  const { data, error } = orderBy
-    ? await builder.order(orderBy, { ascending: true })
-    : await builder;
-  if (error) throw new Error(`${table}: ${error.message}`);
-  return (data ?? []) as Row[];
-}
-
 export async function loadPublicSiteData(): Promise<PublicSiteData> {
+  const tenantSite = await resolveTenantSite();
+  const publicVersion = tenantSite?.contentVersion ?? Number((await supabase.rpc("cms_public_revision")).data?.contentVersion ?? 0);
+  const { data: snapshot, error } = await supabase.rpc("cms_public_snapshot");
+  if (error) throw new Error("Could not load website content.");
+  const fetchRows = async (table: string, orderBy?: string): Promise<Row[]> => {
+    const rows = [...(snapshot?.[table] ?? [])] as Row[];
+    return orderBy ? rows.sort((a, b) => Number(a[orderBy] ?? 0) - Number(b[orderBy] ?? 0)) : rows;
+  };
   const [
     settingsRows,
     socialRows,
@@ -466,19 +494,31 @@ export async function loadPublicSiteData(): Promise<PublicSiteData> {
     documentRows.length > 0 ||
     formRows.length > 0;
 
-  if (!seeded) {
+  if (!seeded && !tenantSite) {
     return fallbackSiteData();
   }
 
   const { courses, featured } = buildCourseResults(courseRows, sectionRows, unitRows, attachmentRows);
   const courseColumns = buildCourseColumns(courses);
+  const settings = buildSettings(settingsRows, socialRows, !!tenantSite);
+  settings.logo = safeContentUrl(settings.logo, "image");
+  settings.favicon = safeContentUrl(settings.favicon, "image");
+  settings.signInUrl = safeContentUrl(settings.signInUrl);
+  settings.homeAboutImage = safeContentUrl(settings.homeAboutImage, "image");
+  settings.homeHeroImages = settings.homeHeroImages.map((url) => safeContentUrl(url, "image")).filter(Boolean);
+  const footerLinks = (rows: NavChild[]): NavChild[] => rows.map((link) => ({ label: str(link.label), to: safeContentUrl(str(link.to)) })).filter((link) => link.to);
 
   return {
-    settings: buildSettings(settingsRows, socialRows),
+    tenantSite: tenantSite ?? undefined,
+    publicVersion,
+    courseContent: Object.fromEntries(courseRows.map((row) => [str(row.slug), { description: str(row.full_description), sections: sectionRows.filter((section) => section.course_id === row.id).map((section) => ({ title: str(section.title), body: str(section.body) })) }])),
+    theme: tenantSite || settingsRows[0]?.theme_configured ? { primaryColor: str(settingsRows[0]?.primary_color), accentColor: str(settingsRows[0]?.accent_color) || undefined, loaderStyle: loaderStyleOf(settingsRows[0]?.loader_style), headingFont: str(settingsRows[0]?.heading_font), bodyFont: str(settingsRows[0]?.body_font) } : undefined,
+    seo: (snapshot?.cms_seo ?? []).map((s: Row) => ({ path: str(s.path), title: str(s.title), description: str(s.description), keywords: str(s.keywords) })),
+    settings,
     navigation: buildNavigation(navRows, courseColumns),
-    footer: buildFooter(footerRows),
-    footerLinks: staticFooterLinks,
-    studentLinks: staticStudentLinks,
+    footer: buildFooter(footerRows, !!tenantSite),
+    footerLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.quick_links ?? []) : staticFooterLinks),
+    studentLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.student_links ?? []) : staticStudentLinks),
     courses,
     featuredCourses: featured.length ? featured : courses.slice(0, 6),
     courseCategories: orderCategories(courses.map((course) => course.category)),

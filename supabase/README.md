@@ -1,5 +1,7 @@
 # Skyline Website CMS — Supabase backend
 
+> Audit update, 2026-10-24: this document contains historical CMS setup notes. The owner confirms CMS and Agency Portal share the Skyline backend; the independent Submissions system remains excluded. The checkout is React/Vite. Use [current database audit](../docs/ARCHITECTURE.md) and [deployment gates](../docs/SUPABASE.md) before any operation. The old four-migration list below is incomplete; 29 local files now exist, and live applied history was not verified. Historical account/verification statements are not current test evidence.
+
 This project stores all Website CMS content in a **separate Supabase project**
 (the "Skyline Test" development project). It does **not** touch the student
 management / "Submissions" database.

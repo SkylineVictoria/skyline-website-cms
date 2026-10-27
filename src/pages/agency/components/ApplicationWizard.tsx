@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ScanType } from "@/lib/docScan";
 import {
   deleteApplicationDocument,
+  flushApplicationEdits,
   getApplication,
   getDocumentSignedUrl,
   listApplicationDocuments,
@@ -24,8 +25,10 @@ import {
 import WizardDocumentStep from "@/pages/agency/components/WizardDocumentStep";
 import WizardReviewStep from "@/pages/agency/components/WizardReviewStep";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { formatDocumentExtraction } from "@/pages/agency/lib/documentExtraction";
+
+import { portalScopeCacheKey } from "@/lib/portalScope";
 
 interface Props {
   applicationId: string;
@@ -50,7 +53,7 @@ function stringValues(data: Record<string, unknown>): Record<string, string> {
 }
 
 function wizardStepKey(applicationId: string): string {
-  return `slit-portal-wizard-step:${applicationId}`;
+  return `slit-portal-wizard-step:${portalScopeCacheKey()}:${applicationId}`;
 }
 
 function savedWizardStep(applicationId: string): number {
@@ -99,6 +102,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   useEffect(() => {
     conflictsRef.current = conflicts;
   }, [conflicts]);
+
+  useEffect(() => {
+    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushApplicationEdits(applicationId));
+    window.addEventListener("portal-before-scope-switch", flush);
+    return () => window.removeEventListener("portal-before-scope-switch", flush);
+  }, [applicationId]);
 
   const current = WIZARD_STEPS[step];
   useEffect(() => {
@@ -329,7 +338,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         setConfirmed(Array.from(confirmedRef.current));
       }
       setConflicts((prev) => prev.filter((c) => c.field !== field));
-      void saveDocumentReview({ applicationId, values: { [field]: value }, provenance: { [field]: "Manual entry" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, state: "corrected" }] });
+      void saveDocumentReview({ applicationId, values: { [field]: value }, provenance: { [field]: "Manual entry" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, state: "corrected" }] }).catch(error => setSaveError(error.message));
     },
     [applicationId, updateValue, setProvenanceFor],
   );
@@ -338,7 +347,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     manualKeysRef.current.add(field);
     confirmedRef.current.add(field);
     setConfirmed(Array.from(confirmedRef.current));
-    void saveDocumentReview({ applicationId, values: { [field]: valuesRef.current[field] ?? "" }, provenance: { [field]: provenanceRef.current[field] ?? "Document extraction" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, state: "confirmed" }] });
+    void saveDocumentReview({ applicationId, values: { [field]: valuesRef.current[field] ?? "" }, provenance: { [field]: provenanceRef.current[field] ?? "Document extraction" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, state: "confirmed" }] }).catch(error => setSaveError(error.message));
   }, [applicationId]);
 
   const handleResolveConflict = useCallback(
@@ -349,7 +358,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setProvenanceFor([field], choice === "extracted" ? conflict?.source ?? "Document" : "Manual entry");
       handleConfirm(field);
       setConflicts((prev) => prev.map((c) => (c.field === field ? { ...c, choice } : c)));
-      void saveDocumentReview({ applicationId, values: { [field]: choice === "extracted" ? conflict?.extracted ?? "" : conflict?.existing ?? "" }, provenance: { [field]: choice === "extracted" ? conflict?.source ?? "Document extraction" : "Manual entry" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, candidateValue: conflict?.extracted, state: choice === "extracted" ? "confirmed" : "corrected" }] });
+      void saveDocumentReview({ applicationId, values: { [field]: choice === "extracted" ? conflict?.extracted ?? "" : conflict?.existing ?? "" }, provenance: { [field]: choice === "extracted" ? conflict?.source ?? "Document extraction" : "Manual entry" }, confirmed: Array.from(confirmedRef.current), resolutions: [{ field, candidateValue: conflict?.extracted, state: choice === "extracted" ? "confirmed" : "corrected" }] }).catch(error => setSaveError(error.message));
     },
     [applicationId, updateValue, setProvenanceFor, handleConfirm],
   );
@@ -522,6 +531,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setSaving(true);
     setSaveError("");
     try {
+      await flushApplicationEdits(applicationId);
       const clean: Record<string, string> = {};
       Object.entries(valuesRef.current).forEach(([key, value]) => {
         if (value && value.trim() !== "") clean[key] = value;

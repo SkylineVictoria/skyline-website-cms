@@ -1,7 +1,10 @@
 import { useMemo, useRef, useState } from "react";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import { useDraft } from "@/pages/admin/lib/useDraft";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { Button, Card, Field, SectionTabs, Select, StatusBadge, TextArea, TextInput, Toggle, useToast } from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Button, Card, Field, SectionTabs, Select, StatusBadge, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import { WorkflowActions } from "@/pages/admin/components/workflow";
 import RichTextEditor from "@/pages/admin/components/RichTextEditor";
 import { courseCategories } from "@/pages/admin/lib/seed";
@@ -29,9 +32,11 @@ export default function CourseEditorPage() {
   const { push } = useToast();
 
   const original = useMemo(() => data.courses.find((c) => c.slug === slug), [data.courses, slug]);
-  const [draft, setDraft] = useState<AdminCourse | null>(original ?? null);
+  const draftApi = useDraft<AdminCourse | null>("course", slug ?? "new", original ?? null);
+  const draft = draftApi.value;
+  const setDraft = draftApi.setValue;
+  const dirty = draftApi.dirty;
   const [tab, setTab] = useState("basic");
-  const [dirty, setDirty] = useState(false);
   const [uploading, setUploading] = useState(false);
   const attachmentInput = useRef<HTMLInputElement>(null);
 
@@ -51,7 +56,6 @@ export default function CourseEditorPage() {
 
   const set = <K extends keyof AdminCourse>(key: K, value: AdminCourse[K]) => {
     setDraft((d) => (d ? { ...d, [key]: value } : d));
-    setDirty(true);
   };
 
   const moveUnit = (index: number, dir: -1 | 1) => {
@@ -81,8 +85,7 @@ export default function CourseEditorPage() {
       snapshot: next,
     });
     logActivity(publish === undefined ? "Updated" : publish ? "Published" : "Saved draft", next.name, "Courses");
-    setDraft(next);
-    setDirty(false);
+    draftApi.markSaved(next);
     push(publish === undefined ? "Course saved" : publish ? "Course published" : "Draft saved");
   };
 
@@ -95,7 +98,7 @@ export default function CourseEditorPage() {
       const attachment = { id: stored.id, name: stored.originalFileName, url: stored.url, originalFileName: stored.originalFileName, storageFileName: stored.storageFileName, bucketName: stored.bucketName, storagePath: stored.storagePath, mimeType: stored.mimeType, fileSize: stored.fileSize };
       const next = { ...draft, attachments: [...draft.attachments, attachment] };
       await saveNow((state) => ({ ...state, courses: state.courses.map((course) => course.id === next.id ? next : course) }));
-      setDraft(next);
+      draftApi.markSaved(next);
       push("File uploaded and attachment record verified.");
     } catch (error) {
       // Storage succeeded but row persistence failed: never leave a silent orphan.
@@ -115,7 +118,7 @@ export default function CourseEditorPage() {
         await saveNow((state) => ({ ...state, courses: state.courses.map((course) => course.id === draft.id ? draft : course) }));
         throw error;
       }
-      setDraft(next);
+      draftApi.markSaved(next);
       push("Attachment removed from Storage and the CMS.", "info");
     } catch (error) { push(error instanceof Error ? error.message : "Could not remove attachment.", "error"); }
   };
@@ -131,7 +134,7 @@ export default function CourseEditorPage() {
           <h1 className="font-heading text-xl font-bold text-foreground-950">{draft.name}</h1>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <StatusBadge status={draft.status} />
-            {dirty ? <span className="text-xs font-medium text-primary-600">Unsaved changes</span> : null}
+            <DraftStatus draft={draftApi} />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -145,7 +148,6 @@ export default function CourseEditorPage() {
             onPublish={() => save(true)}
             onRestore={(snap) => {
               setDraft(snap as AdminCourse);
-              setDirty(false);
             }}
           />
         </div>

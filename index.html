@@ -2,29 +2,53 @@
 <html lang="en-AU">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="https://slit.edu.au/wp-content/uploads/2023/06/cropped-site-270x270.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Skyline Institute Of Technology | Melbourne RTO &amp; CRICOS Courses</title>
-    <meta name="description" content="Skyline Institute Of Technology (RTO 45989, CRICOS 04114B) delivers hands-on technical education and training in Melbourne across automotive, construction, civil design, furnishing and business." />
-    <meta name="keywords" content="Skyline Institute Of Technology, SLIT, Melbourne RTO, CRICOS 04114B, certificate III, diploma, civil construction design, carpentry, cabinet making" />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Skyline Institute Of Technology" />
-    <meta property="og:locale" content="en_AU" />
-    <meta property="og:title" content="Skyline Institute Of Technology" />
-    <meta property="og:description" content="Hands-on technical education and training in Melbourne. Explore certificate and diploma programs at Skyline Institute Of Technology." />
-    <meta property="og:url" content="https://slit.edu.au/" />
-    <meta property="og:image" content="https://static.readdy.ai/image/7fe129f8d7ac12cdc97a659d50dae110/10672c8cbcfc600c6073bd57b6040721.jpeg" />
-    <meta property="og:image:alt" content="Skyline Institute Of Technology, Melbourne" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Skyline Institute Of Technology" />
-    <meta name="twitter:description" content="Hands-on technical education and training in Melbourne. Explore certificate and diploma programs at Skyline Institute Of Technology." />
+    <title>Website</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.5.0/remixicon.min.css">
+  <style>
+    #boot{--tl-primary:#ea6619;position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#f8fafc;color:#0f172a;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;transition:opacity .3s ease}
+    #boot.boot-hide{opacity:0;pointer-events:none}
+    #boot .boot-ring{width:46px;height:46px;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 20%,var(--tl-primary) 100%);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));animation:boot-spin 1.1s linear infinite}
+    #boot .boot-bar,#boot .boot-dots{display:none}
+    #boot[data-style="bar"] .boot-ring,#boot[data-style="dots"] .boot-ring{display:none}
+    #boot[data-style="bar"] .boot-bar{display:block;width:200px;height:5px;border-radius:99px;background:var(--tl-primary);opacity:.85;animation:boot-pulse 1.2s ease-in-out infinite}
+    #boot[data-style="dots"] .boot-dots{display:flex;gap:7px}
+    #boot .boot-dots i{width:9px;height:9px;border-radius:50%;background:var(--tl-primary);animation:boot-pulse 1.1s ease-in-out infinite}
+    #boot .boot-dots i:nth-child(2){animation-delay:.15s}#boot .boot-dots i:nth-child(3){animation-delay:.3s}
+    @keyframes boot-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+    #boot .boot-name{margin:0;max-width:80vw;font-size:16px;font-weight:650;text-align:center;min-height:1em}
+    #boot .boot-label{margin:0;font-size:11px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:#64748b}
+    @keyframes boot-spin{to{transform:rotate(360deg)}}
+    @media (prefers-color-scheme:dark){#boot{background:#0b1020;color:#e5e7eb}#boot .boot-label{color:#94a3b8}}
+    @media (prefers-reduced-motion:reduce){#boot .boot-ring,#boot .boot-dots i,#boot[data-style="bar"] .boot-bar{animation:none}#boot{transition:none}}
+  </style>
   </head>
   <body>
+    <div id="boot" role="status" aria-live="polite">
+      <div class="boot-ring" aria-hidden="true"></div>
+      <div class="boot-bar" aria-hidden="true"></div>
+      <div class="boot-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p class="boot-name" id="boot-name"></p>
+      <p class="boot-label">Loading</p>
+    </div>
+    <script>
+      // Runs before the bundle: applies the cached tenant colour and name (see brand:<hostname> in TenantLoader.tsx).
+      (function () {
+        try {
+          var host = location.hostname.toLowerCase().replace(/\.$/, "");
+          var legacy = ["slit.edu.au", "www.slit.edu.au", "localhost", "127.0.0.1"].indexOf(host) > -1;
+          var brand = JSON.parse(localStorage.getItem("brand:" + (legacy ? "legacy" : host)) || "null");
+          if (!brand) return;
+          if (typeof brand.primary === "string" && /^#[0-9a-f]{6}$/i.test(brand.primary)) document.getElementById("boot").style.setProperty("--tl-primary", brand.primary);
+          if (typeof brand.name === "string") document.getElementById("boot-name").textContent = brand.name.slice(0, 80);
+          if (brand.loaderStyle === "bar" || brand.loaderStyle === "dots") document.getElementById("boot").setAttribute("data-style", brand.loaderStyle);
+        } catch (e) { /* storage unavailable: keep the generic loader */ }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

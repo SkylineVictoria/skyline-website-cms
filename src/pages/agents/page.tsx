@@ -3,7 +3,7 @@ import HtmlContent from "@/components/feature/HtmlContent";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import { breadcrumbSchema } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 export default function AgentsPage() {
   const { data, isLive } = usePublicSite();

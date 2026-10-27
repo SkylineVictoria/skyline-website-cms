@@ -1,25 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useAdminData } from "@/pages/admin/lib/store";
-import {
-  Badge,
-  Button,
-  Card,
-  ConfirmDialog,
-  EmptyState,
-  Field,
-  Modal,
-  PageHeader,
-  Select,
-  StatusBadge,
-  TextInput,
-  Toggle,
-  useToast,
-} from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, Modal, PageHeader, Select, StatusBadge, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminPage } from "@/pages/admin/lib/types";
 import { HistoryButton } from "@/pages/admin/components/workflow";
 import RichTextEditor from "@/pages/admin/components/RichTextEditor";
 import TableEditor from "@/pages/admin/components/TableEditor";
+import { isReservedCmsPath, normalizeCmsPath } from "@/lib/cmsPath";
+import { syncPageNavigation } from "@/lib/pageNav";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import DraftResume from "@/pages/admin/components/DraftResume";
+import { useSlotDraft } from "@/pages/admin/lib/useSlotDraft";
 
 /** The Registered Agents page is edited with the dedicated table editor. */
 const AGENTS_SLUG = "/agents";
@@ -40,10 +32,7 @@ const emptyDraft = (): AdminPage => ({
 
 /** Normalises a page URL to a single leading slash with no spaces. */
 const normalizeSlug = (value: string): string => {
-  let slug = value.trim();
-  if (!slug) return "";
-  if (!slug.startsWith("/")) slug = `/${slug}`;
-  return slug.replace(/\s+/g, "-").replace(/\/{2,}/g, "/");
+  return normalizeCmsPath(value.trim().replace(/\s+/g, "-")) ?? "";
 };
 
 export default function PagesPage() {
@@ -53,7 +42,9 @@ export default function PagesPage() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
   const [editing, setEditing] = useState<AdminPage | null>(null);
-  const [draft, setDraft] = useState<AdminPage | null>(null);
+  const slot = useSlotDraft<AdminPage>("page", (id) => data.pages.find((p) => p.id === id) ?? null, emptyDraft);
+  const draft = slot.draft;
+  const setDraft = slot.setDraft;
   const [pendingDelete, setPendingDelete] = useState<AdminPage | null>(null);
   const [saving, setSaving] = useState(false);
   const [tableDirty, setTableDirty] = useState(false);
@@ -71,20 +62,21 @@ export default function PagesPage() {
   const openNew = () => {
     setEditing(null);
     setTableDirty(false);
-    setDraft(emptyDraft());
+    slot.openNew();
   };
   const openEdit = (p: AdminPage) => {
     setEditing(p);
     setTableDirty(false);
-    setDraft({ ...p });
+    slot.openEdit(p.id, { ...p });
   };
   const close = () => {
     setTableDirty(false);
     setCloseGuard(false);
-    setDraft(null);
+    slot.close();
     setEditing(null);
   };
   // Guard user-initiated closes so unsaved table edits are never silently lost.
+  const resumeDraft = (id: string) => { setEditing(id === "new" ? null : data.pages.find((p) => p.id === id) ?? null); slot.resume(id); };
   const requestClose = () => {
     if (tableDirty) {
       setCloseGuard(true);
@@ -98,7 +90,11 @@ export default function PagesPage() {
     const name = draft.name.trim();
     const slug = normalizeSlug(draft.slug);
     if (!name || !slug) {
-      push("Page name and URL are required", "error");
+      push("A page name and valid local URL path are required", "error");
+      return false;
+    }
+    if (isReservedCmsPath(slug) || slug === "/") {
+      push("This URL is reserved for an application route. Choose a different path.", "error");
       return false;
     }
     const clash = data.pages.find(
@@ -113,14 +109,14 @@ export default function PagesPage() {
     try {
       if (editing) {
         const next = { ...normalized, updatedAt: "2026-10-12 09:14" };
-        await saveNow((d) => ({ ...d, pages: d.pages.map((p) => (p.id === next.id ? next : p)) }));
+        await saveNow((d) => ({ ...d, pages: d.pages.map((p) => (p.id === next.id ? next : p)), navigation: syncPageNavigation(d.navigation, next, editing.slug) }));
         recordRevision({ entity: "page", entityId: next.id, title: next.name, action: next.status === "Published" ? "Published" : "Saved draft", status: next.status, snapshot: next });
         logActivity("Updated", next.name, "Pages");
         push("Page updated");
       } else {
         const id = `page-${Date.now()}`;
         const next = { ...normalized, id, updatedAt: "2026-10-12 09:14" };
-        await saveNow((d) => ({ ...d, pages: [...d.pages, next] }));
+        await saveNow((d) => ({ ...d, pages: [...d.pages, next], navigation: syncPageNavigation(d.navigation, next) }));
         recordRevision({ entity: "page", entityId: next.id, title: next.name, action: "Created", status: next.status, snapshot: next });
         logActivity("Created", next.name, "Pages");
         push(next.status === "Published" ? `Page created — live at ${next.slug}` : "Page created as a draft (not public yet)");
@@ -139,7 +135,7 @@ export default function PagesPage() {
 
   const confirmDelete = () => {
     if (!pendingDelete) return;
-    update((d) => ({ ...d, pages: d.pages.filter((p) => p.id !== pendingDelete.id) }));
+    update((d) => ({ ...d, pages: d.pages.filter((p) => p.id !== pendingDelete.id), navigation: syncPageNavigation(d.navigation, { ...pendingDelete, inNav: false }) }));
     logActivity("Deleted", pendingDelete.name, "Pages");
     push("Page deleted", "info");
     setPendingDelete(null);
@@ -157,6 +153,7 @@ export default function PagesPage() {
           </Button>
         }
       />
+      <DraftResume items={slot.pending.map((d) => ({ id: d.id, label: d.id === "new" ? "New page (not created yet)" : `Page: ${data.pages.find((p) => p.id === d.id)?.name ?? d.id}` }))} onResume={resumeDraft} onDiscard={slot.dropPending} />
 
       <Card className="mb-5 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -270,6 +267,7 @@ export default function PagesPage() {
       >
         {draft ? (
           <div className="space-y-4">
+            <DraftStatus draft={slot} />
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="Page name" required>
                 <TextInput value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value, title: draft.title || e.target.value })} />
@@ -334,6 +332,7 @@ export default function PagesPage() {
             </div>
             <div className="flex flex-wrap items-center gap-6">
               <Toggle checked={draft.inNav} onChange={(v) => setDraft({ ...draft, inNav: v })} label="Show in main menu" />
+              <p className="mt-1 text-xs text-foreground-500">Adds the page to the header menu when it is published (the menu holds at most 7 top-level items). Arrange it under Header &amp; Navigation.</p>
               <Field label="Status">
                 <Select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as AdminPage["status"] })}>
                   <option value="Published">Published</option>

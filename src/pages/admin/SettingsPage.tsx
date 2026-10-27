@@ -1,29 +1,30 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { Button, Card, Field, MediaUrlInput, PageHeader, Select, TextInput, Toggle, useToast } from "@/pages/admin/components/ui";
+import { useState, type FormEvent } from "react";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Button, Card, Field, MediaUrlInput, PageHeader, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
+import ThemeSection from "@/pages/admin/components/ThemeSection";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import { useDraft } from "@/pages/admin/lib/useDraft";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminSettings } from "@/pages/admin/lib/types";
 import { HistoryButton } from "@/pages/admin/components/workflow";
 import { SOCIAL_PLATFORMS, isKnownPlatform, socialIconFor } from "@/lib/socialPlatforms";
-import { useAuth } from "@/pages/admin/lib/auth";
+import SenderSettings from "@/pages/admin/components/SenderSettings";
+import EventRecipients from "@/pages/admin/components/EventRecipients";
+import { useAuth } from "@/pages/admin/lib/authContext";
 import { MIN_PASSWORD_LENGTH, passwordProblem } from "@/lib/passwords";
 
 export default function SettingsPage() {
   const { data, saveNow, logActivity, recordRevision } = useAdminData();
   const { push } = useToast();
-  const [draft, setDraft] = useState<AdminSettings>(data.settings);
+  const draftApi = useDraft<AdminSettings>("settings", "settings", data.settings);
+  const draft = draftApi.value;
+  const setDraft = draftApi.setValue;
   const [saving, setSaving] = useState(false);
   const { verifyAndChangePassword } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordBusy, setPasswordBusy] = useState(false);
-
-  // Re-sync the local draft whenever the store's settings identity changes
-  // (e.g. the async CMS load lands). Without this the form could edit a stale
-  // seed and then overwrite the database with it.
-  useEffect(() => {
-    setDraft(data.settings);
-  }, [data.settings]);
 
   const set = <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -58,6 +59,7 @@ export default function SettingsPage() {
   const addHero = () => set("homeHeroImages", [...draft.homeHeroImages, ""]);
 
   const save = async () => {
+    if (!draft.name.trim()) { push("Website name is required.", "error"); return; }
     const missing = draft.social.find((item) => item.enabled && !item.href.trim());
     if (missing) {
       push(`Add a profile URL for ${missing.label} (or turn it off) before saving.`, "error");
@@ -75,6 +77,7 @@ export default function SettingsPage() {
       // Awaits the actual Supabase write — the form is only reported as saved
       // when the database really accepted the change.
       await saveNow((d) => ({ ...d, settings: draft }));
+      draftApi.markSaved();
       recordRevision({ entity: "settings", entityId: "settings", title: "Website Settings", action: "Saved draft", status: "Draft", snapshot: draft });
       logActivity("Updated", "Website settings", "Settings");
       push("Website settings saved");
@@ -108,7 +111,8 @@ export default function SettingsPage() {
         description="The site identity used across header, footer, SEO and structured data. Set once — every page updates."
         breadcrumb="Global"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <DraftStatus draft={draftApi} />
             <HistoryButton entity="settings" entityId="settings" title="Website Settings" onRestore={(snap) => setDraft(snap as AdminSettings)} />
             <Button icon="ri-save-line" onClick={save} disabled={saving}>
               {saving ? "Saving…" : "Save changes"}
@@ -118,6 +122,7 @@ export default function SettingsPage() {
       />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <ThemeSection value={draft} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} />
         <Card className="p-5">
           <h2 className="mb-1 font-heading text-base font-semibold text-foreground-950">Change password</h2>
           <p className="mb-4 text-sm text-foreground-500">Confirm your current password before choosing a new one.</p>
@@ -301,6 +306,8 @@ export default function SettingsPage() {
             ) : null}
           </div>
         </Card>
+
+        <div className="space-y-5 xl:col-span-2"><SenderSettings tenantId={null} /><EventRecipients tenantId={null} /></div>
       </div>
 
       <div className="mt-5 flex justify-end">

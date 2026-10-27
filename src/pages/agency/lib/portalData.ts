@@ -1,5 +1,6 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import type { PortalAgency } from "@/pages/agency/lib/portalAuth";
+import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
+import { STATUS_LABELS } from "@/pages/agency/lib/applicationAccess";
 
 /** Data access for the Agency Portal. Every read is scoped by database RLS. */
 
@@ -16,16 +17,16 @@ export type ApplicationStatus =
   | "withdrawn";
 
 export const STATUS_META: Record<ApplicationStatus, { label: string; className: string; icon: string }> = {
-  draft: { label: "Draft", className: "bg-background-100 text-foreground-700", icon: "ri-file-edit-line" },
-  submitted: { label: "Submitted", className: "bg-secondary-100 text-secondary-900", icon: "ri-send-plane-line" },
-  under_review: { label: "Under review", className: "bg-secondary-100 text-secondary-900", icon: "ri-search-eye-line" },
-  action_required: { label: "Action required", className: "bg-primary-100 text-primary-800", icon: "ri-alert-line" },
-  offer_issued: { label: "Offer issued", className: "bg-accent-100 text-accent-900", icon: "ri-mail-star-line" },
-  offer_accepted: { label: "Offer accepted", className: "bg-accent-100 text-accent-900", icon: "ri-checkbox-circle-line" },
-  coe_issued: { label: "CoE issued", className: "bg-accent-100 text-accent-900", icon: "ri-file-shield-2-line" },
-  enrolled: { label: "Enrolled", className: "bg-accent-500 text-background-50", icon: "ri-graduation-cap-line" },
-  rejected: { label: "Rejected", className: "bg-primary-100 text-primary-800", icon: "ri-close-circle-line" },
-  withdrawn: { label: "Withdrawn", className: "bg-background-200 text-foreground-600", icon: "ri-arrow-go-back-line" },
+  draft: { label: STATUS_LABELS.draft, className: "bg-background-100 text-foreground-700", icon: "ri-file-edit-line" },
+  submitted: { label: STATUS_LABELS.submitted, className: "bg-secondary-100 text-secondary-900", icon: "ri-send-plane-line" },
+  under_review: { label: STATUS_LABELS.under_review, className: "bg-secondary-100 text-secondary-900", icon: "ri-search-eye-line" },
+  action_required: { label: STATUS_LABELS.action_required, className: "bg-primary-100 text-primary-800", icon: "ri-alert-line" },
+  offer_issued: { label: STATUS_LABELS.offer_issued, className: "bg-accent-100 text-accent-900", icon: "ri-mail-star-line" },
+  offer_accepted: { label: STATUS_LABELS.offer_accepted, className: "bg-accent-100 text-accent-900", icon: "ri-checkbox-circle-line" },
+  coe_issued: { label: STATUS_LABELS.coe_issued, className: "bg-accent-100 text-accent-900", icon: "ri-file-shield-2-line" },
+  enrolled: { label: STATUS_LABELS.enrolled, className: "bg-accent-500 text-background-50", icon: "ri-graduation-cap-line" },
+  rejected: { label: STATUS_LABELS.rejected, className: "bg-primary-100 text-primary-800", icon: "ri-close-circle-line" },
+  withdrawn: { label: STATUS_LABELS.withdrawn, className: "bg-background-200 text-foreground-600", icon: "ri-arrow-go-back-line" },
 };
 
 export const ROLE_LABELS: Record<string, string> = {
@@ -41,7 +42,7 @@ export function statusMeta(status: string) {
 export interface DashboardCounts {
   total: number;
   drafts: number;
-  inReview: number;
+  offerAccepted: number;
   actionRequired: number;
   enrolled: number;
 }
@@ -177,8 +178,9 @@ export async function listPortalUsers(): Promise<PortalUserRow[]> {
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => {
     const r = row as Record<string, unknown>;
-    const memberships = (r.agency_memberships as Array<Record<string, unknown>> | undefined) ?? [];
-    const m = memberships[0];
+    // PostgREST returns a single object (not an array) because agency_memberships.user_id is unique; accept both shapes.
+    const embedded = r.agency_memberships as Record<string, unknown> | Array<Record<string, unknown>> | null | undefined;
+    const m = Array.isArray(embedded) ? embedded[0] : embedded ?? undefined;
     const agency = (m?.agencies as Record<string, unknown> | undefined) ?? undefined;
     return {
       profileId: String(r.id),
@@ -196,18 +198,9 @@ export async function listPortalUsers(): Promise<PortalUserRow[]> {
 
 /** Totals for the signed-in user's authorized scope (RLS decides the rows). */
 export async function getDashboardCounts(): Promise<DashboardCounts> {
-  const { data, error } = await supabase.from("enrollment_applications").select("status");
+  const { data, error } = await supabase.rpc("portal_dashboard");
   if (error) throw new Error(error.message);
-  const counts: DashboardCounts = { total: 0, drafts: 0, inReview: 0, actionRequired: 0, enrolled: 0 };
-  for (const row of data ?? []) {
-    const status = String((row as { status?: string }).status ?? "draft");
-    counts.total += 1;
-    if (status === "draft") counts.drafts += 1;
-    else if (status === "submitted" || status === "under_review") counts.inReview += 1;
-    else if (status === "action_required") counts.actionRequired += 1;
-    else if (status === "enrolled") counts.enrolled += 1;
-  }
-  return counts;
+  return { total: data.total, drafts: data.statuses.draft ?? 0, offerAccepted: data.statuses.offer_accepted ?? 0, actionRequired: data.statuses.action_required ?? 0, enrolled: data.statuses.enrolled ?? 0 };
 }
 
 export async function listNotifications(): Promise<NotificationRow[]> {
@@ -230,15 +223,36 @@ export async function listNotifications(): Promise<NotificationRow[]> {
   });
 }
 
+export type NotificationEvent = "application_submitted" | "application_status_changed" | "offer_accepted" | "coe_voe_issued";
+
+/** Email preferences of the signed-in user; an event with no row is on by default. */
+export async function getEmailPreferences(): Promise<Record<NotificationEvent, boolean>> {
+  const { data, error } = await supabase.from("notification_preferences").select("event, email_enabled");
+  if (error) throw new Error(error.message);
+  const result: Record<NotificationEvent, boolean> = { application_submitted: true, application_status_changed: true, offer_accepted: true, coe_voe_issued: true };
+  for (const row of data ?? []) {
+    const r = row as { event: NotificationEvent; email_enabled: boolean };
+    if (r.event in result) result[r.event] = r.email_enabled;
+  }
+  return result;
+}
+
+export async function setEmailPreference(event: NotificationEvent, enabled: boolean): Promise<void> {
+  const { error } = await supabase.rpc("portal_set_notification_preference", { p_event: event, p_email_enabled: enabled });
+  if (error) throw new Error(error.message);
+}
+
 export async function markNotificationRead(id: string): Promise<void> {
-  await supabase.from("portal_notifications").update({ read: true }).eq("id", id);
+  const { error } = await supabase.from("portal_notifications").update({ read: true }).eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
   if (!uid) return;
-  await supabase.from("portal_notifications").update({ read: true }).eq("recipient", uid).eq("read", false);
+  const { error } = await supabase.from("portal_notifications").update({ read: true }).eq("recipient", uid).eq("read", false);
+  if (error) throw new Error(error.message);
 }
 
 export function formatDate(value: string | null): string {
@@ -246,4 +260,61 @@ export function formatDate(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "\u2014";
   return date.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+}
+
+export interface InvitationRow {
+  id: string;
+  email: string;
+  fullName: string;
+  role: "agency_admin" | "agent";
+  agencyId: string;
+  agencyName: string;
+  status: "pending" | "expired";
+  expiresAt: string;
+  invitedBy: string | null;
+  invitedByName: string;
+}
+
+/** Pending invitations visible to the caller (RLS: organization admin = all, agency admin = own agency). */
+export async function listInvitations(): Promise<InvitationRow[]> {
+  const { data, error } = await supabase
+    .from("agency_invitations")
+    .select("id, email, full_name, role, agency_id, expires_at, invited_by, invited_by_name, agencies(name)")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    const expiresAt = String(r.expires_at ?? "");
+    return {
+      id: String(r.id),
+      email: String(r.email ?? ""),
+      fullName: String(r.full_name ?? ""),
+      role: r.role === "agency_admin" ? "agency_admin" : "agent",
+      agencyId: String(r.agency_id ?? ""),
+      agencyName: String((r.agencies as Record<string, unknown> | null)?.name ?? ""),
+      status: new Date(expiresAt).getTime() < Date.now() ? "expired" : "pending",
+      expiresAt,
+      invitedBy: r.invited_by ? String(r.invited_by) : null,
+      invitedByName: String(r.invited_by_name ?? ""),
+    } satisfies InvitationRow;
+  });
+}
+
+/** Calls portal-admin-users and surfaces the server's own error text instead of the generic non-2xx message. */
+export async function invokePortalUsers(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { data, error } = await supabase.functions.invoke("portal-admin-users", { body });
+  if (error) {
+    let message = error.message;
+    const context = (error as { context?: unknown }).context;
+    if (context instanceof Response) {
+      try {
+        const parsed = (await context.clone().json()) as { error?: string };
+        if (parsed?.error) message = parsed.error;
+      } catch { /* keep the generic message */ }
+    }
+    throw new Error(message);
+  }
+  if (data?.error) throw new Error(String(data.error));
+  return (data ?? {}) as Record<string, unknown>;
 }

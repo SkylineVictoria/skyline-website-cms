@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   formatDate,
+  getEmailPreferences,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  setEmailPreference,
+  type NotificationEvent,
   type NotificationRow,
 } from "@/pages/agency/lib/portalData";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
@@ -12,6 +15,8 @@ export default function PortalNotificationsPage() {
   const [items, setItems] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [prefs, setPrefs] = useState<Record<NotificationEvent, boolean> | null>(null);
+  const [prefError, setPrefError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -28,6 +33,20 @@ export default function PortalNotificationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    getEmailPreferences().then(setPrefs).catch(() => setPrefError("Your email preferences could not be loaded."));
+  }, []);
+
+  const togglePref = async (event: NotificationEvent, enabled: boolean) => {
+    setPrefError("");
+    try {
+      await setEmailPreference(event, enabled);
+      setPrefs((prev) => (prev ? { ...prev, [event]: enabled } : prev));
+    } catch {
+      setPrefError("Your email preference could not be saved. Please try again.");
+    }
+  };
 
   const handleRead = async (id: string) => {
     await markNotificationRead(id);
@@ -59,6 +78,24 @@ export default function PortalNotificationsPage() {
           ) : undefined
         }
       />
+
+      <fieldset className="mt-6 rounded-lg border border-background-200 bg-background-50 p-4">
+        <legend className="px-1 text-sm font-semibold text-foreground-900">Email me about</legend>
+        {prefs ? (
+          <div className="space-y-2">
+            {([["application_submitted", "Applications that are submitted"], ["application_status_changed", "Status changes on my applications"], ["offer_accepted", "Offers accepted on my applications"], ["coe_voe_issued", "CoE / VoE issued on my applications"]] as [NotificationEvent, string][]).map(([event, label]) => (
+              <label key={event} className="flex cursor-pointer items-center gap-2 text-sm text-foreground-800">
+                <input type="checkbox" checked={prefs[event]} onChange={(e) => void togglePref(event, e.target.checked)} className="h-4 w-4" />
+                {label}
+              </label>
+            ))}
+            <p className="text-xs text-foreground-500">These choices apply to email only. Notifications here in the portal are not affected.</p>
+          </div>
+        ) : (
+          <p className="text-sm text-foreground-500">{prefError || "Loading your email preferences\u2026"}</p>
+        )}
+        {prefs && prefError ? <p role="alert" className="mt-2 text-sm text-primary-900">{prefError}</p> : null}
+      </fieldset>
 
       <div className="mt-6">
         {loading ? (

@@ -5,7 +5,7 @@ import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import Reveal from "@/components/base/Reveal";
 import { breadcrumbSchema, courseListSchema } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 export default function CoursesPage() {
   const [searchParams] = useSearchParams();

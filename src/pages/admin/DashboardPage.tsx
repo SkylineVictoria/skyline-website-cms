@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useAuth } from "@/pages/admin/lib/auth";
-import { useAdminData } from "@/pages/admin/lib/store";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Card, EmptyState, PageHeader, StatCard, StatusBadge } from "@/pages/admin/components/ui";
 
 const QUICK_ACTIONS = [

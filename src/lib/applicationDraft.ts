@@ -88,9 +88,10 @@ export function collectFormValues(form: HTMLFormElement): DraftValues {
       if (element.type === "file" || element.type === "submit" || element.type === "button") continue;
       if (element.type === "checkbox") {
         if (element.checked) {
-          const list = Array.isArray(out[name]) ? (out[name] as string[]) : [];
+          const key = name.endsWith("[]") ? name.slice(0, -2) : name;
+          const list = Array.isArray(out[key]) ? (out[key] as string[]) : [];
           list.push(element.value);
-          out[name] = list;
+          out[key] = list;
         }
         continue;
       }
@@ -128,7 +129,7 @@ export function applyFormValues(form: HTMLFormElement, values: DraftValues, retr
 
   for (const [name, value] of Object.entries(values)) {
     const nodes = form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
-      `[name="${name}"]`,
+      `[name="${name}"], [name="${name.endsWith("[]") ? name.slice(0, -2) : name + "[]"}"]`,
     );
     if (nodes.length === 0) {
       missed[name] = value;

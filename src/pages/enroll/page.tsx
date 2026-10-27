@@ -56,10 +56,10 @@ export default function EnrollPage() {
               and track admissions progress in the Agency Portal.
             </p>
             <Link
-              to="/agency/login"
+              to="/login"
               className="mt-6 inline-flex w-fit items-center gap-2 whitespace-nowrap rounded-md border border-primary-300 bg-primary-50 px-5 py-2.5 text-sm font-semibold text-primary-700 transition-colors hover:border-primary-400 hover:bg-primary-100"
             >
-              Sign in to the Agency Portal
+              Sign in
               <i className="ri-arrow-right-line" aria-hidden="true" />
             </Link>
             <p className="mt-3 text-xs text-foreground-500">

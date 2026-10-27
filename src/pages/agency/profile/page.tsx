@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { ROLE_LABELS } from "@/pages/agency/lib/portalData";
 import { PageHeading } from "@/pages/agency/components/PortalUI";
 import { passwordProblem, MIN_PASSWORD_LENGTH } from "@/lib/passwords";

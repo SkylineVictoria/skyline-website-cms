@@ -5,7 +5,7 @@ import CourseCard from "@/components/feature/CourseCard";
 import LatestNews from "@/components/feature/LatestNews";
 import Seo from "@/components/feature/Seo";
 import { defaultOgImage, siteDescription } from "@/data/seo";
-import { usePublicSite } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 
 const services = [
   {

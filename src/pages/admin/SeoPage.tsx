@@ -1,31 +1,43 @@
 import { useState } from "react";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { Button, Card, Field, Modal, PageHeader, TextArea, TextInput, useToast } from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { Button, Card, Field, Modal, PageHeader, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { useToast } from "@/pages/admin/components/toastContext";
 import type { SeoEntry } from "@/pages/admin/lib/types";
 import { HistoryButton } from "@/pages/admin/components/workflow";
+import DraftStatus from "@/pages/admin/components/DraftStatus";
+import DraftResume from "@/pages/admin/components/DraftResume";
+import { useSlotDraft } from "@/pages/admin/lib/useSlotDraft";
+
+const blankSeo = (): SeoEntry => ({ id: crypto.randomUUID(), page: "", path: "/", title: "", description: "", keywords: "" });
 
 export default function SeoPage() {
-  const { data, update, logActivity, recordRevision } = useAdminData();
+  const { data, saveNow, logActivity, recordRevision } = useAdminData();
   const { push } = useToast();
   const [editing, setEditing] = useState<SeoEntry | null>(null);
-  const [draft, setDraft] = useState<SeoEntry | null>(null);
+  const slot = useSlotDraft<SeoEntry>("seo", (id) => data.seo.find((e) => e.id === id) ?? null, blankSeo);
+  const draft = slot.draft;
+  const setDraft = slot.setDraft;
 
   const openEdit = (e: SeoEntry) => {
     setEditing(e);
-    setDraft({ ...e });
+    slot.openEdit(e.id, { ...e });
   };
   const close = () => {
-    setDraft(null);
+    slot.close();
     setEditing(null);
   };
+  const resumeDraft = (id: string) => { setEditing(id === "new" ? null : data.seo.find((e) => e.id === id) ?? null); slot.resume(id); };
 
-  const save = () => {
+  const save = async () => {
     if (!draft) return;
-    update((d) => ({ ...d, seo: d.seo.map((s) => (s.id === draft.id ? draft : s)) }));
+    if (!/^\/(?!\/)/.test(draft.path)) { push("Enter a website path beginning with /", "error"); return; }
+    try {
+    await saveNow((d) => ({ ...d, seo: editing ? d.seo.map((s) => (s.id === draft.id ? draft : s)) : [...d.seo, draft] }));
     recordRevision({ entity: "seo", entityId: draft.id, title: `${draft.page} SEO`, action: "Updated", status: "Draft", snapshot: draft });
     logActivity("Updated", `${draft.page} SEO`, "SEO");
     push("SEO settings saved");
     close();
+    } catch (e) { push(e instanceof Error ? e.message : "SEO save failed", "error"); }
   };
 
   const charGood = (v: number, max: number) => v > 0 && v <= max;
@@ -36,7 +48,9 @@ export default function SeoPage() {
         title="SEO / Page Settings"
         description="Search titles, descriptions and keywords for every public page."
         breadcrumb="Governance"
+        actions={<Button onClick={() => { setEditing(null); slot.openNew(); }}>Add page SEO</Button>}
       />
+      <DraftResume items={slot.pending.map((d) => ({ id: d.id, label: d.id === "new" ? "New SEO entry (not saved yet)" : `SEO: ${data.seo.find((e) => e.id === d.id)?.page ?? d.id}` }))} onResume={resumeDraft} onDiscard={slot.dropPending} />
 
       <Card>
         <div className="overflow-x-auto">
@@ -105,6 +119,7 @@ export default function SeoPage() {
       >
         {draft ? (
           <div className="space-y-4">
+            <DraftStatus draft={slot} />
             <Field label="Page name">
               <TextInput value={draft.page} onChange={(e) => setDraft({ ...draft, page: e.target.value })} />
             </Field>

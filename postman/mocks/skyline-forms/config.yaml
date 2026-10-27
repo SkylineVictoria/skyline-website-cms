@@ -1,0 +1,11 @@
+version: 1
+id: 1793c34f-9ea7-4341-baf4-01fbd0c2c926
+name: Skyline public form provider test contract
+slug: skyline-public-form-provider-tes
+protocol: http
+port: 4901
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

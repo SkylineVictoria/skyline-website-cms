@@ -1,8 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { backendConfiguration, requiredConfiguration } from "../_shared/config.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const createAdminClient = () => createClient(url, serviceKey, { auth: { persistSession: false } });
+type AdminClient = ReturnType<typeof createAdminClient>;
 const openAiKey = Deno.env.get("OPENAI_API_KEY") ?? ""; // shared backend secret; never returned
 const configuredOpenAiBaseUrl = (Deno.env.get("OPENAI_BASE_URL") ?? "").replace(/\/$/, "");
 // A provider override is intentionally available only to the disposable local
@@ -31,15 +34,27 @@ const strip = (html: string) => html.replace(/<\/(p|div|h[1-6]|li|tr)>/gi, "\n")
 const safeUrl = (value: string) => value.startsWith("/") || /^https:\/\//i.test(value) ? value : "";
 
 type Page = { number: number; original: string; cleaned: string; status: "digital" | "ocr" | "empty" | "partial" | "failed"; warnings: string[] };
-type Source = { type: "course" | "page" | "document"; key: string; version: string; title: string; canonicalUrl: string; content: string; courseCode?: string; pages?: Page[]; fileHash?: string; extractionMethod?: string; extractionStatus?: "complete" | "partial" };
-const maxDocumentBytes = Number(Deno.env.get("PUBLIC_ASSISTANT_DOCUMENT_MAX_BYTES") ?? 20 * 1024 * 1024);
-const maxDocumentPages = Number(Deno.env.get("PUBLIC_ASSISTANT_DOCUMENT_MAX_PAGES") ?? 120);
+type Source = { type: "course" | "page" | "document"; key: string; version: string; title: string; canonicalUrl: string; content: string; courseCode?: string; pages?: Page[]; fileHash?: string; extractionMethod?: string; extractionStatus?: "complete" | "partial"; document?: { original: string; cleaned: string; method: string; warnings: string[]; pages: Page[]; corrections: unknown[] } };
+function limit(name: string, fallback: number, minimum: number, maximum: number): number {
+  const value = Number(Deno.env.get(name) ?? fallback);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`invalid_index_configuration:${name}`);
+  return value;
+}
+const maxDocumentBytes = limit("PUBLIC_ASSISTANT_DOCUMENT_MAX_BYTES", 20 * 1024 * 1024, 1, 20 * 1024 * 1024);
+const maxDocumentPages = limit("PUBLIC_ASSISTANT_DOCUMENT_MAX_PAGES", 120, 1, 120);
+const maxContentChars = limit("PUBLIC_ASSISTANT_MAX_CONTENT_CHARS", 500000, 1, 2000000);
+const maxChunks = limit("PUBLIC_ASSISTANT_MAX_CHUNKS", 512, 1, 512);
+const chunkSize = limit("PUBLIC_ASSISTANT_CHUNK_TOKENS", 420, 1, 2048);
+const chunkOverlap = limit("PUBLIC_ASSISTANT_CHUNK_OVERLAP", 60, 0, 2047);
+if (chunkOverlap >= chunkSize) throw new Error("invalid_index_configuration:chunk_overlap");
 const extractionModel = Deno.env.get("PUBLIC_ASSISTANT_DOCUMENT_EXTRACTION_MODEL") ?? "gpt-4.1-mini";
 
 function chunks(content: string, pages?: Page[]): Array<{ heading: string; content: string; pageReference?: string }> {
-  const words = content.split(/\s+/).filter(Boolean); const size = Number(Deno.env.get("PUBLIC_ASSISTANT_CHUNK_TOKENS") ?? 420); const overlap = Number(Deno.env.get("PUBLIC_ASSISTANT_CHUNK_OVERLAP") ?? 60);
+  if (content.length > maxContentChars) throw new Error("content_limit_exceeded");
+  const words = content.split(/\s+/).filter(Boolean); const size = chunkSize; const overlap = chunkOverlap;
   const output: Array<{ heading: string; content: string; pageReference?: string }> = [];
   for (let start = 0; start < words.length; start += size - overlap) {
+    if (output.length >= maxChunks) throw new Error("chunk_limit_exceeded");
     const part = words.slice(start, start + size).join(" ");
     const pageNumbers = pages?.filter((page) => part.includes(page.cleaned.slice(0, 48))).map((page) => page.number) ?? [];
     if (part) output.push({ heading: pageNumbers.length ? `Document page ${pageNumbers[0]}` : "Published information", content: part, pageReference: pageNumbers.length ? `pp. ${pageNumbers[0]}${pageNumbers.length > 1 ? `–${pageNumbers.at(-1)}` : ""}` : undefined });
@@ -48,13 +63,27 @@ function chunks(content: string, pages?: Page[]): Array<{ heading: string; conte
   return output;
 }
 
-const digest = async (value: Uint8Array | string) => { const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; const result = await crypto.subtle.digest("SHA-256", bytes); return [...new Uint8Array(result)].map((x) => x.toString(16).padStart(2, "0")).join(""); };
-async function digitalPdfPages(bytes: Uint8Array): Promise<Page[]> { const pdfjs = await import("https://esm.sh/pdfjs-dist@4.10.38/legacy/build/pdf.mjs"); const pdf = await pdfjs.getDocument({ data: bytes, disableWorker: true }).promise; if (pdf.numPages > maxDocumentPages) throw new Error(`page_limit_exceeded:${pdf.numPages}`); const pages: Page[] = []; for (let number = 1; number <= pdf.numPages; number++) { const text = (await (await pdf.getPage(number)).getTextContent()).items.map((item: any) => String(item.str ?? "")).join(" ").replace(/\s+/g, " ").trim(); pages.push({ number, original: text, cleaned: text, status: text.length >= 40 ? "digital" : "empty", warnings: text.length >= 40 ? [] : ["No usable embedded text; OCR is required for this page."] }); } return pages; }
+const digest = async (value: Uint8Array | string) => { const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value; const result = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)); return [...new Uint8Array(result)].map((x) => x.toString(16).padStart(2, "0")).join(""); };
+async function digitalPdfPages(bytes: Uint8Array): Promise<Page[]> { const pdfjs = await import("https://esm.sh/pdfjs-dist@4.10.38/legacy/build/pdf.mjs"); const pdf = await pdfjs.getDocument({ data: bytes }).promise; if (pdf.numPages > maxDocumentPages) throw new Error(`page_limit_exceeded:${pdf.numPages}`); const pages: Page[] = []; for (let number = 1; number <= pdf.numPages; number++) { const text = (await (await pdf.getPage(number)).getTextContent()).items.map((item: any) => String(item.str ?? "")).join(" ").replace(/\s+/g, " ").trim(); pages.push({ number, original: text, cleaned: text, status: text.length >= 40 ? "digital" : "empty", warnings: text.length >= 40 ? [] : ["No usable embedded text; OCR is required for this page."] }); } return pages; }
 const base64 = (bytes: Uint8Array) => { let value = ""; for (let i = 0; i < bytes.length; i += 0x8000) value += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(value); };
-async function ocrPdf(bytes: Uint8Array, filename: string): Promise<Page[]> { if (!openAiKey) throw new Error("ocr_fallback_unconfigured"); const b64 = base64(bytes); const response = await fetch(openAiEndpoint("responses"), { method: "POST", signal: AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${openAiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: extractionModel, max_output_tokens: 12000, input: [{ role: "user", content: [{ type: "input_text", text: "Extract this public PDF verbatim by page. Preserve headings, paragraphs, lists, tables with headers, and policy exceptions. Return JSON only: {pages:[{page:number,text:string,warnings:string[]}]}. Mark unreadable pages with an explicit warning; never invent text." }, { type: "input_file", filename, file_data: `data:application/pdf;base64,${b64}` }] }] }) }); if (!response.ok) throw new Error(`ocr_provider_${response.status}`); const payload = await response.json(); const raw = String(payload.output_text ?? "").replace(/^```json\s*|```$/g, ""); const parsed = JSON.parse(raw); if (!Array.isArray(parsed.pages) || !parsed.pages.length) throw new Error("ocr_invalid_page_output"); return parsed.pages.map((p: any) => ({ number: Number(p.page), original: String(p.text ?? ""), cleaned: String(p.text ?? "").replace(/\s+/g, " ").trim(), status: String(p.text ?? "").trim() ? "ocr" : "failed", warnings: Array.isArray(p.warnings) ? p.warnings.map(String) : [] })); }
-async function extractDocument(admin: ReturnType<typeof createClient>, doc: any, version: string): Promise<Source> { const bucket = String(doc.bucket_name ?? ""), path = String(doc.storage_path ?? ""), mime = String(doc.mime_type ?? "").toLowerCase(); if (bucket !== "cms-media" || !path.startsWith("forms/") && !path.startsWith("policies/")) throw new Error("untrusted_document_location"); if (mime !== "application/pdf") throw new Error("unsupported_document_type"); if (!doc.file_size || Number(doc.file_size) > maxDocumentBytes) throw new Error("document_size_limit"); const { data: blob, error } = await admin.storage.from(bucket).download(path); if (error || !blob) throw new Error("document_download_failed"); const bytes = new Uint8Array(await blob.arrayBuffer()); if (!bytes.length || bytes.length > maxDocumentBytes || String.fromCharCode(...bytes.slice(0, 5)) !== "%PDF-") throw new Error("invalid_pdf_signature"); let pages: Page[]; let method = "pdfjs-digital-v1"; try { pages = await digitalPdfPages(bytes); if (pages.some((page) => page.status === "empty")) { const ocr = await ocrPdf(bytes, String(doc.original_file_name ?? doc.file_name ?? "document.pdf")); pages = pages.map((page) => ocr.find((candidate) => candidate.number === page.number) ?? { ...page, status: "failed", warnings: [...page.warnings, "OCR did not return this page."] }); method = "pdfjs+openai-page-ocr-v1"; } } catch { pages = await ocrPdf(bytes, String(doc.original_file_name ?? doc.file_name ?? "document.pdf")); method = "openai-page-ocr-v1"; } const bad = pages.filter((page) => page.status === "failed" || !page.cleaned).length; if (bad) throw new Error(`document_partial_or_unreadable:${bad}`); const original = pages.map((page) => `\n\n[Page ${page.number}]\n${page.original}`).join(""); const cleaned = pages.map((page) => `\n\n[Page ${page.number}]\n${page.cleaned}`).join(""); const fileHash = await digest(bytes); const { data: textRow, error: textError } = await admin.from("public_assistant_document_text").upsert({ document_id: doc.id, source_version: version, file_hash: fileHash, original_text: original, cleaned_text: cleaned, extraction_method: method, extraction_version: "public-document-extraction-v1", processing_status: "complete", warning: pages.flatMap((page) => page.warnings), extracted_at: new Date().toISOString() }, { onConflict: "document_id,source_version,file_hash" }).select("id").single(); if (textError || !textRow) throw new Error("document_text_persist_failed"); const { data: corrections } = await admin.from("public_assistant_document_corrections").select("page_number,replacement_text").eq("document_text_id", textRow.id).not("approved_at", "is", null); pages = pages.map((page) => { const correction = (corrections ?? []).find((item: any) => item.page_number === page.number); return correction ? { ...page, cleaned: String(correction.replacement_text), warnings: [...page.warnings, "Approved CMS correction applied to indexing text."] } : page; }); const indexedText = pages.map((page) => `\n\n[Page ${page.number}]\n${page.cleaned}`).join(""); await admin.from("public_assistant_document_text").update({ cleaned_text: indexedText, updated_at: new Date().toISOString() }).eq("id", textRow.id); await admin.from("public_assistant_document_pages").delete().eq("document_text_id", textRow.id); const { error: pagesError } = await admin.from("public_assistant_document_pages").insert(pages.map((page) => ({ document_text_id: textRow.id, page_number: page.number, original_text: page.original, cleaned_text: page.cleaned, status: page.status, warnings: page.warnings }))); if (pagesError) throw new Error("document_pages_persist_failed"); return { type: "document", key: doc.id, version, title: String(doc.name), canonicalUrl: safeUrl(String(doc.url)), content: indexedText, pages, fileHash, extractionMethod: method, extractionStatus: "complete" }; }
+async function ocrPdf(bytes: Uint8Array, filename: string): Promise<Page[]> { if (!openAiKey) throw new Error("ocr_fallback_unconfigured"); const b64 = base64(bytes); const response = await fetch(openAiEndpoint("responses"), { method: "POST", signal: AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${openAiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: extractionModel, max_output_tokens: 12000, input: [{ role: "user", content: [{ type: "input_text", text: "Extract this public PDF verbatim by page. Preserve headings, paragraphs, lists, tables with headers, and policy exceptions. Return JSON only: {pages:[{page:number,text:string,warnings:string[]}]}. Mark unreadable pages with an explicit warning; never invent text." }, { type: "input_file", filename, file_data: `data:application/pdf;base64,${b64}` }] }] }) }); if (!response.ok) throw new Error(`ocr_provider_${response.status}`); const envelope = await response.text(); if (envelope.length > maxContentChars * 2 + 100000) throw new Error("content_limit_exceeded"); const payload = JSON.parse(envelope); const raw = String(payload.output_text ?? "").replace(/^```json\s*|```$/g, ""); const parsed = JSON.parse(raw); if (!Array.isArray(parsed.pages) || !parsed.pages.length) throw new Error("ocr_invalid_page_output"); if (parsed.pages.length > maxDocumentPages) throw new Error("page_limit_exceeded"); const seen = new Set<number>(); let chars = 0; for (const page of parsed.pages) { if (!Number.isInteger(page.page) || page.page < 1 || page.page > maxDocumentPages || seen.has(page.page)) throw new Error("invalid_page_number"); seen.add(page.page); chars += String(page.text ?? "").length; if (chars > maxContentChars) throw new Error("content_limit_exceeded"); } return parsed.pages.map((p: any) => ({ number: Number(p.page), original: String(p.text ?? ""), cleaned: String(p.text ?? "").replace(/\s+/g, " ").trim(), status: String(p.text ?? "").trim() ? "ocr" : "failed", warnings: Array.isArray(p.warnings) ? p.warnings.map(String) : [] })); }
+async function extractDocument(admin: AdminClient, doc: any, version: string): Promise<Source> { const bucket = String(doc.bucket_name ?? ""), path = String(doc.storage_path ?? ""), mime = String(doc.mime_type ?? "").toLowerCase(); if (bucket !== "cms-media" || !path.startsWith("forms/") && !path.startsWith("policies/")) throw new Error("untrusted_document_location"); if (mime !== "application/pdf") throw new Error("unsupported_document_type"); if (!doc.file_size || Number(doc.file_size) > maxDocumentBytes) throw new Error("document_size_limit"); const { data: blob, error } = await admin.storage.from(bucket).download(path); if (error || !blob) throw new Error("document_download_failed"); const bytes = new Uint8Array(await blob.arrayBuffer()); if (!bytes.length || bytes.length > maxDocumentBytes || String.fromCharCode(...bytes.slice(0, 5)) !== "%PDF-") throw new Error("invalid_pdf_signature"); let pages: Page[]; let method = "pdfjs-digital-v1"; try { pages = await digitalPdfPages(bytes); if (pages.some((page) => page.status === "empty")) { const ocr = await ocrPdf(bytes, String(doc.original_file_name ?? doc.file_name ?? "document.pdf")); pages = pages.map((page) => ocr.find((candidate) => candidate.number === page.number) ?? { ...page, status: "failed", warnings: [...page.warnings, "OCR did not return this page."] }); method = "pdfjs+openai-page-ocr-v1"; } } catch (error) { if (error instanceof Error && /^(page_limit|content_limit|invalid_page)/.test(error.message)) throw error; pages = await ocrPdf(bytes, String(doc.original_file_name ?? doc.file_name ?? "document.pdf")); method = "openai-page-ocr-v1"; } const bad = pages.filter((page) => page.status === "failed" || !page.cleaned).length; if (bad) throw new Error(`document_partial_or_unreadable:${bad}`); const original = pages.map((page) => `\n\n[Page ${page.number}]\n${page.original}`).join(""); const cleaned = pages.map((page) => `\n\n[Page ${page.number}]\n${page.cleaned}`).join(""); if (original.length > maxContentChars || cleaned.length > maxContentChars) throw new Error("content_limit_exceeded"); const fileHash = await digest(bytes);
+  // Read approved corrections without writing public_assistant_document_pages
+  // or text. Artifacts are committed only after this attempt's lease is checked.
+  const { data: existing } = await admin.from("public_assistant_document_text").select("id")
+    .eq("document_id",doc.id).eq("source_version",version).eq("file_hash",fileHash).maybeSingle();
+  const { data: rows } = existing ? await admin.from("public_assistant_document_corrections")
+    .select("id,page_number,replacement_text").eq("document_text_id",existing.id).not("approved_at","is",null).order("id") : { data: [] };
+  const corrections = rows ?? [];
+  pages = pages.map(page => { const correction=corrections.find(item=>item.page_number===page.number);
+    return correction ? {...page,cleaned:String(correction.replacement_text),warnings:[...page.warnings,"Approved CMS correction applied to indexing text."]} : page; });
+  const indexedText=pages.map(page=>`\n\n[Page ${page.number}]\n${page.cleaned}`).join("");
+  if (indexedText.length > maxContentChars) throw new Error("content_limit_exceeded");
+  return {type:"document",key:doc.id,version,title:String(doc.name),canonicalUrl:safeUrl(String(doc.url)),content:indexedText,pages,fileHash,extractionMethod:method,extractionStatus:"complete",
+    document:{original,cleaned:indexedText,method,warnings:pages.flatMap(page=>page.warnings),pages,corrections}};
+}
 
-async function loadSource(admin: ReturnType<typeof createClient>, job: { source_type: Source["type"]; source_key: string; source_version: string }): Promise<Source | null> {
+async function loadSource(admin: AdminClient, job: { source_type: Source["type"]; source_key: string; source_version: string }): Promise<Source | null> {
   if (job.source_type === "course") {
     const { data: course } = await admin.from("cms_courses").select("id,slug,code,name,cricos,duration,mode,fees,full_description,entry_requirements,status").eq("id", job.source_key).eq("status", "Published").maybeSingle();
     if (!course) return null;
@@ -80,7 +109,9 @@ async function embed(input: string): Promise<{ vector: number[]; tokens: number 
 }
 
 async function processOne() {
-  if (!workerSecret) return reply({ error: "Worker is not configured." }, 503);
+  const configuration = requiredConfiguration({ PUBLIC_ASSISTANT_WORKER_SECRET: workerSecret, OPENAI_API_KEY: openAiKey, PUBLIC_ASSISTANT_EMBEDDING_MODEL: model });
+  if (configuration) return reply(configuration, 503);
+  if (!Number.isSafeInteger(dimensions) || dimensions !== 1536) return reply({ error: "Edge Function configuration is unavailable.", code: "configuration_invalid", variables: ["PUBLIC_ASSISTANT_EMBEDDING_DIMENSIONS"] }, 503);
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
   const { data: claimed, error } = await admin.rpc("public_assistant_claim_index_job");
   if (error) return reply({ error: "Unable to claim indexing work." }, 500);
@@ -90,7 +121,8 @@ async function processOne() {
     // Every terminal transition is conditioned on the lease minted at claim
     // time. A reclaimed/stale worker therefore cannot overwrite fresh work.
     const { data: accepted } = await admin.rpc("public_assistant_fail_index_job", { p_job: job.id, p_lease: job.lease_token, p_error: message });
-    const retry = Boolean(accepted) && Number(job.attempt_count) < 3;
+    if (!accepted) return reply({ processed: false, stale: true });
+    const retry = Number(job.attempt_count) < 3;
     await admin.from("public_assistant_usage_events").insert({ kind: "index_failure", model, request_key: job.id });
     return reply({ processed: true, retry }, retry ? 202 : 422);
   };
@@ -101,26 +133,27 @@ async function processOne() {
       return reply({ processed: true, cancelled: true });
     }
     const contentHash = source.fileHash ?? await digest(source.content);
-    // Replacement chunks are staged under a new immutable source version.
-    // The currently published version remains queryable until finish RPC makes
-    // activation and cache invalidation a single database transaction.
-    const { data: stored, error: storeError } = await admin.from("public_assistant_sources").upsert({ source_type: source.type, source_key: source.key, canonical_url: source.canonicalUrl, title: source.title, publication_status: "staged", source_version: source.version, content_hash: contentHash }, { onConflict: "source_type,source_key,source_version" }).select("id").single();
-    if (storeError || !stored) throw new Error("source_persist_failed");
-    // Re-running the same leased job is recoverable: stale partial chunks are
-    // replaced only in its unpublished staging version.
-    const { error: deleteError } = await admin.from("public_assistant_chunks").delete().eq("source_id", stored.id);
-    if (deleteError) throw new Error("chunk_replace_failed");
+    // Embeddings are prepared in memory. public_assistant_finish_index_job is
+    // now an internal DB helper called by this single fenced commit operation.
+    const prepared = [];
     let tokens = 0;
     for (const [ordinal, chunk] of chunks(source.content, source.pages).entries()) {
       const result = await embed(chunk.content); tokens += result.tokens;
-      const { error: chunkError } = await admin.from("public_assistant_chunks").insert({ source_id: stored.id, ordinal, heading: chunk.heading, content: chunk.content, content_hash: contentHash, page_reference: chunk.pageReference ?? null, course_code: source.courseCode ?? null, embedding: result.vector, embedding_model: model, embedding_dimensions: dimensions });
-      if (chunkError) throw new Error("chunk_persist_failed");
+      prepared.push({ordinal,heading:chunk.heading,content:chunk.content,page_reference:chunk.pageReference ?? null,embedding:result.vector});
     }
-    await admin.from("public_assistant_usage_events").insert({ kind: "embedding", model, input_tokens: tokens, request_key: job.id });
-    const { data: activated, error: activationError } = await admin.rpc("public_assistant_finish_index_job", { p_job: job.id, p_lease: job.lease_token, p_source: stored.id });
-    if (activationError || !activated) throw new Error("stale_or_invalid_lease");
+    const { data: committed, error: commitError } = await admin.rpc("public_assistant_commit_index", {
+      p_job:job.id,p_lease:job.lease_token,
+      p_source:{type:source.type,key:source.key,version:source.version,url:source.canonicalUrl,title:source.title,hash:contentHash,course_code:source.courseCode ?? null,model,tokens},
+      p_chunks:prepared,p_document:source.document ?? null,
+    });
+    if (commitError) throw new Error("index_commit_failed");
+    if (!committed) return reply({processed:false,stale:true});
     return reply({ processed: true });
   } catch (error) { return await fail(error instanceof Error ? error.message : "indexing failed"); }
 }
 
-Deno.serve((request) => request.method === "POST" && request.headers.get("x-worker-secret") === workerSecret ? processOne() : reply({ error: "Not authorised." }, 401));
+Deno.serve((request) => {
+  const configuration = backendConfiguration(url, serviceKey);
+  if (configuration) return reply(configuration, 503);
+  return request.method === "POST" && Boolean(workerSecret.trim()) && request.headers.get("x-worker-secret") === workerSecret ? processOne() : reply({ error: "Not authorised." }, 401);
+});

@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { Link } from "react-router-dom";
+import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import {
   deleteAgency,
+  invokePortalUsers,
   listAgencies,
   setAgencyStatus,
   updateAgency,
 } from "@/pages/agency/lib/portalData";
-import type { PortalAgency } from "@/pages/agency/lib/portalAuth";
+import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
 import {
   PageHeading,
   PermanentBadge,
@@ -98,6 +101,8 @@ export default function AdminAgenciesPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
+  const [admin, setAdmin] = useState({ name: "", email: "" });
+  const [createNotice, setCreateNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -134,24 +139,32 @@ export default function AdminAgenciesPage() {
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
     setFormError("");
-    if (!form.name.trim() || !form.code.trim()) {
-      setFormError("Agency name and a unique agency code are required.");
+    setCreateNotice("");
+    if (!form.name.trim() || !form.code.trim() || !admin.email.trim() || !admin.name.trim()) {
+      setFormError("Agency name, a unique agency code and the first administrator's name and email are required.");
       return;
     }
     setSaving(true);
     try {
-      const { error: insertError } = await supabase.from("agencies").insert({
-        name: form.name.trim(),
-        code: form.code.trim(),
-        registration_number: form.registration_number.trim(),
-        business_email: form.business_email.trim(),
-        phone: form.phone.trim(),
-        address: form.address.trim(),
-        country: form.country.trim(),
-        primary_contact: form.primary_contact.trim(),
-        status: "Active",
+      // One transaction in the database: the agency and its first admin invitation exist together or not at all.
+      const data = await invokePortalUsers({
+        action: "create_agency",
+        agency: {
+          name: form.name.trim(),
+          code: form.code.trim(),
+          registration_number: form.registration_number.trim(),
+          business_email: form.business_email.trim(),
+          phone: form.phone.trim(),
+          address: form.address.trim(),
+          country: form.country.trim(),
+          primary_contact: form.primary_contact.trim(),
+        },
+        adminEmail: admin.email.trim(),
+        adminName: admin.name.trim(),
+        redirectTo: portalPasswordResetUrl(),
       });
-      if (insertError) throw new Error(insertError.message);
+      setCreateNotice(data.warning ? String(data.warning) : `Agency created. An invitation was ${data.emailSent ? "emailed" : "saved"} for ${admin.email.trim()}.`);
+      setAdmin({ name: "", email: "" });
       setForm({ ...EMPTY_FORM });
       setShowForm(false);
       await load();
@@ -243,11 +256,26 @@ export default function AdminAgenciesPage() {
         }
       />
 
+      {createNotice ? (
+        <p className="mt-4 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-sm text-secondary-900" role="status">{createNotice}</p>
+      ) : null}
+
       {showForm ? (
         <form onSubmit={handleCreate} className="mt-6 rounded-card border border-background-200 bg-background-50 p-6">
           <h2 className="font-heading text-base font-semibold text-foreground-950">New agency</h2>
           <div className="mt-4">
             <AgencyFields form={form} onChange={update} />
+          </div>
+          <h3 className="mt-6 font-heading text-sm font-semibold text-foreground-950">First agency administrator</h3>
+          <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label className={labelClass}>Administrator name *</label>
+              <input className={fieldClass} value={admin.name} onChange={(e) => setAdmin((prev) => ({ ...prev, name: e.target.value }))} />
+            </div>
+            <div>
+              <label className={labelClass}>Administrator email *</label>
+              <input className={fieldClass} type="email" value={admin.email} onChange={(e) => setAdmin((prev) => ({ ...prev, email: e.target.value }))} />
+            </div>
           </div>
 
           {formError ? (
@@ -308,6 +336,13 @@ export default function AdminAgenciesPage() {
                   >
                     {agency.status}
                   </span>
+                  <Link
+                    to="/agency/users"
+                    className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
+                  >
+                    <i className="ri-group-line" aria-hidden="true" />
+                    Users
+                  </Link>
                   <button
                     type="button"
                     onClick={() => openEdit(agency)}

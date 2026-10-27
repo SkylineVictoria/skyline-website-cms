@@ -1,3 +1,4 @@
+import { Toast, ToastContext, useToast } from "./toastContext";
 import {
   createContext,
   useCallback,
@@ -10,7 +11,7 @@ import {
   type TextareaHTMLAttributes,
   type SelectHTMLAttributes,
 } from "react";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { uploadCmsImage } from "@/pages/admin/lib/storage";
 
 /* ------------------------------------------------------------------ Button */
 
@@ -179,17 +180,7 @@ export function MediaUrlInput({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
-  const upload = async (file: File) => {
-    const ext = (file.name.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
-    const path = `cms/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const { error: uploadError } = await supabase.storage
-      .from("cms-media")
-      .upload(path, file, { cacheControl: "31536000", upsert: false, contentType: file.type });
-    if (uploadError) throw uploadError;
-    const { data: pub } = supabase.storage.from("cms-media").getPublicUrl(path);
-    if (!pub?.publicUrl) throw new Error("Could not resolve the public URL");
-    return pub.publicUrl;
-  };
+  const upload = uploadCmsImage;
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
@@ -208,17 +199,8 @@ export function MediaUrlInput({
       // served from a unique filename, so an update is never served from cache.
       const url = await upload(file);
       onChange(url);
-    } catch {
-      // Graceful fallback: keep the field usable by inlining the image.
-      await new Promise<void>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (typeof reader.result === "string") onChange(reader.result);
-          resolve();
-        };
-        reader.onerror = () => resolve();
-        reader.readAsDataURL(file);
-      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Image upload failed.");
     } finally {
       setUploading(false);
     }
@@ -230,7 +212,7 @@ export function MediaUrlInput({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <i className="ri-link absolute left-3 top-1/2 -translate-y-1/2 text-foreground-400" aria-hidden="true" />
-          <TextInput value={value} onChange={(e) => onChange(e.target.value)} placeholder="Paste a URL or upload a file" className="pl-9" />
+          <TextInput aria-label={`${label} URL`} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Paste a URL or upload a file" className="pl-9" />
         </div>
         <div className="flex items-center gap-2">
           <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100">
@@ -238,7 +220,8 @@ export function MediaUrlInput({
             {uploading ? "Uploading…" : "Upload"}
             <input
               type="file"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              aria-label={`${label} upload`}
               className="hidden"
               disabled={uploading}
               onChange={(e) => handleFile(e.target.files?.[0] ?? undefined)}
@@ -449,16 +432,6 @@ export function ConfirmDialog({
   );
 }
 
-/* ------------------------------------------------------------------- Toast */
-
-interface Toast {
-  id: number;
-  message: string;
-  tone: "success" | "error" | "info";
-}
-
-const ToastContext = createContext<{ push: (message: string, tone?: Toast["tone"]) => void } | null>(null);
-
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -486,39 +459,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         ))}
       </div>
     </ToastContext.Provider>
-  );
-}
-
-export function useToast() {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
-}
-
-/* ------------------------------------------------------- Connection banner */
-
-export function PrototypeNotice() {
-  const [open, setOpen] = useState(true);
-  useEffect(() => {
-    setOpen(true);
-  }, []);
-  if (!open) return null;
-  return (
-    <div className="flex items-start gap-2.5 border-b border-primary-200 bg-primary-50 px-5 py-2.5 text-[13px] text-primary-900">
-      <i className="ri-database-2-line mt-0.5 text-base" aria-hidden="true" />
-      <span className="flex-1">
-        <strong className="font-semibold">Connected to your database.</strong> Content you edit here is saved to
-        Supabase and shown on the public website.
-      </span>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        aria-label="Dismiss"
-        className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-primary-700 hover:bg-primary-100"
-      >
-        <i className="ri-close-line text-sm" aria-hidden="true" />
-      </button>
-    </div>
   );
 }
 

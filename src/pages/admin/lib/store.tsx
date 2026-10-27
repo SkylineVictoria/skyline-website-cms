@@ -1,7 +1,13 @@
+import { StoreStatus, NewRevision, StoreContextValue, StoreContext, useAdminData } from "./storeContext";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { buildSeed } from "@/pages/admin/lib/seed";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { loadAdminData, persistAdminData, emptyAdminData } from "@/pages/admin/lib/db";
-import { useAuth } from "@/pages/admin/lib/auth";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { cacheBrand } from "@/lib/brandCache";
+import { resolvedBrandColours } from "@/lib/tenantTheme";
+import { siteThemeFromSettings } from "@/pages/admin/lib/previewTheme";
+import { validateFooterLinks, validateNavigation, type LoaderStyle } from "@/config/cmsLimits";
 import type {
   ActivityItem,
   AdminCourse,
@@ -19,33 +25,15 @@ import type {
   SeoEntry,
 } from "@/pages/admin/lib/types";
 
-export type StoreStatus = "loading" | "error" | "ready";
+const brandFields = (settings: AdminData["settings"]) => JSON.stringify([settings.name, settings.shortName, settings.logo, settings.primaryColor, settings.accentColor, settings.loaderStyle, settings.themeConfigured]);
 
-interface NewRevision {
-  entity: RevisionEntity;
-  entityId: string;
-  title: string;
-  action: string;
-  status: PublishStatus;
-  snapshot: unknown;
+/** Layout limits are enforced here as well as in the editors, so no path (stale tab, restored revision) can save a design-breaking menu or footer. */
+function layoutProblems(previous: AdminData, next: AdminData): string[] {
+  const problems: string[] = [];
+  if (JSON.stringify(previous.navigation) !== JSON.stringify(next.navigation)) problems.push(...validateNavigation(next.navigation));
+  if (JSON.stringify(previous.footer) !== JSON.stringify(next.footer)) problems.push(...validateFooterLinks([{ title: "Quick links", links: next.footer.quickLinks }, { title: "Student links", links: next.footer.studentLinks }]));
+  return problems;
 }
-
-interface StoreContextValue {
-  data: AdminData;
-  status: StoreStatus;
-  error: string | null;
-  reload: () => void;
-  update: (updater: (draft: AdminData) => AdminData) => void;
-  /** Applies an update AND persists it immediately, surfacing any DB error. */
-  saveNow: (updater: (draft: AdminData) => AdminData) => Promise<void>;
-  logActivity: (action: string, item: string, area: string) => void;
-  recordRevision: (rev: NewRevision) => void;
-  revisionsFor: (entity: RevisionEntity, entityId: string) => Revision[];
-  restoreRevision: (id: string) => void;
-  resetToSeed: () => void;
-}
-
-const StoreContext = createContext<StoreContextValue | null>(null);
 
 function now() {
   return new Date().toISOString().slice(0, 16).replace("T", " ");
@@ -59,13 +47,45 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
   const loadedRef = useRef(false);
   const syncedRef = useRef<AdminData | null>(null);
   const dataRef = useRef<AdminData>(data);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveFailed = useRef(false);
+
+  const commit = useCallback((snapshot: AdminData) => {
+    const operation = saveQueue.current.catch(() => {}).then(async () => {
+      if (saveFailed.current) throw new Error("Reload the CMS to resolve the previous save failure.");
+      const previous = syncedRef.current;
+      if (!previous) throw new Error("CMS data has not finished loading.");
+      const problems = layoutProblems(previous, snapshot);
+      if (problems.length) throw new Error(problems[0]);
+      try {
+        await persistAdminData(previous, snapshot);
+        syncedRef.current = snapshot;
+        // Keep the loader and the pre-React boot screen in step with the saved branding (not only on the first public load).
+        if (brandFields(previous.settings) !== brandFields(snapshot.settings)) {
+          const colours = resolvedBrandColours(siteThemeFromSettings(snapshot.settings));
+          cacheBrand({ name: snapshot.settings.shortName || snapshot.settings.name, logoUrl: snapshot.settings.logo, primary: colours.primary, accent: colours.accent, loaderStyle: (snapshot.settings.loaderStyle as LoaderStyle | undefined) ?? "ring" });
+        }
+        setError(null);
+      } catch (e) {
+        // The form stays on screen (the editors keep their drafts); the layout shows a dismissible banner with a retry.
+        saveFailed.current = true;
+        setError(e instanceof Error ? e.message : "CMS save failed.");
+        throw e;
+      }
+    });
+    saveQueue.current = operation;
+    return operation;
+  }, []);
 
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
 
   const load = useCallback(async () => {
-    setStatus("loading");
+    await saveQueue.current.catch(() => {});
+    saveFailed.current = false;
+    // A refresh after the CMS is already showing must not unmount the open editor: only the first load shows the loading state.
+    if (!loadedRef.current) setStatus("loading");
     setError(null);
     try {
       const result = await loadAdminData();
@@ -92,9 +112,10 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
   }, [load]);
 
   // Load once the user is authenticated. The CMS is data-driven from Supabase.
+  const userId = user?.id ?? null;
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!userId) {
       loadedRef.current = false;
       syncedRef.current = null;
       // Do not leave a previous staff member's CMS payload resident after
@@ -104,7 +125,7 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     void load();
-  }, [user, authLoading, load]);
+  }, [userId, authLoading, load]); // keyed on the account, not the session object, so token refreshes do not refetch and clobber open editors
 
   // Persist changes back to Supabase (debounced), diffing against the last sync.
   useEffect(() => {
@@ -114,14 +135,13 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
       const previous = syncedRef.current;
       if (!previous) return;
       try {
-        await persistAdminData(previous, snapshot);
-        syncedRef.current = snapshot;
+        await commit(snapshot);
       } catch (e) {
-        console.error("CMS save failed", e);
+        setError(e instanceof Error ? e.message : "CMS save failed.");
       }
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [data]);
+  }, [data, commit]);
 
   const update = useCallback((updater: (draft: AdminData) => AdminData) => {
     setData((prev) => updater(prev));
@@ -138,11 +158,10 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
     const next = updater(dataRef.current);
     dataRef.current = next;
     setData(next);
-    if (!previous) return;
+    if (!previous) throw new Error("CMS data has not finished loading.");
     // If the write throws, syncedRef is left untouched so a retry re-diffs.
-    await persistAdminData(previous, next);
-    syncedRef.current = next;
-  }, []);
+    await commit(next);
+  }, [commit]);
 
   const logActivity = useCallback(
     (action: string, item: string, area: string) => {
@@ -241,6 +260,7 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const resetToSeed = useCallback(() => {
+    if (requestWebsiteDomain()) throw new Error("Tenant sites do not use Skyline seed content.");
     loadedRef.current = true;
     if (!syncedRef.current) syncedRef.current = emptyAdminData();
     setData(buildSeed());
@@ -252,10 +272,4 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
-}
-
-export function useAdminData() {
-  const ctx = useContext(StoreContext);
-  if (!ctx) throw new Error("useAdminData must be used within AdminStoreProvider");
-  return ctx;
 }

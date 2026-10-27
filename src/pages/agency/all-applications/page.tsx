@@ -22,7 +22,7 @@ export default function AllApplicationsPage() {
     setError("");
     try {
       const [apps, agencyList, agentList] = await Promise.all([
-        listApplications(),
+        Promise.resolve([] as ApplicationListRow[]),
         listAgencies(),
         listAssignableAgents(),
       ]);
@@ -50,7 +50,7 @@ export default function AllApplicationsPage() {
       />
 
       <div className="mt-6">
-        <ApplicationsTable
+        <ApplicationsTable remote
           rows={rows}
           loading={loading}
           error={error}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuth";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { listAgencies } from "@/pages/agency/lib/portalData";
 import {
   createApplication,
@@ -12,6 +12,8 @@ import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
 import { isEditableApplicationStatus } from "@/pages/agency/lib/applicationAccess";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
+import { portalScopeCacheKey } from "@/lib/portalScope";
+
 function newClientKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -19,7 +21,7 @@ function newClientKey(): string {
 
 /** A pending wizard session, so reopening the wizard resumes the SAME draft. */
 function sessionKey(uid: string): string {
-  return `slit-portal-wizard-v1:${uid}`;
+  return `slit-portal-wizard-v1:${portalScopeCacheKey()}:${uid}`;
 }
 
 function readSession(uid: string): string | null {

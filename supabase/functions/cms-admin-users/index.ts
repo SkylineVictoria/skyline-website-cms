@@ -9,6 +9,8 @@
 // Caller must be a signed-in, Active Admin (checked against cms_users).
 // =====================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { cleanEmail, cleanName } from "../_shared/user-input.ts";
+import { backendConfiguration } from "../_shared/config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,6 +71,8 @@ async function upsertProfile(
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const configuration = backendConfiguration(SUPABASE_URL, SERVICE_KEY, ANON_KEY);
+  if (configuration) return json(configuration, 503);
 
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
@@ -88,23 +92,16 @@ Deno.serve(async (req) => {
     });
 
     const caller = callerData.user;
-    let profile: { role?: string; status?: string } | null = null;
+    if (req.headers.has("x-tenant-domain")) return json({ error: "Use tenant membership administration for a scoped request." }, 403);
+    let profile: { role?: string; must_change_password?: boolean; status?: string } | null = null;
     const { data: byId } = await admin
       .from("cms_users")
-      .select("role, status")
+      .select("role, status, must_change_password")
       .eq("auth_user_id", caller.id)
       .maybeSingle();
     profile = byId ?? null;
-    if (!profile && caller.email) {
-      const { data: byEmail } = await admin
-        .from("cms_users")
-        .select("role, status")
-        .ilike("email", caller.email)
-        .maybeSingle();
-      profile = byEmail ?? null;
-    }
 
-    if (!profile || profile.status !== "Active" || profile.role !== "Admin") {
+    if (!profile || profile.status !== "Active" || profile.role !== "Admin" || profile.must_change_password) {
       return json({ error: "Administrator access required." }, 403);
     }
 
@@ -118,48 +115,43 @@ Deno.serve(async (req) => {
 
     switch (action) {
       case "invite": {
-        const email = String(parsed.email ?? "").trim().toLowerCase();
-        const name = String(parsed.name ?? "").trim() || email.split("@")[0];
-        const role = String(parsed.role ?? "Editor");
+        const emailCheck = cleanEmail(parsed.email);
+        if (!emailCheck.ok) return json({ error: emailCheck.error }, 400);
+        const nameCheck = cleanName(parsed.name);
+        if (!nameCheck.ok) return json({ error: nameCheck.error }, 400);
+        const email = emailCheck.value;
+        const name = nameCheck.value;
+        // Unknown roles are rejected rather than silently becoming Editor.
+        const role = String(parsed.role ?? "");
+        if (role !== "Admin" && role !== "Editor") return json({ error: "Role must be Admin or Editor." }, 400);
         const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
-        if (!email) return json({ error: "Email is required." }, 400);
 
         let authUserId = "";
         let inviteLink: string | null = null;
         let emailSent = false;
 
-        // Preferred: official invitation email.
-        const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-          data: { name },
-          redirectTo,
-        });
-
-        if (!inviteErr && invited && invited.user) {
-          authUserId = invited.user.id;
-          emailSent = true;
+        const existing = await findAuthUserByEmail(admin, email);
+        if (existing.error) return json({ error: existing.error }, 400);
+        if (existing.user) {
+          // Existing identities sign in normally. Never disclose a recovery
+          // credential simply because another module wants to link the account.
+          authUserId = existing.user.id;
         } else {
-          // Fallback (e.g. SMTP not configured, or the account already exists):
-          // create/locate the user via the Admin API and return a secure action link.
-          const { error: createErr } = await admin.auth.admin.createUser({
-            email,
-            email_confirm: true,
-            user_metadata: { name },
-          });
-          let found = await findAuthUserByEmail(admin, email);
-          if (!found.user) found = await findAuthUserByEmail(admin, email);
-          if (!found.user) {
-            const msg = (createErr && createErr.message) || (inviteErr && inviteErr.message) || "Could not create user.";
-            return json({ error: msg }, 400);
+          const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, { data: { name }, redirectTo });
+          if (!inviteErr && invited?.user) { authUserId = invited.user.id; emailSent = true; }
+          else {
+            const { error: createErr } = await admin.auth.admin.createUser({ email, email_confirm: true, user_metadata: { name } });
+            const found = await findAuthUserByEmail(admin, email);
+            if (!found.user) return json({ error: createErr?.message || inviteErr?.message || "Could not create user." }, 400);
+            authUserId = found.user.id;
+            // A concurrent registration is an existing identity, not permission
+            // to reset its password. Only our successfully created account gets a link.
+            if (!createErr) {
+              const { data: link, error: linkErr } = await admin.auth.admin.generateLink({ type: "recovery", email, options: redirectTo ? { redirectTo } : undefined });
+              if (linkErr) return json({ error: linkErr.message }, 400);
+              inviteLink = link?.properties?.action_link || null;
+            }
           }
-          authUserId = found.user.id;
-
-          const { data: link, error: linkErr } = await admin.auth.admin.generateLink({
-            type: "recovery",
-            email,
-            options: redirectTo ? { redirectTo } : undefined,
-          });
-          if (linkErr) return json({ error: linkErr.message }, 400);
-          inviteLink = (link && link.properties && link.properties.action_link) || null;
         }
 
         const profileRes = await upsertProfile(admin, { email, name, role, authUserId, status: "Active" });
@@ -172,6 +164,14 @@ Deno.serve(async (req) => {
         const email = String(parsed.email ?? "").trim().toLowerCase();
         const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
         if (!email) return json({ error: "Email is required." }, 400);
+        const { data: mapped } = await admin.from("cms_users").select("auth_user_id").ilike("email", email).eq("status", "Active").maybeSingle();
+        if (!mapped?.auth_user_id) return json({ error: "Mapped active profile not found." }, 404);
+        const { data: shared } = await admin.from("portal_profiles").select("id").eq("auth_user_id", mapped.auth_user_id).limit(1).maybeSingle();
+        const { data: membership, error: membershipError } = await admin.from("tenant_memberships").select("tenant_id").eq("auth_user_id", mapped.auth_user_id).limit(1).maybeSingle();
+        if (membershipError) return json({ error: "Unable to verify account scope." }, 503);
+        if (shared || membership) return json({ error: "Shared accounts must use account self-service recovery." }, 403);
+        const { data: targetAuth, error: targetError } = await admin.auth.admin.getUserById(mapped.auth_user_id);
+        if (targetError || targetAuth?.user?.email?.toLowerCase() !== email) return json({ error: "Verified account mapping required." }, 403);
         const { data: link, error } = await admin.auth.admin.generateLink({
           type: "recovery",
           email,
@@ -182,17 +182,19 @@ Deno.serve(async (req) => {
       }
 
       case "delete": {
+        // Removing one module's access must never delete a shared Auth identity.
         const authUserId = String(parsed.authUserId ?? "").trim();
         const email = String(parsed.email ?? "").trim().toLowerCase();
-        if (authUserId) {
-          const { error } = await admin.auth.admin.deleteUser(authUserId);
-          if (error) return json({ error: error.message }, 400);
-        } else if (email) {
-          const found = await findAuthUserByEmail(admin, email);
-          if (found.user) await admin.auth.admin.deleteUser(found.user.id);
-        }
-        if (email) await admin.from("cms_users").delete().ilike("email", email);
-        return json({ ok: true });
+        if (!authUserId && !email) return json({ error: "Target profile is required." }, 400);
+        let targetQuery = admin.from("cms_users").select("id, auth_user_id");
+        targetQuery = authUserId ? targetQuery.eq("auth_user_id", authUserId) : targetQuery.ilike("email", email);
+        const { data: target, error: targetError } = await targetQuery.maybeSingle();
+        if (targetError || !target) return json({ error: "Mapped profile not found." }, 404);
+        if (target.auth_user_id === caller.id) return json({ error: "Use another administrator to revoke your access." }, 403);
+        const { error } = await admin.from("cms_users").update({ status: "Inactive" }).eq("id", target.id);
+        if (error) return json({ error: error.message }, 400);
+        
+        return json({ ok: true, identityPreserved: true });
       }
 
       case "list": {

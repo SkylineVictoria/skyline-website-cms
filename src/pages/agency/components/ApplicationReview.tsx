@@ -126,6 +126,7 @@ export default function ApplicationReview({
   submitting,
   submitError,
   readOnly = false,
+  canSubmit = true,
   onSubmit,
 }: {
   values: DraftValues;
@@ -141,6 +142,8 @@ export default function ApplicationReview({
   submitting: boolean;
   submitError: string;
   readOnly?: boolean;
+  /** Only a draft is submitted by agents; after that SLIT administration moves the application on. */
+  canSubmit?: boolean;
   onSubmit: () => void;
 }) {
   const val = (key: string): string => {
@@ -377,7 +380,13 @@ export default function ApplicationReview({
         </p>
       ) : null}
 
-      {!readOnly ? (
+      {!readOnly && !canSubmit ? (
+        <p className="rounded-card border border-background-200 bg-background-50 p-5 text-sm text-foreground-700">
+          Your corrections are saved on this application. SLIT administration reviews them and moves the application on; it cannot be resubmitted from here.
+        </p>
+      ) : null}
+
+      {!readOnly && canSubmit ? (
       <div className="flex flex-col gap-3 rounded-card border border-background-200 bg-background-50 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm">
           {readyToSubmit ? (

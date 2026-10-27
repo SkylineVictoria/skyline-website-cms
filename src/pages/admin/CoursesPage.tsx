@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { useToast } from "@/pages/admin/components/ui";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { useToast } from "@/pages/admin/components/toastContext";
 import {
   Badge,
   Button,

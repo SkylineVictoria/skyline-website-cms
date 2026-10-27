@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { backendConfiguration } from "../_shared/config.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "",
   serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
@@ -78,7 +79,7 @@ const courseSource = (course: Course): Source => ({
 function courseAnswer(
   courses: Course[],
   question: string,
-): { answer: string; sources: Source[] } | null {
+): { answer: string; sources: Source[]; mode: "course" } | null {
   const q = normalise(question);
   const matched = courses.filter((c) =>
     [c.name, c.code, c.cricos, c.slug].filter(Boolean).some((v) =>
@@ -90,6 +91,7 @@ function courseAnswer(
       answer:
         "I found more than one matching course. Please include the course code or full course name.",
       sources: matched.slice(0, 4).map(courseSource),
+      mode: "course",
     };
   }
   if (matched.length === 1) {
@@ -98,18 +100,21 @@ function courseAnswer(
       return {
         answer: `Published fees for ${c.name}: ${c.fees}`,
         sources: [courseSource(c)],
+        mode: "course",
       };
     }
     if (/\b(duration|long|weeks?|months?)\b/.test(q) && c.duration) {
       return {
         answer: `${c.name} has a published duration of ${c.duration}.`,
         sources: [courseSource(c)],
+        mode: "course",
       };
     }
     if (/\b(mode|delivery|online|campus|location)\b/.test(q) && c.mode) {
       return {
         answer: `${c.name} is published with delivery mode: ${c.mode}.`,
         sources: [courseSource(c)],
+        mode: "course",
       };
     }
     return {
@@ -117,12 +122,14 @@ function courseAnswer(
         c.cricos ? ` — CRICOS ${c.cricos}` : ""
       }. View the published course page for requirements, units and current details.`,
       sources: [courseSource(c)],
+        mode: "course",
     };
   }
   if (/\b(course|courses|study|program)\b/.test(q)) {
     return {
       answer: "Here are the currently published SLIT courses.",
       sources: courses.slice(0, 6).map(courseSource),
+      mode: "course",
     };
   }
   if (/\b(apply|application|enrol)\b/.test(q)) {
@@ -130,6 +137,7 @@ function courseAnswer(
       answer:
         "You can begin a public application from the published enrolment page.",
       sources: [{ title: "Apply to SLIT", url: "/enroll-now" }],
+      mode: "course",
     };
   }
   if (/\b(contact|phone|email|address)\b/.test(q)) {
@@ -137,6 +145,7 @@ function courseAnswer(
       answer:
         "Please use the published contact page for current SLIT contact details.",
       sources: [{ title: "Contact SLIT", url: "/contact" }],
+      mode: "course",
     };
   }
   return null;
@@ -164,6 +173,8 @@ async function embed(question: string) {
 }
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers });
+  const configuration = backendConfiguration(url, serviceKey);
+  if (configuration) return reply(configuration, 503);
   if (request.method !== "POST") {
     return reply({ error: "Method not allowed." }, 405);
   }
@@ -172,6 +183,17 @@ Deno.serve(async (request) => {
     ? body.question.trim().slice(0, 500)
     : "";
   if (!question) return reply({ error: "Please enter a question." }, 400);
+  // Partition the existing single-institution public cache by requesting origin.
+  // This is cache hygiene, not tenant authorization; tenant routing remains gated.
+  let cacheScope: string;
+  try {
+    const origin = new URL(request.headers.get("Origin") ?? request.url);
+    if (!["https:", "http:"].includes(origin.protocol) || origin.username || origin.password) throw new Error("invalid origin");
+    cacheScope = origin.origin;
+  } catch {
+    return reply({ error: "Invalid request origin." }, 400);
+  }
+  const cacheKey = await hash(`${cacheScope}\n${normalise(question)}`);
   const admin = createClient(url, serviceKey, {
     auth: { persistSession: false },
   });
@@ -201,16 +223,15 @@ Deno.serve(async (request) => {
     admin.rpc("public_assistant_content_version"),
     admin.from("public_assistant_answer_cache").select("answer").eq(
       "cache_key",
-      await hash(normalise(question)),
-    ).gt("expires_at", new Date().toISOString()).maybeSingle(),
+      cacheKey,
+    ).is("tenant_id", null).gt("expires_at", new Date().toISOString()).maybeSingle(),
     admin.from("public_assistant_faqs").select(
       "question,normalized_question,aliases,answer,source_url",
-    ).eq("status", "published"),
+    ).eq("status", "published").is("tenant_id", null),
     admin.from("cms_courses").select("name,code,cricos,duration,mode,fees,slug")
-      .eq("status", "Published").order("display_order"),
+      .eq("status", "Published").is("tenant_id", null).order("display_order"),
   ]);
-  const cacheKey = await hash(normalise(question));
-  if (cached?.answer && cached.answer.source_version === version) {
+  if (cached?.answer && cached.answer.source_version === version && cached.answer.cache_scope === cacheScope) {
     return reply(cached.answer);
   }
   const faq = (faqs ?? []).find((f: any) =>
@@ -303,7 +324,7 @@ Deno.serve(async (request) => {
       mode: "fallback",
     };
   }
-  const payload = { ...answer, source_version: version };
+  const payload = { ...answer, source_version: version, cache_scope: cacheScope };
   await admin.from("public_assistant_answer_cache").upsert({
     cache_key: cacheKey,
     source_version: version,

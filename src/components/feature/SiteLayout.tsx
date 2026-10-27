@@ -4,8 +4,11 @@ import SiteHeader from "./SiteHeader";
 import SiteFooter from "./SiteFooter";
 import { StructuredData } from "./Seo";
 import { organizationSchema, websiteSchema } from "@/data/seo";
-import { PublicSiteProvider, usePublicSite } from "@/hooks/usePublicSite";
+import { PublicSiteProvider } from "@/hooks/usePublicSite";
+import { usePublicSite } from "@/hooks/publicSiteContext";
 import PublicAssistant from "./PublicAssistant";
+import TenantPublicContent from "./TenantPublicContent";
+import { tenantThemeStyle } from "@/lib/tenantTheme";
 
 function ScrollToTop() {
   const location = useLocation();
@@ -88,18 +91,22 @@ function RouteRefresh() {
 }
 
 function SiteLayoutInner() {
+  const { data } = usePublicSite();
   return (
-    <div className="flex min-h-screen flex-col bg-background-50">
-      <StructuredData data={[organizationSchema, websiteSchema]} />
+    <div className="flex min-h-screen flex-col bg-background-50 font-body" data-tenant-site={data.tenantSite?.tenantId} style={tenantThemeStyle(data.theme)}>
+      {!data.tenantSite ? <StructuredData data={[organizationSchema, websiteSchema]} /> : <StructuredData data={[
+        { "@context": "https://schema.org", "@type": "EducationalOrganization", name: data.settings.name, url: window.location.origin, logo: data.settings.logo, email: data.settings.email, telephone: data.settings.phone, address: data.settings.address },
+        { "@context": "https://schema.org", "@type": "WebSite", name: data.settings.name, url: window.location.origin },
+      ]} />}
       <ScrollProgress />
       <ScrollToTop />
       <RouteRefresh />
       <SiteHeader />
       <main className="flex-1">
-        <Outlet />
+        {data.tenantSite ? <TenantPublicContent /> : <Outlet />}
       </main>
       <SiteFooter />
-      <PublicAssistant />
+      {!data.tenantSite ? <PublicAssistant /> : null}
       <BackToTop />
     </div>
   );

@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "@/pages/admin/lib/auth";
-import { useAdminData } from "@/pages/admin/lib/store";
-import { PrototypeNotice, AdminLoading, AdminError } from "@/pages/admin/components/ui";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { useAdminData } from "@/pages/admin/lib/storeContext";
+import { AdminLoading, AdminError } from "@/pages/admin/components/ui";
+import { DraftProvider } from "@/pages/admin/lib/draft";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { hadSession, loginUrl } from "@/lib/loginRouting";
 
 interface NavEntry {
   to: string;
@@ -26,6 +29,7 @@ const NAV: NavEntry[] = [
   { to: "/admin/contact", label: "Contact Information", icon: "ri-contacts-line" },
   { to: "/admin/seo", label: "SEO / Page Settings", icon: "ri-search-eye-line" },
   { to: "/admin/users", label: "Users & Permissions", icon: "ri-user-settings-line", adminOnly: true },
+  { to: "/admin/institution", label: "Institution", icon: "ri-building-line", adminOnly: true },
   { to: "/admin/activity", label: "Activity Log", icon: "ri-history-line" },
 ];
 
@@ -44,6 +48,15 @@ export default function AdminLayout() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [userMenu, setUserMenu] = useState(false);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); };
+  }, []);
 
   if (authLoading) {
     return (
@@ -53,14 +66,15 @@ export default function AdminLayout() {
     );
   }
 
-  if (!user) return <Navigate to="/admin/login" replace state={{ from: location.pathname }} />;
+  if (!user) return <Navigate to={loginUrl(location.pathname + location.search, hadSession())} replace />;
 
   // Force a password rotation before any CMS content is reachable.
   if (user.mustChangePassword && location.pathname !== "/admin/set-password") {
     return <Navigate to="/admin/set-password" replace />;
   }
 
-  const items = NAV.filter((n) => !(n.adminOnly && user.role !== "Admin"));
+  const tenant = requestWebsiteDomain();
+  const items = NAV.filter((n) => !(n.adminOnly && user.role !== "Admin") && !(!tenant && n.to === "/admin/institution") && !(tenant && (n.to === "/admin/users" || n.to.startsWith("/admin/knowledge"))));
 
   const sidebar = (
     <nav className="flex h-full flex-col">
@@ -69,7 +83,7 @@ export default function AdminLayout() {
           <i className="ri-building-2-line text-lg" aria-hidden="true" />
         </span>
         <div className="leading-tight">
-          <p className="font-heading text-sm font-bold text-foreground-950">Skyline CMS</p>
+          <p className="font-heading text-sm font-bold text-foreground-950">{tenant ? `${data.settings.shortName || data.settings.name} CMS` : "Skyline CMS"}</p>
           <p className="text-[11px] text-foreground-500">Website Admin</p>
         </div>
       </div>
@@ -105,9 +119,14 @@ export default function AdminLayout() {
     </nav>
   );
 
+  // Quiet by default: a small status dot. A banner appears only for problems (offline, a failed save), can be dismissed and offers a retry.
+  const problem = !online ? "You are offline. Changes you make stay in this browser as a draft until the connection returns." : status === "ready" && error ? `Could not save: ${error}` : null;
+  const showBanner = problem !== null && dismissed !== problem;
+  const connection = problem ? { tone: "bg-red-500", label: problem } : status === "loading" ? { tone: "bg-amber-500", label: "Loading content…" } : { tone: "bg-emerald-500", label: "Connected: changes are saved to your website database." };
+
   return (
+    <DraftProvider>
     <div className="min-h-screen bg-background-100 text-foreground-900">
-      <PrototypeNotice />
       <div className="flex">
         {/* Desktop sidebar */}
         <aside className="sticky top-0 hidden h-[calc(100vh-44px)] w-[260px] shrink-0 border-r border-background-200 bg-background-50 lg:block">
@@ -135,6 +154,9 @@ export default function AdminLayout() {
               >
                 <i className="ri-menu-line text-lg" aria-hidden="true" />
               </button>
+              <span role="status" title={connection.label} aria-label={connection.label} className="flex h-5 w-5 items-center justify-center" tabIndex={0}>
+                <span className={`h-2.5 w-2.5 rounded-full ${connection.tone}`} />
+              </span>
               <div className="hidden items-center gap-2 text-[13px] text-foreground-500 sm:flex">
                 <i className="ri-shield-check-line text-primary-500" aria-hidden="true" />
                 <span>{data.settings.shortName} content management</span>
@@ -178,6 +200,14 @@ export default function AdminLayout() {
             </div>
           </header>
 
+          {showBanner ? (
+            <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-900 md:px-6">
+              <i className="ri-error-warning-line text-base" aria-hidden="true" />
+              <span className="flex-1">{problem}</span>
+              {online ? <button type="button" onClick={reload} className="cursor-pointer rounded border border-red-300 bg-white px-2.5 py-1 font-medium hover:bg-red-100">Retry</button> : null}
+              <button type="button" aria-label="Dismiss" onClick={() => setDismissed(problem)} className="flex h-6 w-6 cursor-pointer items-center justify-center rounded hover:bg-red-100"><i className="ri-close-line" aria-hidden="true" /></button>
+            </div>
+          ) : null}
           <main className="px-4 py-6 md:px-6 md:py-7">
             {status === "loading" ? (
               <AdminLoading />
@@ -190,5 +220,6 @@ export default function AdminLayout() {
         </div>
       </div>
     </div>
+    </DraftProvider>
   );
 }

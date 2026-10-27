@@ -1,9 +1,9 @@
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
-import NotFound from "@/pages/NotFound";
 import SiteLayout from "@/components/feature/SiteLayout";
 import Home from "@/pages/home/page";
 import ContentPageRoute from "@/pages/content/page";
+import CmsPageRoute from "@/pages/content/CmsPageRoute";
 import CoursesPage from "@/pages/courses/page";
 import CourseDetailPage from "@/pages/course-detail/page";
 import ContactPage from "@/pages/contact/page";
@@ -17,8 +17,10 @@ import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 
 import PortalProviders from "@/pages/agency/components/PortalProviders";
+import PortalLanding from "@/pages/agency/components/PortalLanding";
 import RequirePortal from "@/pages/agency/components/RequirePortal";
-import PortalLoginPage from "@/pages/agency/login/page";
+import LoginPage from "@/pages/login/page";
+import LoginRedirect from "@/pages/login/LoginRedirect";
 import PortalDashboardPage from "@/pages/agency/dashboard/page";
 import PortalApplicationsPage from "@/pages/agency/applications/page";
 import NewApplicationPage from "@/pages/agency/applications/new/page";
@@ -31,11 +33,11 @@ import AdminAgenciesPage from "@/pages/agency/agencies/page";
 import AdminUsersPage from "@/pages/agency/users/page";
 import AllApplicationsPage from "@/pages/agency/all-applications/page";
 import AdminAuditLogPage from "@/pages/agency/audit-log/page";
+import RegistrationWorkbenchPage from "@/pages/agency/registrations/page";
 
 import AdminProviders from "@/pages/admin/components/AdminProviders";
 import AdminLayout from "@/pages/admin/components/AdminLayout";
 import RequireAdmin from "@/pages/admin/components/RequireAdmin";
-import AdminLoginPage from "@/pages/admin/LoginPage";
 import AdminSetPasswordPage from "@/pages/admin/SetPasswordPage";
 import DashboardPage from "@/pages/admin/DashboardPage";
 import AdminCoursesPage from "@/pages/admin/CoursesPage";
@@ -50,6 +52,7 @@ import FormBuilderPage from "@/pages/admin/FormBuilderPage";
 import AdminContactPage from "@/pages/admin/ContactPage";
 import AdminSeoPage from "@/pages/admin/SeoPage";
 import UsersPage from "@/pages/admin/UsersPage";
+import InstitutionPage from "@/pages/admin/InstitutionPage";
 import ActivityPage from "@/pages/admin/ActivityPage";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 import DocumentIndexPage from "@/pages/admin/DocumentIndexPage";
@@ -72,8 +75,12 @@ const routes: RouteObject[] = [
       { path: "become-an-agent", element: <BecomeAnAgentPage /> },
       { path: "contact", element: <ContactPage /> },
       { path: "enroll-now", element: <EnrollPage /> },
-      { path: "*", element: <NotFound /> },
+      { path: "*", element: <CmsPageRoute /> },
     ],
+  },
+  {
+    path: "/login",
+    element: <LoginPage />,
   },
   {
     path: "/forgot-password",
@@ -87,11 +94,11 @@ const routes: RouteObject[] = [
     path: "/agency",
     element: <PortalProviders />,
     children: [
-      { path: "login", element: <PortalLoginPage /> },
+      { path: "login", element: <LoginRedirect /> },
       {
         element: <RequirePortal />,
         children: [
-          { index: true, element: <Navigate to="/agency/dashboard" replace /> },
+          { index: true, element: <PortalLanding /> },
           { path: "dashboard", element: <PortalDashboardPage /> },
           { path: "applications", element: <PortalApplicationsPage /> },
           { path: "applications/new", element: <NewApplicationPage /> },
@@ -104,6 +111,7 @@ const routes: RouteObject[] = [
           { path: "users", element: <AdminUsersPage /> },
           { path: "all-applications", element: <AllApplicationsPage /> },
           { path: "audit-log", element: <AdminAuditLogPage /> },
+          { path: "registrations", element: <RegistrationWorkbenchPage /> },
         ],
       },
     ],
@@ -112,7 +120,7 @@ const routes: RouteObject[] = [
     path: "/admin",
     element: <AdminProviders />,
     children: [
-      { path: "login", element: <AdminLoginPage /> },
+      { path: "login", element: <LoginRedirect /> },
       { path: "set-password", element: <AdminSetPasswordPage /> },
       {
         element: <AdminLayout />,
@@ -130,6 +138,7 @@ const routes: RouteObject[] = [
           { path: "contact", element: <AdminContactPage /> },
           { path: "seo", element: <AdminSeoPage /> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
+          { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },
           { path: "activity", element: <ActivityPage /> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
           { path: "knowledge/documents", element: <RequireAdmin><DocumentIndexPage /></RequireAdmin> },

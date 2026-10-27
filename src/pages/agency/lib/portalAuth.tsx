@@ -1,3 +1,4 @@
+import { PortalRole, PortalProfile, PortalAgency, PortalMembership, ActionResult, PortalAuthValue, PortalAuthContext, portalPasswordResetUrl, usePortalAuth } from "./portalAuthContext";
 import {
   createContext,
   useCallback,
@@ -12,82 +13,14 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
 import { passwordRecoveryUrl } from "@/lib/siteUrl";
-
-/**
- * Agency Portal authentication (Supabase Auth, email + password only).
- *
- * One sign-in page serves all three roles:
- *   - SLIT Admin    — an Active CMS Admin (cms_users.role = 'Admin').
- *   - Agency Admin  — agency_memberships.role = 'agency_admin'.
- *   - Agent         — agency_memberships.role = 'agent'.
- *
- * The authoritative role/scope is resolved server-side by the `portal_identity`
- * SECURITY DEFINER function; the database RLS policies enforce the same scope on
- * every later read/write, so the UI is never the only guard.
- */
-
-export type PortalRole = "slit_admin" | "agency_admin" | "agent";
-
-export interface PortalProfile {
-  id: string;
-  fullName: string;
-  email: string;
-  phone: string;
-  jobTitle: string;
-  status: string;
-}
-
-export interface PortalAgency {
-  id: string;
-  name: string;
-  code: string;
-  registrationNumber: string;
-  businessEmail: string;
-  phone: string;
-  address: string;
-  country: string;
-  primaryContact: string;
-  status: string;
-  isPermanent: boolean;
-}
-
-export interface PortalMembership {
-  role: "agency_admin" | "agent";
-  status: string;
-}
-
-interface ActionResult {
-  ok: boolean;
-  error?: string;
-}
-
-interface PortalAuthValue {
-  authUser: { id: string; email: string; name: string } | null;
-  role: PortalRole | null;
-  profile: PortalProfile | null;
-  agency: PortalAgency | null;
-  membership: PortalMembership | null;
-  authLoading: boolean;
-  identityLoading: boolean;
-  identityError: string;
-  signIn: (email: string, password: string) => Promise<ActionResult>;
-  signOut: () => Promise<void>;
-  requestReset: (email: string) => Promise<ActionResult>;
-  reloadIdentity: () => Promise<void>;
-  updateOwnProfile: (patch: Partial<Pick<PortalProfile, "fullName" | "phone" | "jobTitle">>) => Promise<ActionResult>;
-  changeOwnPassword: (currentPassword: string, password: string) => Promise<ActionResult>;
-}
-
-const PortalAuthContext = createContext<PortalAuthValue | null>(null);
+import { useNavigate } from "react-router-dom";
+import { markSessionSeen } from "@/lib/loginRouting";
+import { portalAccessMessage } from "@/pages/agency/lib/applicationAccess";
+import { currentPortalScope, setPortalScope, flushPortalBeforeSwitch, type PortalScope } from "@/lib/portalScope";
 
 function basePathPrefix(): string {
   const base = __BASE_PATH__.split("/").filter(Boolean).join("/");
   return base ? `/${base}` : "";
-}
-
-/** Where invite / recovery emails must land (kept unhardcoded for any host). */
-export function portalPasswordResetUrl(): string {
-  return passwordRecoveryUrl();
 }
 
 function mapAuthUser(user: User) {
@@ -126,6 +59,11 @@ function mapAgency(row: Record<string, unknown>): PortalAgency {
 }
 
 export function PortalAuthProvider({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
+  const [scopes, setScopes] = useState<PortalScope[]>([]);
+  const [selectedScope, setSelectedScope] = useState<PortalScope | null>(null);
+  const [scopeEpoch, setScopeEpoch] = useState(0);
+  const identitySequence = useRef(0);
   const [authUser, setAuthUser] = useState<{ id: string; email: string; name: string } | null>(null);
   const [role, setRole] = useState<PortalRole | null>(null);
   const [profile, setProfile] = useState<PortalProfile | null>(null);
@@ -137,6 +75,11 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   const identityRef = useRef<{ userId: string; at: number; pending: Promise<void> | null }>({ userId: "", at: 0, pending: null });
 
   const clearIdentity = useCallback(() => {
+    ++identitySequence.current;
+    identityRef.current = { userId: "", at: 0, pending: null };
+    setScopes([]);
+    setPortalScope(null);
+    setSelectedScope(null);
     setRole(null);
     setProfile(null);
     setAgency(null);
@@ -144,74 +87,80 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resolveIdentity = useCallback(
-    async (u: { id: string; email: string; name: string }) => {
-      const now = Date.now();
-      // The INITIAL_SESSION auth event commonly follows getSession; deduplicate
-      // it while still revalidating a live membership at least every two minutes.
-      if (identityRef.current.userId === u.id && now - identityRef.current.at < 120_000) {
+    async (u: { id: string; email: string; name: string }, requestedKey?: string, force = false) => {
+      const stamp = Date.now();
+      if (!force && identityRef.current.userId === u.id && stamp - identityRef.current.at < 120000) {
         if (identityRef.current.pending) return identityRef.current.pending;
         return;
       }
+      const sequence = ++identitySequence.current;
       identityRef.current.userId = u.id;
-      identityRef.current.at = now;
+      identityRef.current.at = stamp;
       setIdentityLoading(true);
       setIdentityError("");
       const task = (async () => { try {
         countPortalMetric("identity.fetch");
+        // Accept a pending invitation for this verified email and learn why access may be missing (database-resolved).
+        let accessState = "active";
+        try {
+          const { data: access } = await supabase.rpc("portal_resolve_access");
+          accessState = String((access as { state?: string } | null)?.state ?? "active");
+        } catch { /* older database without migration 86: fall back to the identity check */ }
+        const { data: options, error: optionsError } = await supabase.rpc("portal_scope_options");
+        if (optionsError) throw new Error(optionsError.message);
+        const available: PortalScope[] = (options.choices ?? []).map((item: { tenantId: string; name: string; domain: string }) => ({ key: item.tenantId, tenantId: item.tenantId, name: item.name, domain: item.domain, userId: u.id }));
+        if (options.legacyAllowed) available.unshift({ key: "legacy", tenantId: null, name: "Skyline (existing portal)", domain: null, userId: u.id });
+        if (sequence !== identitySequence.current) return;
+        setScopes(available);
+        let stored: string | null = null;
+        try { stored = sessionStorage.getItem("skyline-portal-scope:" + u.id); } catch { /* storage unavailable */ }
+        const wanted = requestedKey ?? stored ?? available[0]?.key;
+        const selected = available.find((option) => option.key === wanted);
+        if (!selected && available.length === 0 && !["active", "org_admin"].includes(accessState)) throw new Error(portalAccessMessage(accessState));
+        if (!selected) {
+          setPortalScope({ key: "denied", tenantId: null, name: "Unavailable", domain: "unavailable.invalid", userId: u.id });
+          setRole(null); setProfile(null); setAgency(null); setMembership(null); setSelectedScope(null);
+          throw new Error("The selected institution is no longer authorized. Choose an available institution.");
+        }
+        setPortalScope(selected);
         const { data, error } = await supabase.rpc("portal_identity");
         if (error) throw new Error(error.message);
-        const identity = (data ?? {}) as {
-          role?: PortalRole | null;
-          profile_id?: string | null;
-          agency_id?: string | null;
-        };
-        setRole(identity.role ?? null);
-
-        if (identity.profile_id) {
-          const { data: p } = await supabase
-            .from("portal_profiles")
-            .select("id, full_name, email, phone, job_title, status")
-            .eq("id", identity.profile_id)
-            .maybeSingle();
-          setProfile(p ? mapProfile(p as Record<string, unknown>) : null);
-        } else {
-          setProfile(null);
-        }
-
-        if (identity.agency_id) {
-          const { data: a } = await supabase
-            .from("agencies")
-            .select("id, name, code, registration_number, business_email, phone, address, country, primary_contact, status, is_permanent")
-            .eq("id", identity.agency_id)
-            .maybeSingle();
-          setAgency(a ? mapAgency(a as Record<string, unknown>) : null);
-
-          const { data: m } = await supabase
-            .from("agency_memberships")
-            .select("role, status")
-            .eq("user_id", identity.profile_id ?? "")
-            .maybeSingle();
-          setMembership(
-            m
-              ? { role: (m.role === "agency_admin" ? "agency_admin" : "agent"), status: String(m.status ?? "Active") }
-              : null,
-          );
-        } else {
-          setAgency(null);
-          setMembership(null);
-        }
+        const identity = (data ?? {}) as { role?: PortalRole | null; profile_id?: string | null; agency_id?: string | null };
+        if (!identity.role) throw new Error(accessState === "active" || accessState === "org_admin" ? "Access to this institution is not granted." : portalAccessMessage(accessState));
+        const [p, a, m] = await Promise.all([
+          identity.profile_id ? supabase.from("portal_profiles").select("id,full_name,email,phone,job_title,status").eq("id", identity.profile_id).maybeSingle() : Promise.resolve({data:null,error:null}),
+          identity.agency_id ? supabase.from("agencies").select("*").eq("id", identity.agency_id).maybeSingle() : Promise.resolve({data:null,error:null}),
+          identity.profile_id ? supabase.from("agency_memberships").select("role,status").eq("user_id", identity.profile_id).maybeSingle() : Promise.resolve({data:null,error:null}),
+        ]);
+        if (sequence !== identitySequence.current) return;
+        if (p.error || a.error || m.error) throw new Error("Could not load authorized portal details.");
+        setRole(identity.role);
+        setProfile(p.data ? mapProfile(p.data as Record<string, unknown>) : null);
+        setAgency(a.data ? mapAgency(a.data as Record<string, unknown>) : null);
+        setMembership(m.data ? { role: m.data.role === "agency_admin" ? "agency_admin" : "agent", status: String(m.data.status) } : null);
+        setSelectedScope(selected);
+        try { sessionStorage.setItem("skyline-portal-scope:" + u.id, selected.key); } catch { /* storage unavailable */ }
       } catch (e) {
-        clearIdentity();
-        setIdentityError(e instanceof Error ? e.message : "We could not load your portal access.");
+        if (sequence !== identitySequence.current) return;
+        setRole(null); setProfile(null); setAgency(null); setMembership(null);
+        setIdentityError(e instanceof Error ? e.message : "Could not verify institution access.");
       } finally {
-        setIdentityLoading(false);
-        identityRef.current.pending = null;
+        if (sequence === identitySequence.current) { setIdentityLoading(false); identityRef.current.pending = null; }
       } })();
       identityRef.current.pending = task;
       return task;
-    },
-    [clearIdentity],
-  );
+    }, []);
+
+  const selectScope = useCallback(async (key: string) => {
+    if (!authUser || !scopes.some((option) => option.key === key)) return;
+    try {
+      await flushPortalBeforeSwitch();
+      setRole(null); setProfile(null); setAgency(null); setMembership(null);
+      await resolveIdentity(authUser, key, true);
+      setScopeEpoch((epoch) => epoch + 1);
+      navigate("/agency/dashboard", { replace: true });
+    } catch (e) { setIdentityError(e instanceof Error ? e.message : "Save changes before switching institution."); }
+  }, [authUser, scopes, resolveIdentity, navigate]);
 
   useEffect(() => {
     let active = true;
@@ -259,7 +208,9 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    await flushPortalBeforeSwitch();
     await supabase.auth.signOut();
+    markSessionSeen(false);
     setAuthUser(null);
     clearIdentity();
   }, [clearIdentity]);
@@ -273,7 +224,7 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reloadIdentity = useCallback(async () => {
-    if (authUser) await resolveIdentity(authUser);
+    if (authUser) await resolveIdentity(authUser, currentPortalScope()?.key, true);
   }, [authUser, resolveIdentity]);
 
   const updateOwnProfile = useCallback(
@@ -318,6 +269,7 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<PortalAuthValue>(
     () => ({
       authUser,
+      scopes, selectedScope, scopeEpoch, selectScope,
       role,
       profile,
       agency,
@@ -334,6 +286,7 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
     }),
     [
       authUser,
+      scopes, selectedScope, scopeEpoch, selectScope,
       role,
       profile,
       agency,
@@ -350,11 +303,15 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <PortalAuthContext.Provider value={value}>{children}</PortalAuthContext.Provider>;
-}
-
-export function usePortalAuth(): PortalAuthValue {
-  const ctx = useContext(PortalAuthContext);
-  if (!ctx) throw new Error("usePortalAuth must be used within PortalAuthProvider");
-  return ctx;
+  return <PortalAuthContext.Provider value={value}>
+    {authUser && scopes.length > 0 ? <div className="border-b border-background-200 bg-background-50 px-5 py-3">
+      <label className="flex items-center gap-3 text-sm">Institution
+        <select aria-label="Institution" className="rounded border border-background-300 px-3 py-2" value={selectedScope?.key ?? ""} disabled={identityLoading} onChange={(event) => void selectScope(event.target.value)}>
+          {!selectedScope ? <option value="">Choose an institution</option> : null}
+          {scopes.map((scope) => <option key={scope.key} value={scope.key}>{scope.name}</option>)}
+        </select>
+      </label>
+    </div> : null}
+    {children}
+  </PortalAuthContext.Provider>;
 }

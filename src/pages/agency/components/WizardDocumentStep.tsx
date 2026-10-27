@@ -454,7 +454,7 @@ export default function WizardDocumentStep({
 function AcademicDocumentReview({ doc, specs, onSave }: { doc: WizardDoc; specs: WizardFieldSpec[]; onSave: Props["onReviewDocument"] }) {
   const extraction = doc.extraction as DocumentExtraction | undefined;
   const candidateFingerprint = JSON.stringify({ extracted: extraction?.extracted ?? {}, confirmed: extraction?.confirmed ?? {}, status: extraction?.status });
-  const reviewFields = useMemo(() => ({ ...(extraction?.extracted ?? {}), ...(extraction?.confirmed ?? {}) }), [candidateFingerprint, extraction?.extracted, extraction?.confirmed]);
+  const reviewFields = useMemo(() => { const candidate = JSON.parse(candidateFingerprint); return { ...candidate.extracted, ...candidate.confirmed }; }, [candidateFingerprint]);
   const [fields, setFields] = useState<Record<string, string>>(() => ({ ...(extraction?.extracted ?? {}), ...(extraction?.confirmed ?? {}) }));
   const [saving, setSaving] = useState(false);
   const status = extraction?.status ?? "unreviewed";
@@ -473,7 +473,7 @@ function AcademicDocumentReview({ doc, specs, onSave }: { doc: WizardDoc; specs:
 function DocumentExtractionReview({ doc, specs, onSave }: { doc: WizardDoc; specs: WizardFieldSpec[]; onSave: Props["onReviewDocument"] }) {
   const extraction = doc.extraction as DocumentExtraction;
   const candidateFingerprint = JSON.stringify({ extracted: extraction.extracted, confirmed: extraction.confirmed, status: extraction.status });
-  const reviewFields = useMemo(() => ({ ...extraction.extracted, ...extraction.confirmed }), [candidateFingerprint, extraction.extracted, extraction.confirmed]);
+  const reviewFields = useMemo(() => { const candidate = JSON.parse(candidateFingerprint); return { ...candidate.extracted, ...candidate.confirmed }; }, [candidateFingerprint]);
   const [fields, setFields] = useState<Record<string, string>>(() => ({ ...extraction.extracted, ...extraction.confirmed }));
   const [saving, setSaving] = useState(false);
   useEffect(() => { setFields(reviewFields); }, [doc.id, reviewFields]);

@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AppField, AppSection } from "@/data/applicationForms";
-import {
-  ApplicationFieldControl,
-  isConditionMet,
-  isFieldFilled,
-  sectionHeading,
-  sectionIcon,
-} from "@/components/feature/applicationFieldKit";
+import { ApplicationFieldControl } from "@/components/feature/applicationFieldKit";
+import { isConditionMet, isFieldFilled, sectionHeading, sectionIcon } from "@/components/feature/applicationFieldHelpers";
 import TermsDeclaration from "@/components/feature/TermsDeclaration";
 import DocumentScanWidget from "@/components/feature/DocumentScanWidget";
 import { applyFieldValues, type ScanType } from "@/lib/docScan";

@@ -11,3 +11,8 @@ verify_jwt = false
 [functions.public-assistant-index]
 # Worker is authenticated with x-worker-secret, not a browser JWT.
 verify_jwt = false
+
+[functions.notification-delivery]
+# Server-to-server only. verify_jwt = true plus an in-function check: only the service-role key may run the worker (401 without a token, 403 for
+# anon/user tokens). No worker secret. The /webhook route is disabled (410) until Postmark callbacks can be authenticated.
+verify_jwt = true

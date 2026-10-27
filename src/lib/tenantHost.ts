@@ -11,7 +11,7 @@ export function normalizedHostname(value: string): string {
 // Existing Skyline deployment and local legacy regression entry points only.
 // New institutions require explicit verified database domain records.
 export function isLegacyHostname(hostname: string): boolean {
-  return ["slit.edu.au", "www.slit.edu.au", "localhost", "127.0.0.1"].includes(hostname);
+  return ["slit.edu.au", "www.slit.edu.au", "localhost", "127.0.0.1"].includes(hostname) || hostname.endsWith(".vercel.app");
 }
 
 export function requestWebsiteDomain(): string | null {

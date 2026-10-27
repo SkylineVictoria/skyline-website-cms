@@ -50,7 +50,7 @@ TODO, IN_PROGRESS, BLOCKED, DONE (DONE needs verified acceptance). Local status 
 
 ## Current position
 Phases 1-4 DONE and hosted-VERIFIED. Phases 5 (P05-01..03), 6, 7 and 8 are DONE and released as migrations 73-90 (hosted verification not recorded); 91 (status model) is local only. P05-04 BLOCKED on live Azure approval.
-Next eligible: P09-01 (Phase 8b is done; P08-08 is BLOCKED on PRISMS API access). Highest local migration: 94 (91-94 local only, plus a notification-delivery redeploy for the PDF and CoE/VoE attachments; hold until the new frontend release); hosted at 90 as last verified 2026-10-27 (91 pending).
+Next eligible: P09-01 (Phase 8b is done; P08-08 is BLOCKED on PRISMS API access). Highest local migration: 94 (91-94 local only, plus a notification-delivery redeploy for the PDF and CoE/VoE attachments and a portal-document-extract redeploy for P05-05 per-category routing; hold until the new frontend release); hosted at 90 as last verified 2026-10-27 (91 pending).
 Hosted Edge Functions: all seven deployed (portal-document-extract v15; notification-delivery with JWT on, matching config.toml; cms-admin-users v11 and portal-admin-users v12, both JWT on, redeployed 2026-10-27 08:52Z).
 The notification-delivery-worker cron job exists hosted (migration 88) and is inactive since migration 90 (inferred from the applied list, not queried); nothing sends email until the owner approves a sender and sets the Postmark secrets and Vault key. Supabase Auth uses custom SMTP via Postmark (no-reply@slit.edu.au).
 Live Postmark NOT RUN. Live Azure NOT RUN. Frontend hosting for https://slit.edu.au is UNVERIFIED and separately gated.

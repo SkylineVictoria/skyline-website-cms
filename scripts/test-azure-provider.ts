@@ -300,6 +300,65 @@ test("provider selection: default stays OpenAI, Azure needs its own complete val
   assert.ok(!JSON.stringify(badEndpoint).includes("example.com") && !JSON.stringify(missing).includes(KEY));
 });
 
+// ---- P05-05: per-category provider routing ----
+const ROUTE_BASE = { OPENAI_API_KEY: "k", OPENAI_DOCUMENT_MODEL: "m", EF_AZURE_DOCUMENT_ENDPOINT: ENDPOINT, EF_AZURE_DOCUMENT_API_KEY: KEY, EF_AZURE_DOCUMENT_MODEL: "prebuilt-idDocument" };
+const CATEGORIES = ["Passport", "Driving Licence", "Visa", "English Test", "Academic"] as const;
+
+test("routing: blank routes leave selection unchanged", () => {
+  for (const routes of [undefined, "", "   "]) {
+    for (const category of [undefined, ...CATEGORIES]) {
+      assert.equal(createDocumentExtractionProvider({ ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_ROUTES: routes }, { category }).provider?.id, "openai-responses", `${routes} ${category}`);
+      assert.equal(createDocumentExtractionProvider({ ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_PROVIDER: "azure", EF_DOCUMENT_EXTRACTION_ROUTES: routes }, { category }).provider?.id, "azure-document-intelligence", `${routes} ${category}`);
+    }
+  }
+});
+
+test("routing: passport and licence to Azure, every other category stays on the default OpenAI", () => {
+  const config = { ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_ROUTES: "passport=azure, driving_licence=azure" };
+  for (const category of CATEGORIES) {
+    const expected = category === "Passport" || category === "Driving Licence" ? "azure-document-intelligence" : "openai-responses";
+    assert.equal(createDocumentExtractionProvider(config, { category }).provider?.id, expected, category);
+  }
+  assert.equal(createDocumentExtractionProvider(config).unavailable, null);
+  // An explicit openai route beats an Azure default.
+  const flipped = { ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_PROVIDER: "azure", EF_DOCUMENT_EXTRACTION_ROUTES: "visa=openai" };
+  assert.equal(createDocumentExtractionProvider(flipped, { category: "Visa" }).provider?.id, "openai-responses");
+  assert.equal(createDocumentExtractionProvider(flipped, { category: "Passport" }).provider?.id, "azure-document-intelligence");
+  // A provider nothing can reach is not required: all categories routed to Azure need no OpenAI settings.
+  const noOpenAi = { EF_AZURE_DOCUMENT_ENDPOINT: ENDPOINT, EF_AZURE_DOCUMENT_API_KEY: KEY, EF_AZURE_DOCUMENT_MODEL: "prebuilt-idDocument", EF_DOCUMENT_EXTRACTION_ROUTES: "passport=azure,driving_licence=azure" };
+  assert.equal(createDocumentExtractionProvider(noOpenAi, { category: "Passport" }).provider?.id, "azure-document-intelligence");
+  const missingFallback = createDocumentExtractionProvider(noOpenAi);
+  assert.deepEqual([missingFallback.provider, missingFallback.unavailable?.code, missingFallback.unavailable?.variables], [null, "configuration_unavailable", ["OPENAI_API_KEY", "OPENAI_DOCUMENT_MODEL"]]);
+});
+
+test("routing: an invalid route string fails closed, naming only the variable", () => {
+  for (const routes of ["passport", "passport=gemini", "Passport=azure", "passport=Azure", "bogus=azure", "passport=azure,", ",passport=azure", "passport=azure,passport=openai", "passport=azure=x", "=azure"]) {
+    for (const category of [undefined, "Passport" as const, "Visa" as const]) {
+      const result = createDocumentExtractionProvider({ ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_ROUTES: routes }, { category });
+      assert.deepEqual([result.provider, result.unavailable?.code, result.unavailable?.variables], [null, "configuration_invalid", ["EF_DOCUMENT_EXTRACTION_ROUTES"]], `${routes} ${category}`);
+      assert.ok(!JSON.stringify(result).includes(KEY) && !("categories" in result.unavailable!));
+    }
+  }
+});
+
+test("routing: Azure routed to a category it has no model for fails as configuration_invalid naming the category, no fallback", () => {
+  const config = { ...ROUTE_BASE, EF_DOCUMENT_EXTRACTION_ROUTES: "passport=azure,visa=azure,english_test=azure" };
+  const visa = createDocumentExtractionProvider(config, { category: "Visa" });
+  assert.deepEqual([visa.provider, visa.unavailable?.code, visa.unavailable?.categories], [null, "configuration_invalid", ["Visa"]]);
+  assert.deepEqual(visa.unavailable?.variables, ["EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_MODEL_MAP"]);
+  // Availability check without a category reports every unsupported routed category.
+  const all = createDocumentExtractionProvider(config);
+  assert.deepEqual([all.provider, all.unavailable?.code, all.unavailable?.categories], [null, "configuration_invalid", ["Visa", "English Test"]]);
+  // Supported routed and unrouted categories are unaffected.
+  assert.equal(createDocumentExtractionProvider(config, { category: "Passport" }).provider?.id, "azure-document-intelligence");
+  assert.equal(createDocumentExtractionProvider(config, { category: "Academic" }).provider?.id, "openai-responses");
+  // Mapping the categories makes the same routes valid.
+  const mapped = { ...config, EF_AZURE_DOCUMENT_MODEL_MAP: JSON.stringify({ Visa: "visa-v1", "English Test": "english-test-v1" }) };
+  assert.equal(createDocumentExtractionProvider(mapped, { category: "Visa" }).provider?.id, "azure-document-intelligence");
+  assert.equal(createDocumentExtractionProvider(mapped).unavailable, null);
+  assert.ok(!JSON.stringify(visa).includes(KEY) && !JSON.stringify(all).includes(ENDPOINT));
+});
+
 // ---- P05-03: leased-job orchestration against an in-memory queue that mirrors the SQL fences ----
 // Mirrors portal_claim/finish/fail/record: state + lease fencing, candidates fill only empty fields,
 // the operation receipt is dropped on every terminal state and kept across a retryable requeue.

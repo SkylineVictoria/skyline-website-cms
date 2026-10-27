@@ -16,7 +16,7 @@ const model = Deno.env.get("OPENAI_DOCUMENT_MODEL") ?? "";
 // Provider settings, read once. EF_DOCUMENT_EXTRACTION_PROVIDER unset keeps the existing OpenAI adapter;
 // "azure" selects the Azure adapter, which then needs its own EF_AZURE_DOCUMENT_* configuration.
 const providerConfig: Record<string, string> = { OPENAI_API_KEY: openAiKey, OPENAI_DOCUMENT_MODEL: model };
-for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
+for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
 const workerSecret = Deno.env.get("DOCUMENT_EXTRACTION_WORKER_SECRET") ?? "";
 const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-worker-secret, x-tenant-domain", "Content-Type": "application/json" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
@@ -56,7 +56,7 @@ async function processOne(scope?: { job: string; tenant: string }) {
   // Nothing is claimed unless the worker secret and the selected provider are configured; values are never echoed.
   const workerIssue = requiredConfiguration({ DOCUMENT_EXTRACTION_WORKER_SECRET: workerSecret });
   const providerIssue = createDocumentExtractionProvider(providerConfig).unavailable;
-  if (workerIssue || providerIssue) return reply({ error: "Edge Function configuration is unavailable.", code: providerIssue?.code === "configuration_invalid" ? "configuration_invalid" : "configuration_unavailable", variables: [...(workerIssue?.variables ?? []), ...(providerIssue?.variables ?? [])] }, 503);
+  if (workerIssue || providerIssue) return reply({ error: "Edge Function configuration is unavailable.", code: providerIssue?.code === "configuration_invalid" ? "configuration_invalid" : "configuration_unavailable", variables: [...(workerIssue?.variables ?? []), ...(providerIssue?.variables ?? [])], ...(providerIssue?.categories ? { categories: providerIssue.categories } : {}) }, 503);
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
   const { data: claimed, error } = scope ? await admin.rpc("portal_claim_tenant_document_job", { p_job: scope.job, p_tenant: scope.tenant }) : await admin.rpc("portal_claim_document_extraction_job");
   if (error) return reply({ ok: false, error: error.message }, 500);
@@ -110,7 +110,7 @@ async function processOne(scope?: { job: string; tenant: string }) {
   if (blobError || !blob) return await fail("storage", "The private document is no longer available.", false);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (!bytes.length || bytes.length > MAX_BYTES || !isSupportedDocument(bytes, doc.mime_type ?? blob.type, doc.filename)) return await fail("validation", "The document must be a valid PDF, JPG, or PNG no larger than 10 MB.", false);
-  const selection = createDocumentExtractionProvider(providerConfig);
+  const selection = createDocumentExtractionProvider(providerConfig, { category: doc.category });
   if (!selection.provider) return await fail("configuration", "The extraction provider is not configured.", true);
   const provider = selection.provider;
   const result = await runLeasedExtraction(provider, {

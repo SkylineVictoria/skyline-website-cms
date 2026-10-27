@@ -31,6 +31,7 @@ Supabase secrets are project-wide; the prefix gives no function isolation. Exist
 | OPENAI_DOCUMENT_MODEL | portal-document-extract | required for extraction |
 | OPENAI_BASE_URL | assistant, index | optional; test adapter only |
 | EF_DOCUMENT_EXTRACTION_PROVIDER | portal-document-extract | unset/`openai` = OpenAI, `azure` = Azure adapter |
+| EF_DOCUMENT_EXTRACTION_ROUTES | portal-document-extract | optional, e.g. `passport=azure,driving_licence=azure` (keys passport, driving_licence, visa, english_test, academic; values openai or azure); unlisted categories use the provider above; Azure routed to a category with no model is configuration_invalid (category named) |
 | EF_AZURE_DOCUMENT_ENDPOINT, EF_AZURE_DOCUMENT_API_KEY (secret), EF_AZURE_DOCUMENT_MODEL | portal-document-extract | all required when provider=azure; incomplete = typed unavailable, manual entry continues |
 | EF_AZURE_DOCUMENT_MODEL_MAP, EF_AZURE_DOCUMENT_API_VERSION | portal-document-extract | optional (API version default 2024-11-30) |
 | PUBLIC_ASSISTANT_WORKER_SECRET | public-assistant-index | secret |

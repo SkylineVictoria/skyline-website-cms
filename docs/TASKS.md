@@ -11,7 +11,7 @@ Phase order (ADR-012, 2026-10-26): 5 Azure, 6 RTO administration, 7 Postmark, 8 
 | 2 Multi-tenant DB and security foundation | 10 | 10 | 0 | VERIFIED |
 | 3 Tenant-driven website, branding, CMS | 5 | 5 | 0 | VERIFIED |
 | 4 Agency portal and admission isolation | 5 | 5 | 0 | VERIFIED |
-| 5 Azure AI Document Intelligence | 4 | 3 | 1 | PENDING |
+| 5 Azure AI Document Intelligence | 5 | 4 | 1 | PENDING |
 | 6 RTO and company administration | 4 | 4 | 0 | PENDING |
 | 7 Postmark email and notifications | 3 | 3 | 0 | PENDING |
 | 8 PRISMS registration (manual) | 3 | 3 | 0 | PENDING |
@@ -19,7 +19,7 @@ Phase order (ADR-012, 2026-10-26): 5 Azure, 6 RTO administration, 7 Postmark, 8 
 | 9 Multi-tenant RAG chatbot | 5 | 0 | 5 | PENDING |
 | 10 Stripe subscriptions and billing | 3 | 0 | 3 | PENDING |
 | 11 Performance, security, observability, deploy | 4 | 0 | 4 | PENDING |
-| **Total** | **55** | **41** | **14** | |
+| **Total** | **56** | **42** | **14** | |
 
 **Next eligible: P09-01** (Phase 8b is complete except P08-08, BLOCKED on PRISMS API access). P05-04 live run needs explicit owner approval and a hosted release.
 
@@ -62,6 +62,10 @@ Phase order (ADR-012, 2026-10-26): 5 Azure, 6 RTO administration, 7 Postmark, 8 
   - Scope: document synthetic fixture run and accuracy/cost evidence format; run only with credentials and explicit approval.
   - Acceptance: mock-only readiness reported separately; live result stays NOT RUN until approved and executed.
   - Tests: optional per-category real-fixture run; field-level outcomes, no invented accuracy.
+- P05-05 Per-category provider routing. status: DONE (local, mock-only 2026-10-27; SQL suites NOT RUN, Docker down; undeployed). Deps: P05-03.
+  - Scope: optional `EF_DOCUMENT_EXTRACTION_ROUTES` (`passport=azure,driving_licence=azure`) in `_shared/document-extraction/select.ts`; unlisted categories use `EF_DOCUMENT_EXTRACTION_PROVIDER` (blank = openai).
+  - Acceptance: malformed routes and Azure routed to a category without a model fail as configuration_invalid (category named), never a silent fallback; blank routes change nothing.
+  - Tests: `scripts/test-azure-provider.ts` (4 routing cases).
 
 ## Phase 6 - RTO and company administration
 

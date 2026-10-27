@@ -97,6 +97,38 @@ export function normaliseCandidates(fields: Record<string, string>): Record<stri
 
 const known = new Set<string>(EXTRACTION_FIELD_NAMES);
 
+const AU_STATE_CODES = new Set(["NSW", "VIC", "QLD", "SA", "WA", "TAS", "NT", "ACT"]);
+const US_STATE_CODES = new Set(["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WV","WI","WY"]);
+const AU_ADDRESS_KEYS = ["au_street", "au_line2", "au_suburb", "au_state", "au_zip"] as const;
+const OV_ADDRESS_KEYS = ["ov_street", "ov_line2", "ov_suburb", "ov_state", "ov_zip"] as const;
+const isAustraliaName = (v: string) => ["AUS", "AU", "AUSTRALIA"].includes(v.trim().toUpperCase());
+
+/**
+ * Keeps a non-Australian address instead of dropping it: structured au_* values
+ * with a non-Australian state are moved to the ov_* fields, address_type follows
+ * the data, and a missing country is inferred only for a US state code with a
+ * 5 or 5+4 digit ZIP. If the country is still unknown it stays empty and a
+ * warning is returned. Australian handling is unchanged.
+ */
+export function normaliseAddress(fields: Record<string, string>): { fields: Record<string, string>; warnings: string[] } {
+  const result = { ...fields };
+  const warnings: string[] = [];
+  const auState = (result.au_state ?? "").toUpperCase().replace(/\./g, "");
+  if (AU_ADDRESS_KEYS.some((k) => result[k]) && !OV_ADDRESS_KEYS.some((k) => result[k]) && auState && !AU_STATE_CODES.has(auState) && !/^\d{4}$/.test(result.au_zip ?? "")) {
+    AU_ADDRESS_KEYS.forEach((key, i) => { if (result[key]) result[OV_ADDRESS_KEYS[i]] = result[key]; delete result[key]; });
+    if (result.au_country && !isAustraliaName(result.au_country)) result.ov_country = result.au_country;
+    delete result.au_country;
+  }
+  if (!OV_ADDRESS_KEYS.some((k) => result[k]) && !result.ov_country) return { fields: result, warnings };
+  if (!AU_ADDRESS_KEYS.some((k) => result[k])) result.address_type = "Overseas Address";
+  if (result.address_type === "Overseas Address" && !result.ov_country) {
+    const state = (result.ov_state ?? "").toUpperCase().replace(/\./g, "");
+    if (US_STATE_CODES.has(state) && /^\d{5}(-\d{4})?$/.test(result.ov_zip ?? "")) result.ov_country = "United States";
+    else warnings.push("The address country could not be determined; street, city, state and postal code were filled, enter the country manually.");
+  }
+  return { fields: result, warnings };
+}
+
 /** Confidence is kept only when every value is a finite number in 0..1; otherwise it is dropped. */
 export function validConfidence(value: unknown): Record<string, number> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -115,14 +147,16 @@ export function buildExtractionEnvelope(provider: Pick<DocumentExtractionProvide
   const rawFields = Object.fromEntries(Object.entries(result.fields)
     .filter(([key, value]) => known.has(key) && typeof value === "string" && value.trim())
     .map(([key, value]) => [key, String(value).trim()]));
-  const extracted = result.categoryMismatch ? {} : normaliseCandidates(rawFields);
+  const address = result.categoryMismatch ? { fields: rawFields, warnings: [] as string[] } : normaliseAddress(rawFields);
+  const extracted = result.categoryMismatch ? {} : normaliseCandidates(address.fields);
+  const warnings = [...result.warnings, ...address.warnings];
   const confidence = validConfidence(result.confidence);
   return {
     extracted, confirmed: {}, status: Object.keys(extracted).length ? "unreviewed" : "no_fields",
     source: {
       engine: provider.id, parser: EXTRACTION_PARSER, model: provider.model, extractedAt, documentType: result.detectedType,
       categoryMismatch: result.categoryMismatch, rawFields, evidence: result.evidence,
-      ...(confidence ? { confidence } : {}), ...(result.warnings.length ? { warnings: result.warnings } : {}),
+      ...(confidence ? { confidence } : {}), ...(warnings.length ? { warnings } : {}),
     },
   };
 }

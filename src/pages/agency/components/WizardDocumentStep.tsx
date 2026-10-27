@@ -465,7 +465,7 @@ function AcademicDocumentReview({ doc, specs, onSave }: { doc: WizardDoc; specs:
   };
   return <div className="rounded-md border border-background-200 bg-background-50 p-3">
     <div className="flex items-center justify-between gap-3"><span className="truncate text-xs font-semibold text-foreground-800">{doc.filename}</span><span className="text-[11px] font-medium text-foreground-500">{status}</span></div>
-    <div className="mt-3 grid gap-2 sm:grid-cols-2">{specs.map((spec) => <label key={spec.name} className={`grid gap-1 rounded-md p-1 text-[11px] font-medium uppercase tracking-wide text-foreground-500 ${fields[spec.name] ? "bg-secondary-100" : ""}`}>{spec.label}<SpecControl spec={spec} name={`academic-${doc.id}-${spec.name}`} value={fields[spec.name] ?? ""} onChange={(value) => setFields((current) => ({ ...current, [spec.name]: value }))} /></label>)}</div>
+    <ReviewFields specs={specs} fields={fields} idPrefix={`academic-${doc.id}`} onChange={(name, value) => setFields((current) => ({ ...current, [name]: value }))} />
     <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={saving} onClick={() => void save("confirmed")} className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-background-50 disabled:opacity-50">Confirm qualification</button><button type="button" disabled={saving} onClick={() => void save("rejected")} className="rounded-md border border-primary-300 px-3 py-1.5 text-xs font-semibold text-primary-800 disabled:opacity-50">Reject extraction</button></div>
   </div>;
 }
@@ -481,7 +481,22 @@ function DocumentExtractionReview({ doc, specs, onSave }: { doc: WizardDoc; spec
   return <div className="rounded-lg border border-background-200 bg-background-50 p-4">
     <p className="text-xs font-semibold text-foreground-900">Review extraction: {doc.filename}</p>
     <p className="mt-1 text-[11px] text-foreground-500">Values remain unverified until confirmed. Confirmation saves the reviewed values to the application.</p>
-    <div className="mt-3 grid gap-2 sm:grid-cols-2">{specs.map((spec) => <label key={spec.name} className={`grid gap-1 rounded-md p-1 text-[11px] font-medium uppercase tracking-wide text-foreground-500 ${fields[spec.name] ? "bg-secondary-100" : ""}`}>{spec.label}<SpecControl spec={spec} name={`review-${doc.id}-${spec.name}`} value={fields[spec.name] ?? ""} onChange={(value) => setFields((current) => ({ ...current, [spec.name]: value }))} /></label>)}</div>
+    <ReviewFields specs={specs} fields={fields} idPrefix={`review-${doc.id}`} onChange={(name, value) => setFields((current) => ({ ...current, [name]: value }))} />
     <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={saving} onClick={() => void save("confirmed")} className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-background-50 disabled:opacity-50">Confirm values</button><button type="button" disabled={saving} onClick={() => void save("rejected")} className="rounded-md border border-primary-300 px-3 py-1.5 text-xs font-semibold text-primary-800 disabled:opacity-50">Reject extraction</button></div>
   </div>;
+}
+
+/** Short review: read values (and the address radio) first; unread optional fields sit behind one toggle. Only the selected address section is shown. */
+function ReviewFields({ specs, fields, idPrefix, onChange }: { specs: WizardFieldSpec[]; fields: Record<string, string>; idPrefix: string; onChange: (name: string, value: string) => void }) {
+  const [more, setMore] = useState(false);
+  const visible = specs.filter((spec) => isSpecVisible(spec, fields));
+  const isRead = (spec: WizardFieldSpec) => Boolean((fields[spec.name] ?? "").trim());
+  const shown = visible.filter((spec) => isRead(spec) || spec.name === "address_type");
+  const hidden = visible.filter((spec) => !shown.includes(spec));
+  const cell = (spec: WizardFieldSpec) => <label key={spec.name} className={`grid gap-1 rounded-md p-1 text-[11px] font-medium uppercase tracking-wide text-foreground-500 ${isRead(spec) ? "bg-secondary-100" : ""}`}>{spec.label}<SpecControl spec={spec} name={`${idPrefix}-${spec.name}`} value={fields[spec.name] ?? ""} onChange={(value) => onChange(spec.name, value)} /></label>;
+  return <>
+    {shown.length === 0 ? <p className="mt-3 text-[11px] text-foreground-500">No values were read from this document.</p> : <div className="mt-3 grid gap-2 sm:grid-cols-2">{shown.map(cell)}</div>}
+    {hidden.length > 0 ? <button type="button" aria-expanded={more} onClick={() => setMore((open) => !open)} className="mt-2 text-xs font-semibold text-primary-700 underline">{more ? "Hide extra details" : "Add more details"}</button> : null}
+    {more ? <div className="mt-2 grid gap-2 sm:grid-cols-2">{hidden.map(cell)}</div> : null}
+  </>;
 }

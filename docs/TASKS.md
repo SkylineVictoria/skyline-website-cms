@@ -62,7 +62,7 @@ Phase order (ADR-012, 2026-10-26): 5 Azure, 6 RTO administration, 7 Postmark, 8 
   - Scope: document synthetic fixture run and accuracy/cost evidence format; run only with credentials and explicit approval.
   - Acceptance: mock-only readiness reported separately; live result stays NOT RUN until approved and executed.
   - Tests: optional per-category real-fixture run; field-level outcomes, no invented accuracy.
-- P05-05 Per-category provider routing. status: DONE (local, mock-only 2026-10-27; SQL suites NOT RUN, Docker down; undeployed). Deps: P05-03.
+- P05-05 Per-category provider routing. status: DONE (local, mock-only 2026-10-27; overseas-address mapping and short review panel added after, see COMPLETED.md; SQL suites NOT RUN, Docker down; undeployed). Deps: P05-03.
   - Scope: optional `EF_DOCUMENT_EXTRACTION_ROUTES` (`passport=azure,driving_licence=azure`) in `_shared/document-extraction/select.ts`; unlisted categories use `EF_DOCUMENT_EXTRACTION_PROVIDER` (blank = openai).
   - Acceptance: malformed routes and Azure routed to a category without a model fail as configuration_invalid (category named), never a silent fallback; blank routes change nothing.
   - Tests: `scripts/test-azure-provider.ts` (4 routing cases; 4 Australian driving-licence mapping cases added with the azure.ts address fix).

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  EXTRACTION_CATEGORIES, EXTRACTION_FIELD_NAMES, EXTRACTION_PARSER, buildExtractionEnvelope, isSupportedDocument,
+  EXTRACTION_CATEGORIES, EXTRACTION_FIELD_NAMES, EXTRACTION_PARSER, buildExtractionEnvelope, isSupportedDocument, type ExtractionSuccess,
   type DocumentExtractionProvider, type ExtractionCategory, type ExtractionRequest,
 } from "../supabase/functions/_shared/document-extraction/contract.ts";
 import { createMockProvider, MOCK_FIXTURE_VERSION, type MockScenario } from "../supabase/functions/_shared/document-extraction/mock.ts";
@@ -202,4 +202,24 @@ test("provider selection: missing configuration is a typed unavailable result th
   const ready = createDocumentExtractionProvider({ OPENAI_API_KEY: "k", OPENAI_DOCUMENT_MODEL: "m" });
   assert.equal(ready.unavailable, null);
   assert.equal(ready.provider?.id, "openai-responses");
+});
+
+const openAiFields = (fields: Record<string, string>): ExtractionSuccess => ({ ok: true, detectedType: "Driving Licence", categoryMismatch: false, fields, evidence: [], warnings: [], operationId: null, usage: {} });
+
+test("OpenAI-style results: a US address placed in au_ fields moves to overseas fields and the wizard selects the Overseas radio", () => {
+  const envelope = buildExtractionEnvelope(createMockProvider(), openAiFields({ au_street: "123 CALLIEL WAY", au_suburb: "SAINT JOHNS", au_state: "FL", au_zip: "32259-2338" }), "t");
+  assert.deepEqual(envelope.extracted, { address_type: "Overseas Address", ov_street: "123 CALLIEL WAY", ov_suburb: "SAINT JOHNS", ov_state: "FL", ov_zip: "32259-2338", ov_country: "United States" });
+  const wizard = formatExtractionCandidates(envelope.extracted);
+  assert.deepEqual([wizard.address_type, wizard.ov_country, wizard.ov_state], ["Overseas Address", "United States", "FL"]);
+  const noRadio = formatExtractionCandidates({ au_street: "1 Example Street", au_state: "NSW", au_zip: "2000" });
+  assert.equal(noRadio.address_type, "Australian Address");
+});
+
+test("OpenAI-style results: Visa, English and Academic values reach the wizard formatting without being dropped", () => {
+  const visa = formatExtractionCandidates(buildExtractionEnvelope(createMockProvider(), openAiFields({ holds_visa: "Yes", visa_subclass: "500", visa_grant_date: "12/03/2026", visa_stay_until: "2027-03-31", visa_grant_number: "G123" }), "t").extracted);
+  assert.deepEqual(visa, { holds_visa: "Yes", visa_subclass: "500", visa_grant_date: "2026-03-12", visa_stay_until: "2027-03-31", visa_grant_number: "G123" });
+  const english = formatExtractionCandidates(buildExtractionEnvelope(createMockProvider(), openAiFields({ english_type: "IELTS Academic", english_score: "7.0", english_components: "L 7.5 R 7 W 6.5 S 7", english_date: "2026-01-10", english_reference: "REF1" }), "t").extracted);
+  assert.deepEqual(english, { english_type: "IELTS Academic", english_score: "7.0 (Overall) · L 7.5 R 7 W 6.5 S 7", english_date: "2026-01-10", english_reference: "REF1" });
+  const academic = formatExtractionCandidates(buildExtractionEnvelope(createMockProvider(), openAiFields({ academic_institution: "Example University", academic_qualification: "Bachelor", academic_program: "IT", academic_year: "2024", academic_result: "GPA 3.4/4" }), "t").extracted);
+  assert.deepEqual(academic, { academic_institution: "Example University", academic_qualification: "Bachelor", academic_program: "IT", academic_year: "2024", academic_result: "GPA 3.4/4" });
 });

@@ -604,7 +604,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         conflicts={conflicts.filter((c) => current.fields.includes(c.field))}
         onExtracted={handleExtracted}
         onUpload={handleUpload}
-        onReviewDocument={handleReviewDocument}
+        onReviewDocument={async (doc, confirmedValues, status) => {
+          await handleReviewDocument(doc, confirmedValues, status);
+          // Move on after a confirmation unless another document in this category still awaits review (several awards).
+          const pending = documents.some((item) => item.id !== doc.id && item.category === doc.category && item.extraction?.status === "unreviewed");
+          if (status === "confirmed" && !pending) goNext();
+        }}
         onReprocessDocument={handleReprocessDocument}
         onRemoveDoc={handleRemoveDoc}
         onManualChange={handleManualChange}

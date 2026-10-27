@@ -263,7 +263,7 @@ test("driving licence (Australian): address without a printed country is mapped;
   assert.ok(!JSON.stringify(outcome.fields).includes("12345678") && !JSON.stringify(outcome.fields).includes("4012345678"));
 });
 
-test("driving licence: explicit AUS/Australia, document-level country, unit numbers and state names are handled; foreign addresses are not mapped", async () => {
+test("driving licence: explicit AUS/Australia, document-level country, unit numbers and state names are handled; foreign addresses map to the overseas fields", async () => {
   const withCountry = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "3/12 Example Street", city: "Parramatta", state: "New South Wales", postalCode: "2150", countryRegion: "Australia" } }) }));
   assert.deepEqual([withCountry.fields.au_street, withCountry.fields.au_state], ["3/12 Example Street", "NSW"]);
   const unit = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { unit: "3", houseNumber: "12", road: "Example Street", suburb: "Parramatta", postalCode: "2150" } }) }));
@@ -271,11 +271,33 @@ test("driving licence: explicit AUS/Australia, document-level country, unit numb
   const docCountry = await licenceFields(auLicence({ CountryRegion: field({ type: "countryRegion", valueCountryRegion: "AUS" }), Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Perth", state: "WA", postalCode: "6000" } }) }));
   assert.equal(docCountry.fields.address_type, "Australian Address");
   const usa = await licenceFields(auLicence({ Region: field({ type: "string", valueString: "WA" }), Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Street", city: "Seattle", state: "WA", postalCode: "98101" } }) }));
-  assert.equal(usa.fields.address_type, undefined);
-  assert.ok(usa.warnings.some((w) => /not an Australian address/i.test(w)));
+  assert.equal(usa.fields.address_type, "Overseas Address");
+  assert.equal(usa.fields.ov_street, "1 Example Street");
   const foreign = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Road", city: "London", postalCode: "N1 1AA", countryRegion: "GBR" } }) }));
-  assert.equal(foreign.fields.address_type, undefined);
+  assert.deepEqual([foreign.fields.address_type, foreign.fields.ov_street, foreign.fields.ov_suburb, foreign.fields.ov_zip, foreign.fields.ov_country], ["Overseas Address", "1 Example Road", "London", "N1 1AA", "GBR"]);
   assert.equal(foreign.fields.first_name, "Asha");
+});
+
+const envelopeOf = (outcome: ExtractionSuccess) => buildExtractionEnvelope(createAzureProvider({ endpoint: ENDPOINT, apiKey: KEY, modelMap: {} }), outcome, "t");
+
+test("driving licence: Florida address without a printed country keeps street, city, state, ZIP and infers United States", async () => {
+  const fl = await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { houseNumber: "123", road: "CALLIEL WAY", city: "SAINT JOHNS", state: "FL", postalCode: "32259-2338" } }) }));
+  const envelope = envelopeOf(fl);
+  assert.deepEqual([envelope.extracted.address_type, envelope.extracted.ov_street, envelope.extracted.ov_suburb, envelope.extracted.ov_state, envelope.extracted.ov_zip, envelope.extracted.ov_country], ["Overseas Address", "123 CALLIEL WAY", "SAINT JOHNS", "FL", "32259-2338", "United States"]);
+  assert.equal(Object.keys(envelope.extracted).some((k) => k.startsWith("au_")), false);
+});
+
+test("driving licence: US address with a printed country keeps it; an Australian address with no country is unchanged", async () => {
+  const us = envelopeOf(await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "1 Main St", city: "Austin", state: "TX", postalCode: "73301", countryRegion: "USA" } }) })));
+  assert.deepEqual([us.extracted.address_type, us.extracted.ov_country, us.extracted.ov_state], ["Overseas Address", "USA", "TX"]);
+  const au = envelopeOf(await licenceFields(auLicence()));
+  assert.deepEqual([au.extracted.address_type, au.extracted.au_state, au.extracted.au_country, au.extracted.ov_street], ["Australian Address", "NSW", "Australia", undefined]);
+});
+
+test("driving licence: an address whose country cannot be determined still fills the overseas fields and warns", async () => {
+  const unknown = envelopeOf(await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "1 Example Road", city: "Leeds", state: "West Yorkshire", postalCode: "LS1 1AA" } }) })));
+  assert.deepEqual([unknown.extracted.address_type, unknown.extracted.ov_street, unknown.extracted.ov_suburb, unknown.extracted.ov_state, unknown.extracted.ov_zip, unknown.extracted.ov_country], ["Overseas Address", "1 Example Road", "Leeds", "West Yorkshire", "LS1 1AA", undefined]);
+  assert.ok(unknown.source.warnings?.some((w) => /country could not be determined/i.test(w)));
 });
 
 test("driving licence: missing, empty or malformed fields never fail the whole result", async () => {

@@ -135,7 +135,17 @@ function mapIdDocument(doc: Json, category: ExtractionCategory): { mapped: Mappe
         put(m, "au_state", state, "Address", f.Address);
         put(m, "au_zip", text(address.postalCode), "Address", f.Address);
         put(m, "au_country", "Australia", "Address", f.Address);
-      } else m.warnings.push("Address is not an Australian address and was not mapped.");
+      } else {
+        // Non-Australian address: map to the wizard's Overseas fields; country inference and the missing-country warning live in normaliseAddress.
+        const building = [text(address.houseNumber), text(address.road) ?? text(address.streetName)].filter(Boolean).join(" ");
+        const street = text(address.streetAddress) ?? (text(address.unit) && building ? `${text(address.unit)}/${building}` : building);
+        m.fields.address_type = "Overseas Address"; m.evidence.push({ field: "address_type", page: pageOf(f.Address), source: "Azure Address" });
+        put(m, "ov_street", street || null, "Address", f.Address);
+        put(m, "ov_suburb", text(address.city) ?? text(address.suburb) ?? text(address.cityDistrict), "Address", f.Address);
+        put(m, "ov_state", text(address.state) ?? scalar(f.Region), "Address", f.Address);
+        put(m, "ov_zip", text(address.postalCode), "Address", f.Address);
+        put(m, "ov_country", country, "Address", f.Address);
+      }
     } else m.warnings.push("Address was not structured and was not mapped.");
   }
   return { mapped: m, mismatch: false };

@@ -99,6 +99,11 @@ export function formatExtractionCandidates(fields: Record<string, string> | unde
       formatted[field] = value;
     }
   }
+  // The radio follows the extracted address when the provider did not set it.
+  if (!formatted.address_type) {
+    if (formatted.ov_street || formatted.ov_suburb || formatted.ov_state || formatted.ov_zip || formatted.ov_country) formatted.address_type = "Overseas Address";
+    else if (formatted.au_street || formatted.au_suburb || formatted.au_state || formatted.au_zip) formatted.address_type = "Australian Address";
+  }
   if (englishComponents) {
     formatted.english_score = formatted.english_score ? `${formatted.english_score} (Overall) · ${englishComponents}` : englishComponents;
   }

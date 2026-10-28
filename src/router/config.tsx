@@ -54,8 +54,12 @@ import AdminSeoPage from "@/pages/admin/SeoPage";
 import UsersPage from "@/pages/admin/UsersPage";
 import InstitutionPage from "@/pages/admin/InstitutionPage";
 import ActivityPage from "@/pages/admin/ActivityPage";
+import NotificationLogPage from "@/pages/admin/NotificationLogPage";
+import AgenciesPage from "@/pages/admin/AgenciesPage";
+import AgencyNewPage from "@/pages/admin/AgencyNewPage";
+import AgencyDetailPage from "@/pages/admin/AgencyDetailPage";
+import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
-import DocumentIndexPage from "@/pages/admin/DocumentIndexPage";
 
 const routes: RouteObject[] = [
   {
@@ -137,11 +141,31 @@ const routes: RouteObject[] = [
           { path: "forms/:id", element: <FormBuilderPage /> },
           { path: "contact", element: <AdminContactPage /> },
           { path: "seo", element: <AdminSeoPage /> },
+          {
+            path: "applications",
+            element: <RequireAdmin><ApplicationsArea /></RequireAdmin>,
+            children: [
+              { index: true, element: <AllApplicationsPage /> },
+              { path: "new", element: <NewApplicationPage /> },
+              { path: ":id", element: <ApplicationDetailPage /> },
+            ],
+          },
+          {
+            path: "agencies",
+            element: <RequireAdmin><ApplicationsArea /></RequireAdmin>,
+            children: [
+              { index: true, element: <AgenciesPage /> },
+              { path: "new", element: <AgencyNewPage /> },
+              { path: ":id", element: <AgencyDetailPage /> },
+            ],
+          },
+          { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },
           { path: "activity", element: <ActivityPage /> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
-          { path: "knowledge/documents", element: <RequireAdmin><DocumentIndexPage /></RequireAdmin> },
+          // The Document Extraction page was removed; old links land on the dashboard.
+          { path: "knowledge/documents", element: <Navigate to="/admin" replace /> },
         ],
       },
     ],

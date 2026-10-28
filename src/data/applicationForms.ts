@@ -34,6 +34,8 @@ export type AppField = {
   required?: boolean;
   options?: string[];
   placeholder?: string;
+  /** Special input behaviour: a year dropdown, a USI (10 characters) or a phone number with country code. */
+  format?: "year" | "usi" | "phone";
   description?: string;
   full?: boolean;
   showIf?: FieldCondition;
@@ -95,7 +97,7 @@ export const enrolSections: AppSection[] = [
         required: true,
         options: ["Male", "Female", "Prefer not to say"],
       },
-      { name: "mobile", label: "Mobile", type: "tel", required: true, placeholder: "0412345678" },
+      { name: "mobile", label: "Mobile", type: "tel", format: "phone", required: true, placeholder: "412 345 678" },
       { name: "email", label: "Email", type: "email", required: true },
       { name: "confirm_email", label: "Confirm Email", type: "email", required: true },
       {
@@ -263,7 +265,8 @@ export const enrolSections: AppSection[] = [
         name: "agent_phone",
         label: "Agent Contact Number",
         type: "tel",
-        placeholder: "Optional — 10 digits",
+        format: "phone",
+        placeholder: "Optional",
         showIf: { field: "via_agent", equals: ["Yes"] },
       },
     ],
@@ -375,8 +378,9 @@ export const enrolSections: AppSection[] = [
       {
         name: "academic_year",
         label: "Year Completed",
-        type: "text",
-        placeholder: "e.g. 2022",
+        type: "select",
+        format: "year",
+        placeholder: "Select year",
         description: "Read from your marksheet — edit if needed.",
       },
     ],
@@ -397,6 +401,7 @@ export const enrolSections: AppSection[] = [
         name: "usi_number",
         label: "USI Number",
         type: "text",
+        format: "usi",
         required: true,
         full: true,
         placeholder: "Enter your 10-character USI",
@@ -419,7 +424,7 @@ export const enrolSections: AppSection[] = [
       { name: "ec_name", label: "Full Name", type: "text", required: true, full: true },
       { name: "ec_relationship", label: "Relationship to You", type: "text" },
       { name: "ec_email", label: "Email", type: "email" },
-      { name: "ec_phone", label: "Contact Number", type: "tel", required: true, placeholder: "10 digits" },
+      { name: "ec_phone", label: "Contact Number", type: "tel", format: "phone", required: true, placeholder: "412 345 678" },
       {
         name: "ec_in_au",
         label: "Is your emergency contact in Australia?",

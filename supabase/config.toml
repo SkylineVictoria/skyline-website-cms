@@ -13,6 +13,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.notification-delivery]
-# Server-to-server only. verify_jwt = true plus an in-function check: only the service-role key may run the worker (401 without a token, 403 for
-# anon/user tokens). No worker secret. The /webhook route is disabled (410) until Postmark callbacks can be authenticated.
+# Server-to-server only. verify_jwt = true (the gateway verifies the JWT signature; this must stay on) plus an in-function check on the verified
+# token's claims: role must be service_role and, on a hosted project, ref must be this project's reference (401 without a token, 403 for anon/user
+# tokens, another project's key or a malformed token). The key is not compared with SUPABASE_SERVICE_ROLE_KEY, which can hold the opaque sb_secret_ key. No worker secret. The /webhook route is disabled (410) until Postmark callbacks can be authenticated.
 verify_jwt = true

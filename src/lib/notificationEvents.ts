@@ -12,7 +12,7 @@ export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventKey, { title: st
 
 export interface EventSettings { recipients: string[]; notifyAgent: boolean; notifyAgencyAdmins: boolean; notifyStudent: boolean }
 
-export const MAX_EVENT_RECIPIENTS = 10;
+export const MAX_EVENT_RECIPIENTS = 20;
 const EMAIL = /^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/;
 // eslint-disable-next-line no-control-regex -- control characters are never valid in an address
 const CONTROL = /[\u0000-\u001f\u007f]/;

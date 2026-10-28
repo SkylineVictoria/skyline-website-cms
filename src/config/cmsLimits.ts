@@ -35,3 +35,6 @@ export function validateNavigation(items: NavLike[]): string[] {
   }
   return problems;
 }
+
+/** Most courses the homepage carousel shows; also the most that can be featured. */
+export const HOME_COURSE_LIMIT = 20;

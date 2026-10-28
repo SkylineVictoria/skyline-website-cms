@@ -55,6 +55,32 @@ export interface PublicSocialLink {
   icon: string;
 }
 
+/** Homepage courses carousel; missing or invalid CMS values fall back to continuous drift, slow, pause on hover. */
+export type CarouselMotion = "drift" | "slide";
+export type DriftSpeed = "slow" | "medium" | "fast";
+
+export interface CoursesCarouselSettings {
+  /** Continuous drift (a marquee) or slide by slide. */
+  motion: CarouselMotion;
+  driftSpeed: DriftSpeed;
+  autoSlide: boolean;
+  intervalSeconds: number;
+  pauseOnHover: boolean;
+}
+
+export const DEFAULT_COURSES_CAROUSEL: CoursesCarouselSettings = { motion: "drift", driftSpeed: "slow", autoSlide: true, intervalSeconds: 5, pauseOnHover: true };
+
+function carouselOf(row: Row): CoursesCarouselSettings {
+  const seconds = Number(row.courses_carousel_interval_seconds);
+  return {
+    motion: row.courses_carousel_motion === "slide" ? "slide" : DEFAULT_COURSES_CAROUSEL.motion,
+    driftSpeed: row.courses_carousel_drift_speed === "medium" || row.courses_carousel_drift_speed === "fast" ? row.courses_carousel_drift_speed : DEFAULT_COURSES_CAROUSEL.driftSpeed,
+    autoSlide: row.courses_carousel_auto === false ? false : DEFAULT_COURSES_CAROUSEL.autoSlide,
+    intervalSeconds: Number.isInteger(seconds) && seconds >= 2 && seconds <= 30 ? seconds : DEFAULT_COURSES_CAROUSEL.intervalSeconds,
+    pauseOnHover: row.courses_carousel_pause_on_hover === false ? false : DEFAULT_COURSES_CAROUSEL.pauseOnHover,
+  };
+}
+
 export interface PublicSettings {
   /** The logo saved in Website Settings, or "" when none is set (logo itself falls back to the default image). */
   logoConfigured: string;
@@ -81,6 +107,7 @@ export interface PublicSettings {
   footerIntro: string;
   copyright: string;
   social: PublicSocialLink[];
+  coursesCarousel: CoursesCarouselSettings;
 }
 
 export interface PublicFooter {
@@ -187,7 +214,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
       admissionsEmail: str(row.admissions_email), admissionsHref: `mailto:${str(row.admissions_email)}`,
       address: str(row.address), rto, cricos, legal: [rto && `RTO ${rto}`, cricos && `CRICOS ${cricos}`].filter(Boolean).join(" "),
       signInUrl: str(row.sign_in_url), homeHeroImages: heroImages, homeAboutImage: str(row.home_about_image),
-      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), acknowledgement: "", footerIntro: "", copyright: "", social,
+      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), acknowledgement: "", footerIntro: "", copyright: "", social, coursesCarousel: carouselOf(row),
     };
   }
 
@@ -216,6 +243,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
     footerIntro: staticSite.footerIntro,
     copyright: staticSite.copyright,
     social: social.length ? social : staticSite.social.map((s) => ({ label: s.label, href: s.href, icon: s.icon })),
+    coursesCarousel: carouselOf(row),
   };
 }
 

@@ -26,6 +26,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     },
   },
   auth: {
+    // Stay signed in until an explicit Log out: the session is kept in localStorage (the default) and renewed with the refresh
+    // token, however long the app was closed. No time-box or inactivity limit is applied here; any such limit is a project setting.
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
@@ -36,3 +38,12 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     flowType: "implicit",
   },
 });
+
+// supabase-js already refreshes when a hidden tab becomes visible again; this also covers the network returning and a device
+// waking from sleep, where the page can stay "visible" but its refresh timer was frozen. startAutoRefresh is safe to repeat.
+if (typeof window !== "undefined") {
+  const kick = () => { if (document.visibilityState === "visible") void supabase.auth.startAutoRefresh(); };
+  window.addEventListener("online", kick);
+  window.addEventListener("focus", kick);
+  document.addEventListener("visibilitychange", kick);
+}

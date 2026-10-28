@@ -15,6 +15,7 @@ import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
 import { passwordRecoveryUrl } from "@/lib/siteUrl";
 import { useNavigate } from "react-router-dom";
 import { markSessionSeen } from "@/lib/loginRouting";
+import { checkSession, retryUntil } from "@/lib/authSession";
 import { portalAccessMessage } from "@/pages/agency/lib/applicationAccess";
 import { currentPortalScope, setPortalScope, flushPortalBeforeSwitch, type PortalScope } from "@/lib/portalScope";
 
@@ -164,34 +165,47 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    let stopRetry = () => {};
+    const sameUser = (a: typeof authUser, b: NonNullable<typeof authUser>) => a?.id === b.id && a.email === b.email && a.name === b.name;
 
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        countPortalMetric("auth.getSession");
-        if (!active) return;
-        const nextUser = data.session?.user ? mapAuthUser(data.session.user) : null;
-        setAuthUser(nextUser);
-        setAuthLoading(false);
-        if (nextUser) void resolveIdentity(nextUser);
-      })
-      .catch(() => {
-        if (active) {
-          setAuthLoading(false);
-          setIdentityError("We could not verify your session.");
-        }
-      });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      // Keep this callback synchronous — only update local auth state here.
-      const nextUser = session?.user ? mapAuthUser(session.user) : null;
-      setAuthUser(nextUser);
+    // Restores the saved session. Only "no session" means signed out; when the refresh cannot be attempted
+    // (offline) the loader stays up and this is retried, so the user is never sent to the login page for a network blip.
+    const load = async (): Promise<boolean> => {
+      const check = await checkSession();
+      if (!active) return true;
+      countPortalMetric("auth.getSession");
+      if (check.kind === "unavailable") return false;
+      const nextUser = check.kind === "session" ? mapAuthUser(check.session.user) : null;
+      setAuthUser((previous) => (nextUser && sameUser(previous, nextUser) ? previous : nextUser));
+      setAuthLoading(false);
       if (nextUser) void resolveIdentity(nextUser);
-      else clearIdentity();
+      return true;
+    };
+    void load().then((done) => {
+      if (!done && active) stopRetry = retryUntil(load);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      // Keep this callback synchronous — only update local auth state here.
+      if (session?.user) {
+        const nextUser = mapAuthUser(session.user);
+        setAuthUser((previous) => (sameUser(previous, nextUser) ? previous : nextUser));
+        setAuthLoading(false);
+        stopRetry();
+        // A token refresh is the same person; nothing to re-resolve.
+        if (event !== "TOKEN_REFRESHED") void resolveIdentity(nextUser);
+      } else if (event === "SIGNED_OUT") {
+        // Explicit log out, or the server rejected the refresh token as invalid or revoked.
+        setAuthUser(null);
+        setAuthLoading(false);
+        clearIdentity();
+      }
+      // Any other event without a session (e.g. INITIAL_SESSION while a refresh is failing offline) is not a sign-out.
     });
 
     return () => {
       active = false;
+      stopRetry();
       sub.subscription.unsubscribe();
     };
   }, [resolveIdentity, clearIdentity]);
@@ -209,7 +223,7 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await flushPortalBeforeSwitch();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     markSessionSeen(false);
     setAuthUser(null);
     clearIdentity();

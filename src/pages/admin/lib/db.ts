@@ -57,6 +57,7 @@ function settingsRow(s: AdminSettings): Row {
     body_font: s.bodyFont ?? "Arial",
     theme_configured: s.themeConfigured ?? false,
     map_embed_src: s.mapEmbedSrc ?? "",
+    ...(s.carouselAutoSlide !== undefined || s.carouselIntervalSeconds !== undefined || s.carouselPauseOnHover !== undefined || s.carouselMotion !== undefined || s.carouselDriftSpeed !== undefined ? { courses_carousel_motion: s.carouselMotion ?? "drift", courses_carousel_drift_speed: s.carouselDriftSpeed ?? "slow", courses_carousel_auto: s.carouselAutoSlide ?? true, courses_carousel_interval_seconds: s.carouselIntervalSeconds ?? 5, courses_carousel_pause_on_hover: s.carouselPauseOnHover ?? true } : {}),
     ...(s.accentColor !== undefined || s.loaderStyle !== undefined ? { accent_color: s.accentColor ? s.accentColor : null, loader_style: s.loaderStyle || "ring" } : {}),
   };
 }
@@ -486,6 +487,11 @@ export async function loadAdminData(): Promise<LoadResult> {
         themeConfigured: bool(settingsRow.theme_configured),
         accentColor: settingsRow.accent_color ? str(settingsRow.accent_color) : undefined,
         loaderStyle: settingsRow.loader_style ? str(settingsRow.loader_style) : undefined,
+        carouselMotion: settingsRow.courses_carousel_motion === undefined ? undefined : settingsRow.courses_carousel_motion === "slide" ? "slide" : "drift",
+        carouselDriftSpeed: settingsRow.courses_carousel_drift_speed === undefined ? undefined : settingsRow.courses_carousel_drift_speed === "medium" || settingsRow.courses_carousel_drift_speed === "fast" ? settingsRow.courses_carousel_drift_speed : "slow",
+        carouselAutoSlide: settingsRow.courses_carousel_auto === undefined ? undefined : bool(settingsRow.courses_carousel_auto),
+        carouselIntervalSeconds: settingsRow.courses_carousel_interval_seconds === undefined ? undefined : Number(settingsRow.courses_carousel_interval_seconds),
+        carouselPauseOnHover: settingsRow.courses_carousel_pause_on_hover === undefined ? undefined : bool(settingsRow.courses_carousel_pause_on_hover),
         mapEmbedSrc: str(settingsRow.map_embed_src),
         shortName: str(settingsRow.short_name),
         logo: str(settingsRow.logo),

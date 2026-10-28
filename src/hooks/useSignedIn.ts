@@ -7,7 +7,7 @@ export function useSignedIn(): boolean {
   useEffect(() => {
     let active = true;
     supabase.auth.getSession().then(({ data }) => { if (active) setSignedIn(Boolean(data.session)); }).catch(() => undefined);
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => { setSignedIn(Boolean(session)); });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => { if (session) setSignedIn(true); else if (event === "SIGNED_OUT") setSignedIn(false); });
     return () => { active = false; sub.subscription.unsubscribe(); };
   }, []);
   return signedIn;

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Reveal from "@/components/base/Reveal";
-import CourseCard from "@/components/feature/CourseCard";
+import CoursesCarousel from "@/components/feature/CoursesCarousel";
 import LatestNews from "@/components/feature/LatestNews";
 import Seo from "@/components/feature/Seo";
 import { defaultOgImage, siteDescription } from "@/data/seo";
+import { HOME_COURSE_LIMIT } from "@/config/cmsLimits";
 import { usePublicSite } from "@/hooks/publicSiteContext";
+
 
 const services = [
   {
@@ -35,8 +37,10 @@ const staticAboutImage = "https://slit.edu.au/wp-content/uploads/2023/05/about_i
 
 export default function Home() {
   const [slide, setSlide] = useState(0);
-  const { data } = usePublicSite();
-  const { featuredCourses, settings } = data;
+  const { data, status } = usePublicSite();
+  const { featuredCourses, courses, settings } = data;
+  const homeCourses = [...featuredCourses, ...courses.filter((course) => !featuredCourses.some((featured) => featured.slug === course.slug))].slice(0, HOME_COURSE_LIMIT);
+  const coursesLoading = status === "loading";
 
   // Hero and about imagery are CMS-managed (Website Settings → Homepage images)
   // and fall back to the shipped defaults until the CMS provides values.
@@ -186,6 +190,7 @@ export default function Home() {
         </div>
       </section>
 
+      {coursesLoading || homeCourses.length > 0 ? (
       <section className="bg-background-100 py-16 md:py-24">
         <div className="site-container">
           <Reveal className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
@@ -205,15 +210,13 @@ export default function Home() {
             </Link>
           </Reveal>
 
-          <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3" data-product-shop>
-            {featuredCourses.map((course, index) => (
-              <Reveal key={course.slug} delay={index * 70}>
-                <CourseCard course={course} />
-              </Reveal>
-            ))}
+          <div className="mt-10">
+            <CoursesCarousel courses={homeCourses} settings={settings.coursesCarousel} loading={coursesLoading} />
           </div>
         </div>
       </section>
+
+      ) : null}
 
       <section className="bg-accent-950 py-14 md:py-16">
         <div className="site-container flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-center">

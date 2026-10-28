@@ -764,14 +764,26 @@ test("notify: Postmark sender rejection is a definitive, non-retried failure and
   assert.match(String(bodies[0].From), /^".*" <.+>$/);
 });
 
-test("notify: the worker accepts only the service-role key (401 without a token, 403 for anon and user tokens)", async () => {
-  const service = "service.role.key-value";
-  assert.equal(await authorizeWorker(`Bearer ${service}`, service), 200);
-  assert.equal(await authorizeWorker(null, service), 401);
-  assert.equal(await authorizeWorker("", service), 401);
-  assert.equal(await authorizeWorker("Basic abc", service), 401);
-  for (const token of ["anon.key.value", "user.jwt.value", service + "x", service.slice(1)]) assert.equal(await authorizeWorker(`Bearer ${token}`, service), 403, token);
-  assert.equal(await authorizeWorker(`Bearer ${service}`, ""), 403, "an unconfigured service key never authorizes");
+const b64url = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fakeJwt = (claims: Record<string, unknown>) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(claims)}.signature`;
+
+test("notify: the worker accepts only a service_role token of this project (401 without a token, 403 for anything else)", async () => {
+  const hosted = "https://abcdefghijklmnopqrst.supabase.co";
+  const bearer = (claims: Record<string, unknown>) => `Bearer ${fakeJwt(claims)}`;
+  assert.equal(await authorizeWorker(bearer({ role: "service_role", ref: "abcdefghijklmnopqrst" }), hosted), 200, "service_role with the matching ref");
+  assert.equal(await authorizeWorker(bearer({ role: "anon", ref: "abcdefghijklmnopqrst" }), hosted), 403, "anon role");
+  assert.equal(await authorizeWorker(bearer({ role: "authenticated", ref: "abcdefghijklmnopqrst", sub: "u" }), hosted), 403, "signed-in user");
+  assert.equal(await authorizeWorker(bearer({ role: "service_role", ref: "zzzzzzzzzzzzzzzzzzzz" }), hosted), 403, "service_role of another project");
+  assert.equal(await authorizeWorker(bearer({ role: "service_role" }), hosted), 403, "service_role without a ref on a hosted project");
+  assert.equal(await authorizeWorker(null, hosted), 401, "missing header");
+  assert.equal(await authorizeWorker("", hosted), 401, "empty header");
+  assert.equal(await authorizeWorker("Basic abc", hosted), 401, "not a bearer token");
+  assert.equal(await authorizeWorker("Bearer ", hosted), 401, "empty bearer token");
+  for (const token of ["notajwt", "a.b", "a.b.c.d", "..", "a..c", `a.${btoa("not json")}.c`, `a.${b64url(["service_role"])}.c`, `a.${b64url("service_role")}.c`]) {
+    assert.equal(await authorizeWorker(`Bearer ${token}`, hosted), 403, `malformed: ${token.slice(0, 12)}`);
+  }
+  assert.equal(await authorizeWorker(bearer({ role: "service_role" }), "http://127.0.0.1:54321"), 200, "a local stack has no project ref to match; the role alone decides");
+  assert.equal(await authorizeWorker(bearer({ role: "anon" }), "http://127.0.0.1:54321"), 403, "anon is refused locally too");
 });
 
 // ---- P08-06: submission PDF attached to the application_submitted email ----
@@ -901,4 +913,22 @@ test("coe/voe email: if the document cannot be read the delivery is retried late
   assert.deepEqual([summary.retried, summary.accepted, provider.sent.length], [1, 1, 1]);
   assert.deepEqual(recorded.map((r) => `${r.id}:${r.code}:${r.retry}`), ["c1:attachment_unavailable:true", "c2:null:false"]);
   assert.equal(provider.sent[0].attachments?.length, 1);
+});
+
+test("pdf: qualifications list is printed once, single fields only fill in when the list lacks them", () => {
+  const lines = (snapshot: unknown) => submissionPdfLines({ reference: "R", institution: "I", version: 1, submittedAt: null, snapshot }).map((l) => l.text);
+  const both = lines({
+    values: { first_name: "Ada", academic_institution: "Uni A", academic_qualification: "BSc", academic_year: "2020" },
+    academicQualifications: [
+      { institution: "uni a", qualification: "bsc", year: "2020", documentIds: ["d1"] },
+      { institution: "Uni B", qualification: "MSc", year: "2022", documentIds: ["d2"] },
+      { institution: "Manual Inst", qualification: "Cert" },
+    ],
+  });
+  assert.deepEqual(both.filter((t) => /^\d\. /.test(t)), ["1. bsc, uni a, 2020", "2. MSc, Uni B, 2022", "3. Cert, Manual Inst"]);
+  assert.ok(!both.some((t) => t.startsWith("Academic institution")));
+  const fallback = lines({ values: { academic_institution: "Uni C", academic_qualification: "Diploma", academic_year: "2019" }, academicQualifications: [] });
+  assert.deepEqual(fallback.filter((t) => /^\d\. /.test(t)), ["1. Diploma, Uni C, 2019"]);
+  const extra = lines({ values: { academic_institution: "Typed", academic_qualification: "Own" }, academicQualifications: [{ institution: "Uni B", qualification: "MSc", documentIds: ["d2"] }] });
+  assert.equal(extra.filter((t) => /^\d\. /.test(t)).length, 2);
 });

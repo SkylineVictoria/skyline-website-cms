@@ -223,6 +223,12 @@ export interface AdminSettings {
   accentColor?: string;
   /** Loader animation: ring, bar or dots (cms_settings.loader_style). */
   loaderStyle?: string;
+  /** Homepage courses carousel (cms_settings.courses_carousel_*). Defaults: on, 5 seconds, pause on hover. */
+  carouselMotion?: "drift" | "slide";
+  carouselDriftSpeed?: "slow" | "medium" | "fast";
+  carouselAutoSlide?: boolean;
+  carouselIntervalSeconds?: number;
+  carouselPauseOnHover?: boolean;
   mapEmbedSrc?: string;
   name: string;
   shortName: string;

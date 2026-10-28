@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { useToast } from "@/pages/admin/components/toastContext";
+import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
 import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import {
   NOTIFICATION_EVENTS, NOTIFICATION_EVENT_LABELS, configWithEvent, eventErrorMessage, hasAnyRecipient, validateEventForm,
@@ -9,6 +10,13 @@ import {
 
 interface State { legacy: boolean; version: number; source: string; config: Record<string, unknown>; events: Record<NotificationEventKey, EventSettings> }
 interface Form { recipientsText: string; notifyAgent: boolean; notifyAgencyAdmins: boolean; notifyStudent: boolean }
+
+/** Read-only preview of who an event reaches, from the form as it is now. */
+function willGoTo(settings: EventSettings): string {
+  const people = [settings.notifyAgent ? "assigned agent" : "", settings.notifyAgencyAdmins ? "agency admins" : "", settings.notifyStudent ? "the student" : ""].filter(Boolean);
+  const internal = settings.recipients.length ? `plus these internal addresses: ${settings.recipients.join(", ")}` : "";
+  return [people.join(", "), internal].filter(Boolean).join(", ") || "nobody";
+}
 
 const toForm = (s: EventSettings): Form => ({ recipientsText: s.recipients.join("\n"), notifyAgent: s.notifyAgent, notifyAgencyAdmins: s.notifyAgencyAdmins, notifyStudent: s.notifyStudent });
 
@@ -77,6 +85,7 @@ export default function EventRecipients({ tenantId }: { tenantId: string | null 
   return (
     <Card className="p-5">
       <h3 className="text-sm font-semibold">Who is emailed</h3>
+      <div className="mt-2"><NotificationGateBanner /></div>
       <p className="mt-1 text-sm text-background-600">Choose the people notified for each event. Internal addresses do not need a portal account. Nothing is sent until sending is approved, and users can still opt out of their own copy.</p>
       <div className="mt-4 space-y-5">
         {NOTIFICATION_EVENTS.map((event) => {
@@ -88,7 +97,7 @@ export default function EventRecipients({ tenantId }: { tenantId: string | null 
             <fieldset key={event} className="rounded-md border border-background-200 p-4">
               <legend className="px-1 text-sm font-semibold">{label.title}</legend>
               <p className="text-xs text-background-600">{label.when}</p>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-background-700" htmlFor={`recipients-${event}`}>Internal recipients (one per line, up to 10)</label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-background-700" htmlFor={`recipients-${event}`}>Internal recipients (one per line, up to 20)</label>
               <textarea id={`recipients-${event}`} rows={3} value={form.recipientsText} onChange={(e) => update(event, { recipientsText: e.target.value })} aria-invalid={Boolean(errors[event])} aria-describedby={errors[event] ? `recipients-${event}-error` : undefined}
                 className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="admissions@example.edu.au" />
               <div className="mt-2 flex flex-wrap gap-4 text-sm">
@@ -96,6 +105,10 @@ export default function EventRecipients({ tenantId }: { tenantId: string | null 
                 <label className="inline-flex items-center gap-2"><input type="checkbox" checked={form.notifyAgencyAdmins} onChange={(e) => update(event, { notifyAgencyAdmins: e.target.checked })} />Agency admins</label>
                 <label className="inline-flex items-center gap-2"><input type="checkbox" checked={form.notifyStudent} onChange={(e) => update(event, { notifyStudent: e.target.checked })} />Student</label>
               </div>
+              <p className="mt-2 rounded-md bg-background-100 px-3 py-2 text-xs text-background-700" data-testid={`preview-${event}`}>
+                <strong>Will go to:</strong> {willGoTo(preview)}
+              </p>
+              {preview.recipients.length === 0 ? <p className="mt-1 text-xs font-medium text-primary-700">No internal addresses are set for this event; only the people above receive it.</p> : null}
               {errors[event] ? <p id={`recipients-${event}-error`} role="alert" className="mt-2 text-xs font-medium text-primary-700">{errors[event]}</p> : null}
               <div className="mt-3 flex items-center gap-3">
                 <Button size="sm" disabled={busy !== null} onClick={() => void save(event)}>{busy === event ? "Saving…" : "Save recipients"}</Button>

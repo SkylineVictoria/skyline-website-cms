@@ -14,12 +14,14 @@ import {
   TextInput,
   Toggle,
 } from "@/pages/admin/components/ui";
+import { HOME_COURSE_LIMIT } from "@/config/cmsLimits";
+import CarouselSettings from "@/pages/admin/components/CarouselSettings";
 import type { AdminCourse } from "@/pages/admin/lib/types";
 import { courseCategories } from "@/pages/admin/lib/seed";
 
 type SortKey = "order" | "name" | "updated";
 
-const FEATURED_LIMIT = 6;
+const FEATURED_LIMIT = HOME_COURSE_LIMIT;
 
 export default function CoursesPage() {
   const { data, update, logActivity } = useAdminData();
@@ -33,6 +35,7 @@ export default function CoursesPage() {
   const [sort, setSort] = useState<SortKey>("order");
   const [pendingDelete, setPendingDelete] = useState<AdminCourse | null>(null);
 
+  const featuredCount = data.courses.filter((c) => c.featured).length;
   const categories = ["All", ...courseCategories];
 
   const filtered = useMemo(() => {
@@ -69,10 +72,9 @@ export default function CoursesPage() {
   };
 
   const toggleFeatured = (course: AdminCourse) => {
-    const featuredCount = data.courses.filter((c) => c.featured).length;
     if (!course.featured && featuredCount >= FEATURED_LIMIT) {
       push(
-        `The homepage shows up to ${FEATURED_LIMIT} featured courses. Turn one off before featuring another.`,
+        `Up to ${FEATURED_LIMIT} courses can be featured; featured courses lead the homepage carousel. Turn one off before featuring another.`,
         "error",
       );
       return;
@@ -152,6 +154,8 @@ export default function CoursesPage() {
           </Button>
         }
       />
+
+      <CarouselSettings />
 
       {/* Filters */}
       <Card className="mb-5 p-4">
@@ -264,7 +268,9 @@ export default function CoursesPage() {
                       </button>
                     </td>
                     <td className="px-4 py-3">
-                      <Toggle checked={c.featured} onChange={() => toggleFeatured(c)} />
+                      <span title={!c.featured && featuredCount >= FEATURED_LIMIT ? `The homepage carousel shows up to ${FEATURED_LIMIT} courses and ${featuredCount}/${FEATURED_LIMIT} are featured. Turn one off to feature this course.` : undefined}>
+                        <Toggle checked={c.featured} disabled={!c.featured && featuredCount >= FEATURED_LIMIT} onChange={() => toggleFeatured(c)} />
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -305,9 +311,9 @@ export default function CoursesPage() {
         Showing {filtered.length} of {data.courses.length} courses. Use the arrows to set display order —
         the public website lists courses in this order.{" "}
         <strong className="font-semibold text-foreground-700">
-          {data.courses.filter((c) => c.featured).length}/{FEATURED_LIMIT}
+          {featuredCount}/{FEATURED_LIMIT}
         </strong>{" "}
-        courses are featured on the homepage.
+        featured on the homepage.
       </p>
 
       <ConfirmDialog

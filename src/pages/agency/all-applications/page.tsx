@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { listAgencies } from "@/pages/agency/lib/portalData";
 import {
   listApplications,
@@ -8,9 +8,14 @@ import {
   type ApplicationListRow,
 } from "@/pages/agency/lib/portalApplications";
 import ApplicationsTable from "@/pages/agency/components/ApplicationsTable";
+import { cmsPaths, useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { PageHeading } from "@/pages/agency/components/PortalUI";
 
 export default function AllApplicationsPage() {
+  const paths = useApplicationPaths();
+  const { role } = usePortalAuth();
   const [rows, setRows] = useState<ApplicationListRow[]>([]);
   const [agencies, setAgencies] = useState<Array<{ id: string; name: string }>>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -40,12 +45,15 @@ export default function AllApplicationsPage() {
     void load();
   }, [load]);
 
+  // Administrators of the main site manage applications inside the CMS.
+  if (paths.area === "portal" && role === "slit_admin" && !requestWebsiteDomain()) return <Navigate to={cmsPaths.list} replace />;
+
   return (
     <div>
       <PageHeading
         eyebrow="All Applications"
         title="All applications"
-        action={<Link to="/agency/applications/new" className="inline-flex items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"><i className="ri-add-line" aria-hidden="true" />+ New Application</Link>}
+        action={<Link to={paths.create} className="inline-flex items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"><i className="ri-add-line" aria-hidden="true" />+ New Application</Link>}
         description="Every application across every agency — search, filter by agency, agent, course, intake and status, and open any application for review."
       />
 

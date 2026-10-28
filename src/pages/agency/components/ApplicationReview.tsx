@@ -1,6 +1,9 @@
 import type { AppSection } from "@/data/applicationForms";
 import type { DraftValues } from "@/lib/applicationDraft";
 import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
+import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
+import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
+import { qualificationDetail, qualificationTitle, submittedQualifications, type Qualification } from "@/pages/agency/lib/qualifications";
 
 export interface ConsentState {
   method: string;
@@ -61,6 +64,7 @@ const GROUPS: Group[] = [
     icon: "ri-translate-2",
     rows: [
       ["Holds a valid visa", "holds_visa"],
+      ["Visa stay-until / expiry", "visa_stay_until"],
       ["English assessment", "english_type"],
       ["English score", "english_score"],
       ["Date achieved", "english_date"],
@@ -72,11 +76,7 @@ const GROUPS: Group[] = [
   {
     title: "Academic background",
     icon: "ri-file-text-line",
-    rows: [
-      ["Institution", "academic_institution"],
-      ["Qualification", "academic_qualification"],
-      ["Year completed", "academic_year"],
-    ],
+    rows: [],
   },
   {
     title: "Emergency contact",
@@ -117,6 +117,7 @@ export default function ApplicationReview({
   courses,
   sections,
   application,
+  qualifications,
   agentName,
   agencyName,
   consent,
@@ -133,6 +134,7 @@ export default function ApplicationReview({
   courses: string[];
   sections: AppSection[];
   application: ApplicationDetail;
+  qualifications: Qualification[];
   agentName: string;
   agencyName: string;
   consent: ConsentState;
@@ -149,7 +151,7 @@ export default function ApplicationReview({
   const val = (key: string): string => {
     const v = values[key];
     if (v === undefined || v === null) return "";
-    return Array.isArray(v) ? v.join(", ") : String(v);
+    return Array.isArray(v) ? v.join(", ") : formatStoredValue(key, String(v));
   };
 
   const readyToSubmit = missing.length === 0 && consent.method !== "" && consent.confirmed && consent.authorised;
@@ -211,12 +213,14 @@ export default function ApplicationReview({
               {group.title}
             </p>
             <dl className="mt-3 space-y-2">
-              {group.rows.map(([label, key]) => {
-                const value = val(key);
+              {(group.title === "Academic background"
+                ? submittedQualifications(qualifications, values).map((item, index): [string, string, string] => [`Qualification ${index + 1}`, `academic-${index}`, [qualificationTitle(item), qualificationDetail(item)].filter(Boolean).join(" · ")])
+                : group.rows.map(([label, key]): [string, string, string] => [label, key, val(key)])
+              ).map(([label, key, value]) => {
                 if (!value) return null;
                 return (
                   <div key={key} className="flex items-start justify-between gap-3 text-xs">
-                    <dt className="text-foreground-500">{label}</dt>
+                    <dt className="text-foreground-500">{label}{expiryNote(key, values)}</dt>
                     <dd className="max-w-[60%] break-words text-right font-medium text-foreground-900">{value}</dd>
                   </div>
                 );
@@ -432,5 +436,19 @@ export default function ApplicationReview({
       </div>
       ) : null}
     </div>
+  );
+}
+const EXPIRY_TYPE_BY_FIELD = new Map(Object.entries(EXPIRY_FIELDS).map(([type, name]) => [name, type as ExpiryDocument]));
+
+/** Small, non-blocking expiry warning beside a review row. */
+function expiryNote(key: string, values: DraftValues) {
+  const type = EXPIRY_TYPE_BY_FIELD.get(key);
+  if (!type) return null;
+  const expiry = getDocumentExpiryStatus(type, { [key]: values[key] });
+  if ((expiry.status !== "expired" && expiry.status !== "expiring_soon") || !expiry.date) return null;
+  return (
+    <span className={`ml-2 text-[10px] font-semibold ${expiryTone(expiry.status)}`} title={expiryTooltip(expiry)}>
+      {expiryLabel(expiry)}
+    </span>
   );
 }

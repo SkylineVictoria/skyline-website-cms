@@ -13,6 +13,7 @@ import {
 import {
   listInstitutionCourses,
   flushApplicationEdits,
+  getApplication,
   type ApplicationCourseRow,
   saveApplicationDraft,
   submitApplication,
@@ -26,6 +27,9 @@ import {
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/documentAttachments";
+import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
+import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
+import { qualificationDetail, qualificationTitle, readQualifications } from "@/pages/agency/lib/qualifications";
 import { canSubmitApplicationStatus } from "@/pages/agency/lib/applicationAccess";
 import ApplicationReview, { type ConsentState } from "@/pages/agency/components/ApplicationReview";
 import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAttachmentField";
@@ -42,10 +46,13 @@ interface WorkspaceProps {
   agentPhone: string;
   agencyName: string;
   readOnly: boolean;
+  /** Administrators: opening a document is written to the audit log. */
+  auditAccess?: boolean;
   onSaved?: () => void;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+
 
 export default function ApplicationWorkspace({
   application,
@@ -54,6 +61,7 @@ export default function ApplicationWorkspace({
   agentPhone,
   agencyName,
   readOnly,
+  auditAccess = false,
   onSaved,
 }: WorkspaceProps) {
   const [courseOptions, setCourseOptions] = useState<ApplicationCourseRow[]>([]);
@@ -84,7 +92,24 @@ export default function ApplicationWorkspace({
     [agencyName, agentName, agentEmail, agentPhone],
   );
 
-  const mergedInitial = useMemo<DraftValues>(() => ({ ...seed, ...storedValues }), [seed, storedValues]);
+  // Fields the document wizard filled in; the badge goes away once the agent edits one.
+  const documentFields = useMemo(() => {
+    const provenance = ((application.data ?? {}) as { fieldProvenance?: Record<string, { kind?: string; documentId?: string }> }).fieldProvenance ?? {};
+    return new Map(Object.entries(provenance).filter(([name, entry]) => entry?.kind === "ai_unverified" && String(storedValues[name] ?? "").trim() !== "").map(([name, entry]) => [name, entry.documentId ?? ""]));
+  }, [application.data, storedValues]);
+  const [editedFields, setEditedFields] = useState<Set<string>>(() => new Set());
+  // Current dates behind the expiry warnings, kept live as the form is edited.
+  const [expiryDates, setExpiryDates] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.values(EXPIRY_FIELDS).map((name) => [name, String(storedValues[name] ?? "")])),
+  );
+  const expiryFieldType = useMemo(() => new Map(Object.entries(EXPIRY_FIELDS).map(([type, name]) => [name, type as ExpiryDocument])), []);
+
+  // A saved value always wins; a seed only fills a field that is empty.
+  const mergedInitial = useMemo<DraftValues>(() => {
+    const out: DraftValues = { ...storedValues };
+    for (const [name, value] of Object.entries(seed)) if (!String(out[name] ?? "").trim()) out[name] = value;
+    return out;
+  }, [seed, storedValues]);
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {};
@@ -117,6 +142,7 @@ export default function ApplicationWorkspace({
   const [documentMessage, setDocumentMessage] = useState("");
   const [attachments, setAttachments] = useState<DocumentRow[]>([]);
   const [documentBusy, setDocumentBusy] = useState("");
+  const [qualifications, setQualifications] = useState(() => readQualifications(application.data));
 
   const formRef = useRef<HTMLFormElement>(null);
   const sectionRefs = useRef<Array<HTMLElement | null>>([]);
@@ -138,8 +164,9 @@ export default function ApplicationWorkspace({
   }, [progress]);
 
   const refreshAttachments = useCallback(async () => {
-    const rows = await listApplicationDocuments(application.id);
+    const [rows, detail] = await Promise.all([listApplicationDocuments(application.id), getApplication(application.id, false)]);
     setAttachments(rows.filter((document) => document.isCurrent));
+    if (detail) setQualifications(readQualifications(detail.data));
   }, [application.id]);
 
   useEffect(() => {
@@ -306,6 +333,10 @@ export default function ApplicationWorkspace({
     // Persisted portal attachments are managed by ApplicationAttachmentField;
     // never let the native file event create a second upload request.
     if (target?.type === "file") return;
+    if (target?.name && expiryFieldType.has(target.name)) setExpiryDates((prev) => ({ ...prev, [target.name]: target.value }));
+    if (target?.name && event.nativeEvent.isTrusted && documentFields.has(target.name)) {
+      setEditedFields((prev) => (prev.has(target.name) ? prev : new Set(prev).add(target.name)));
+    }
     if (target?.name && (target.type === "radio" || target.type === "select-one")) {
       setValues((prev) => ({ ...prev, [target.name]: target.value }));
     }
@@ -330,11 +361,16 @@ export default function ApplicationWorkspace({
 
   const previewAttachment = useCallback(async (document: DocumentRow) => {
     setDocumentBusy(document.id);
+    const tab = window.open("", "_blank"); // opened first, while the click still counts as a user action
     try {
+      if (auditAccess) await logAdminAccess(application.id, "document_viewed", { documentId: document.id, filename: document.filename, category: document.category });
       const url = await getDocumentSignedUrl(document.storagePath);
-      window.open(url, "_blank", "noopener,noreferrer");
+      if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+    } catch (error) {
+      tab?.close();
+      throw error;
     } finally { setDocumentBusy(""); }
-  }, []);
+  }, [auditAccess, application.id]);
 
   const extractAttachment = useCallback(async (document: DocumentRow) => {
     setDocumentBusy(document.id);
@@ -380,6 +416,12 @@ export default function ApplicationWorkspace({
     return false;
   }, [attachments]);
 
+  /** A filled optional field whose format is wrong (USI, phone); it never stops a draft being saved, only final submission. */
+  const fieldInvalid = useCallback((field: AppField): boolean => {
+    const control = formRef.current?.querySelector<HTMLInputElement>(`[name="${field.name}"]`);
+    return Boolean(control && control.value.trim() !== "" && !control.checkValidity());
+  }, []);
+
   /** Required field labels still missing, grouped by the section they live in. */
   const collectMissing = useCallback(() => {
     const missing: string[] = [];
@@ -387,10 +429,10 @@ export default function ApplicationWorkspace({
     sections.forEach((section, index) => {
       if (!isConditionMet(section.showIf, values)) return;
       for (const field of section.fields) {
-        if (!field.required) continue;
         if (field.type === "static" || field.type === "table" || field.type === "terms") continue;
+        if (!field.required && !field.format) continue;
         if (!isConditionMet(field.showIf, values)) continue;
-        if (fieldMissing(field)) {
+        if (field.required ? fieldMissing(field) : fieldInvalid(field)) {
           missing.push(`${sectionHeading(section.title, index)}: ${field.label}`);
           if (firstBySection[index] === null) firstBySection[index] = index;
         }
@@ -398,7 +440,7 @@ export default function ApplicationWorkspace({
     });
     const firstIndex = firstBySection.findIndex((v) => v !== null);
     return { missing, firstIndex };
-  }, [sections, values, fieldMissing]);
+  }, [sections, values, fieldMissing, fieldInvalid]);
 
   const openReview = () => {
     const form = formRef.current;
@@ -511,6 +553,22 @@ export default function ApplicationWorkspace({
     );
   };
 
+  const renderExpiryWarning = (name: string) => {
+    const type = expiryFieldType.get(name);
+    if (!type) return null;
+    const expiry = getDocumentExpiryStatus(type, { [name]: expiryDates[name] });
+    if ((expiry.status !== "expired" && expiry.status !== "expiring_soon") || !expiry.date) return null;
+    const source = documentFields.has(name) && !editedFields.has(name) ? attachments.find((document) => document.id === documentFields.get(name))?.filename : undefined;
+    return (
+      <span
+        className={`text-[10px] font-semibold normal-case ${expiryTone(expiry.status)}`}
+        title={`${expiryTooltip(expiry)}${type === "english" ? " (valid 2 years from the test date)" : ""}${source ? `. Source: ${source}` : ""}`}
+      >
+        {expiryLabel(expiry)}
+      </span>
+    );
+  };
+
   const renderField = (field: AppField) => {
     const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name);
     if (field.type === "static") {
@@ -537,6 +595,16 @@ export default function ApplicationWorkspace({
         >
           {field.label}
           {field.required ? <span className="text-primary-600">*</span> : null}
+          {documentFields.has(field.name) && !editedFields.has(field.name) ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-secondary-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-secondary-900"
+              title={`From document: ${attachments.find((document) => document.id === documentFields.get(field.name))?.filename ?? "uploaded document"}. Check it; you can edit it.`}
+            >
+              <i className="ri-file-text-line" aria-hidden="true" />
+              From document
+            </span>
+          ) : null}
+          {renderExpiryWarning(field.name)}
           {locked && LOCKED_AGENT_FIELDS.has(field.name) ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-secondary-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-secondary-900">
               <i className="ri-lock-line" aria-hidden="true" />
@@ -558,7 +626,7 @@ export default function ApplicationWorkspace({
             onExtract={extractAttachment}
             onDelete={deleteAttachment}
           />
-        ) : <ApplicationFieldControl field={field.name === "agent_agency" ? { ...field, options: [seed.agent_agency] } : field} formId={FORM_ID} value={(storedValues[field.name] as string) ?? seed[field.name]} locked={locked} />}
+        ) : <ApplicationFieldControl field={field.name === "agent_agency" ? { ...field, options: [seed.agent_agency] } : field} formId={FORM_ID} value={mergedInitial[field.name] as string | undefined} locked={locked} />}
         {missing ? (
           <p className="mt-1.5 flex items-center gap-1 text-xs text-primary-700">
             <i className="ri-error-warning-line" aria-hidden="true" />
@@ -584,6 +652,23 @@ export default function ApplicationWorkspace({
           .filter((field) => isConditionMet(field.showIf, values))
           .map((field) => renderField(field))}
       </div>
+      {section.fields.some((field) => field.name === "academic_upload") && qualifications.length > 0 ? (
+        <div className="mt-4 rounded-md border border-background-200 bg-background-50 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Qualifications read from documents</p>
+          <ul className="mt-2 space-y-1.5">
+            {qualifications.map((item, index) => (
+              <li key={`${qualificationTitle(item)}-${index}`} className="text-xs text-foreground-700">
+                <span className="font-semibold text-foreground-900">{qualificationTitle(item)}</span>
+                {qualificationDetail(item) ? <span> &middot; {qualificationDetail(item)}</span> : null}
+                {item.documentIds.length > 0 ? (
+                  <span className="text-foreground-500"> (from {item.documentIds.map((id) => attachments.find((document) => document.id === id)?.filename ?? "a document").join(", ")})</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-foreground-500">Removing an uploaded file removes only the qualifications read from it.</p>
+        </div>
+      ) : null}
     </>
   );
 
@@ -698,6 +783,7 @@ export default function ApplicationWorkspace({
             }
             sections={sections}
             application={application}
+            qualifications={qualifications}
             agentName={agentName}
             agencyName={agencyName}
             consent={consent}

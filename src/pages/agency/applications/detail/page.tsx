@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { STATUS_META, formatDate } from "@/pages/agency/lib/portalData";
 import { isEditableApplicationStatus, nextStatusOptions } from "@/pages/agency/lib/applicationAccess";
@@ -19,13 +20,18 @@ import {
   type StatusHistoryRow,
 } from "@/pages/agency/lib/portalApplications";
 import ApplicationWorkspace from "@/pages/agency/components/ApplicationWorkspace";
+import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
+import NotificationLogTable from "@/pages/admin/components/NotificationLogTable";
+import { downloadApplicationPdf, logAdminAccess } from "@/pages/agency/lib/applicationPdf";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { cmsPaths, useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
 import ApplicationMessages from "@/pages/agency/components/ApplicationMessages";
 import { PortalEmpty, PortalError, PortalLoading, StatusBadge } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
 
-type Tab = "overview" | "form" | "documents" | "history" | "messages";
+type Tab = "overview" | "form" | "documents" | "history" | "messages" | "notifications";
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "overview", label: "Overview", icon: "ri-dashboard-line" },
@@ -45,6 +51,7 @@ function wasWizardOpen(applicationId: string): boolean {
 
 export default function ApplicationDetailPage() {
   const { id = "" } = useParams();
+  const paths = useApplicationPaths();
   const { role, profile, agency } = usePortalAuth();
 
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
@@ -132,13 +139,23 @@ export default function ApplicationDetailPage() {
     }
   };
 
-  const handleDocumentAction = async (doc: DocumentRow, action: "preview" | "retry" | "delete") => {
+  const handleDocumentAction = async (doc: DocumentRow, action: "preview" | "download" | "retry" | "delete") => {
     setDocumentBusy(`${action}:${doc.id}`);
     setActionError("");
     try {
-      if (action === "preview") {
-        const signedUrl = await getDocumentSignedUrl(doc.storagePath);
-        window.open(signedUrl, "_blank", "noopener,noreferrer");
+      if (action === "preview" || action === "download") {
+        // Open the tab first, while the click still counts as a user action; popup blockers refuse a tab opened after the awaits.
+        const tab = action === "preview" ? window.open("", "_blank") : null;
+        try {
+          if (isSlit) await logAdminAccess(id, action === "download" ? "document_downloaded" : "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category });
+          const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300, action === "download" ? doc.filename : undefined);
+          if (action === "download") window.location.assign(signedUrl);
+          else if (tab) { tab.opener = null; tab.location.href = signedUrl; }
+          else window.location.assign(signedUrl);
+        } catch (error) {
+          tab?.close();
+          throw error;
+        }
       } else if (action === "retry") {
         await queueDocumentExtraction(doc.id, true);
         await load();
@@ -162,6 +179,9 @@ export default function ApplicationDetailPage() {
 
   // Do not unmount an open wizard during a background detail refresh. Its
   // document and form state are independently persisted by the wizard/RPCs.
+  // Administrators of the main site manage applications inside the CMS (this also covers links from emails).
+  if (paths.area === "portal" && isSlit && !requestWebsiteDomain()) return <Navigate to={cmsPaths.detail(id)} replace />;
+
   if (loading && !application) {
     return <PortalLoading label="Loading application\u2026" />;
   }
@@ -171,7 +191,7 @@ export default function ApplicationDetailPage() {
       <div className="space-y-4">
         <PortalError message={error || "Application not found."} onRetry={() => void load()} />
         <Link
-          to={isSlit ? "/agency/all-applications" : "/agency/applications"}
+          to={isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list}
           className="inline-flex items-center gap-2 rounded-md border border-background-300 px-4 py-2.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"
         >
           <i className="ri-arrow-left-line" aria-hidden="true" />
@@ -194,7 +214,7 @@ export default function ApplicationDetailPage() {
       <header className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <Link
-            to={isSlit ? "/agency/all-applications" : "/agency/applications"}
+            to={isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground-500 hover:text-primary-600"
           >
             <i className="ri-arrow-left-line" aria-hidden="true" />
@@ -221,6 +241,23 @@ export default function ApplicationDetailPage() {
             <span>Updated {formatDate(application.updatedAt)}</span>
             {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
           </p>
+          {isSlit && application.agentName ? (
+            <p className="mt-1 text-xs text-foreground-500">
+              Agent: <span className="font-medium text-foreground-800">{application.agentName}</span>
+              {application.agentEmail ? <> · <a href={`mailto:${application.agentEmail}`} className="text-primary-700 hover:underline">{application.agentEmail}</a></> : null}
+              {application.agentPhone ? <> · {formatPhone(application.agentPhone)}</> : null}
+            </p>
+          ) : null}
+          {isSlit ? (
+            <button
+              type="button"
+              onClick={() => { setActionError(""); void logAdminAccess(application.id, "pdf_exported").then(() => downloadApplicationPdf(application)).catch((e) => setActionError(e instanceof Error ? e.message : "The PDF could not be created.")); }}
+              className="mt-3 inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
+            >
+              <i className="ri-file-pdf-2-line" aria-hidden="true" />
+              Download PDF
+            </button>
+          ) : null}
         </div>
         <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
@@ -232,7 +269,7 @@ export default function ApplicationDetailPage() {
       </header>
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
-        {TABS.map((item) => (
+        {(paths.area === "cms" ? [...TABS, { id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : TABS).map((item) => (
           <button
             key={item.id}
             type="button"
@@ -397,10 +434,11 @@ export default function ApplicationDetailPage() {
             key={workspaceKey}
             application={application}
             agentName={agentName}
-            agentEmail={profile?.email ?? ""}
-            agentPhone={profile?.phone ?? ""}
+            agentEmail={application.agentEmail || (role === "agent" ? profile?.email ?? "" : "")}
+            agentPhone={application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "")}
             agencyName={agencyName}
             readOnly={readOnly}
+            auditAccess={isSlit}
             onSaved={refreshAfterSave}
           />
         ) : null}
@@ -438,6 +476,7 @@ export default function ApplicationDetailPage() {
                       <td className="px-4 py-3 text-xs">
                         <div className="flex flex-wrap gap-1.5">
                           <button type="button" onClick={() => void handleDocumentAction(doc, "preview")} disabled={Boolean(documentBusy)} className="rounded border border-background-300 px-2 py-1 font-semibold text-foreground-700 disabled:opacity-50">Preview</button>
+                          <button type="button" onClick={() => void handleDocumentAction(doc, "download")} disabled={Boolean(documentBusy)} className="rounded border border-background-300 px-2 py-1 font-semibold text-foreground-700 disabled:opacity-50">Download</button>
                           {!readOnly ? <button type="button" onClick={() => void handleDocumentAction(doc, "retry")} disabled={Boolean(documentBusy)} className="rounded border border-primary-300 px-2 py-1 font-semibold text-primary-800 disabled:opacity-50">{documentBusy === `retry:${doc.id}` ? "Queueing…" : "Extract / retry"}</button> : null}
                           {!readOnly ? <button type="button" onClick={() => void handleDocumentAction(doc, "delete")} disabled={Boolean(documentBusy)} className="rounded border border-primary-300 px-2 py-1 font-semibold text-primary-800 disabled:opacity-50">{documentBusy === `delete:${doc.id}` ? "Deleting…" : "Delete"}</button> : null}
                           {!readOnly ? <button type="button" onClick={openWizard} className="rounded border border-secondary-300 px-2 py-1 font-semibold text-secondary-900">Review</button> : null}
@@ -482,6 +521,13 @@ export default function ApplicationDetailPage() {
         ) : null}
 
         {tab === "messages" ? <ApplicationMessages applicationId={id} /> : null}
+
+        {tab === "notifications" && paths.area === "cms" ? (
+          <div>
+            <NotificationGateBanner />
+            <NotificationLogTable applicationId={id} />
+          </div>
+        ) : null}
       </div>
 
       {wizardOpen ? (

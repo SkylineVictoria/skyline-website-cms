@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(215);
+select plan(219);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -265,7 +265,7 @@ select throws_ok($$select public.portal_set_notification_preference('bogus',fals
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select throws_ok($$select public.notification_save_legacy_event('application_submitted','{"recipients":["a@example.test","A@example.test"]}')$$,'22023',null,'duplicate recipients (case-insensitive) are rejected');
 select throws_ok($$select public.notification_save_legacy_event('application_submitted','{"recipients":["not-an-email"]}')$$,'22023',null,'an invalid recipient address is rejected');
-select throws_ok($$select public.notification_save_legacy_event('application_submitted',(select jsonb_build_object('recipients',jsonb_agg('r'||g||'@example.test')) from generate_series(1,11) g))$$,'22023',null,'more than 10 recipients are rejected');
+select throws_ok($$select public.notification_save_legacy_event('application_submitted',(select jsonb_build_object('recipients',jsonb_agg('r'||g||'@example.test')) from generate_series(1,21) g))$$,'22023',null,'more than 20 recipients are rejected');
 select throws_ok($$select public.notification_save_legacy_event('application_submitted','{"notifyAgent":"yes"}')$$,'22023',null,'toggles must be booleans');
 select throws_ok($$select public.notification_save_legacy_event('application_submitted','{"notifyEveryone":true}')$$,'22023',null,'unknown settings are rejected');
 select throws_ok($$select public.notification_save_legacy_event('bogus','{}')$$,'22023',null,'unknown events are rejected');
@@ -428,6 +428,24 @@ set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
 select throws_ok($$select public.notification_invalid_recipients(null)$$,'42501',null,'an agent cannot list them');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000020';
 select is(public.notification_invalid_recipients('1b000000-0000-0000-0000-000000000001'),'[]'::jsonb,'another organization sees none of the legacy scope deliveries');
+reset role;
+-- Agency detail isolation: one agency's agents and applications never appear under another agency.
+insert into public.agencies(id,name,code) values ('1c000000-0000-0000-0000-00000000000a','Isolation A','ISO-A'),('1c000000-0000-0000-0000-00000000000b','Isolation B','ISO-B');
+insert into public.portal_profiles(id,auth_user_id,full_name,email) values
+ ('2c000000-0000-0000-0000-00000000000a','3c000000-0000-0000-0000-00000000000a','Agent A1','a1@example.test'),
+ ('2c000000-0000-0000-0000-00000000000b','3c000000-0000-0000-0000-00000000000b','Agent B1','b1@example.test');
+insert into public.agency_memberships(user_id,agency_id,role) values
+ ('2c000000-0000-0000-0000-00000000000a','1c000000-0000-0000-0000-00000000000a','agent'),
+ ('2c000000-0000-0000-0000-00000000000b','1c000000-0000-0000-0000-00000000000b','agent');
+insert into public.enrollment_applications(id,agency_id,assigned_agent_id,data,status) values
+ ('4c000000-0000-0000-0000-00000000000a','1c000000-0000-0000-0000-00000000000a','2c000000-0000-0000-0000-00000000000a','{}','draft'),
+ ('4c000000-0000-0000-0000-00000000000b','1c000000-0000-0000-0000-00000000000b','2c000000-0000-0000-0000-00000000000b','{}','draft');
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select is((select array_agg(user_id::text) from public.agency_memberships where agency_id='1c000000-0000-0000-0000-00000000000a'),array['2c000000-0000-0000-0000-00000000000a'],'agency A lists only its own agents');
+select is((select array_agg(user_id::text) from public.agency_memberships where agency_id='1c000000-0000-0000-0000-00000000000b'),array['2c000000-0000-0000-0000-00000000000b'],'agency B lists only its own agents');
+select is((select array_agg(r->>'id') from jsonb_array_elements(public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000a',null,'','','updated','desc',25,0)->'rows') r),array['4c000000-0000-0000-0000-00000000000a'],'agency A lists only its own applications');
+select is((public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000b',null,'','','updated','desc',25,0)->>'total')::int,1,'agency B count covers only its own applications');
 reset role;
 select * from finish();
 rollback;

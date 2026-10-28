@@ -96,11 +96,44 @@ export function selectEmailProvider(config: Record<string, string | undefined>, 
 }
 
 // ---- worker authentication ----------------------------------------------------------------------
-/** The worker accepts only the project's service-role key (platform authentication, no dedicated secret). 401 = no bearer token, 403 = any other token. */
-export async function authorizeWorker(authorization: string | null, serviceKey: string): Promise<200 | 401 | 403> {
+/** The project reference of a hosted project URL (https://<ref>.supabase.co); null for any other host (local stack, custom domain). */
+function projectRefOf(supabaseUrl: string): string | null {
+  try {
+    const host = new URL(supabaseUrl).hostname;
+    return host.endsWith(".supabase.co") ? host.split(".")[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The claims of a three-part JWT, or null when it is not one. The signature is NOT checked here (see authorizeWorker). */
+function jwtClaims(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts.some((part) => !part)) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)));
+    return claims && typeof claims === "object" && !Array.isArray(claims) ? claims as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The worker accepts only the project's service-role key: a JWT whose role is "service_role" and, on a hosted project, whose ref is this
+ * project's reference (taken from SUPABASE_URL). 401 = no bearer token, 403 = any other token (anon, signed-in user, wrong project, malformed).
+ *
+ * SECURITY: this reads the claims WITHOUT verifying the signature, so it is only safe because the platform gateway has already verified the
+ * token (config.toml verify_jwt = true for this function, which must stay on). It deliberately does not compare against SUPABASE_SERVICE_ROLE_KEY:
+ * that variable can hold the newer opaque sb_secret_ key, which no JWT, and so no cron call, can ever equal. Claim values are never logged or returned.
+ */
+export async function authorizeWorker(authorization: string | null, supabaseUrl: string): Promise<200 | 401 | 403> {
   const token = /^Bearer (.+)$/.exec((authorization ?? "").trim())?.[1] ?? "";
   if (!token) return 401;
-  if (!serviceKey || !(await safeEqual(token, serviceKey))) return 403;
+  const claims = jwtClaims(token);
+  if (!claims || claims.role !== "service_role") return 403;
+  const expected = projectRefOf(supabaseUrl);
+  if (expected && claims.ref !== expected) return 403;
   return 200;
 }
 

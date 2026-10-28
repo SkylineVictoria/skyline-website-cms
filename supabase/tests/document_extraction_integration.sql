@@ -1,7 +1,7 @@
 -- Run with: npm run test:document-extraction:integration
 -- Exercises the database boundary used by both functions and the wizard.
 begin;
-select plan(17);
+select plan(25);
 
 insert into public.agencies(id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Extraction test A', 'EXT-A'),
@@ -59,6 +59,35 @@ values ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-0000000
 select is((select state from public.enrollment_document_deletion_recovery where document_id = '50000000-0000-0000-0000-000000000001'), 'storage_deleted_row_failed', 'partial deletion has a recovery record');
 update public.enrollment_application_documents set is_current = false where id = '50000000-0000-0000-0000-000000000002';
 select is((public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000002', '{"dob":"2001-01-01"}'::jsonb)->>'stale')::boolean, true, 'deleted or replaced documents reject stale results');
+
+-- Replacement: an unedited value from a superseded file is replaced; an edited one is a conflict.
+insert into public.enrollment_applications(id, agency_id, assigned_agent_id, data, status) values
+  ('40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '{"academicQualifications":[{"institution":"Manual Inst","qualification":"Cert"}]}', 'draft');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
+  ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/old.pdf', 'old.pdf', '{}'),
+  ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/new.pdf', 'new.pdf', '{}'),
+  ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a1.pdf', 'a1.pdf', '{}'),
+  ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a2.pdf', 'a2.pdf', '{}'),
+  ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a3.pdf', 'a3.pdf', '{}');
+select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000003', '{"au_street":"1 Old St","au_suburb":"Oldtown"}'::jsonb);
+update public.enrollment_applications set data = jsonb_set(data, '{values,au_suburb}', '"Edited"') where id = '40000000-0000-0000-0000-000000000003';
+delete from public.enrollment_application_documents where id = '50000000-0000-0000-0000-000000000003';
+create temp table replace_result as select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000004', '{"au_street":"2 New St","au_suburb":"Newtown"}'::jsonb) as r;
+select is((select r->>'au_street' from replace_result), 'auto_applied', 'an unedited value from the replaced file is re-applied');
+select is((select data #>> '{values,au_street}' from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), '2 New St', 'the replacement value is persisted');
+select is((select r->>'au_suburb' from replace_result), 'conflict', 'an edited value is a conflict, not a replacement');
+select is((select data #>> '{values,au_suburb}' from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), 'Edited', 'an edited value is never overwritten');
+
+-- Qualifications: one entry per distinct qualification, duplicates share an entry, deletes remove only their own.
+select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000005', '{"academic_institution":"Uni A","academic_qualification":"BSc","academic_year":"2020"}'::jsonb);
+select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000006', '{"academic_institution":"uni a","academic_qualification":"bsc","academic_year":"2020"}'::jsonb);
+select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000007', '{"academic_institution":"Uni B","academic_qualification":"MSc","academic_year":"2022"}'::jsonb);
+select is((select jsonb_array_length(data->'academicQualifications') from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), 3, 'each distinct qualification is appended and the duplicate is skipped');
+delete from public.enrollment_application_documents where id = '50000000-0000-0000-0000-000000000005';
+select is((select jsonb_array_length(data->'academicQualifications') from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), 3, 'a shared entry survives while another file still backs it');
+delete from public.enrollment_application_documents where id in ('50000000-0000-0000-0000-000000000006', '50000000-0000-0000-0000-000000000007');
+select is((select jsonb_array_length(data->'academicQualifications') from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), 1, 'removing the files removes only the entries they created');
+select is((select data #>> '{academicQualifications,0,institution}' from public.enrollment_applications where id = '40000000-0000-0000-0000-000000000003'), 'Manual Inst', 'manual entries are kept');
 
 select * from finish();
 rollback;

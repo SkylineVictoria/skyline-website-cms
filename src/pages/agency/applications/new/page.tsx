@@ -8,6 +8,7 @@ import {
   listAssignableAgents,
   type AgentOption,
 } from "@/pages/agency/lib/portalApplications";
+import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
 import { isEditableApplicationStatus } from "@/pages/agency/lib/applicationAccess";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
@@ -54,6 +55,7 @@ function clearSession(uid: string): void {
 type Phase = "checking" | "pick" | "wizard";
 
 export default function NewApplicationPage() {
+  const paths = useApplicationPaths();
   const { role, agency, authUser, authLoading, identityLoading } = usePortalAuth();
   const navigate = useNavigate();
 
@@ -148,7 +150,7 @@ export default function NewApplicationPage() {
 
   const handleFinish = () => {
     if (authUser?.id) clearSession(authUser.id);
-    navigate(`/agency/applications/${applicationId}`, { replace: true });
+    navigate(paths.detail(applicationId), { replace: true });
   };
 
   const handleCancel = async () => {
@@ -156,7 +158,7 @@ export default function NewApplicationPage() {
     if (uid) clearSession(uid);
     // A new draft has a real reference and must remain available even if the
     // document wizard is closed before any field is filled.
-    navigate(`/agency/applications/${applicationId}`, { replace: true });
+    navigate(paths.detail(applicationId), { replace: true });
   };
 
   if (authLoading || identityLoading || phase === "checking") {
@@ -271,7 +273,7 @@ export default function NewApplicationPage() {
             )}
           </button>
           <Link
-            to="/agency/applications"
+            to={paths.list}
             className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 px-5 py-3 text-sm font-semibold text-foreground-800 transition-colors hover:bg-background-100"
           >
             Cancel

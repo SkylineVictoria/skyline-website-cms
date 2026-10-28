@@ -1,5 +1,6 @@
 import { baseFieldClass, isConditionMet, isFieldFilled, sectionHeading, sectionIcon, todayIso } from "./applicationFieldHelpers";
 import type { AppField, FieldCondition } from "@/data/applicationForms";
+import { PhoneInput, UsiInput, YearSelect } from "./applicationInputs";
 
 export function ApplicationFieldControl({
   field,
@@ -77,6 +78,10 @@ export function ApplicationFieldControl({
       />
     );
   }
+
+  if (field.format === "year") return <YearSelect id={id} name={field.name} value={value} locked={locked} required={field.required} />;
+  if (field.format === "usi") return <UsiInput id={id} name={field.name} value={value} locked={locked} required={field.required} placeholder={field.placeholder} />;
+  if (field.format === "phone") return <PhoneInput id={id} name={field.name} value={value} locked={locked} required={field.required} placeholder={field.placeholder} />;
 
   if (field.type === "select") {
     return (

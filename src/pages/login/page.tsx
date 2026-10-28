@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { checkSession, retryUntil } from "@/lib/authSession";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { AdminLoading, Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
@@ -70,7 +71,7 @@ export default function LoginPage() {
     const decision = decideLogin(await fetchAccess(userId), next, readLastDestination(userId));
     if (decision.kind === "blocked") {
       // Nothing usable: end the session so no half-signed-in state is left behind.
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       markSessionSeen(false);
       setError(decision.message);
       setChecking(false);
@@ -87,12 +88,20 @@ export default function LoginPage() {
   // Someone who is already signed in (or returning from an invite / reset) is routed without seeing the form.
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
+    let stopRetry = () => {};
+    void checkSession().then((check) => {
       if (!active) return;
-      if (data.session?.user) void route(data.session.user.id);
-      else setChecking(false);
-    }).catch(() => { if (active) setChecking(false); });
-    return () => { active = false; };
+      if (check.kind === "session") { void route(check.session.user.id); return; }
+      setChecking(false);
+      // A saved session that could not be refreshed offline is routed as soon as the network is back.
+      if (check.kind === "unavailable") stopRetry = retryUntil(async () => {
+        const again = await checkSession();
+        if (again.kind === "unavailable") return false;
+        if (again.kind === "session" && active) void route(again.session.user.id);
+        return true;
+      });
+    });
+    return () => { active = false; stopRetry(); };
   }, [route]);
 
   const submit = async (event: FormEvent) => {

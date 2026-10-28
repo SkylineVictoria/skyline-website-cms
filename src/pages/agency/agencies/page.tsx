@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import {
   deleteAgency,
@@ -94,7 +96,7 @@ function toForm(agency: PortalAgency): FormState {
   };
 }
 
-export default function AdminAgenciesPage() {
+function PortalAgenciesPage() {
   const [agencies, setAgencies] = useState<PortalAgency[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -465,4 +467,10 @@ export default function AdminAgenciesPage() {
       </PortalModal>
     </div>
   );
+}
+/** Administrators of the main site manage agencies inside the CMS, not in the agent portal layout. */
+export default function AdminAgenciesPage() {
+  const { role } = usePortalAuth();
+  if (role === "slit_admin" && !requestWebsiteDomain()) return <Navigate to="/admin/agencies" replace />;
+  return <PortalAgenciesPage />;
 }

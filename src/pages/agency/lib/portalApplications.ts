@@ -84,6 +84,15 @@ async function profileNames(ids: string[]): Promise<Map<string, string>> {
   return map;
 }
 
+/** Email and phone of one profile; RLS lets the profile itself, its agency admin and SLIT admins read it. */
+async function profileContact(id: string): Promise<{ email: string; phone: string }> {
+  if (!id) return { email: "", phone: "" };
+  const { data, error } = await supabase.from("portal_profiles").select("email, phone").eq("id", id).maybeSingle();
+  if (error || !data) return { email: "", phone: "" };
+  const r = data as Record<string, unknown>;
+  return { email: str(r.email), phone: str(r.phone) };
+}
+
 /** Every application the caller is authorised to see, with agency/agent/course detail. */
 export async function listApplications(filters: ApplicationFilters = {}): Promise<ApplicationListRow[]> {
   countPortalMetric("applications.list");
@@ -251,6 +260,9 @@ export interface ApplicationDetail {
   createdByName: string;
   agentId: string | null;
   agentName: string;
+  /** Contact details of the assigned agent (not the signed-in user); empty when unassigned or unreadable. */
+  agentEmail: string;
+  agentPhone: string;
   submittedByName: string;
   studentName: string;
   studentEmail: string;
@@ -304,11 +316,12 @@ export async function getApplication(id: string, refreshDraftRevision = true): P
   const r = data as Record<string, unknown>;
   if (refreshDraftRevision) draftVersions.set(id, Number(r.draft_version ?? 0));
   const agencyId = str(r.agency_id);
-  const [nameMap, agencyMap, courseMap, consents] = await Promise.all([
+  const [nameMap, agencyMap, courseMap, consents, agentContact] = await Promise.all([
     profileNames([str(r.created_by), str(r.assigned_agent_id), str(r.submitted_by)]),
     fetchAgencyNames([agencyId]),
     fetchCoursesByApplication([id]),
     listConsents(id),
+    profileContact(str(r.assigned_agent_id)),
   ]);
 
   return {
@@ -321,6 +334,8 @@ export async function getApplication(id: string, refreshDraftRevision = true): P
     createdByName: nameMap.get(str(r.created_by)) ?? "",
     agentId: str(r.assigned_agent_id) || null,
     agentName: nameMap.get(str(r.assigned_agent_id)) ?? "",
+    agentEmail: agentContact.email,
+    agentPhone: agentContact.phone,
     submittedByName: nameMap.get(str(r.submitted_by)) ?? "",
     studentName: str(r.student_name),
     studentEmail: str(r.student_email),
@@ -600,6 +615,8 @@ export interface UploadDocumentInput {
   file: File;
   uploadedBy?: string | null;
   metadata?: Record<string, unknown>;
+  /** Called once the object and its metadata row are stored, before extraction is queued. */
+  onStored?: (doc: UploadedDocument) => void;
 }
 
 export interface UploadedDocument {
@@ -621,7 +638,7 @@ async function sha256(file: File): Promise<string> {
  * orphaned object so storage and the database can never drift apart.
  */
 export async function uploadApplicationDocument(input: UploadDocumentInput): Promise<UploadedDocument> {
-  const { applicationId, category, file, uploadedBy, metadata } = input;
+  const { applicationId, category, file, uploadedBy, metadata, onStored } = input;
   await validateDocumentFile(file);
   const contentSha256 = await sha256(file);
   // A retry after a lost response must return the original document, rather than
@@ -667,6 +684,7 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   }
 
   const id = String(data?.id ?? "");
+  onStored?.({ id, path, category, filename: file.name });
   // Queue through a trusted backend after the row exists. A failed enqueue does
   // not invalidate an upload; it remains visible and can be retried explicitly.
   try { await queueDocumentExtraction(id); } catch { /* surfaced by the document's retry control */ }
@@ -678,41 +696,6 @@ export async function queueDocumentExtraction(documentId: string, reextract = fa
   const { data, error } = await supabase.functions.invoke("portal-document-extract", { body: { documentId, reextract } });
   if (error) throw new Error(error.message);
   if (!data?.ok) throw new Error(String(data?.error ?? "Document extraction could not be queued."));
-}
-
-export interface DocumentFieldReview {
-  id: string;
-  applicationId: string;
-  documentId: string | null;
-  field: string;
-  candidateValue: string;
-  existingValue: string;
-  finalValue: string;
-  state: "auto_applied" | "corroborated" | "conflict" | "confirmed" | "corrected" | "rejected" | "stale";
-  source: Record<string, unknown>;
-  createdAt: string;
-}
-
-/** RLS limits this to the caller's agency and (for agents) assigned drafts. */
-export async function listDocumentFieldReviews(applicationId: string): Promise<DocumentFieldReview[]> {
-  const { data, error } = await supabase
-    .from("enrollment_document_field_reviews")
-    .select("id, application_id, document_id, field_identifier, candidate_value, existing_value, final_value, state, source, created_at")
-    .eq("application_id", applicationId)
-    .order("created_at", { ascending: false });
-  // Older portal deployments may not have the additive 0013 audit table yet.
-  // Keep ordinary draft editing available; the document-review UI activates as
-  // soon as that migration is safely reconciled and applied.
-  if (error) {
-    if (error.code === "42P01" || /enrollment_document_field_reviews/i.test(error.message)) return [];
-    throw new Error(error.message);
-  }
-  return (data ?? []).map((row) => ({
-    id: String(row.id), applicationId: String(row.application_id), documentId: row.document_id ? String(row.document_id) : null,
-    field: String(row.field_identifier), candidateValue: String(row.candidate_value ?? ""), existingValue: String(row.existing_value ?? ""),
-    finalValue: String(row.final_value ?? ""), state: row.state as DocumentFieldReview["state"],
-    source: (row.source ?? {}) as Record<string, unknown>, createdAt: String(row.created_at),
-  }));
 }
 
 /** Serialised server-side with extraction writes; no browser read/modify/write race. */
@@ -727,18 +710,6 @@ export async function saveDocumentReview(input: {
   });
 }
 
-/** Persist document-local OCR review data. RLS constrains the row to the caller's application scope. */
-export async function updateDocumentExtraction(
-  id: string,
-  metadata: Record<string, unknown>,
-  reviewState: "Pending" | "Accepted" | "Rejected",
-): Promise<void> {
-  const { error } = await supabase
-    .from("enrollment_application_documents")
-    .update({ metadata, review_state: reviewState })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
-}
 
 /** Removes a document (object + metadata row) the caller is authorised to delete. */
 export async function deleteApplicationDocument(doc: { id: string; storagePath: string }): Promise<void> {
@@ -750,39 +721,14 @@ export async function deleteApplicationDocument(doc: { id: string; storagePath: 
 }
 
 /** Creates a short-lived signed URL so an authorised user can view a private document. */
-export async function getDocumentSignedUrl(storagePath: string, expiresIn = 300): Promise<string> {
+export async function getDocumentSignedUrl(storagePath: string, expiresIn = 300, downloadName?: string): Promise<string> {
   countPortalMetric("documents.signedUrl");
   if (!storagePath) throw new Error("This document has no stored file.");
   const { data, error } = await supabase.storage
     .from("enrollment-documents")
-    .createSignedUrl(storagePath, expiresIn);
+    .createSignedUrl(storagePath, expiresIn, downloadName ? { download: downloadName } : undefined);
   if (error) throw new Error(error.message);
   return data?.signedUrl ?? "";
-}
-
-export interface ApplicationDataPatch {
-  values?: Record<string, string>;
-  wizard?: Record<string, unknown>;
-  studentName?: string;
-  studentEmail?: string;
-  intake?: string;
-  completion?: number;
-  /** Derived from document-local accepted academic extraction records. */
-  academicQualifications?: Array<Record<string, string>>;
-}
-
-/**
- * Merges wizard-produced values into a draft's `data` without clobbering stored
- * courses or any field it does not explicitly carry. Only ever touches drafts the
- * caller is authorised to write (RLS enforces the agency/agent scope).
- */
-export async function patchApplicationData(id: string, patch: ApplicationDataPatch): Promise<void> {
-  const data: Record<string, unknown> = {};
-  if (patch.values) data.values = patch.values;
-  if (patch.wizard) data.wizard = patch.wizard;
-  if (patch.academicQualifications) data.academicQualifications = patch.academicQualifications;
-  if (patch.completion !== undefined) data.progress = { overall: patch.completion };
-  await draftCommand(id, "portal_save_draft_v2", { p_patch: data });
 }
 
 /** Removes a draft the caller owns (used only when a wizard session is abandoned empty). */

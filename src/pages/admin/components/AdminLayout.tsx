@@ -17,14 +17,16 @@ interface NavEntry {
 
 const NAV: NavEntry[] = [
   { to: "/admin", label: "Dashboard", icon: "ri-dashboard-3-line", end: true },
+  { to: "/admin/applications", label: "Applications", icon: "ri-file-list-3-line", adminOnly: true },
+  { to: "/admin/agencies", label: "Agencies", icon: "ri-building-2-line", adminOnly: true },
   { to: "/admin/courses", label: "Courses", icon: "ri-book-2-line" },
   { to: "/admin/pages", label: "Pages", icon: "ri-file-text-line" },
   { to: "/admin/navigation", label: "Header & Navigation", icon: "ri-menu-line" },
   { to: "/admin/footer", label: "Footer", icon: "ri-layout-bottom-line" },
   { to: "/admin/settings", label: "Website Settings", icon: "ri-settings-3-line" },
+  { to: "/admin/notifications", label: "Notification log", icon: "ri-mail-check-line", adminOnly: true },
   { to: "/admin/documents", label: "Documents & Policies", icon: "ri-file-pdf-2-line" },
   { to: "/admin/knowledge", label: "Assistant Knowledge", icon: "ri-question-answer-line", adminOnly: true },
-  { to: "/admin/knowledge/documents", label: "Document Extraction", icon: "ri-file-search-line", adminOnly: true },
   { to: "/admin/forms", label: "Forms", icon: "ri-survey-line" },
   { to: "/admin/contact", label: "Contact Information", icon: "ri-contacts-line" },
   { to: "/admin/seo", label: "SEO / Page Settings", icon: "ri-search-eye-line" },

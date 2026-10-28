@@ -72,3 +72,61 @@ test("English test aliases select the actual wizard options", () => {
   assert.deepEqual(formatExtractionCandidates({ english_type: "TOEFL iBT" }), { english_type: "TOEFL iBT" });
   assert.deepEqual(formatExtractionCandidates({ english_type: "Pearson PTE" }), { english_type: "PTE Academic" });
 });
+
+test("document expiry: expired, valid, expiring soon, English +2 years, missing, invalid, today", async () => {
+  const { getDocumentExpiryStatus, expiryMessage, expiryLabel } = await import("../src/pages/agency/lib/documentExpiry.ts");
+  const today = new Date(2026, 9, 28, 23, 59);
+  assert.deepEqual(getDocumentExpiryStatus("passport", { passport_expiry: "2025-03-12" }, today), { status: "expired", date: "2025-03-12", expiresToday: false });
+  assert.equal(getDocumentExpiryStatus("passport", { passport_expiry: "2030-01-01" }, today).status, "valid");
+  assert.equal(getDocumentExpiryStatus("passport", { passport_expiry: "2027-03-28" }, today).status, "expiring_soon");
+  assert.equal(getDocumentExpiryStatus("passport", { passport_expiry: "2027-04-29" }, today).status, "valid");
+  assert.equal(getDocumentExpiryStatus("visa", { visa_stay_until: "2027-01-12" }, today).status, "expiring_soon");
+  assert.equal(getDocumentExpiryStatus("visa", { visa_stay_until: "2026-10-27" }, today).status, "expired");
+  assert.deepEqual(getDocumentExpiryStatus("english", { english_date: "2024-10-27" }, today), { status: "expired", date: "2026-10-27", expiresToday: false });
+  assert.deepEqual(getDocumentExpiryStatus("english", { english_date: "2025-01-01" }, today), { status: "valid", date: "2027-01-01", expiresToday: false });
+  assert.equal(getDocumentExpiryStatus("english", { english_date: "2024-10-28", english_valid_until: "2030-01-01" }, today).status, "valid");
+  assert.equal(getDocumentExpiryStatus("english", { english_date: "2026-11-01" }, today).status, "valid");
+  assert.equal(getDocumentExpiryStatus("passport", {}, today).status, "unknown");
+  assert.equal(getDocumentExpiryStatus("english", {}, today).status, "unknown");
+  assert.equal(getDocumentExpiryStatus("passport", { passport_expiry: "2026-02-30" }, today).status, "unknown");
+  assert.equal(getDocumentExpiryStatus("visa", { visa_stay_until: "soon" }, today).status, "unknown");
+  const expiresToday = getDocumentExpiryStatus("passport", { passport_expiry: "2026-10-28" }, today);
+  assert.deepEqual(expiresToday, { status: "expiring_soon", date: "2026-10-28", expiresToday: true });
+  assert.equal(expiryMessage("passport", expiresToday), "This passport expires today.");
+  assert.equal(expiryLabel(expiresToday), "Expires today");
+  assert.equal(expiryLabel(getDocumentExpiryStatus("visa", { visa_stay_until: "2027-01-12" }, today)), "Expiring soon");
+  assert.equal(getDocumentExpiryStatus("english", { english_date: "2024-10-28" }, today).status, "valid");
+});
+
+test("USI: format rules, forbidden characters, case, blank", async () => {
+  const { validateUsi, normalizeUsi, hasForbiddenUsiCharacter, USI_FORMAT_MESSAGE } = await import("../supabase/functions/_shared/validation/identifiers.ts");
+  assert.equal(validateUsi("ABCDEFGHJK"), "");
+  assert.equal(validateUsi("abcdefghjk"), "");
+  assert.equal(normalizeUsi("abcd-efgh jk99"), "ABCDEFGHJK");
+  assert.equal(validateUsi(""), "");
+  assert.equal(validateUsi("   "), "");
+  assert.equal(validateUsi("ABCDEFGHJ"), USI_FORMAT_MESSAGE);
+  assert.equal(validateUsi("ABCDEFGHJKL"), USI_FORMAT_MESSAGE);
+  for (const bad of ["abcd1efghi", "ABCD0EFGHJ", "ABCDIEFGHJ", "ABCDOEFGHJ", "ABCD!EFGHJ"]) assert.equal(validateUsi(bad), USI_FORMAT_MESSAGE, bad);
+  assert.equal(hasForbiddenUsiCharacter("abcd1efghi"), true);
+  assert.equal(hasForbiddenUsiCharacter("abcdefghjk"), false);
+});
+
+test("phone: Australian normalisation, validation and display", async () => {
+  const { normalizePhoneInput, validatePhone, formatPhone, parseStoredPhone, AU_PHONE_MESSAGE } = await import("../supabase/functions/_shared/validation/identifiers.ts");
+  const check = (dial: string, typed: string) => { const n = normalizePhoneInput(dial, typed); return { e164: n.e164, message: validatePhone(n.dial, n.national) }; };
+  assert.deepEqual(check("61", "0412345678"), { e164: "+61412345678", message: "" });
+  assert.deepEqual(check("61", "+61412345678"), { e164: "+61412345678", message: "" });
+  assert.deepEqual(check("61", "412345678"), { e164: "+61412345678", message: "" });
+  assert.deepEqual(check("61", "0412 345 678"), { e164: "+61412345678", message: "" });
+  assert.deepEqual(check("61", "0291234567"), { e164: "+61291234567", message: "" });
+  assert.equal(check("61", "12345").message, AU_PHONE_MESSAGE);
+  assert.equal(check("61", "0512345678").message, AU_PHONE_MESSAGE);
+  assert.deepEqual(check("61", ""), { e164: "", message: "" });
+  assert.equal(check("91", "9876543210").message, "");
+  assert.equal(check("91", "+441234567890").e164, "+441234567890");
+  assert.equal(formatPhone("+61412345678"), "+61 412 345 678");
+  assert.equal(formatPhone("0412345678"), "+61 412 345 678");
+  assert.equal(formatPhone("(03) 9123 4567"), "(03) 9123 4567");
+  assert.equal(parseStoredPhone("(03) 9123 4567"), null);
+});

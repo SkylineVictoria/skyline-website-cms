@@ -59,8 +59,8 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return reply({ ok: false, error: "Method not allowed." }, 405);
   // Postmark callbacks are disabled (410) until they can be authenticated without a shared secret; delivery states stay worker-driven.
   if (new URL(request.url).pathname.endsWith("/webhook")) return reply({ ok: false, error: "Webhook disabled." }, 410);
-  // Platform authentication: config.toml verify_jwt = true rejects unsigned tokens; only the service-role key may run the worker.
-  const status = await authorizeWorker(request.headers.get("authorization"), serviceKey);
+  // Platform authentication: config.toml verify_jwt = true rejects unsigned tokens (authorizeWorker relies on that); only a service_role token of this project may run the worker.
+  const status = await authorizeWorker(request.headers.get("authorization"), url);
   if (status !== 200) return reply({ ok: false, error: status === 401 ? "Unauthorized." : "Forbidden." }, status);
   return await worker();
 });

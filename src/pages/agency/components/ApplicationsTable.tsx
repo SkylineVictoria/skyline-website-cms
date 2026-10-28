@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
+import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import { Link } from "react-router-dom";
 import { queryApplications, type ApplicationListRow } from "@/pages/agency/lib/portalApplications";
 import { STATUS_META, statusMeta, formatDate } from "@/pages/agency/lib/portalData";
@@ -20,6 +21,8 @@ interface ApplicationsTableProps {
   onRetry?: () => void;
   /** Show the search / status / course / intake filter bar. */
   showFilters?: boolean;
+  /** Pins the list to one agency (the agency page): sent to the query, never filtered after loading. */
+  fixedAgencyId?: string;
   /** SLIT Admin: filter by agency. */
   agencies?: Option[];
   /** Agency Admin / SLIT Admin: filter by assigned agent. */
@@ -67,6 +70,7 @@ export default function ApplicationsTable({
   error,
   onRetry,
   showFilters = true,
+  fixedAgencyId = "",
   agencies,
   agents,
   pageSize = 10,
@@ -76,9 +80,11 @@ export default function ApplicationsTable({
   emptyMessage = "When a student application is created it will appear here.",
   emptyAction,
 }: ApplicationsTableProps) {
+  const paths = useApplicationPaths();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [agencyId, setAgencyId] = useState("");
+  const [chosenAgencyId, setAgencyId] = useState("");
+  const agencyId = fixedAgencyId || chosenAgencyId;
   const [agentId, setAgentId] = useState("");
   const [courseCode, setCourseCode] = useState("");
   const [intake, setIntake] = useState("");
@@ -86,12 +92,16 @@ export default function ApplicationsTable({
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
 
+  const [previousAgency, setPreviousAgency] = useState(fixedAgencyId);
+  if (previousAgency !== fixedAgencyId) { setPreviousAgency(fixedAgencyId); setPage(1); }
   const [remoteRows, setRemoteRows] = useState<ApplicationListRow[]>([]);
   const [remoteTotal, setRemoteTotal] = useState(0);
   const [remoteError, setRemoteError] = useState("");
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [retry, setRetry] = useState(0);
   const rows = remote ? remoteRows : providedRows;
+  // Rows of the previous agency are dropped at once, never shown under the next one while it loads.
+  useEffect(() => { setRemoteRows([]); }, [fixedAgencyId]);
   useEffect(() => {
     if (!remote) return;
     let active = true;
@@ -210,7 +220,7 @@ export default function ApplicationsTable({
                 </option>
               ))}
             </select>
-            {agencies ? (
+            {agencies && !fixedAgencyId ? (
               <select
                 value={agencyId}
                 onChange={(e) => {
@@ -356,7 +366,7 @@ export default function ApplicationsTable({
                         <div className="inline-flex items-center gap-2">
                           {row.status === "draft" ? (
                             <Link
-                              to={`/agency/applications/${row.id}`}
+                              to={paths.detail(row.id)}
                               className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-background-300 px-2.5 py-1.5 text-xs font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
                               title="Resume draft"
                             >
@@ -365,7 +375,7 @@ export default function ApplicationsTable({
                             </Link>
                           ) : null}
                           <Link
-                            to={`/agency/applications/${row.id}`}
+                            to={paths.detail(row.id)}
                             className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-primary-500 px-2.5 py-1.5 text-xs font-semibold text-background-50 transition-colors hover:bg-primary-600"
                           >
                             <i className="ri-eye-line" aria-hidden="true" />

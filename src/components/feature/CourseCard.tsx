@@ -9,6 +9,9 @@ export default function CourseCard({ course }: { course: Course }) {
           <img
             src={course.image}
             alt={course.imageAlt}
+            loading="lazy"
+            decoding="async"
+            draggable={false}
             className="h-full w-full object-top transition-transform duration-700 group-hover:scale-105"
           />
         ) : (

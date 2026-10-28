@@ -4,6 +4,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import type { AdminUser, Role } from "@/pages/admin/lib/types";
 import { passwordRecoveryUrl } from "@/lib/siteUrl";
 import { markSessionSeen } from "@/lib/loginRouting";
+import { checkSession, retryUntil } from "@/lib/authSession";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { resolveTenantSite } from "@/lib/tenantSite";
 
@@ -26,8 +27,12 @@ async function fetchProfiles(): Promise<AdminUser[]> {
   }));
 }
 
+/** The profile lookup itself failed (network, server); the user's access is unknown, so it must not be treated as "no access". */
+class ProfileUnavailable extends Error {}
+
 /** Resolve a session to a CMS staff member. Returns null when the signed-in
- * user has no (active) CMS profile — i.e. they must not access the CMS. */
+ * user has no (active) CMS profile — i.e. they must not access the CMS.
+ * Throws ProfileUnavailable when that could not be determined. */
 async function resolveSessionUser(authUserId: string | undefined, email: string | undefined): Promise<SessionUser | null> {
   if (!authUserId && !email) return null;
   if (requestWebsiteDomain()) {
@@ -36,14 +41,19 @@ async function resolveSessionUser(authUserId: string | undefined, email: string 
       // Claim any pending invitation for this institution (needs a confirmed email); a failure must not block sign-in.
       try { await supabase.rpc("tenant_accept_pending_invites"); } catch { /* the invitation stays pending */ }
       const { data, error } = await supabase.rpc("tenant_cms_identity");
-      return error || !data ? null : data as SessionUser;
-    } catch { return null; }
+      if (error) throw new ProfileUnavailable(error.message);
+      return data ? data as SessionUser : null;
+    } catch (error) {
+      if (error instanceof ProfileUnavailable) throw error;
+      throw new ProfileUnavailable(error instanceof Error ? error.message : "unavailable");
+    }
   }
   const base = supabase
     .from("cms_users")
     .select("id, name, email, role, status, must_change_password");
   const query = authUserId ? base.eq("auth_user_id", authUserId) : base.ilike("email", email as string);
-  const { data } = await query.maybeSingle();
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new ProfileUnavailable(error.message);
   if (!data) return null;
   if (data.status === "Inactive") return null;
   return {
@@ -67,34 +77,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    let stopRetry = () => {};
 
-    const applySession = async (authUserId: string | undefined, email: string | undefined) => {
-      const resolved = await resolveSessionUser(authUserId, email);
-      if (!active) return;
+    // true = settled. false = the profile lookup could not run (offline); the signed-in user is kept and it is retried.
+    const applySession = async (authUserId: string | undefined, email: string | undefined): Promise<boolean> => {
+      let resolved: SessionUser | null;
+      try {
+        resolved = await resolveSessionUser(authUserId, email);
+      } catch (error) {
+        if (error instanceof ProfileUnavailable) return false;
+        throw error;
+      }
+      if (!active) return true;
       setUser(resolved);
       if (resolved) {
         const profiles = await fetchProfiles();
         if (active && profiles.length) setUsers(profiles);
       }
       if (active) setAuthLoading(false);
+      return true;
+    };
+    const apply = (authUserId: string | undefined, email: string | undefined) => {
+      stopRetry();
+      void applySession(authUserId, email).then((done) => {
+        if (!done && active) stopRetry = retryUntil(() => applySession(authUserId, email));
+      });
     };
 
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        void applySession(data.session?.user?.id, data.session?.user?.email);
-      })
-      .catch(() => {
-        if (active) setAuthLoading(false);
+    void checkSession().then((check) => {
+      if (!active) return;
+      if (check.kind === "session") apply(check.session.user.id, check.session.user.email);
+      else if (check.kind === "none") setAuthLoading(false);
+      else stopRetry = retryUntil(async () => {
+        // Offline at start: keep the loader up until the saved session can be restored.
+        const again = await checkSession();
+        if (again.kind === "unavailable") return false;
+        if (again.kind === "session") apply(again.session.user.id, again.session.user.email);
+        else setAuthLoading(false);
+        return true;
       });
+    });
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       // Keep this callback synchronous: only react to the auth state here.
-      void applySession(session?.user?.id, session?.user?.email);
+      if (event === "TOKEN_REFRESHED") return; // same person, same access
+      if (session?.user) apply(session.user.id, session.user.email);
+      else if (event === "SIGNED_OUT") {
+        // Explicit log out, or the server rejected the refresh token as invalid or revoked.
+        stopRetry();
+        setUser(null);
+        setAuthLoading(false);
+      }
+      // Other events without a session (INITIAL_SESSION while a refresh is failing offline) are not a sign-out.
     });
 
     return () => {
       active = false;
+      stopRetry();
       sub.subscription.unsubscribe();
     };
   }, []);
@@ -109,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const resolved = await resolveSessionUser(data.user.id, data.user.email);
     if (!resolved) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       return { ok: false, error: "This account does not have access to the CMS." };
     }
     const profiles = await fetchProfiles();
@@ -119,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     markSessionSeen(false);
     setUser(null);
     setUsers([]);

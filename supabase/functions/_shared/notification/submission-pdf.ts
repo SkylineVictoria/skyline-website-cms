@@ -1,3 +1,4 @@
+import { formatStoredValue } from "../validation/identifiers.ts";
 // Runtime-neutral, dependency-free PDF of an immutable submitted-application snapshot (Helvetica text, A4, paginated).
 // The PDF exists only in memory for the duration of one send: nothing here logs, stores or returns the content anywhere else.
 
@@ -94,6 +95,27 @@ function formatValue(value: unknown, depth = 0): string {
   return "";
 }
 
+const QUALIFICATION_PARTS = ["institution", "qualification", "program", "year", "result"] as const;
+type QualificationParts = Record<typeof QUALIFICATION_PARTS[number], string>;
+
+/**
+ * Qualifications to print: the snapshot's list (file-linked and manual entries), plus the single
+ * institution / qualification / year fields when the list does not already hold them.
+ */
+function qualificationLines(snap: Record<string, unknown>, values: Record<string, unknown>): string[] {
+  const part = (source: Record<string, unknown>, key: string, prefix: string) => formatValue(source[`${prefix}${key}`]);
+  const read = (source: Record<string, unknown>, prefix: string) => Object.fromEntries(QUALIFICATION_PARTS.map((key) => [key, part(source, key, prefix)])) as QualificationParts;
+  const listed = Array.isArray(snap.academicQualifications) ? snap.academicQualifications as Record<string, unknown>[] : [];
+  const entries = listed.filter((entry) => entry && typeof entry === "object").map((entry) => {
+    const fromKeys = read(entry, "");
+    return QUALIFICATION_PARTS.some((key) => fromKeys[key]) ? fromKeys : read(entry, "academic_");
+  }).filter((entry) => QUALIFICATION_PARTS.some((key) => entry[key]));
+  const single = read(values, "academic_");
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  if (QUALIFICATION_PARTS.some((key) => single[key]) && !entries.some((e) => same(e.institution, single.institution) && same(e.qualification, single.qualification) && same(e.year, single.year))) entries.push(single);
+  return entries.map((e, i) => `${i + 1}. ${[e.qualification || e.program, e.institution, e.program !== e.qualification ? e.program : "", e.year, e.result].filter(Boolean).join(", ")}`);
+}
+
 export interface SubmissionPdfInput { reference: string; institution: string; version: number; submittedAt: string | null; snapshot: unknown }
 
 /** File uploads and wizard / provenance internals are left out; only what the applicant and agent entered is printed. */
@@ -107,13 +129,18 @@ export function submissionPdfLines(input: SubmissionPdfInput): PdfLine[] {
   const values = (snap.values && typeof snap.values === "object" ? snap.values : {}) as Record<string, unknown>;
   let printed = 0;
   for (const [key, value] of Object.entries(values)) {
-    if (/(_upload|_copy|_file)$/.test(key)) continue;
-    const text = formatValue(value);
+    if (/(_upload|_copy|_file)$/.test(key) || key.startsWith("academic_")) continue;
+    const text = formatStoredValue(key, formatValue(value));
     if (!text) continue;
     lines.push({ text: `${humanize(key)}: ${text}` });
     printed++;
   }
   if (!printed) lines.push({ text: "No form values were recorded.", style: "muted" });
+  const qualifications = qualificationLines(snap, values);
+  if (qualifications.length) {
+    lines.push({ text: "Academic qualifications", style: "heading" });
+    for (const text of qualifications) lines.push({ text });
+  }
   const courses = Array.isArray(snap.courses) ? snap.courses as Record<string, unknown>[] : [];
   if (courses.length) {
     lines.push({ text: "Courses", style: "heading" });

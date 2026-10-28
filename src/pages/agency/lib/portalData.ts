@@ -104,6 +104,96 @@ export async function listAgencies(): Promise<PortalAgency[]> {
   return (data ?? []).map((row) => mapAgency(row as Record<string, unknown>));
 }
 
+export interface AgencySummary extends PortalAgency {
+  agentCount: number;
+  applicationCount: number;
+  createdAt: string;
+}
+
+/**
+ * One page of agencies for the CMS list. Search, status, counts and paging are all done by the query: the agent and application
+ * counts are embedded counts per agency row, and the total comes from the same filtered query.
+ */
+export async function queryAgencies(filters: { search?: string; status?: string; limit: number; offset: number }): Promise<{ total: number; rows: AgencySummary[] }> {
+  let query = supabase
+    .from("agencies")
+    .select(`${AGENCY_COLUMNS}, created_at, agents:agency_memberships(count), applications:enrollment_applications(count)`, { count: "exact" })
+    .eq("agents.role", "agent");
+  const term = (filters.search ?? "").trim().replace(/[%,()*]/g, " ");
+  if (term) query = query.or(`name.ilike.%${term}%,code.ilike.%${term}%,business_email.ilike.%${term}%`);
+  if (filters.status) query = query.eq("status", filters.status);
+  const { data, error, count } = await query.order("name", { ascending: true }).range(filters.offset, filters.offset + filters.limit - 1);
+  if (error) throw new Error(error.message);
+  const counted = (value: unknown) => Number((value as Array<{ count?: number }> | undefined)?.[0]?.count ?? 0);
+  return {
+    total: count ?? 0,
+    rows: (data ?? []).map((row) => {
+      const r = row as Record<string, unknown>;
+      return { ...mapAgency(r), createdAt: String(r.created_at ?? ""), agentCount: counted(r.agents), applicationCount: counted(r.applications) };
+    }),
+  };
+}
+
+export async function getAgency(id: string): Promise<AgencySummary | null> {
+  const { data, error } = await supabase
+    .from("agencies")
+    .select(`${AGENCY_COLUMNS}, created_at, agents:agency_memberships(count), applications:enrollment_applications(count)`)
+    .eq("id", id)
+    .eq("agents.role", "agent")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const r = data as Record<string, unknown>;
+  const counted = (value: unknown) => Number((value as Array<{ count?: number }> | undefined)?.[0]?.count ?? 0);
+  return { ...mapAgency(r), createdAt: String(r.created_at ?? ""), agentCount: counted(r.agents), applicationCount: counted(r.applications) };
+}
+
+/** Pending invitations of one agency; the agency is part of the query. */
+export async function listAgencyInvitations(agencyId: string): Promise<InvitationRow[]> {
+  const { data, error } = await supabase
+    .from("agency_invitations")
+    .select("id, email, full_name, role, agency_id, expires_at, invited_by, invited_by_name, agencies(name)")
+    .eq("agency_id", agencyId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    const expiresAt = String(r.expires_at ?? "");
+    return {
+      id: String(r.id), email: String(r.email ?? ""), fullName: String(r.full_name ?? ""),
+      role: r.role === "agency_admin" ? "agency_admin" : "agent", agencyId: String(r.agency_id ?? ""),
+      agencyName: String((r.agencies as Record<string, unknown> | null)?.name ?? ""),
+      status: new Date(expiresAt).getTime() < Date.now() ? "expired" : "pending", expiresAt,
+      invitedBy: r.invited_by ? String(r.invited_by) : null, invitedByName: String(r.invited_by_name ?? ""),
+    } satisfies InvitationRow;
+  });
+}
+
+/** Adds an agency record without a first administrator (with one, use the create_agency function, which is atomic). */
+export async function createAgencyRecord(input: AgencyPatch & { status: "Active" | "Inactive" }): Promise<string> {
+  const { data, error } = await supabase
+    .from("agencies")
+    .insert({
+      name: input.name.trim(), code: input.code.trim(), registration_number: input.registrationNumber.trim(), business_email: input.businessEmail.trim(),
+      phone: input.phone.trim(), address: input.address.trim(), country: input.country.trim(), primary_contact: input.primaryContact.trim(), status: input.status,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+  return String(data.id);
+}
+
+/**
+ * Writes an administrator's change to an agency record to the audit log (the log accepts no direct client writes). Before the function is
+ * released the change still saves; once it exists, a failed log is reported.
+ */
+export async function logAgencyChange(agencyId: string, action: "agency_created" | "agency_updated" | "agency_deactivated" | "agency_reactivated", detail: Record<string, unknown> = {}): Promise<void> {
+  const { error } = await supabase.rpc("portal_log_agency_change", { p_agency: agencyId, p_action: action, p_detail: detail });
+  if (!error || error.code === "PGRST202" || error.code === "42883") return;
+  throw new Error(`Saved, but the change could not be written to the audit log. ${error.message}`);
+}
+
 export interface AgencyPatch {
   name: string;
   code: string;

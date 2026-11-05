@@ -64,6 +64,10 @@ import AdminAgentsPage from "@/pages/admin/AgentsPage";
 import AgentDetailPage from "@/pages/admin/AgentDetailPage";
 import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
+import StaffPage from "@/pages/admin/StaffPage";
+import StaffDetailPage from "@/pages/admin/StaffDetailPage";
+import StaffApplyPage from "@/pages/staff/StaffApplyPage";
+import StaffWorkspacePage from "@/pages/staff/StaffWorkspacePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 
@@ -100,6 +104,8 @@ const routes: RouteObject[] = [
     path: "/reset-password",
     element: <ResetPasswordPage />,
   },
+  { path: "/staff/apply", element: <StaffApplyPage /> },
+  { path: "/staff", element: <StaffWorkspacePage /> },
   {
     path: "/agency",
     element: <PortalProviders />,
@@ -172,6 +178,8 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
+          { path: "staff", element: <RequireAdmin><StaffPage /></RequireAdmin> },
+          { path: "staff/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },

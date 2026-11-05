@@ -16,6 +16,8 @@
     "test:passport-parser": "jiti scripts/test-passport-parser.ts",
     "test:portal-application-access": "jiti scripts/test-portal-application-access.ts",
     "test:portal-document-attachments": "jiti scripts/test-portal-document-attachments.ts",
+    "test:e2e": "playwright test",
+    "test:staff-registration": "jiti scripts/test-staff-registration.ts",
     "test:public-assistant": "node scripts/test-public-assistant.mjs",
     "test:public-assistant:local-acceptance": "node scripts/test-public-assistant-local-acceptance.mjs",
     "test:public-assistant:integration": "npx supabase test db supabase/tests/public_assistant_integration.sql",
@@ -32,6 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",
+    "@playwright/test": "^1.55.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.1",

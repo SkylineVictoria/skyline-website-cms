@@ -23,3 +23,13 @@ verify_jwt = false
 # token's claims: role must be service_role and, on a hosted project, ref must be this project's reference (401 without a token, 403 for anon/user
 # tokens, another project's key or a malformed token). The key is not compared with SUPABASE_SERVICE_ROLE_KEY, which can hold the opaque sb_secret_ key. No worker secret. The /webhook route is disabled (410) until Postmark callbacks can be authenticated.
 verify_jwt = true
+
+[functions.staff-register]
+# Public staff sign-up gate. It rate-limits per caller and per email, runs the duplicate check, then asks Supabase Auth to email the
+# code. All data access is service-role only inside the function; it contains no caller-controlled table or record identifier.
+verify_jwt = false
+
+[functions.staff-document-extract]
+# Signed-in applicants only: the platform verifies the JWT, and the function reads the document through an ownership check that
+# runs as the caller (hr_staff_document_for_extraction). The student function portal-document-extract is untouched.
+verify_jwt = true

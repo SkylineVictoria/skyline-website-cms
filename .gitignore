@@ -62,3 +62,7 @@ migration-reports/
 
 # Backup task output
 docs/release-evidence/
+
+# Playwright output
+test-results/
+playwright-report/

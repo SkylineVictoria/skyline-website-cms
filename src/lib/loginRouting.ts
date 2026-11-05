@@ -1,4 +1,5 @@
 import { portalAccessMessage, type PortalAccessState } from "../pages/agency/lib/applicationAccess";
+import type { StaffStatus } from "./staffStatus";
 
 /**
  * Routing helpers for the single /login page. Pure and browser-free so they can be tested offline.
@@ -6,9 +7,9 @@ import { portalAccessMessage, type PortalAccessState } from "../pages/agency/lib
  * (cms_users / tenant_cms_identity / portal_resolve_access). RLS and the edge functions still authorize every request.
  */
 
-export type LoginDestination = "cms" | "portal";
-export const DESTINATION_PATH: Record<LoginDestination, string> = { cms: "/admin", portal: "/agency" };
-export const DESTINATION_LABEL: Record<LoginDestination, string> = { cms: "Website admin (CMS)", portal: "Agency portal" };
+export type LoginDestination = "cms" | "portal" | "staff";
+export const DESTINATION_PATH: Record<LoginDestination, string> = { cms: "/admin", portal: "/agency", staff: "/staff" };
+export const DESTINATION_LABEL: Record<LoginDestination, string> = { cms: "Website admin (CMS)", portal: "Agency portal", staff: "My staff application" };
 export const SET_PASSWORD_PATH = "/admin/set-password";
 
 /** A same-origin, router-relative path or null. Rejects absolute URLs, protocol-relative URLs, backslashes, control characters and /login loops. */
@@ -41,7 +42,8 @@ export function legacyLoginTarget(search: string, stateFrom?: unknown): string {
 }
 
 export interface CmsAccess { active: boolean; mustChangePassword: boolean }
-export interface AccessSummary { cms: CmsAccess | null; portal: PortalAccessState | null }
+/** staff: the person's staff application status from hr_staff_access ("none" or absent when they have none). */
+export interface AccessSummary { cms: CmsAccess | null; portal: PortalAccessState | null; staff?: StaffStatus | "none" | null }
 
 export type LoginDecision =
   | { kind: "go"; to: string }
@@ -54,6 +56,8 @@ export function availableDestinations(access: AccessSummary): LoginDestination[]
   const options: LoginDestination[] = [];
   if (access.cms?.active) options.push("cms");
   if (access.portal === "active" || access.portal === "org_admin") options.push("portal");
+  // A staff application or account has its own workspace. Once active, an Admin uses the CMS, so the staff page is not offered beside it.
+  if (access.staff && access.staff !== "none" && !(access.staff === "active" && options.includes("cms"))) options.push("staff");
   return options;
 }
 
@@ -70,6 +74,7 @@ export function decideLogin(access: AccessSummary, next: string | null = null, l
   if (target) {
     if (options.includes("cms") && /^\/admin(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
     if (options.includes("portal") && /^\/agency(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
+    if (options.includes("staff") && /^\/staff(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
   }
   if (options.length === 1) return { kind: "go", to: DESTINATION_PATH[options[0]] };
   // A SLIT administrator manages everything from the CMS (its menu links to the portal pages), so there is nothing to choose.
@@ -81,7 +86,7 @@ export function decideLogin(access: AccessSummary, next: string | null = null, l
 /** Where a chosen destination goes: the validated return path when it belongs to that area, otherwise the area's landing page. */
 export function destinationFor(option: LoginDestination, next: string | null): string {
   const target = safeNext(next);
-  if (target && (option === "cms" ? /^\/admin(?:[/?#]|$)/ : /^\/agency(?:[/?#]|$)/).test(target)) return target;
+  if (target && (option === "cms" ? /^\/admin(?:[/?#]|$)/ : option === "staff" ? /^\/staff(?:[/?#]|$)/ : /^\/agency(?:[/?#]|$)/).test(target)) return target;
   return DESTINATION_PATH[option];
 }
 
@@ -118,7 +123,7 @@ export function hadSession(): boolean {
 
 const LAST_KEY = "skyline.login.last";
 export function readLastDestination(userId: string): LoginDestination | null {
-  try { const v = window.localStorage.getItem(`${LAST_KEY}:${userId}`); return v === "cms" || v === "portal" ? v : null; } catch { return null; }
+  try { const v = window.localStorage.getItem(`${LAST_KEY}:${userId}`); return v === "cms" || v === "portal" || v === "staff" ? v : null; } catch { return null; }
 }
 export function rememberDestination(userId: string, destination: LoginDestination): void {
   try { window.localStorage.setItem(`${LAST_KEY}:${userId}`, destination); } catch { /* storage unavailable */ }

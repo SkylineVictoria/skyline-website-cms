@@ -18,6 +18,8 @@ interface Props {
   onRemoveDoc: (doc: WizardDoc) => Promise<void>;
   /** Records the view first where access is audited (SLIT staff); a failure blocks opening the file. */
   logView?: (doc: WizardDoc) => Promise<void>;
+  /** Where a stored file is opened from. Defaults to the student application documents; staff pass their own private bucket. */
+  signedUrl?: (doc: WizardDoc) => Promise<string>;
 }
 
 const CHIP = "rounded-md border border-background-200 bg-background-50 px-3 py-2 text-xs text-foreground-700";
@@ -44,7 +46,7 @@ function ErrorActions({ message, onRetry, onManual }: { message: string; onRetry
   );
 }
 
-export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView }: Props) {
+export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl }: Props) {
   const [deleteCandidate, setDeleteCandidate] = useState<WizardDoc | null>(null);
   const [removing, setRemoving] = useState("");
   const [removeError, setRemoveError] = useState("");
@@ -67,10 +69,10 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
     setRemoveError("");
     try {
       if (logView) await logView(doc);
-      const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300);
+      const url = signedUrl ? await signedUrl(doc) : await getDocumentSignedUrl(doc.storagePath, 300);
       const isPdf = /\.pdf$/i.test(doc.filename);
       // View only: hide the browser PDF viewer's download and print toolbar.
-      setPreview({ doc, url: isPdf ? `${signedUrl}#toolbar=0&navpanes=0` : signedUrl, isPdf });
+      setPreview({ doc, url: isPdf ? `${url}#toolbar=0&navpanes=0` : url, isPdf });
     } catch (error) {
       setRemoveError(error instanceof Error ? error.message : "The document could not be opened.");
     } finally {

@@ -15,6 +15,8 @@ import {
   type AgentEnrolForm, type EnrolErrors, type EnrolKind, type StudentEnrolForm,
 } from "@/lib/enrolForm";
 import { enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
+import { requestStaffCode, verifyStaffCode } from "@/lib/staffApi";
+import { toE164 } from "@/lib/staffPhone";
 
 type Step = 1 | 2 | 3;
 
@@ -37,9 +39,10 @@ export default function EnrolWizard({ initialKind, onSignIn, onSignedIn }: { ini
 
   return (
     <div ref={top}>
-      {step === 1 ? <KindStep kind={kind} onChange={setKind} onContinue={() => setStep(kind === "staff" ? 1 : 2)} onSignIn={onSignIn} /> : null}
+      {step === 1 ? <KindStep kind={kind} onChange={setKind} onContinue={() => setStep(2)} onSignIn={onSignIn} /> : null}
       {step === 2 && kind === "student" ? <StudentStep onBack={() => setStep(1)} onDone={done} onSignedIn={onSignedIn} /> : null}
       {step === 2 && kind === "agent" ? <AgentStep onBack={() => setStep(1)} onDone={done} onSignedIn={onSignedIn} /> : null}
+      {step === 2 && kind === "staff" ? <StaffStep onBack={() => setStep(1)} /> : null}
       {step === 3 && result ? <DoneStep result={result} onSignIn={onSignIn} /> : null}
     </div>
   );
@@ -62,7 +65,7 @@ function Eyebrow({ children }: { children: ReactNode }) {
 const KINDS: Array<{ id: EnrolKind; icon: string; title: string; note?: string; text: string }> = [
   { id: "student", icon: "ri-graduation-cap-line", title: "Student", text: "Apply for a course and track your enrolment." },
   { id: "agent", icon: "ri-briefcase-4-line", title: "Agent", note: "Needs approval", text: "Refer and manage students for your agency." },
-  { id: "staff", icon: "ri-user-3-line", title: "Staff", note: "Invite only", text: "Staff accounts are created by your administrator. Use the link in your invitation email." },
+  { id: "staff", icon: "ri-user-3-line", title: "Staff", note: "Needs approval", text: "Apply for a staff account. An administrator reviews your application." },
 ];
 
 function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; onChange: (k: EnrolKind) => void; onContinue: () => void; onSignIn: () => void }) {
@@ -96,11 +99,10 @@ function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; o
       </div>
       {kind === "staff" ? (
         <div className="mt-5 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-[13px] text-secondary-900" role="status">
-          Staff accounts cannot be created here. Open the link in the invitation email your administrator sent you to set your password, then sign in.
-          Lost it? Ask your administrator to resend the invitation.
+          An administrator reviews every staff application. Already invited? Open the link in the invitation email to set your password, then sign in.
         </div>
       ) : null}
-      <Button type="button" className="mt-6 w-full" onClick={onContinue} disabled={kind === "staff"}>Continue</Button>
+      <Button type="button" className="mt-6 w-full" onClick={onContinue}>Continue</Button>
       <p className="mt-5 text-center text-sm text-foreground-600">
         Already have an account? <button type="button" onClick={onSignIn} className="cursor-pointer font-semibold text-primary-700 hover:text-primary-800">Sign in</button>
       </p>
@@ -349,5 +351,91 @@ function DoneStep({ result, onSignIn }: { result: EnrolResult; onSignIn: () => v
       </dl>
       <Button type="button" variant="outline" className="mt-6 w-full" onClick={onSignIn}>Back to sign in</Button>
     </div>
+  );
+}
+
+/* ----------------------------------------------------------------- step 2: staff */
+
+/**
+ * Staff apply for an account ("Needs approval", like agents). Email and mobile first: the staff-register function checks them
+ * against existing staff, students, agents and admins BEFORE it emails the code, and answers a clash with one neutral message.
+ * The code (or the emailed link) verifies the email; /staff/apply then sets the password and starts the draft. No SMS is sent.
+ */
+function StaffStep({ onBack }: { onBack: () => void }) {
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [agreed, setAgreed] = useState(false);
+  const [website, setWebsite] = useState("");
+  const [sent, setSent] = useState(false);
+  const [code, setCode] = useState("");
+  const [errors, setErrors] = useState<{ email?: string; phone?: string; agreed?: string; code?: string; form?: string }>({});
+  const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
+
+  const send = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    const mobile = String(new FormData(event.currentTarget).get("staff-mobile") ?? "");
+    setPhone(mobile);
+    const next: typeof errors = {};
+    if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(email.trim())) next.email = "Enter a valid email address.";
+    if (!toE164(mobile)) next.phone = "Enter your mobile number with its country code.";
+    if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
+    setErrors(next);
+    if (Object.keys(next).length) return;
+    setBusy(true);
+    try { await requestStaffCode(email.trim().toLowerCase(), toE164(mobile)!, agreed, website); setSent(true); }
+    catch (e) {
+      const field = (e as { field?: string }).field;
+      const message = e instanceof Error ? e.message : "We could not send the email. Please try again.";
+      setErrors(field === "email" || field === "phone" ? { [field]: message } : { form: message });
+    }
+    finally { setBusy(false); }
+  };
+
+  const verify = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    if (!/^\d{6,8}$/.test(code.trim())) { setErrors({ code: "Enter the code from the email." }); return; }
+    setBusy(true);
+    try { await verifyStaffCode(email, code); navigate("/staff/apply", { replace: true }); }
+    catch (e) { setErrors({ code: e instanceof Error ? e.message : "That code is not right." }); }
+    finally { setBusy(false); }
+  };
+
+  if (sent) {
+    return (
+      <form onSubmit={verify} noValidate>
+        <StepHeader step={3} kind="Staff" title="Check your email" onBack={() => { setSent(false); setCode(""); setErrors({}); }} />
+        <div className="mt-6 space-y-4">
+          <p className="text-sm text-foreground-700" role="status">We emailed <strong>{email.trim().toLowerCase()}</strong>. Open the link in that email, or type the code it shows. The link and the code work once and expire.</p>
+          <Field label="Code from the email"><TextInput inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" /><Problem text={errors.code} /></Field>
+          <Button type="submit" className="w-full" disabled={busy}>{busy ? "Checking…" : "Verify email"}</Button>
+          <button type="button" className="w-full cursor-pointer text-center text-sm font-semibold text-primary-700 hover:text-primary-800" disabled={busy}
+            onClick={() => { setBusy(true); void requestStaffCode(email.trim().toLowerCase(), toE164(phone)!, agreed).then(() => setErrors({}), (e) => setErrors({ code: e instanceof Error ? e.message : "We could not send the email." })).finally(() => setBusy(false)); }}>
+            Send a new code
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={send} noValidate>
+      <StepHeader step={2} kind="Staff" title="Your details" onBack={onBack} />
+      <div className="mt-6 space-y-4">
+        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
+        <div>
+          <label htmlFor="staff-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+          <PhoneInput id="staff-mobile" name="staff-mobile" value={phone} required placeholder="041 234 5678" />
+          <Problem text={errors.phone} />
+        </div>
+        <p className="text-xs text-foreground-500">We email you a code to confirm your address. Your name, date of birth and documents come next.</p>
+        <div className="hidden" aria-hidden="true"><label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label></div>
+        <Agree checked={agreed} onChange={setAgreed} error={errors.agreed} />
+        <FormError text={errors.form} />
+        <Button type="submit" className="w-full" disabled={busy}>{busy ? "Checking…" : "Email me a code"}</Button>
+      </div>
+    </form>
   );
 }

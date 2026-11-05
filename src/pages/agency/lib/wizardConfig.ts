@@ -168,3 +168,20 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** Who the wizard collects documents for. Students keep WIZARD_STEPS exactly as above; staff use STAFF_WIZARD_STEPS. */
+export type Registrant = "student" | "staff";
+
+/**
+ * Staff document screens (staff self-registration). Only the passport is required; the rest are optional. `category` is the
+ * hr.staff_documents category; PTE and English certificates share the "english" reader but are kept as separate documents.
+ */
+export const STAFF_WIZARD_STEPS: WizardStep[] = [
+  { id: "passport", title: "Passport", short: "Passport", subtitle: "Required. Upload the biodata page (PDF, JPG or PNG). We read it to fill in your name and date of birth.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
+  { id: "visa", title: "Visa", short: "Visa", subtitle: "Optional. Upload your visa grant notice or VEVO record.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "" },
+  { id: "licence", title: "Driver licence", short: "Driver licence", subtitle: "Optional. Upload your driver licence; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
+  { id: "english", title: "PTE result", short: "PTE", subtitle: "Optional. Upload your PTE score report.", icon: "ri-translate-2", category: "PTE", noun: "PTE result", skipLabel: "" },
+  { id: "english", title: "English certificate", short: "English certificate", subtitle: "Optional. Upload another English language certificate (IELTS, TOEFL or similar).", icon: "ri-award-line", category: "English Certificate", noun: "English certificate", skipLabel: "" },
+];
+
+export const wizardStepsFor = (registrant: Registrant): WizardStep[] => (registrant === "staff" ? STAFF_WIZARD_STEPS : WIZARD_STEPS);

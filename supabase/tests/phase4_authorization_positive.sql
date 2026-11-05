@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(286);
+select plan(288);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -562,6 +562,13 @@ select lives_ok($$select public.portal_self_register_agent_complete('{"abn":"530
 select is((select status||':'||(registration_requested_at is not null)::text from public.agencies where registration_number='53004085616'),'Inactive:true','the business waits for review');
 select is(public.portal_resolve_access()->>'state','pending_review','the agent is told the review is pending');
 select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"51824753556","businessName":"Second","contactName":"Goo Agent","phone":"0398765400"}')$$,'23505',null,'one business per account');
+-- A Google student gives only a mobile (migration 20261105100000): no date of birth needed.
+reset role;
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000044','mobile.only@example.test',now());
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000044';
+select lives_ok($$select public.portal_self_enrol_complete('{"firstName":"Mob","lastName":"Only","phone":"+61498000044"}')$$,'a Google student needs only their mobile');
+select throws_ok($$select public.portal_self_enrol_complete('{"firstName":"Bad","lastName":"Dob","phone":"+61498000045","dateOfBirth":"2025-01-01"}')$$,'23505',null,'once set up, the account cannot enrol again');
 reset role;
 select * from finish();
 rollback;

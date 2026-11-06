@@ -7,6 +7,9 @@
 // Only then does it ask Supabase Auth to email a one-time code / confirmation link (signInWithOtp). No SMS is ever sent: the phone
 // number is collected, normalised and stored, not verified. Nothing here grants access; the verified email session does, and
 // hr_staff_start re-checks everything. An existing student/agent signs in and attaches the application to the same login instead.
+// Action admin_add (an Active CMS Admin, verified from the bearer token): adds a staff member from the CMS. The person is invited
+// by email (Auth invite; an existing sign-in is reused and gets no email) and hr_admin_staff_create (service role) writes their draft
+// staff record with the name filled in. The same duplicate checks apply.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
@@ -60,9 +63,10 @@ Deno.serve(async (req) => {
   let body: Record<string, unknown> = {};
   try { body = (await req.json()) as Record<string, unknown>; } catch { body = {}; }
   const action = String(body.action ?? "");
-  if (action !== "check" && action !== "send_code") return json({ error: "Unknown action." }, 400);
+  if (action !== "check" && action !== "send_code" && action !== "admin_add") return json({ error: "Unknown action." }, 400);
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  if (action === "admin_add") return adminAdd(req, body, admin);
   const callerKey = await hash(req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for") ?? "anonymous");
   if (!(await withinLimit(admin, `staff-register:caller:${action}:${callerKey}`, action === "check" ? 30 : 8, 600))) {
     return json({ error: "Please wait a few minutes before trying again." }, 429, { "Retry-After": "600" });
@@ -99,3 +103,69 @@ Deno.serve(async (req) => {
   if (error) return json({ error: "We could not send the email. Please try again shortly." }, 502);
   return json({ ok: true, phone });
 });
+
+/** The caller must be an Active CMS Admin (the token is verified with the anon client, the role read with the service role). */
+// deno-lint-ignore no-explicit-any
+async function callerAdmin(req: Request, admin: any): Promise<{ id: string } | null> {
+  const header = req.headers.get("Authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) return null;
+  const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await anon.auth.getUser(token);
+  if (error || !data.user) return null;
+  const { data: row } = await admin.from("cms_users").select("role, status").eq("auth_user_id", data.user.id).maybeSingle();
+  return row && row.role === "Admin" && row.status === "Active" ? { id: data.user.id } : null;
+}
+
+// deno-lint-ignore no-explicit-any
+async function findAuthUserByEmail(admin: any, email: string): Promise<{ id: string } | null> {
+  for (let page = 1; page <= 20; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error || !data) return null;
+    const match = data.users.find((u: { email?: string | null }) => (u.email ?? "").toLowerCase() === email);
+    if (match) return { id: match.id };
+    if (data.users.length < 200) break;
+  }
+  return null;
+}
+
+// deno-lint-ignore no-explicit-any
+async function adminAdd(req: Request, body: Record<string, unknown>, admin: any): Promise<Response> {
+  const caller = await callerAdmin(req, admin);
+  if (!caller) return json({ error: "Only an administrator can add staff." }, 403);
+  const email = cleanEmail(body.email);
+  if (!email.ok) return json({ error: email.error, field: "email" }, 400);
+  const phone = toE164(body.phone);
+  if (!phone) return json({ error: "Enter the mobile number with its country code.", field: "phone" }, 400);
+  const firstName = String(body.firstName ?? "").trim(), lastName = String(body.lastName ?? "").trim();
+  if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) return json({ error: "Enter the first and last name." }, 400);
+  const role = body.role === "admin" || body.role === "trainer" ? body.role : null;
+
+  const { data: check, error: checkError } = await admin.rpc("hr_staff_precheck", { p_email: email.value, p_phone: phone });
+  if (checkError || !check) return json({ error: "We could not check these details right now. Please try again shortly." }, 503);
+  if (check.ok !== true) {
+    if (check.emailConflict) return json({ error: "This email already belongs to a student, agent, staff member or admin user.", field: "email" }, 409);
+    if (check.phoneConflict) return json({ error: "This mobile number already belongs to a student, agent, staff member or admin user.", field: "phone" }, 409);
+    return json({ error: "Check the email address and mobile number." }, 400);
+  }
+
+  // An existing sign-in (not matched above, so it has no record of its own) is reused; otherwise Auth emails an invitation.
+  let user = await findAuthUserByEmail(admin, email.value);
+  let emailSent = false, created = false;
+  if (!user) {
+    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email.value, {
+      data: { registrant: "staff", staff_phone: phone, name: `${firstName} ${lastName}` }, redirectTo: safeRedirect(body.redirectTo),
+    });
+    if (inviteError || !invited?.user) return json({ error: "The invitation email could not be sent. Please try again shortly." }, 502);
+    user = { id: invited.user.id }; emailSent = true; created = true;
+  }
+  const { data, error } = await admin.rpc("hr_admin_staff_create", {
+    p_auth_user_id: user.id, p_email: email.value, p_phone: phone, p_first_name: firstName, p_last_name: lastName, p_role: role, p_admin: caller.id,
+  });
+  if (error) {
+    if (created) await admin.auth.admin.deleteUser(user.id).catch(() => undefined);
+    return json({ error: error.message || "The staff member could not be added." }, 400);
+  }
+  return json({ ok: true, profileId: data?.id ?? null, emailSent });
+}
+

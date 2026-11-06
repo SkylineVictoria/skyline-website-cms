@@ -1,7 +1,7 @@
 begin;
 -- Staff self-registration (hr schema): phone normalisation, duplicate checks, RLS, role and approval rules, status log.
 -- Fixtures only; rolled back. Run: npx supabase test db
-select plan(100);
+select plan(106);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -209,6 +209,20 @@ select is(jsonb_array_length(public.jobs_open()), 1, 'a closed job is no longer 
 select is(public.jobs_open('f0000000-0000-0000-0000-000000000001')->0->>'status', 'closed', 'but its page can say it is closed');
 select is(hr.staff_transition_allowed('submitted', 'job_applied'), false, 'a submitted staff application does not become a job application');
 select is(hr.staff_transition_allowed('draft', 'job_applied'), true, 'a draft does');
+
+-- ---------------------------------------------------------------- applicants list and an Admin adding a staff member (20261106130000)
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(jsonb_array_length(public.hr_admin_job_applications('f0000000-0000-0000-0000-000000000001')), 1, 'the applicants of a job are listed');
+select is(public.hr_admin_job_applications()->0->>'email', 'job.seeker@example.test', 'with the applicant''s details');
+select throws_ok($$select public.hr_admin_staff_create('a0000000-0000-0000-0000-000000000009', 'x@example.test', '+61400000009', 'A', 'B')$$, '42501', null, 'the browser cannot create staff records (service role only)');
+reset role;
+insert into auth.users(id, email, email_confirmed_at, raw_user_meta_data, aud, role) values
+ ('a0000000-0000-0000-0000-000000000009', 'added.staff@example.test', null, '{"registrant":"staff","staff_phone":"+61400000009"}', 'authenticated', 'authenticated');
+select is(public.hr_admin_staff_create('a0000000-0000-0000-0000-000000000009', 'added.staff@example.test', '0400 000 009', 'Added', 'Person', 'trainer', 'a0000000-0000-0000-0000-000000000004')->>'status', 'draft', 'an Admin-added staff member starts as a draft');
+select is((select first_name || ' ' || last_name from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000009'), 'Added Person', 'with the name filled in');
+select throws_ok($$select public.hr_admin_staff_create('a0000000-0000-0000-0000-000000000009', 'added.staff@example.test', '+61400000009', 'Added', 'Person')$$, '23505', 'This person already has a staff record.', 'not twice');
+select is((select actor_kind from hr.staff_status_events e join hr.staff_profiles p on p.id = e.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000009'), 'admin', 'the log says an administrator added them');
 
 -- ---------------------------------------------------------------- guard and append-only
 reset role;

@@ -238,3 +238,15 @@ test("the job someone was applying for is remembered while their account is crea
   assert.equal(routing.destinationFor("portal", "/admin"), "/agency", "other areas are still fenced");
 });
 
+test("an Admin adds a staff member: name, email, mobile with the country code, and a role; the function invites them", () => {
+  const good = { firstName: "Pat", lastName: "Lee", email: "pat.lee@example.test", phone: "+61412345678", role: "trainer" as const };
+  assert.deepEqual(status.newStaffProblems(good), {});
+  assert.ok(status.newStaffProblems({ ...good, firstName: " " }).firstName);
+  assert.ok(status.newStaffProblems({ ...good, email: "pat@nowhere" }).email);
+  assert.ok(status.newStaffProblems({ ...good, phone: "0412345678" }).phone, "the country code is required");
+  const edge = read("supabase/functions/staff-register/index.ts");
+  assert.ok(edge.includes('action !== "admin_add"') && edge.includes("callerAdmin(") && edge.includes('row.role === "Admin" && row.status === "Active"'), "admin_add checks for an Active CMS Admin");
+  assert.ok(edge.includes("inviteUserByEmail(") && edge.includes('registrant: "staff"'), "the invitation marks the sign-in as a staff registrant");
+  assert.ok(edge.includes("hr_admin_staff_create") && edge.includes("hr_staff_precheck"), "the record is created after the duplicate check");
+});
+

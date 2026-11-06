@@ -50,7 +50,7 @@ export default function StaffApplyPage() {
   // Someone who came here to apply for a job goes back to that job; everyone else to the staff workspace.
   const afterStart = useCallback(() => { const job = readJobIntent(); navigate(job ? jobApplyPath(job) : "/staff", { replace: true }); }, [navigate]);
 
-  const meta = (user?.user_metadata ?? {}) as { registrant?: string; staff_password_set?: boolean; staff_phone?: string };
+  const meta = (user?.user_metadata ?? {}) as { registrant?: string; staff_password_set?: boolean; staff_phone?: string; name?: string };
   const registeredAsStaff = meta.registrant === "staff";
 
   // Someone who already has an application goes straight to it; a staff sign-up that already chose its password resumes.
@@ -61,7 +61,8 @@ export default function StaffApplyPage() {
       try {
         const me = await getMyStaffApplication();
         if (cancelled) return;
-        if (me) { afterStart(); return; }
+        // A staff member added by an Admin already has a record; they still choose their password first.
+        if (me && !(registeredAsStaff && !meta.staff_password_set)) { afterStart(); return; }
         if (registeredAsStaff && meta.staff_password_set) {
           await startStaffApplication();
           if (!cancelled) afterStart();
@@ -112,7 +113,7 @@ export default function StaffApplyPage() {
     return (
       <Shell>
         <h1 className="font-heading text-xl font-bold text-foreground-950">Choose a password</h1>
-        <p className="mt-2 text-sm text-foreground-600">Your email {user.email} is confirmed. You sign in with it and this password.</p>
+        <p className="mt-2 text-sm text-foreground-600">{meta.name ? `Welcome, ${meta.name}. ` : ""}Your email {user.email} is confirmed. You sign in with it and this password.</p>
         <form onSubmit={choosePassword} className="mt-5 space-y-4" noValidate>
           <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}><TextInput type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
           <Field label="Repeat password" required><TextInput type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} /></Field>

@@ -17,7 +17,7 @@ const icons: Record<string, string> = {
   forms: 'ri-survey-line', contact: 'ri-contacts-line', seo: 'ri-search-eye-line',
   users: 'ri-user-settings-line', institution: 'ri-building-line', activity: 'ri-history-line',
   website: 'ri-global-line', admissions: 'ri-file-list-line', agencies: 'ri-team-line',
-  communications: 'ri-mail-line', students: 'ri-user-line', external: 'ri-external-link-line',
+  communications: 'ri-mail-line', students: 'ri-user-line', external: 'ri-external-link-line', jobs: 'ri-briefcase-line',
 };
 export const menuIcon = (key: string) => Object.hasOwn(icons, key) ? icons[key] : 'ri-folder-line';
 
@@ -28,7 +28,7 @@ const routes = new Set([
   '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
-  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff',
+  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', '/admin/jobs',
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

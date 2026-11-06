@@ -78,3 +78,16 @@ export function submitProblems(input: StaffSubmitInput): string[] {
 export const STAFF_STATUS_TONE: Record<StaffStatus, "muted" | "warn" | "secondary" | "success" | "primary" | "accent"> = {
   draft: "muted", job_applied: "warn", submitted: "warn", preboarding: "secondary", active: "success", rejected: "muted", inactive: "muted",
 };
+
+/** What an Admin types to add a staff member (phone as the country-code field gives it: E.164). */
+export interface NewStaffForm { firstName: string; lastName: string; email: string; phone: string; role: StaffRole }
+export function newStaffProblems(form: NewStaffForm): Partial<Record<keyof NewStaffForm, string>> {
+  const problems: Partial<Record<keyof NewStaffForm, string>> = {};
+  if (!form.firstName.trim() || form.firstName.trim().length > 100) problems.firstName = "Enter the first name.";
+  if (!form.lastName.trim() || form.lastName.trim().length > 100) problems.lastName = "Enter the last name.";
+  if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(form.email.trim())) problems.email = "Enter a valid email address.";
+  if (!/^\+[1-9]\d{7,14}$/.test(form.phone.trim())) problems.phone = "Enter the mobile number with its country code.";
+  if (!STAFF_ROLES.includes(form.role)) problems.role = "Choose Trainer or Admin.";
+  return problems;
+}
+

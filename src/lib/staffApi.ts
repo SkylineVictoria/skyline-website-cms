@@ -1,6 +1,6 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { publicSiteOrigin } from "@/lib/siteUrl";
-import type { StaffRole, StaffStatus } from "@/lib/staffStatus";
+import type { NewStaffForm, StaffRole, StaffStatus } from "@/lib/staffStatus";
 import type { EmploymentType, JobApplicationStatus, JobStatus } from "@/lib/jobs";
 
 /** Browser-side calls for staff self-registration. Every write is a SECURITY DEFINER function (the hr schema is not exposed). */
@@ -165,6 +165,12 @@ export async function adminStaffDetail(id: string): Promise<StaffDetail> {
   const { data, error } = await supabase.rpc("hr_admin_staff_detail", { p_id: id });
   if (error) fail(error, "The application could not be loaded.");
   return data as StaffDetail;
+}
+
+/** An Admin adds a staff member: the staff-register function invites them (or reuses an existing sign-in) and creates the draft record. */
+export async function adminAddStaff(form: NewStaffForm): Promise<{ profileId: string | null; emailSent: boolean }> {
+  const data = await register({ action: "admin_add", firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: form.phone.trim(), role: form.role, redirectTo: staffApplyUrl() });
+  return { profileId: typeof data.profileId === "string" ? data.profileId : null, emailSent: data.emailSent === true };
 }
 
 export type StaffDecision =

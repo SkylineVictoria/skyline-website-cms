@@ -609,7 +609,7 @@ test('ABN lookup extracts only published business data and fails closed on a dif
 });
 
 // ---- Enroll now (migration 119): what a student or an agent types on the sign-in page ----
-import {
+import { codeProblem,
   EMPTY_AGENT_ENROL, EMPTY_STUDENT_ENROL, abnProblem, agentEnrolPayload, dateOfBirthProblem, dateOfBirthRange, formatAbn, mobileProblem, parseDateOfBirth, studentEnrolPayload,
   validateAgentEnrol, validateStudentEnrol,
 } from "../src/lib/enrolForm.ts";
@@ -716,3 +716,12 @@ test("enrol: emails need a real-looking domain; Australian phones are 10 digits 
   assert.match(validateAgentEnrol({ ...form, email: "reg@example" }).email ?? "", /valid email/i);
 });
 
+
+test("sign up: the emailed code that claims an agent-created student record is 6 to 10 digits", () => {
+  assert.equal(codeProblem("123456"), "");
+  assert.equal(codeProblem(" 123 456 "), "");
+  assert.equal(codeProblem("1234567890"), "");
+  assert.notEqual(codeProblem("12345"), "");
+  assert.notEqual(codeProblem("12a456"), "");
+  assert.notEqual(codeProblem(""), "");
+});

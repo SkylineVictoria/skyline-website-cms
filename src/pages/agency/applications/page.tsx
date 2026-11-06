@@ -17,6 +17,8 @@ export default function PortalApplicationsPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // The table loads the rows itself; the "apply at SLIT?" prompt shows only when a student has none.
+  const [total, setTotal] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,7 +69,7 @@ export default function PortalApplicationsPage() {
         }
       />
 
-      {isStudent && !loading && !error && rows.length === 0 ? (
+      {isStudent && !error && total === 0 ? (
         <div className="mt-6 flex flex-col items-start gap-4 rounded-lg border border-primary-200 bg-primary-50 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="font-heading text-lg font-bold text-foreground-950">Do you want to apply at SLIT?</h2>
@@ -82,6 +84,7 @@ export default function PortalApplicationsPage() {
 
       <div className="mt-6">
         <ApplicationsTable remote
+          onTotal={setTotal}
           rows={rows}
           loading={loading}
           error={error}

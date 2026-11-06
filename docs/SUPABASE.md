@@ -7,7 +7,7 @@ Only project **xcpydisstlvtvcsqnjob** (Skyline Web, ap-southeast-2, PostgreSQL 1
 | Function | verify_jwt | Auth model | Hosted version |
 |---|---|---|---|
 | cms-admin-users | true | CMS admin JWT | 7 |
-| calendly-admin | true | CMS Admin (Skyline site) or tenant admin JWT, decided by `cms_integration_can_manage`; reads the Calendly token saved in the CMS with the service role; GET api.calendly.com `/users/me` and `/event_types`; the token never leaves the function | NOT DEPLOYED |
+| calendly-admin | true | CMS Admin (Skyline site) or tenant admin JWT, decided by `cms_integration_can_manage`; reads the Calendly token saved in the CMS with the service role; GET api.calendly.com `/users/me` and `/event_types`; the token never leaves the function | 1 (DEPLOYED 2026-11-06, verify_jwt true) |
 | portal-admin-users | true | org admin or agency admin JWT; rules enforced by migration 86 functions (agency admin: own agency only) | 7 |
 | portal-document-delete | true | caller JWT + RLS, validated application-owned path | 7 |
 | portal-document-extract | false | worker secret / user enqueue; leased, fenced | 12 |
@@ -128,7 +128,7 @@ Local `portal-admin-users` adds organization-admin-only `lookup_agency_abn` (che
 - Migration `20261106100000_student_claims_record_with_mobile.sql` (APPLIED, verified 2026-11-06): portal_self_register, when the email is already on a student record, refuses unless the mobile matches that record (same digits with or without the country code). With it, a student whose record an agent or SLIT created claims it from Sign up: email + mobile, a one-time code emailed by Supabase Auth, then their own password; no invitation email needed.
 - portal-self-register v5 (DEPLOYED 2026-11-06, verify_jwt false, from the repo with the same _shared files as v4): the claim path above. An email on a student record no longer gets the password-reset mail; it gets `signInWithOtp` (a code, if the Auth "Magic Link" email template includes `{{ .Token }}`; a link otherwise) on a sign-in created here without a password when none exists. Same _shared files as v4.
 
-## Calendly booking on the Contact page (migration 20261106110000 local only, NOT applied; calendly-admin NOT DEPLOYED)
+## Calendly booking on the Contact page (migration 20261106110000 local only, NOT applied; calendly-admin v1 DEPLOYED 2026-11-06)
 - `20261106110000_calendly_booking_settings.sql`: `cms_settings.calendly_url` (public like phone and email, shape-checked), `cms_integration_secrets` (RLS on, no anon/authenticated access; service role and the definer functions only), `cms_integration_can_manage(uuid)`, `cms_integration_status(text, uuid)` (configured, updatedAt, last 4 characters), `cms_integration_secret_set(text, uuid, text)` (saves or, with "", removes; the value is never returned). CMS: Global > Contact Information > "Book a call (Calendly)" (link saved with the page; token saved on its own; "Test connection" lists the event types to pick). Public: Contact page "Book a call" card and an inline iframe (`src/lib/calendly.ts`; no Calendly script). No env names: the token lives in the table.
 
 ## Staff self-registration (hr schema; migrations APPLIED and functions DEPLOYED to hosted 2026-11-05, frontend NOT released)

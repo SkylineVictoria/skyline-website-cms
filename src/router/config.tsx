@@ -11,6 +11,9 @@ import EnrollPage from "@/pages/enroll/page";
 import BecomeAnAgentPage from "@/pages/become-an-agent/page";
 import AgentsPage from "@/pages/agents/page";
 import FormsPoliciesPage from "@/pages/forms-policies/page";
+import CareersPage from "@/pages/careers/page";
+import CareerDetailPage from "@/pages/careers/detail/page";
+import CareerApplyPage from "@/pages/careers/apply/page";
 import CmsFormPage from "@/pages/form/page";
 import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
@@ -66,6 +69,7 @@ import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
+import JobsPage from "@/pages/admin/JobsPage";
 import StaffApplyPage from "@/pages/staff/StaffApplyPage";
 import StaffWorkspacePage from "@/pages/staff/StaffWorkspacePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
@@ -87,6 +91,9 @@ const routes: RouteObject[] = [
       { path: "forms/:id", element: <CmsFormPage /> },
       { path: "agents", element: <AgentsPage /> },
       { path: "become-an-agent", element: <BecomeAnAgentPage /> },
+      { path: "careers", element: <CareersPage /> },
+      { path: "careers/:id", element: <CareerDetailPage /> },
+      { path: "careers/:id/apply", element: <CareerApplyPage /> },
       { path: "contact", element: <ContactPage /> },
       { path: "enroll-now", element: <EnrollPage /> },
       { path: "*", element: <CmsPageRoute /> },
@@ -179,6 +186,7 @@ const routes: RouteObject[] = [
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
           { path: "staff", element: <RequireAdmin><StaffPage /></RequireAdmin> },
+          { path: "staff/jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
           { path: "staff/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },

@@ -9,6 +9,7 @@ import {
   type StaffDocCategory, type StaffDocument, type StaffMe,
 } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, submitProblems, type StaffRole } from "@/lib/staffStatus";
+import { JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 
 /** Same shape as a student's wizard document, so the student's document screen is reused as it is. */
 const EXTRACTION: Record<StaffDocument["extractionStatus"], WizardExtractionState> = { pending: "queued", processing: "processing", done: "done", no_fields: "empty", failed: "failed", unavailable: "empty" };
@@ -82,6 +83,11 @@ export default function StaffWorkspacePage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">{me.profile.first_name ? `Welcome, ${me.profile.first_name}` : "Your staff application"}</h1>
         <span data-testid="staff-status" className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-semibold text-foreground-900">{STAFF_STATUS_LABEL[me.profile.status]}</span>
       </div>
+      {me.profile.status === "draft" && me.jobApplications?.some((a) => a.status === "hired") ? (
+        <p className="mb-5 rounded-md border border-secondary-300 bg-secondary-50 px-4 py-3 text-sm text-foreground-900" data-testid="hired-banner">
+          <strong>Congratulations, you were hired for {me.jobApplications.find((a) => a.status === "hired")?.jobTitle}.</strong> Complete your details below, upload your documents and submit to finish your staff registration.
+        </p>
+      ) : null}
       {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : <StatusPanel me={me} />}
       <Timeline me={me} />
     </Frame>
@@ -91,6 +97,7 @@ export default function StaffWorkspacePage() {
 /* ----------------------------------------------------------------- after submit: status and messages */
 
 const STATUS_TEXT: Record<string, string> = {
+  job_applied: "Your job application has been received. Our team will review it and get back to you. If you are hired, you complete your staff registration here with the same login.",
   submitted: "Your application is with an administrator. You will be able to sign in here to see the decision.",
   preboarding: "Your application was approved. An administrator is finishing your onboarding and will activate your account.",
   active: "Your account is active.",
@@ -103,6 +110,12 @@ function StatusPanel({ me }: { me: StaffMe }) {
   return (
     <section className="rounded-card border border-background-200 bg-background-50 p-5" aria-label="Application status">
       <p className="text-sm text-foreground-800">{STATUS_TEXT[status]}</p>
+      {me.jobApplications?.length ? (
+        <ul className="mt-3 space-y-1.5" data-testid="my-job-applications">
+          {me.jobApplications.map((a) => <li key={a.id} className="text-sm text-foreground-700"><strong>{a.jobTitle}</strong> · applied {new Date(a.appliedAt).toLocaleDateString()} · {JOB_APPLICATION_STATUS_LABEL[a.status]}{a.decisionNote ? ` · ${a.decisionNote}` : ""}</li>)}
+        </ul>
+      ) : null}
+      {status === "job_applied" || status === "rejected" ? <p className="mt-3"><Link to="/careers" className="font-semibold text-primary-700 hover:underline">See other openings</Link></p> : null}
       {me.role ? <p className="mt-2 text-sm text-foreground-700">Role: <strong>{ROLE_TEXT[me.role].title}</strong>{me.role === "trainer" ? "" : status === "active" ? "" : " (effective once your account is active)"}</p> : null}
       {status === "active" && me.role === "admin" ? <p className="mt-3"><Link to="/admin" className="font-semibold text-primary-700 hover:underline">Open the admin console</Link></p> : null}
       {status === "rejected" && me.application.review_note ? <p className="mt-2 rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-800"><strong>Note from the administrator:</strong> {me.application.review_note}</p> : null}

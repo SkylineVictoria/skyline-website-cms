@@ -1,6 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { publicSiteOrigin } from "@/lib/siteUrl";
 import type { StaffRole, StaffStatus } from "@/lib/staffStatus";
+import type { EmploymentType, JobApplicationStatus, JobStatus } from "@/lib/jobs";
 
 /** Browser-side calls for staff self-registration. Every write is a SECURITY DEFINER function (the hr schema is not exposed). */
 
@@ -10,13 +11,22 @@ export interface StaffProfile {
   emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; status: StaffStatus; created_at: string; updated_at: string;
 }
 export interface StaffApplicationRow { id: string; requested_role: StaffRole | null; submitted_at: string | null; review_note: string; reviewed_at: string | null }
-export type StaffDocCategory = "Passport" | "Visa" | "Driving Licence" | "PTE" | "English Certificate";
+export type StaffDocCategory = "Passport" | "Visa" | "Driving Licence" | "PTE" | "English Certificate" | "Resume" | "Cover Letter";
 export interface StaffDocument {
   id: string; category: StaffDocCategory; filename: string; mimeType: string; fileSize: number; storagePath: string;
   extractionStatus: "pending" | "processing" | "done" | "no_fields" | "failed" | "unavailable"; extracted: Record<string, string>; extractionError?: string | null;
 }
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
-export interface StaffMe { profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[]; role: StaffRole | null; events: StaffEvent[]; attachedToExistingAccount?: boolean }
+export interface StaffJobFile { id: string; filename: string; storagePath: string; mimeType: string }
+/** One application for a job post (hr.job_applications), with the job it is for and the files that came with it. */
+export interface StaffJobApplication {
+  id: string; jobId: string; jobTitle: string; employmentType: EmploymentType; location: string; jobStatus: JobStatus; status: JobApplicationStatus;
+  coverLetter: string; appliedAt: string; decidedAt: string | null; decisionNote: string; resume: StaffJobFile | null; coverLetterDocument: StaffJobFile | null;
+}
+export interface StaffMe {
+  profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[]; role: StaffRole | null; events: StaffEvent[];
+  jobApplications: StaffJobApplication[]; attachedToExistingAccount?: boolean;
+}
 
 function fail(error: { message?: string } | null, fallback: string): never {
   throw new Error(error?.message || fallback);
@@ -139,10 +149,10 @@ export async function staffAccessState(): Promise<StaffStatus | "none"> {
 
 /* ------------------------------------------------------------------ admin */
 
-export interface StaffListRow { id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null; submittedAt: string | null; updatedAt: string }
+export interface StaffListRow { id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null; jobTitle?: string | null; submittedAt: string | null; updatedAt: string }
 export interface StaffDetail {
   profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[];
-  roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean;
+  roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; jobApplications: StaffJobApplication[];
 }
 
 export async function adminListStaff(status: string, search: string, limit = 50, offset = 0): Promise<{ total: number; rows: StaffListRow[] }> {

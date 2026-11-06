@@ -2,28 +2,32 @@
 // The database is the authority: hr.staff_transition_allowed() / the hr.staff_status_guard trigger enforce the same table, and
 // every change is logged in hr.staff_status_events. This copy only decides which buttons to offer.
 
-export type StaffStatus = "draft" | "submitted" | "preboarding" | "active" | "rejected" | "inactive";
+export type StaffStatus = "draft" | "job_applied" | "submitted" | "preboarding" | "active" | "rejected" | "inactive";
 export type StaffRole = "admin" | "trainer";
 
-export const STAFF_STATUSES: readonly StaffStatus[] = ["draft", "submitted", "preboarding", "active", "rejected", "inactive"];
+export const STAFF_STATUSES: readonly StaffStatus[] = ["draft", "job_applied", "submitted", "preboarding", "active", "rejected", "inactive"];
 export const STAFF_ROLES: readonly StaffRole[] = ["admin", "trainer"];
 
 export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
-  draft: "Draft", submitted: "Submitted", preboarding: "Preboarding", active: "Active", rejected: "Rejected", inactive: "Inactive",
+  draft: "Draft", job_applied: "Job applied", submitted: "Submitted", preboarding: "Preboarding", active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
-/** rejected -> draft is the Admin-only reopen; inactive -> active is an Admin reactivation. */
+/**
+ * rejected -> draft is the Admin-only reopen; inactive -> active is an Admin reactivation. A job application (hr_job_apply) moves a
+ * draft or rejected person to job_applied; hiring sends them back to draft to complete the staff registration, declining to rejected.
+ */
 const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
   ["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"],
   ["preboarding", "active"], ["preboarding", "rejected"],
   ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"],
+  ["draft", "job_applied"], ["rejected", "job_applied"], ["job_applied", "draft"], ["job_applied", "rejected"],
 ];
 
 export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
   return MOVES.some(([a, b]) => a === from && b === to);
 }
 
-/** The admin actions available for a status, in the order the buttons are shown. */
+/** The admin actions available for a status, in the order the buttons are shown. A job applicant is hired or declined per job application. */
 export type StaffAdminAction = "approve" | "reject" | "activate" | "deactivate" | "reopen";
 export function adminActionsFor(status: StaffStatus): StaffAdminAction[] {
   switch (status) {
@@ -72,5 +76,5 @@ export function submitProblems(input: StaffSubmitInput): string[] {
 
 /** Badge tone per status (admin lists). */
 export const STAFF_STATUS_TONE: Record<StaffStatus, "muted" | "warn" | "secondary" | "success" | "primary" | "accent"> = {
-  draft: "muted", submitted: "warn", preboarding: "secondary", active: "success", rejected: "muted", inactive: "muted",
+  draft: "muted", job_applied: "warn", submitted: "warn", preboarding: "secondary", active: "success", rejected: "muted", inactive: "muted",
 };

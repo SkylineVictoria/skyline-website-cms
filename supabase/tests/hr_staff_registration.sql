@@ -1,7 +1,7 @@
 begin;
 -- Staff self-registration (hr schema): phone normalisation, duplicate checks, RLS, role and approval rules, status log.
 -- Fixtures only; rolled back. Run: npx supabase test db
-select plan(71);
+select plan(100);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -156,6 +156,59 @@ set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000001';
 select throws_ok($$select public.hr_staff_document_apply_extraction(gen_random_uuid(), 'done', '{}')$$, '42501', null, 'the browser cannot write a reading');
 select is(public.hr_staff_document_for_extraction((select id from hr.staff_documents limit 1))::text, null, 'another applicant''s document is not offered for reading');
 reset role;
+
+-- ---------------------------------------------------------------- job posts and job applications (20261106120000)
+reset role;
+insert into auth.users(id, email, email_confirmed_at, raw_user_meta_data, aud, role) values
+ ('a0000000-0000-0000-0000-000000000008', 'job.seeker@example.test', now(), '{"staff_phone":"+61 400 000 008"}', 'authenticated', 'authenticated');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000008';
+select throws_ok($$select public.hr_admin_job_save(null, '{"title":"Trainer","description":"Teach.","employmentType":"full_time","location":"Melbourne"}')$$, '42501', null, 'only an administrator posts a job');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_job_save(null, '{"title":"T","description":"Teach.","employmentType":"full_time","location":"Melbourne"}')$$, '22023', 'Enter a job title (2 to 150 characters).', 'a job needs a title');
+select throws_ok($$select public.hr_admin_job_save(null, '{"title":"Trainer","description":"Teach.","employmentType":"casual","location":"Melbourne"}')$$, '22023', 'Choose Full time or Part time.', 'full time or part time only');
+select lives_ok($$select public.hr_admin_job_save(null, '{"title":"Trainer (test post)","description":"Teach.","employmentType":"part_time","location":"Melbourne"}')$$, 'an administrator posts a job');
+reset role;
+insert into hr.jobs(id, title, description, employment_type, salary, location) values
+ ('f0000000-0000-0000-0000-000000000001', 'Commercial Cookery Trainer', 'Teach commercial cookery.', 'full_time', '$80,000 + super', 'Melbourne, VIC');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(jsonb_array_length(public.hr_admin_job_list()), 2, 'the admin list shows every job');
+select is((select e->>'applied' from jsonb_array_elements(public.hr_admin_job_list()) e where e->>'id' = 'f0000000-0000-0000-0000-000000000001'), '0', 'with its applicant count');
+set local role anon;
+select is(jsonb_array_length(public.jobs_open()), 2, 'anyone sees the open jobs');
+select is(public.jobs_open('f0000000-0000-0000-0000-000000000001')->0->>'employmentType', 'full_time', 'with the employment type');
+select throws_ok($$select * from hr.jobs$$, '42501', null, 'the table itself is not readable by visitors');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000008';
+select lives_ok($$select public.hr_staff_start()$$, 'the job seeker''s account is created from the sign-up (a draft)');
+select throws_ok($$select public.hr_job_apply('f0000000-0000-0000-0000-000000000001', 'Dear team', null)$$, '22023', 'Upload your resume.', 'a resume is required');
+reset role;
+insert into storage.objects(bucket_id, name) select 'staff-documents', 'a0000000-0000-0000-0000-000000000008/' || a.id || '/resume.docx'
+ from hr.staff_applications a join hr.staff_profiles p on p.id = a.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000008';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000008';
+select lives_ok($$select public.hr_staff_document_register('Resume', 'a0000000-0000-0000-0000-000000000008/' || (select a.id from hr.staff_applications a join hr.staff_profiles p on p.id = a.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000008') || '/resume.docx', 'resume.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 2048)$$, 'a Word resume is registered');
+select is((select extraction_status from hr.staff_documents where category = 'Resume' and is_current), 'unavailable', 'a resume is never sent for reading');
+select throws_ok($$select public.hr_job_apply('f0000000-0000-0000-0000-000000000001', '', (select id from hr.staff_documents where category = 'Resume' and is_current))$$, '22023', 'Write a cover letter or upload one.', 'a cover letter is required');
+select is(public.hr_job_apply('f0000000-0000-0000-0000-000000000001', 'Dear team, I would love to teach cookery.', (select id from hr.staff_documents where category = 'Resume' and is_current))->'profile'->>'status', 'job_applied', 'applying puts the person in the staff table as Job applied');
+select is(jsonb_array_length(public.hr_staff_me()->'jobApplications'), 1, 'the applicant sees their job application');
+select throws_ok($$select public.hr_job_apply('f0000000-0000-0000-0000-000000000001', 'Again', (select id from hr.staff_documents where category = 'Resume' and is_current))$$, '23505', 'You have already applied for this job.', 'no second application for the same job');
+select throws_ok($$select public.hr_staff_submit()$$, '23514', null, 'a job applicant cannot submit the staff form before being hired');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_staff_list('job_applied')->>'total', '1', 'the staff list filters by Job applied');
+select is(public.hr_admin_staff_list('job_applied')->'rows'->0->>'jobTitle', 'Commercial Cookery Trainer', 'and names the job');
+select is((select e->>'applied' from jsonb_array_elements(public.hr_admin_job_list()) e where e->>'id' = 'f0000000-0000-0000-0000-000000000001'), '1', 'the job post counts the applicant');
+select is(public.hr_admin_job_decide((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'hired', null)->'profile'->>'status', 'draft', 'hired: the person completes the staff registration (a draft again)');
+select is((select status from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'hired', 'the job application is marked hired');
+select is((select note from hr.staff_status_events where from_status = 'job_applied' and to_status = 'draft' order by id desc limit 1), 'Hired for Commercial Cookery Trainer. Please complete your staff registration.', 'the applicant is told why');
+select throws_ok($$select public.hr_admin_job_decide((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'declined', null)$$, '23514', 'This job application has already been decided.', 'a decision is made once');
+select lives_ok($$select public.hr_admin_job_save('f0000000-0000-0000-0000-000000000001', '{"status":"closed"}')$$, 'the job is closed');
+reset role;
+select is(jsonb_array_length(public.jobs_open()), 1, 'a closed job is no longer listed');
+select is(public.jobs_open('f0000000-0000-0000-0000-000000000001')->0->>'status', 'closed', 'but its page can say it is closed');
+select is(hr.staff_transition_allowed('submitted', 'job_applied'), false, 'a submitted staff application does not become a job application');
+select is(hr.staff_transition_allowed('draft', 'job_applied'), true, 'a draft does');
 
 -- ---------------------------------------------------------------- guard and append-only
 reset role;

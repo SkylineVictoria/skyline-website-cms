@@ -43,7 +43,8 @@ test("the browser, the edge function and the database normalise the same vectors
 /* ------------------------------------------------------------------ status transitions */
 
 test("status transitions allow exactly the agreed moves", () => {
-  const allowed: Array<[string, string]> = [["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"], ["preboarding", "active"], ["preboarding", "rejected"], ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"]];
+  const allowed: Array<[string, string]> = [["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"], ["preboarding", "active"], ["preboarding", "rejected"], ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"],
+    ["draft", "job_applied"], ["rejected", "job_applied"], ["job_applied", "draft"], ["job_applied", "rejected"]];
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), allowed.some(([a, b]) => a === from && b === to), `${from} -> ${to}`);
   }
@@ -51,10 +52,11 @@ test("status transitions allow exactly the agreed moves", () => {
 });
 
 test("the TypeScript transition table matches the database function and the status list", () => {
-  const sql = read("supabase/migrations/20261105180000_hr_staff_schema.sql");
-  const body = sql.slice(sql.indexOf("hr.staff_transition_allowed"), sql.indexOf("create function hr.staff_status_guard"));
-  const pairs = [...body.matchAll(/\('([a-z]+)','([a-z]+)'\)/g)].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 8);
+  // 20261106120000 (job posts) replaced the transition function and the status checks of 20261105180000.
+  const sql = read("supabase/migrations/20261106120000_job_posts.sql");
+  const body = sql.slice(sql.indexOf("hr.staff_transition_allowed"), sql.indexOf("update storage.buckets"));
+  const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
+  assert.equal(pairs.length, 12);
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), pairs.some(([a, b]) => a === from && b === to), `database ${from} -> ${to}`);
   }
@@ -68,6 +70,7 @@ test("admin actions follow the status", () => {
   assert.deepEqual(status.adminActionsFor("active"), ["deactivate"]);
   assert.deepEqual(status.adminActionsFor("rejected"), ["reopen"]);
   assert.deepEqual(status.adminActionsFor("draft"), []);
+  assert.deepEqual(status.adminActionsFor("job_applied"), [], "a job applicant is hired or declined per job application, not through the staff actions");
   for (const s of status.STAFF_STATUSES) for (const action of status.adminActionsFor(s)) {
     const to = { approve: "preboarding", reject: "rejected", activate: "active", deactivate: "inactive", reopen: "draft" }[action] as never;
     assert.ok(status.canTransition(s, to), `${action} from ${s} is a legal move`);
@@ -188,3 +191,50 @@ test("staff reading reuses the shared reader and leaves the student function byt
   const index = read("supabase/functions/staff-document-extract/index.ts");
   assert.ok(index.includes("../_shared/document-extraction/select.ts") && !index.includes("portal_claim_document_extraction_job"), "shared adapters, no student queue");
 });
+
+/* ------------------------------------------------------------------ job posts and applications */
+
+test("a job post needs a title, a description, full time or part time, and a location", async () => {
+  const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
+  const good = { ...jobs.EMPTY_JOB, title: "Trainer", description: "Teach.", location: "Melbourne" };
+  assert.deepEqual(jobs.jobProblems(good), {});
+  assert.ok(jobs.jobProblems({ ...good, title: "T" }).title);
+  assert.ok(jobs.jobProblems({ ...good, description: " " }).description);
+  assert.ok(jobs.jobProblems({ ...good, employmentType: "casual" as never }).employmentType);
+  assert.ok(jobs.jobProblems({ ...good, location: "" }).location);
+  assert.ok(jobs.jobProblems({ ...good, salary: "x".repeat(121) }).salary);
+  assert.deepEqual([...jobs.EMPLOYMENT_TYPES], ["full_time", "part_time"]);
+  assert.equal(jobs.EMPLOYMENT_TYPE_LABEL.full_time, "Full time");
+  assert.equal(jobs.EMPLOYMENT_TYPE_LABEL.part_time, "Part time");
+});
+
+test("resumes and cover letters are PDF or Word files up to 10 MB; an application needs a resume and a cover letter", async () => {
+  const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
+  assert.equal(jobs.jobFileMime({ name: "cv.pdf", type: "application/pdf" }), "application/pdf");
+  assert.equal(jobs.jobFileMime({ name: "cv.docx", type: "" }), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a .docx with no browser type is known by its name");
+  assert.equal(jobs.jobFileMime({ name: "cv.png", type: "image/png" }), null);
+  assert.equal(jobs.jobFileProblem({ name: "cv.pdf", type: "application/pdf", size: 100 }), "");
+  assert.match(jobs.jobFileProblem({ name: "cv.exe", type: "application/octet-stream", size: 100 }), /PDF or Word/);
+  assert.match(jobs.jobFileProblem({ name: "cv.pdf", type: "application/pdf", size: 11 * 1024 * 1024 }), /10 MB/);
+  assert.deepEqual(jobs.applyProblems({ hasResume: false, coverLetter: "", hasCoverLetterFile: false }), ["Upload your resume.", "Write a cover letter or upload one."]);
+  assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "", hasCoverLetterFile: true }), []);
+  assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "Dear team", hasCoverLetterFile: false }), []);
+  assert.ok(jobs.applyProblems({ hasResume: true, coverLetter: "x".repeat(5001), hasCoverLetterFile: false }).length);
+});
+
+test("the job someone was applying for is remembered while their account is created, and the sign-in returns there", async () => {
+  const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
+  const map = new Map<string, string>();
+  const s = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => { map.set(k, v); }, removeItem: (k: string) => { map.delete(k); } };
+  const id = "0f3a2c9e-1b4d-4e6f-8a7b-9c0d1e2f3a4b";
+  jobs.rememberJobIntent(id, s);
+  assert.equal(jobs.readJobIntent(s), id);
+  jobs.rememberJobIntent("not-an-id", s);
+  assert.equal(jobs.readJobIntent(s), null, "only a job id is kept");
+  assert.equal(jobs.jobApplyPath(id), `/careers/${id}/apply`);
+  assert.deepEqual(routing.decideLogin({ cms: null, portal: "no_access", staff: "draft" }, `/careers/${id}/apply`), { kind: "go", to: `/careers/${id}/apply` });
+  assert.deepEqual(routing.decideLogin({ cms: null, portal: "active" }, `/careers/${id}/apply`), { kind: "go", to: `/careers/${id}/apply` }, "a student applies for a job with the same login");
+  assert.equal(routing.destinationFor("portal", `/careers/${id}`), `/careers/${id}`);
+  assert.equal(routing.destinationFor("portal", "/admin"), "/agency", "other areas are still fenced");
+});
+

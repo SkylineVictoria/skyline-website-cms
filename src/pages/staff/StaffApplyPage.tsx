@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -7,6 +7,7 @@ import { PhoneInput } from "@/components/feature/applicationInputs";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 import { getMyStaffApplication, setStaffPassword, startStaffApplication } from "@/lib/staffApi";
 import { toE164 } from "@/lib/staffPhone";
+import { jobApplyPath, readJobIntent } from "@/lib/jobs";
 
 function Shell({ children }: { children: ReactNode }) {
   return (
@@ -46,6 +47,9 @@ export default function StaffApplyPage() {
     return () => { cancelled = true; sub.subscription.unsubscribe(); };
   }, []);
 
+  // Someone who came here to apply for a job goes back to that job; everyone else to the staff workspace.
+  const afterStart = useCallback(() => { const job = readJobIntent(); navigate(job ? jobApplyPath(job) : "/staff", { replace: true }); }, [navigate]);
+
   const meta = (user?.user_metadata ?? {}) as { registrant?: string; staff_password_set?: boolean; staff_phone?: string };
   const registeredAsStaff = meta.registrant === "staff";
 
@@ -57,15 +61,15 @@ export default function StaffApplyPage() {
       try {
         const me = await getMyStaffApplication();
         if (cancelled) return;
-        if (me) { navigate("/staff", { replace: true }); return; }
+        if (me) { afterStart(); return; }
         if (registeredAsStaff && meta.staff_password_set) {
           await startStaffApplication();
-          if (!cancelled) navigate("/staff", { replace: true });
+          if (!cancelled) afterStart();
         }
       } catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : "We could not load your application."); }
     })();
     return () => { cancelled = true; };
-  }, [user, registeredAsStaff, meta.staff_password_set, navigate]);
+  }, [user, registeredAsStaff, meta.staff_password_set, afterStart]);
 
   const choosePassword = async (event: FormEvent) => {
     event.preventDefault();
@@ -73,7 +77,7 @@ export default function StaffApplyPage() {
     if (password.length < MIN_PASSWORD_LENGTH) { setError(`Use at least ${MIN_PASSWORD_LENGTH} characters.`); return; }
     if (password !== again) { setError("The two passwords do not match."); return; }
     setBusy(true); setError("");
-    try { await setStaffPassword(password); await startStaffApplication(); navigate("/staff", { replace: true }); }
+    try { await setStaffPassword(password); await startStaffApplication(); afterStart(); }
     catch (e) { setError(e instanceof Error ? e.message : "We could not save your password."); }
     finally { setBusy(false); }
   };
@@ -84,7 +88,7 @@ export default function StaffApplyPage() {
     const phone = toE164(new FormData(event.currentTarget).get("attach-phone"));
     if (!phone) { setError("Enter your mobile number with its country code."); return; }
     setBusy(true); setError("");
-    try { await startStaffApplication(phone); navigate("/staff", { replace: true }); }
+    try { await startStaffApplication(phone); afterStart(); }
     catch (e) { setError(e instanceof Error ? e.message : "We could not start your application."); }
     finally { setBusy(false); }
   };

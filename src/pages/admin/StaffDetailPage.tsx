@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { Badge, Button, Card, Field, Modal, PageHeader, TextArea } from "@/pages/admin/components/ui";
 import { adminDecideStaff, adminStaffDetail, staffDocumentUrl, type StaffDecision, type StaffDetail, type StaffDocument } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE, adminActionsFor, type StaffAdminAction, type StaffRole } from "@/lib/staffStatus";
+import { adminDecideJobApplication } from "@/lib/jobsApi";
+import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 
 const ACTION_LABEL: Record<StaffAdminAction, string> = { approve: "Approve", reject: "Reject", activate: "Activate", deactivate: "Deactivate", reopen: "Reopen as draft" };
 const NOTE_REQUIRED: Record<StaffAdminAction, boolean> = { approve: false, reject: true, activate: false, deactivate: false, reopen: true };
@@ -12,7 +14,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   return <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{label}</dt><dd className="text-sm text-foreground-900">{children || "—"}</dd></div>;
 }
 
-/** One staff application: details, documents (short-lived signed links), and the Admin decisions. Admins only. */
+/** One person: details, documents (short-lived signed links), their job applications (hire / decline) and the Admin decisions. Admins only. */
 export default function StaffDetailPage() {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
@@ -23,6 +25,8 @@ export default function StaffDetailPage() {
   const [confirmAdmin, setConfirmAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState("");
+  const [jobDecision, setJobDecision] = useState<{ id: string; title: string; decision: "hired" | "declined" } | null>(null);
+  const [jobNote, setJobNote] = useState("");
 
   const load = useCallback(async () => {
     try { const next = await adminStaffDetail(id); setDetail(next); setRole(next.application.requested_role ?? "trainer"); setError(""); }
@@ -43,9 +47,19 @@ export default function StaffDetailPage() {
     finally { setBusy(false); }
   };
 
-  const openDoc = async (doc: StaffDocument) => {
-    try { window.open(await staffDocumentUrl(doc.storagePath, 120), "_blank", "noopener,noreferrer"); }
+  const openPath = async (storagePath: string) => {
+    try { window.open(await staffDocumentUrl(storagePath, 120), "_blank", "noopener,noreferrer"); }
     catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
+  };
+  const openDoc = (doc: StaffDocument) => openPath(doc.storagePath);
+
+  const askJob = (id: string, title: string, decision: "hired" | "declined") => { setJobDecision({ id, title, decision }); setJobNote(""); setDialogError(""); };
+  const decideJob = async () => {
+    if (!jobDecision || !detail) return;
+    setBusy(true); setDialogError("");
+    try { setDetail(await adminDecideJobApplication(jobDecision.id, jobDecision.decision, jobNote)); setJobDecision(null); }
+    catch (e) { setDialogError(e instanceof Error ? e.message : "That could not be done."); }
+    finally { setBusy(false); }
   };
 
   if (error && !detail) return <div><PageHeader title="Staff application" /><p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p></div>;
@@ -96,6 +110,39 @@ export default function StaffDetailPage() {
         </Card>
       </div>
 
+      {detail.jobApplications?.length ? (
+        <Card className="mt-6 p-5">
+          <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Job applications</h2>
+          <ul className="space-y-3" data-testid="staff-job-applications">
+            {detail.jobApplications.map((a) => (
+              <li key={a.id} className="rounded-md border border-background-200 px-4 py-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-foreground-950">{a.jobTitle} <span className="font-normal text-foreground-600">· {EMPLOYMENT_TYPE_LABEL[a.employmentType]} · {a.location}</span></p>
+                    <p className="text-xs text-foreground-500">Applied {new Date(a.appliedAt).toLocaleString()}{a.decidedAt ? ` · decided ${new Date(a.decidedAt).toLocaleString()}` : ""}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge tone={a.status === "hired" ? "success" : a.status === "declined" ? "muted" : "warn"}>{JOB_APPLICATION_STATUS_LABEL[a.status]}</Badge>
+                    {a.status === "applied" ? (
+                      <>
+                        <Button size="sm" onClick={() => askJob(a.id, a.jobTitle, "hired")} data-testid="job-hire">Hire</Button>
+                        <Button size="sm" variant="outline" onClick={() => askJob(a.id, a.jobTitle, "declined")} data-testid="job-decline">Decline</Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {a.resume ? <Button size="sm" variant="outline" onClick={() => void openPath(a.resume!.storagePath)}><i className="ri-file-text-line" aria-hidden="true" /> Resume: {a.resume.filename}</Button> : null}
+                  {a.coverLetterDocument ? <Button size="sm" variant="outline" onClick={() => void openPath(a.coverLetterDocument!.storagePath)}><i className="ri-file-text-line" aria-hidden="true" /> Cover letter: {a.coverLetterDocument.filename}</Button> : null}
+                </div>
+                {a.coverLetter ? <details className="mt-2"><summary className="cursor-pointer text-xs font-semibold text-primary-700">Cover letter</summary><p className="mt-1 whitespace-pre-line text-foreground-700">{a.coverLetter}</p></details> : null}
+                {a.decisionNote ? <p className="mt-2 text-xs text-foreground-600">Note: {a.decisionNote}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
       <Card className="mt-6 p-5">
         <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">History</h2>
         <ol className="space-y-2">
@@ -129,6 +176,17 @@ export default function StaffDetailPage() {
           ) : null}
           {action === "deactivate" ? <p className="text-sm text-foreground-700">This switches off their admin console access (if any) and marks them Inactive.</p> : null}
           <Field label={NOTE_REQUIRED[action ?? "approve"] ? "Note (required)" : "Note (optional)"}><TextArea rows={3} value={note} onChange={(e) => setNote(e.target.value)} data-testid="staff-decision-note" /></Field>
+          {dialogError ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{dialogError}</p> : null}
+        </div>
+      </Modal>
+
+      <Modal open={jobDecision !== null} title={jobDecision ? `${jobDecision.decision === "hired" ? "Hire" : "Decline"}: ${jobDecision.title}` : ""} onClose={() => setJobDecision(null)}
+        footer={<><Button variant="outline" onClick={() => setJobDecision(null)}>Cancel</Button><Button onClick={() => void decideJob()} disabled={busy} data-testid="job-decision-confirm">{busy ? "Working…" : jobDecision?.decision === "hired" ? "Hire" : "Decline"}</Button></>}>
+        <div className="space-y-4">
+          <p className="text-sm text-foreground-700">{jobDecision?.decision === "hired"
+            ? "The person is told they are hired and asked to complete their staff registration (personal details, passport and other documents) on their staff page; you then approve it with a role as usual."
+            : "The application is marked declined. If it was their only open job application, their staff record becomes Rejected, with your note."}</p>
+          <Field label="Note (optional)" hint="Shown to the applicant on their staff page."><TextArea rows={3} value={jobNote} onChange={(e) => setJobNote(e.target.value)} data-testid="job-decision-note" /></Field>
           {dialogError ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{dialogError}</p> : null}
         </div>
       </Modal>

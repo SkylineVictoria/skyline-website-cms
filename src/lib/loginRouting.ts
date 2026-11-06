@@ -72,6 +72,8 @@ export function decideLogin(access: AccessSummary, next: string | null = null, l
   const target = safeNext(next);
   // An explicit return path wins when the user actually has access to that area.
   if (target) {
+    // A job application page (/careers) is open to anyone signed in: students and agents apply for jobs with the same login.
+    if (/^\/careers(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
     if (options.includes("cms") && /^\/admin(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
     if (options.includes("portal") && /^\/agency(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
     if (options.includes("staff") && /^\/staff(?:[/?#]|$)/.test(target)) return { kind: "go", to: target };
@@ -86,6 +88,7 @@ export function decideLogin(access: AccessSummary, next: string | null = null, l
 /** Where a chosen destination goes: the validated return path when it belongs to that area, otherwise the area's landing page. */
 export function destinationFor(option: LoginDestination, next: string | null): string {
   const target = safeNext(next);
+  if (target && /^\/careers(?:[/?#]|$)/.test(target)) return target;
   if (target && (option === "cms" ? /^\/admin(?:[/?#]|$)/ : option === "staff" ? /^\/staff(?:[/?#]|$)/ : /^\/agency(?:[/?#]|$)/).test(target)) return target;
   return DESTINATION_PATH[option];
 }

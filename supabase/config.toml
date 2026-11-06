@@ -14,6 +14,11 @@ verify_jwt = false
 # mail is sent through Supabase Auth.
 verify_jwt = false
 
+[functions.calendly-admin]
+# CMS "Test connection" for the Calendly booking link. The gateway verifies the caller's JWT; the function then asks
+# cms_integration_can_manage with that token before reading the saved Calendly token with the service role.
+verify_jwt = true
+
 [functions.public-assistant-index]
 # Worker is authenticated with x-worker-secret, not a browser JWT.
 verify_jwt = false

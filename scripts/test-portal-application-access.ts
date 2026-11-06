@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ResponsiveTable from "../src/components/ui/ResponsiveTable.tsx";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { calendlyEmbedSrc, calendlyUrlProblem } from "../src/lib/calendly.ts";
 import { directoryAgencyToForm, EMPTY_AGENCY_FORM, validateAgencyForm } from '../src/pages/admin/lib/agencyForm.ts';
 import type { DirectoryAgency } from '../src/pages/agency/lib/portalData.ts';
 
@@ -724,4 +725,17 @@ test("sign up: the emailed code that claims an agent-created student record is 6
   assert.notEqual(codeProblem("12345"), "");
   assert.notEqual(codeProblem("12a456"), "");
   assert.notEqual(codeProblem(""), "");
+});
+
+test("contact page: the Calendly link saved in the CMS must be a calendly.com scheduling page; the embed is a plain iframe address", () => {
+  assert.equal(calendlyUrlProblem(""), "");
+  assert.equal(calendlyUrlProblem("https://calendly.com/slit"), "");
+  assert.equal(calendlyUrlProblem(" https://calendly.com/slit-admissions/30min "), "");
+  assert.notEqual(calendlyUrlProblem("http://calendly.com/slit/30min"), "");
+  assert.notEqual(calendlyUrlProblem("https://calendly.com/slit/30min?month=2026-11"), "");
+  assert.notEqual(calendlyUrlProblem("https://example.com/calendly.com/slit"), "");
+  assert.notEqual(calendlyUrlProblem("javascript:alert(1)"), "");
+  assert.equal(calendlyEmbedSrc("https://calendly.com/slit/30min/", "slit.edu.au"), "https://calendly.com/slit/30min?embed_type=Inline&hide_gdpr_banner=1&embed_domain=slit.edu.au");
+  assert.equal(calendlyEmbedSrc("https://calendly.com/slit", ""), "https://calendly.com/slit?embed_type=Inline&hide_gdpr_banner=1");
+  assert.equal(calendlyEmbedSrc("https://example.com/x", "slit.edu.au"), "");
 });

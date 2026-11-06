@@ -5,6 +5,8 @@ import type { AdminSettings } from "@/pages/admin/lib/types";
 import { HistoryButton } from "@/pages/admin/components/workflow";
 import DraftStatus from "@/pages/admin/components/DraftStatus";
 import { useDraft } from "@/pages/admin/lib/useDraft";
+import CalendlyCard from "@/pages/admin/components/CalendlyCard";
+import { calendlyUrlProblem } from "@/lib/calendly";
 
 export default function ContactPage() {
   const { data, update, logActivity, recordRevision } = useAdminData();
@@ -17,6 +19,8 @@ export default function ContactPage() {
     setDraft((d) => ({ ...d, [key]: value }));
 
   const save = () => {
+    const problem = calendlyUrlProblem(draft.calendlyUrl ?? "");
+    if (problem) { push(problem, "error"); return; }
     update((d) => ({ ...d, settings: draft }));
     draftApi.markSaved();
     recordRevision({ entity: "contact", entityId: "contact", title: "Contact Information", action: "Saved draft", status: "Draft", snapshot: draft });
@@ -28,7 +32,7 @@ export default function ContactPage() {
     <div>
       <PageHeader
         title="Contact Information"
-        description="Phone, email and address shown in the header, footer, contact page and structured data."
+        description="Phone, email and address shown in the header, footer, contact page and structured data, and the Calendly link for booking a call."
         breadcrumb="Global"
         actions={
           <div className="flex flex-wrap items-center gap-3">
@@ -71,6 +75,10 @@ export default function ContactPage() {
             The map updates automatically from the address above.
           </p>
         </Card>
+      </div>
+
+      <div className="mt-5">
+        <CalendlyCard url={draft.calendlyUrl ?? ""} onUrlChange={(value) => set("calendlyUrl", value)} />
       </div>
 
       <div className="mt-5 flex justify-end">

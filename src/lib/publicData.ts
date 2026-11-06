@@ -103,6 +103,8 @@ export interface PublicSettings {
   homeAboutImage: string;
   logoAlt: string;
   mapEmbedSrc: string;
+  /** The Calendly scheduling link saved in the CMS; "" hides booking on the Contact page. */
+  calendlyUrl: string;
   acknowledgement: string;
   footerIntro: string;
   copyright: string;
@@ -214,7 +216,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
       admissionsEmail: str(row.admissions_email), admissionsHref: `mailto:${str(row.admissions_email)}`,
       address: str(row.address), rto, cricos, legal: [rto && `RTO ${rto}`, cricos && `CRICOS ${cricos}`].filter(Boolean).join(" "),
       signInUrl: str(row.sign_in_url), homeHeroImages: heroImages, homeAboutImage: str(row.home_about_image),
-      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), acknowledgement: "", footerIntro: "", copyright: "", social, coursesCarousel: carouselOf(row),
+      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), calendlyUrl: str(row.calendly_url), acknowledgement: "", footerIntro: "", copyright: "", social, coursesCarousel: carouselOf(row),
     };
   }
 
@@ -239,6 +241,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
     homeAboutImage: str(row.home_about_image) || DEFAULT_HOME_ABOUT,
     logoAlt: str(row.name) || staticSite.logoAlt,
     mapEmbedSrc: staticSite.mapEmbedSrc,
+    calendlyUrl: str(row.calendly_url),
     acknowledgement: staticSite.acknowledgement,
     footerIntro: staticSite.footerIntro,
     copyright: staticSite.copyright,

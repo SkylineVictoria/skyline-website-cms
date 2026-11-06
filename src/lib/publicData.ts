@@ -1,3 +1,4 @@
+import { CAREERS_LINK, withCareersLink } from "@/lib/jobs";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite, type TenantSite } from "@/lib/tenantSite";
 import type { SiteTheme } from "@/lib/tenantTheme";
@@ -546,9 +547,9 @@ export async function loadPublicSiteData(): Promise<PublicSiteData> {
     theme: tenantSite || settingsRows[0]?.theme_configured ? { primaryColor: str(settingsRows[0]?.primary_color), accentColor: str(settingsRows[0]?.accent_color) || undefined, loaderStyle: loaderStyleOf(settingsRows[0]?.loader_style), headingFont: str(settingsRows[0]?.heading_font), bodyFont: str(settingsRows[0]?.body_font) } : undefined,
     seo: (snapshot?.cms_seo ?? []).map((s: Row) => ({ path: str(s.path), title: str(s.title), description: str(s.description), keywords: str(s.keywords) })),
     settings,
-    navigation: buildNavigation(navRows, courseColumns),
+    navigation: tenantSite ? buildNavigation(navRows, courseColumns) : withCareersLink(buildNavigation(navRows, courseColumns), { ...CAREERS_LINK }),
     footer: buildFooter(footerRows, !!tenantSite),
-    footerLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.quick_links ?? []) : staticFooterLinks),
+    footerLinks: tenantSite ? footerLinks(footerRows[0]?.quick_links ?? []) : withCareersLink(footerLinks(footerRows[0]?.links_configured ? (footerRows[0]?.quick_links ?? []) : staticFooterLinks), { ...CAREERS_LINK }),
     studentLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.student_links ?? []) : staticStudentLinks),
     courses,
     featuredCourses: featured.length ? featured : courses.slice(0, 6),

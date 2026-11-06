@@ -250,3 +250,14 @@ test("an Admin adds a staff member: name, email, mobile with the country code, a
   assert.ok(edge.includes("hr_admin_staff_create") && edge.includes("hr_staff_precheck"), "the record is created after the duplicate check");
 });
 
+test("the website menus always reach Careers: added before Contact Us unless the CMS menu already links /careers", async () => {
+  const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
+  const link = { ...jobs.CAREERS_LINK };
+  assert.deepEqual(jobs.withCareersLink([{ label: "Home", to: "/" }, { label: "Contact Us", to: "/contact" }], link).map((i) => i.label), ["Home", "Careers", "Contact Us"]);
+  assert.deepEqual(jobs.withCareersLink([{ label: "Home", to: "/" }], link).map((i) => i.label), ["Home", "Careers"], "no Contact Us: at the end");
+  const custom = [{ label: "Join us", to: "/careers" }, { label: "Contact Us", to: "/contact" }];
+  assert.deepEqual(jobs.withCareersLink(custom, link), custom, "the CMS's own link wins");
+  const grouped = [{ label: "About", children: [{ to: "/careers" }] }, { label: "Contact Us", to: "/contact" }];
+  assert.deepEqual(jobs.withCareersLink(grouped, link), grouped, "a Careers link inside a group counts");
+});
+

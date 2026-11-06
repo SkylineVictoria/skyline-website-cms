@@ -86,3 +86,20 @@ export function readJobIntent(s: Store | null = store()): string | null {
 }
 export const jobApplyPath = (jobId: string) => `/careers/${jobId}/apply`;
 export const jobPath = (jobId: string) => `/careers/${jobId}`;
+
+/* ------------------------------------------------------------------ the Careers link on the website */
+
+export const CAREERS_LINK = { label: "Careers", to: "/careers" } as const;
+
+/**
+ * The website header and footer menus are edited in the CMS; the Careers page is always reachable, so a "Careers" link is added
+ * before "Contact Us" (or at the end) when nobody has put one in. A link to /careers anywhere in the menu, even under a group,
+ * keeps the menu as it is.
+ */
+export function withCareersLink<T extends { label: string; to?: string; children?: Array<{ to?: string }> }>(items: T[], link: T): T[] {
+  const has = (item: { to?: string; children?: Array<{ to?: string }> }) => item.to === CAREERS_LINK.to || (item.children ?? []).some((c) => c.to === CAREERS_LINK.to);
+  if (items.some(has)) return items;
+  const contact = items.findIndex((item) => item.to === "/contact");
+  return contact < 0 ? [...items, link] : [...items.slice(0, contact), link, ...items.slice(contact)];
+}
+

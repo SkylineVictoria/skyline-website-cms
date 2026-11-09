@@ -91,12 +91,12 @@ export default function StaffWorkspacePage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">{me.profile.first_name ? `Welcome, ${me.profile.first_name}` : "Your staff application"}</h1>
         <span data-testid="staff-status" className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-semibold text-foreground-900">{STAFF_STATUS_LABEL[me.profile.status]}</span>
       </div>
-      {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : (
+      {me.profile.status === "invited" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : (
         <>
           <StatusPanel me={me} />
           <section className="mt-6 rounded-card border border-background-200 bg-background-50 p-5" aria-label="Document checklist">
             <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Document checklist</h2>
-            <StaffChecklist me={me} uid={uid} onChange={setMe} canReupload={me.profile.status === "submitted" || me.profile.status === "preboarding"} />
+            <StaffChecklist me={me} uid={uid} onChange={setMe} canReupload={me.profile.status === "documents_submitted"} />
           </section>
         </>
       )}
@@ -123,13 +123,13 @@ function StatusPanel({ me }: { me: StaffMe }) {
       {me.role ? <p className="mt-2 text-sm text-foreground-700">Role: <strong>{ROLE_TEXT[me.role].title}</strong>{status === "active" ? "" : " (effective once your account is active)"}</p> : null}
       {status === "active" && me.role === "admin" ? <p className="mt-3"><Link to="/admin" className="font-semibold text-primary-700 hover:underline">Open the admin console</Link></p> : null}
       {status === "rejected" && me.application.review_note ? <p className="mt-2 rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-800"><strong>Note from the administrator:</strong> {me.application.review_note}</p> : null}
-      {me.summary.rejected > 0 && (status === "submitted" || status === "preboarding") ? <p className={`mt-3 ${ALERT}`} role="status">An administrator asked you to replace {me.summary.rejected === 1 ? "a document" : `${me.summary.rejected} documents`}. See the note below and upload a new file.</p> : null}
+      {me.summary.rejected > 0 && status === "documents_submitted" ? <p className={`mt-3 ${ALERT}`} role="status">An administrator asked you to replace {me.summary.rejected === 1 ? "a document" : `${me.summary.rejected} documents`}. See the note below and upload a new file.</p> : null}
     </section>
   );
 }
 
 function Timeline({ me }: { me: StaffMe }) {
-  const items = me.events.filter((e) => e.note || e.to !== "draft");
+  const items = me.events.filter((e) => e.note || e.to !== "applied");
   if (!items.length) return null;
   return (
     <section className="mt-8" aria-label="Status history and messages">

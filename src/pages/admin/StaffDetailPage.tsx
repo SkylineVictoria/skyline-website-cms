@@ -83,7 +83,7 @@ export default function StaffDetailPage() {
   const { profile, application, summary } = detail;
   const activeRole = detail.roles.find((r) => !r.revokedAt)?.role;
   const actions = adminActionsFor(profile.status);
-  const canReview = profile.status !== "draft";
+  const canReview = profile.status !== "applied";
   const allApproved = summary.approved === summary.required;
   const address = [profile.address_street, profile.address_line2, profile.address_suburb, profile.address_state, profile.address_postcode, profile.address_country].filter(Boolean).join(", ");
   const checklist = staffChecklist(detail.documents, profile.is_australian_citizen);

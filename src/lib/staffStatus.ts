@@ -4,35 +4,38 @@
 
 import { checklist, expiryState, todayIso, type ChecklistItem, type DocLike, type DocumentKind, type ExpiryRule, type ReviewState } from "@/lib/documentChecklist";
 
-export type StaffStatus = "draft" | "submitted" | "preboarding" | "active" | "rejected" | "inactive";
+export type StaffStatus = "applied" | "invited" | "documents_submitted" | "offer_sent" | "offer_signed" | "active" | "rejected" | "inactive";
 export type StaffRole = "admin" | "trainer";
 
-export const STAFF_STATUSES: readonly StaffStatus[] = ["draft", "submitted", "preboarding", "active", "rejected", "inactive"];
+export const STAFF_STATUSES: readonly StaffStatus[] = ["applied", "invited", "documents_submitted", "offer_sent", "offer_signed", "active", "rejected", "inactive"];
 export const STAFF_ROLES: readonly StaffRole[] = ["admin", "trainer"];
 
-/** Until an Admin activates the account the person is "Pending": still filling in (draft) or waiting for review (submitted). */
+/** No login exists before "active": the person works through emailed links (documents, re-upload, offer). */
 export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
-  draft: "Pending", submitted: "Pending review", preboarding: "Approved", active: "Active", rejected: "Rejected", inactive: "Inactive",
+  applied: "Applied", invited: "Invited", documents_submitted: "Documents submitted", offer_sent: "Offer sent", offer_signed: "Offer signed",
+  active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
-/** rejected -> draft is the Admin-only reopen; inactive -> active is an Admin reactivation. */
+/** Same table as hr.staff_transition_allowed() (migration 20261109100000). Resending or revoking a link changes no status. */
 const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
-  ["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"],
-  ["preboarding", "active"], ["preboarding", "rejected"],
-  ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"],
+  ["applied", "invited"], ["applied", "rejected"],
+  ["invited", "documents_submitted"], ["invited", "rejected"],
+  ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
+  ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"],
+  ["offer_signed", "active"], ["offer_signed", "rejected"],
+  ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"],
 ];
 
 export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
   return MOVES.some(([a, b]) => a === from && b === to);
 }
 
-/** The admin actions available for a status, in the order the buttons are shown. */
+/** The admin actions available for a status, in the order the buttons are shown. Link, offer and activation actions arrive with the
+ *  staff-admin function (HR-02c..g); until then "approve" / "activate" are never offered. */
 export type StaffAdminAction = "approve" | "reject" | "activate" | "reactivate" | "deactivate" | "reopen";
 export function adminActionsFor(status: StaffStatus): StaffAdminAction[] {
   switch (status) {
-    // Activate records the role and goes submitted -> preboarding -> active in one step (hr_admin_staff_activate_account).
-    case "submitted": return ["activate", "reject"];
-    case "preboarding": return ["activate", "reject"];
+    case "applied": case "invited": case "documents_submitted": case "offer_sent": case "offer_signed": return ["reject"];
     case "active": return ["deactivate"];
     case "inactive": return ["reactivate"];
     case "rejected": return ["reopen"];
@@ -127,17 +130,21 @@ export function submitProblems(input: StaffSubmitInput, today = todayIso()): str
 
 /** Badge tone per status (admin lists). */
 export const STAFF_STATUS_TONE: Record<StaffStatus, "muted" | "warn" | "secondary" | "success" | "primary" | "accent"> = {
-  draft: "muted", submitted: "warn", preboarding: "secondary", active: "success", rejected: "muted", inactive: "muted",
+  applied: "warn", invited: "secondary", documents_submitted: "warn", offer_sent: "secondary", offer_signed: "primary",
+  active: "success", rejected: "muted", inactive: "muted",
 };
 
 /* ------------------------------------------------------------------ admin Staff > Employees tabs (hr_admin_staff_list p_statuses) */
 
-export type EmployeeTabId = "applications" | "active" | "closed";
+export type EmployeeTabId = "applications" | "invited" | "documents" | "offers" | "active" | "closed";
 export interface EmployeeTab { id: EmployeeTabId; label: string; statuses: readonly StaffStatus[]; countBadge: boolean }
-/** Drafts ("Pending", not yet submitted) are in no tab: there is nothing for an administrator to review yet. */
+/** Every status is in exactly one tab; a count badge marks the tabs that wait for an administrator. */
 export const EMPLOYEE_TABS: readonly EmployeeTab[] = [
-  { id: "applications", label: "Applications", statuses: ["submitted", "preboarding"], countBadge: true },
+  { id: "applications", label: "Applications", statuses: ["applied"], countBadge: true },
+  { id: "invited", label: "Invited", statuses: ["invited"], countBadge: false },
+  { id: "documents", label: "Documents submitted", statuses: ["documents_submitted"], countBadge: true },
+  { id: "offers", label: "Offers", statuses: ["offer_sent", "offer_signed"], countBadge: true },
   { id: "active", label: "Active", statuses: ["active"], countBadge: false },
-  { id: "closed", label: "Inactive/Rejected", statuses: ["inactive", "rejected"], countBadge: false },
+  { id: "closed", label: "Rejected/Inactive", statuses: ["rejected", "inactive"], countBadge: false },
 ];
 export const employeeTab = (id: string | null | undefined): EmployeeTab => EMPLOYEE_TABS.find((t) => t.id === id) ?? EMPLOYEE_TABS[0];

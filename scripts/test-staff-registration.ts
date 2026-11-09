@@ -44,42 +44,45 @@ test("the browser, the edge function and the database normalise the same vectors
 /* ------------------------------------------------------------------ status transitions */
 
 test("status transitions allow exactly the agreed moves", () => {
-  const allowed: Array<[string, string]> = [["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"], ["preboarding", "active"], ["preboarding", "rejected"], ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"]];
+  const allowed: Array<[string, string]> = [["applied", "invited"], ["applied", "rejected"], ["invited", "documents_submitted"], ["invited", "rejected"],
+    ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
+    ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"], ["offer_signed", "active"], ["offer_signed", "rejected"],
+    ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"]];
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), allowed.some(([a, b]) => a === from && b === to), `${from} -> ${to}`);
   }
-  assert.equal(status.canTransition("draft", "active"), false, "nobody skips review");
+  assert.equal(status.canTransition("applied", "active"), false, "nobody skips review");
+  assert.equal(status.canTransition("invited", "offer_sent"), false, "no offer before the documents are submitted");
 });
 
 test("the TypeScript transition table matches the database function and the status list", () => {
-  const sql = read("supabase/migrations/20261105180000_hr_staff_schema.sql");
-  const body = sql.slice(sql.indexOf("hr.staff_transition_allowed"), sql.indexOf("create function hr.staff_status_guard"));
-  const pairs = [...body.matchAll(/\('([a-z]+)','([a-z]+)'\)/g)].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 8);
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const body = sql.slice(sql.indexOf("function hr.staff_transition_allowed"), sql.indexOf("function hr.staff_status_guard"));
+  const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
+  assert.equal(pairs.length, 15);
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), pairs.some(([a, b]) => a === from && b === to), `database ${from} -> ${to}`);
   }
-  const list = sql.match(/status in \(([^)]*)\)/)?.[1].replace(/'/g, "").split(",").map((s) => s.trim());
+  const check = sql.slice(sql.indexOf("add constraint staff_profiles_status_check"));
+  const list = check.match(/status in \(([^)]*)\)/)?.[1].replace(/'/g, "").split(",").map((s) => s.trim());
   assert.deepEqual(list, [...status.STAFF_STATUSES]);
 });
 
 test("admin actions follow the status", () => {
-  assert.deepEqual(status.adminActionsFor("submitted"), ["activate", "reject"]);
-  assert.deepEqual(status.adminActionsFor("preboarding"), ["activate", "reject"]);
+  for (const s of ["applied", "invited", "documents_submitted", "offer_sent", "offer_signed"] as const) assert.deepEqual(status.adminActionsFor(s), ["reject"]);
   assert.deepEqual(status.adminActionsFor("active"), ["deactivate"]);
   assert.deepEqual(status.adminActionsFor("inactive"), ["reactivate"]);
   assert.deepEqual(status.adminActionsFor("rejected"), ["reopen"]);
-  assert.deepEqual(status.adminActionsFor("draft"), []);
-  // Activate from submitted goes through preboarding inside hr_admin_staff_activate_account (approve, then activate).
-  const legal = (from: string, to: string) => status.canTransition(from as never, to as never) || (from === "submitted" && to === "active" && status.canTransition("submitted", "preboarding") && status.canTransition("preboarding", "active"));
   for (const s of status.STAFF_STATUSES) for (const action of status.adminActionsFor(s)) {
-    const to = { approve: "preboarding", reject: "rejected", activate: "active", reactivate: "active", deactivate: "inactive", reopen: "draft" }[action];
-    assert.ok(legal(s, to), `${action} from ${s} is a legal move`);
+    const to = { approve: "", reject: "rejected", activate: "active", reactivate: "active", deactivate: "inactive", reopen: "applied" }[action];
+    assert.ok(status.canTransition(s, to as never), `${action} from ${s} is a legal move`);
   }
   const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
   const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
-  assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)) && fn.includes("public.hr_admin_staff_approve(") && fn.includes("public.hr_admin_staff_activate("), "one-step activation reuses approve and activate");
-  assert.ok(fn.indexOf("d.status <> 'approved'") > 0 && fn.indexOf("d.status <> 'approved'") < fn.indexOf("public.hr_admin_staff_approve("), "every required document is approved before any role is granted");
+  assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)), "activation checks for an administrator first");
+  assert.ok(fn.includes("p.status <> 'offer_signed'") && fn.includes("u.id <> p_auth_user_id") && fn.includes("where lower(btrim(coalesce(email, ''))) = p.email"), "only a signed offer, only the person's own login");
+  const send = sql.slice(sql.indexOf("function public.hr_admin_staff_offer_send"));
+  assert.ok(send.indexOf("hr.staff_documents_problem(p.id)") > 0 && send.indexOf("hr.staff_documents_problem(p.id)") < send.indexOf("hr.invite_create("), "every required document is approved before an offer goes out");
 });
 
 /* ------------------------------------------------------------------ duplicate checks */
@@ -199,8 +202,13 @@ test("an applicant can never write review fields or grant themselves access", ()
   const review = sql.slice(sql.indexOf("function public.hr_admin_staff_document_review"));
   assert.ok(/v_admin uuid := hr\.require_admin\(\)/.test(review.slice(0, 300)), "document review checks for an administrator");
   assert.ok(review.includes("'You cannot review your own documents.'"));
-  const reupload = sql.slice(sql.indexOf("create policy staff_documents_owner_reupload"), sql.indexOf("-- ------------------------------------------------------------------ applicant"));
-  assert.ok(reupload.includes("d.status = 'rejected'") && reupload.includes("(storage.foldername(name))[1] = auth.uid()::text"), "after submit only the folder of a rejected document of their own accepts uploads");
+  for (const policy of ["staff_documents_owner_insert", "staff_documents_owner_delete", "staff_documents_owner_reupload"]) {
+    assert.ok(sql.includes(`drop policy if exists ${policy} on storage.objects;`) && !sql.includes(`create policy ${policy}`), `${policy} is dropped: applicants never write storage directly`);
+  }
+  const add = sql.slice(sql.indexOf("function public.hr_svc_document_add"));
+  assert.ok(add.indexOf("hr.invite_for_write(p_token_hash") > 0 && add.indexOf("hr.invite_for_write(p_token_hash") < add.indexOf("select * into p"), "every applicant write checks the link first");
+  assert.ok(add.includes("if not v_fresh and (r.id is null or r.status <> 'rejected')"), "with a re-upload link only a rejected document is replaced");
+  assert.ok(/revoke all on function %s from public, anon, authenticated/.test(sql) && sql.includes("grant execute on function %s to service_role"), "link functions are service-role only");
 });
 
 /* ------------------------------------------------------------------ roles */
@@ -284,17 +292,18 @@ test("staff reading reuses the shared reader and leaves the student function byt
 
 test("the Employees tabs cover every reviewed status once and match the database filter", () => {
   const tabs = status.EMPLOYEE_TABS;
-  assert.deepEqual(tabs.map((t) => t.id), ["applications", "active", "closed"]);
-  assert.deepEqual([...tabs[0].statuses], ["submitted", "preboarding"]);
-  assert.deepEqual([...tabs[2].statuses], ["inactive", "rejected"]);
+  assert.deepEqual(tabs.map((t) => t.id), ["applications", "invited", "documents", "offers", "active", "closed"]);
+  assert.deepEqual([...tabs[0].statuses], ["applied"]);
+  assert.deepEqual([...tabs[3].statuses], ["offer_sent", "offer_signed"]);
+  assert.deepEqual([...tabs[5].statuses], ["rejected", "inactive"]);
   const all = tabs.flatMap((t) => [...t.statuses]);
   assert.equal(new Set(all).size, all.length, "no status is in two tabs");
-  assert.deepEqual(status.STAFF_STATUSES.filter((s) => !all.includes(s)), ["draft"], "only drafts are in no tab");
-  assert.deepEqual(tabs.filter((t) => t.countBadge).map((t) => t.id), ["applications"]);
+  assert.deepEqual(status.STAFF_STATUSES.filter((s) => !all.includes(s)), [], "every status is in a tab");
+  assert.deepEqual(tabs.filter((t) => t.countBadge).map((t) => t.id), ["applications", "documents", "offers"]);
   assert.equal(status.employeeTab("bogus").id, "applications");
   const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
   const fn = sql.slice(sql.indexOf("create or replace function public.hr_admin_staff_list"));
   assert.ok(fn.indexOf("perform hr.require_admin();") > 0 && fn.indexOf("perform hr.require_admin();") < fn.indexOf("select count(*)"), "the admin check runs before any read");
-  assert.ok(fn.includes("s is null or s not in ('draft','submitted','preboarding','active','rejected','inactive')"), "every p_statuses value is validated");
+  assert.ok(fn.includes("s is null or s not in ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive')"), "every p_statuses value is validated");
   assert.ok(sql.includes("drop function if exists public.hr_admin_staff_list(text, text, integer, integer);"), "no ambiguous overload is left behind");
 });

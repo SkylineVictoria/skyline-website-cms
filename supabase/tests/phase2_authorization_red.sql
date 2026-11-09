@@ -9,11 +9,11 @@ select is(has_table_privilege('authenticated','public.admin_menu_items','update'
 select is(has_table_privilege('authenticated','public.admin_menu_items','delete'),false,'browser cannot delete menu');
 select is((select relrowsecurity from pg_class where oid='public.admin_menu_items'::regclass),true,'menu has RLS');
 -- 32 seeded rows plus later menu migrations (businesses, agents, students, staff item, Staff group, Jobs, ...) on a full repo replay.
-select is((select count(*)::int from public.admin_menu_items),38,'desired menu seeded');
+select is((select count(*)::int from public.admin_menu_items),41,'desired menu seeded');
 -- Seeded hidden: students (unimplemented group), media (unimplemented). 20261102095335: agent_users and agency_directory
 -- (replaced by Agencies > Businesses / Agents / Students). 20261103090000: courses (the group emptied when Course Catalogue
 -- moved under Website).
-select is((select string_agg(id, ',' order by id) from public.admin_menu_items where not is_enabled),'agency_directory,agent_users,courses,media,students','unimplemented and retired menu items disabled (exact set)');
+select is((select string_agg(id, ',' order by id) from public.admin_menu_items where not is_enabled),'agency_candidates,agency_directory,agency_employees,agent_users,courses,media,students','unimplemented and retired menu items disabled (exact set)');
 select throws_ok($$delete from public.admin_menu_items where id='dashboard'$$,'23514',null,'system menu cannot be deleted');
 select throws_ok($$update public.admin_menu_items set route='/admin/users' where id='dashboard'$$,'23514',null,'system destination protected');
 select throws_ok($$update public.admin_menu_items set permission_key='cms.read' where id='users'$$,'23514',null,'system permission protected');

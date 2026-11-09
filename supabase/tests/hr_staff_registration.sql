@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(269);
+select plan(306);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -38,6 +38,11 @@ begin
  update hr.staff_profiles set status = 'invited' where id = v_id;
  update hr.staff_profiles set status = 'documents_submitted' where id = v_id;
  update hr.staff_applications set submitted_at = now() where profile_id = v_id;
+ update hr.staff_profiles set is_australian_citizen = true where id = v_id;
+ insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/passport/p.pdf'), ('staff-documents', v_id || '/academic/a.pdf'), ('staff-documents', v_id || '/health-insurance/h.pdf');
+ insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, expiry_date)
+  select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
+  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
  insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/offer/o.pdf'), ('staff-documents', v_id || '/offer/s.pdf');
  insert into hr.staff_offers(profile_id, storage_path, filename, file_size, sha256, uploaded_by, sent_at, sent_by, signed_at, signer_name, consent_text, signed_path, signed_sha256)
   values (v_id, v_id || '/offer/o.pdf', 'o.pdf', 10, repeat('a', 64), 'a0000000-0000-0000-0000-000000000004', now(), 'a0000000-0000-0000-0000-000000000004', now(),
@@ -223,6 +228,18 @@ do $w$ begin perform pg_temp.to_signed('t1', 'Tess', 'invited.trainer@example.te
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', null)$$, '22023', 'Enter the joining date.', 'a joining date is required');
+reset role;
+-- (a changed expiry date resets the review, so the fixture's approval is kept by hand here)
+alter table hr.staff_documents disable trigger staff_document_review_reset;
+update hr.staff_documents set expiry_date = current_date - 1 where profile_id = pg_temp.v('t1') and category = 'Passport';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', current_date + 14)$$, '23514', 'The passport has expired.', 'an expired document blocks activation');
+reset role;
+update hr.staff_documents set expiry_date = current_date + 400 where profile_id = pg_temp.v('t1') and category = 'Passport';
+alter table hr.staff_documents enable trigger staff_document_review_reset;
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', current_date + 14)->>'email', 'invited.trainer@example.test', 'the check call returns the email and changes nothing');
 select is(public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', current_date + 14)->>'existingLogin', 'false', 'a just-invited login does not count as an existing login');
 select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', current_date + 14, 'a0000000-0000-0000-0000-000000000006')$$, '42501', 'That login does not belong to this person.', 'a login with another email is refused');
@@ -231,8 +248,9 @@ select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('t1')
 select is((select auth_user_id from hr.staff_profiles where id = pg_temp.v('t1')), null, 'a refused id links nothing');
 select is(public.hr_admin_staff_activate_account(pg_temp.v('t1'), 'trainer', current_date + 14, 'a0000000-0000-0000-0000-000000000005')->>'activated', 'false', 'an unconfirmed (just invited) login waits for the password');
 reset role;
-select is((select p.status || '/' || a.joining_date::text || '/' || r.role from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
-  join hr.staff_roles r on r.profile_id = p.id and r.revoked_at is null where p.id = pg_temp.v('t1')), 'offer_signed/' || (current_date + 14)::text || '/trainer', 'role and joining date recorded, still offer_signed');
+select is((select p.status || '/' || e.joining_date::text || '/' || r.role from hr.staff_profiles p join hr.employment e on e.profile_id = p.id
+  join hr.staff_roles r on r.profile_id = p.id and r.revoked_at is null where p.id = pg_temp.v('t1')), 'offer_signed/' || (current_date + 14)::text || '/trainer', 'role and joining date (on hr.employment) recorded, still offer_signed');
+select is(public.hr_admin_staff_detail(pg_temp.v('t1'))->'employment'->>'joiningDate', (current_date + 14)::text, 'the Employees detail shows the employment record');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000005';
 select throws_ok($$select public.hr_staff_claim_account()$$, '42501', 'Confirm your email first.', 'claiming needs the invite accepted');
@@ -429,56 +447,113 @@ insert into hr.staff_documents(application_id, profile_id, category, storage_pat
 select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1')), 'done', '{"first_name":"Asha","last_name":"Overwritten","dob":"1999-04-05","passport_number":"X1234567"}')$$, 'a passport reading is recorded');
 select is((select first_name || '/' || last_name || '/' || date_of_birth from hr.staff_profiles where id = pg_temp.v('x1')), 'Asha/Keep/1999-04-05', 'empty details are filled and typed ones are never overwritten');
 
--- ---------------------------------------------------------------- Careers on the no-login flow (HR-02i)
-insert into hr.jobs(title, description, employment_type, location, status) values ('Trainer (Commercial Cookery)', 'Teach.', 'full_time', 'Melbourne', 'open'), ('Closed role', 'Old.', 'part_time', 'Sydney', 'closed');
+-- ---------------------------------------------------------------- Careers and Candidates on the no-login flow (HR-02i / HR-02j)
+insert into hr.jobs(title, description, employment_type, location, status, department) values ('Trainer (Commercial Cookery)', 'Teach.', 'full_time', 'Melbourne', 'open', 'Training'), ('Closed role', 'Old.', 'part_time', 'Sydney', 'closed', '');
 insert into t select 'jjob1', id::text from hr.jobs where title = 'Trainer (Commercial Cookery)';
 insert into t select 'jjob0', id::text from hr.jobs where title = 'Closed role';
 select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob0'), null)->>'reason', 'job_closed', 'a closed job cannot be applied for');
 select is((select count(*)::int from hr.staff_profiles where email = 'cara.careers@example.test'), 0, '...and nothing is recorded');
 insert into t select 'jc1', public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob1'), 'I love teaching.')->>'profileId';
-select is((select p.status || '/' || j.status || '/' || j.cover_letter from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = pg_temp.v('jc1')),
- 'applied/applied/I love teaching.', 'a Careers application is a staff application (applied) with the job and the cover letter');
+select is((select p.status || '/' || j.status || '/' || j.stage || '/' || j.source || '/' || j.cover_letter from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = pg_temp.v('jc1')),
+ 'applied/applied/screening/careers/I love teaching.', 'a Careers application is a staff application (applied) with the job in screening and the cover letter');
 -- (the public form stores the resume next; an application WITH its resume is complete, so a second apply only adds a job)
 update hr.staff_applications set resume_path = pg_temp.v('jc1') || '/resume/first.pdf', resume_filename = 'first.pdf', resume_mime = 'application/pdf', resume_size = 10 where profile_id = pg_temp.v('jc1');
 select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob1'), null)->>'reason', 'exists', 'applying again for the same job: the same answer');
-select is((select count(*)::int from hr.job_applications where profile_id = pg_temp.v('jc1')), 1, '...and still one job application');
+select is((select count(*)::int from hr.job_applications where profile_id = pg_temp.v('jc1')), 1, '...and still one open job application');
+insert into t select 'japp1', id::text from hr.job_applications where profile_id = pg_temp.v('jc1');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('jc1') || '/cover-letter/c.pdf'), ('staff-documents', pg_temp.v('jc1') || '/resume/c.pdf');
-select throws_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, (select id from hr.job_applications where profile_id = pg_temp.v('jc1')), pg_temp.v('jc1') || '/resume/c.pdf'),
+select throws_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, pg_temp.v('japp1'), pg_temp.v('jc1') || '/resume/c.pdf'),
  '22023', 'The cover letter location is not valid.', 'the cover letter file must be in its own folder');
-select lives_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, (select id from hr.job_applications where profile_id = pg_temp.v('jc1')), pg_temp.v('jc1') || '/cover-letter/c.pdf'),
+select lives_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, pg_temp.v('japp1'), pg_temp.v('jc1') || '/cover-letter/c.pdf'),
  'the cover letter file is recorded on the job application');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
-select is((public.hr_admin_job_applications(pg_temp.v('jjob1'))->0->>'coverLetter'), 'I love teaching.', 'the Applicants tab shows the cover letter');
-select is((public.hr_admin_job_applications(pg_temp.v('jjob1'))->0->'coverLetterFile'->>'filename'), 'c.pdf', '...and the cover letter file');
+select is(public.hr_admin_candidate(pg_temp.v('japp1'))->>'coverLetter', 'I love teaching.', 'the candidate page shows the cover letter');
+select is(public.hr_admin_candidate(pg_temp.v('japp1'))->'coverLetterFile'->>'filename', 'c.pdf', '...the cover letter file');
+select is(public.hr_admin_candidate(pg_temp.v('japp1'))->'resume'->>'filename', 'first.pdf', '...and the application''s resume');
+select is((public.hr_admin_candidates(pg_temp.v('jjob1'), 'screening', 'cara', 10, 0)->>'total')::int, 1, 'the candidate list filters by job, stage and search');
 select is(public.hr_admin_staff_detail(pg_temp.v('jc1'))->'jobApplications'->0->>'jobTitle', 'Trainer (Commercial Cookery)', 'the Employees detail shows the job');
 select is((public.hr_admin_staff_list(null, 'cara.careers', 5, 0, null)->'rows'->0->>'jobTitle'), 'Trainer (Commercial Cookery)', 'the Employees list shows the job');
-select lives_ok($$select public.hr_admin_staff_invite(pg_temp.v('jc1'), 'documents', pg_temp.h('job-link'))$$, 'Send document link (the old Hire)');
+select throws_ok($$select public.hr_admin_staff_invite(pg_temp.v('jc1'), 'documents', pg_temp.h('job-link'))$$, '23514', 'This person applied for a job: hire them from Candidates (or decline the application) to send the document link.',
+ 'a Careers applicant gets the document link through Candidates');
+select throws_ok($$select public.hr_admin_candidate_hire(pg_temp.v('japp1'), pg_temp.h('hire-1'))$$, '23514', 'Mark the candidate selected before hiring.', 'no hire before the selected stage');
+select throws_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'selected')$$, '23514', 'Record the interview before marking a candidate selected.', 'selected needs an interview first');
+select throws_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'interview')$$, '22023', 'Enter the interview date and time.', 'an interview needs its date');
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'shortlisted')$$, 'shortlisted');
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'interview', now() + interval '2 days', 'Bring the portfolio.')$$, 'the interview is recorded');
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'selected', null, 'Strong candidate.')$$, 'selected');
+select is(public.hr_admin_candidate(pg_temp.v('japp1'))->>'stage' || '/' || (public.hr_admin_candidate(pg_temp.v('japp1'))->>'interviewNotes'), 'selected/Strong candidate.', 'the stage and the notes are kept');
+select throws_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp1'), 'hired')$$, '22023', null, 'hiring is not a stage change');
+select is(public.hr_admin_candidate_hire(pg_temp.v('japp1'), pg_temp.h('hire-1'))->'invite'->>'purpose', 'documents', 'Hire and send document link: the document link is made');
 reset role;
-select is((select status from hr.job_applications where profile_id = pg_temp.v('jc1')), 'hired', 'the job application follows: hired');
+select is((select j.status || '/' || p.status from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id where j.id = pg_temp.v('japp1')), 'hired/invited', 'the job application is hired and the person is invited');
+select is((select department || '/' || job_title || '/' || employment_type || '/' || coalesce(joining_date::text, 'none') from hr.employment where profile_id = pg_temp.v('jc1')),
+ 'Training/Trainer (Commercial Cookery)/full_time/none', 'the employment record comes from the job; the joining date waits for activation');
+select ok((select count(*) from hr.recruitment_events where application_id = pg_temp.v('japp1')) >= 3, 'the recruitment log records the moves');
+select is(public.hr_svc_onboarding_open(pg_temp.h('hire-1'))->>'readOnly', 'false', 'the hire link opens the onboarding');
+-- Declined: the last open application of a person who is still just "applied" rejects the person (email optional).
 insert into t select 'jc2', public.hr_svc_apply('Dan', 'Declined', 'dan.declined@example.test', '0400 000 812', pg_temp.v('jjob1'), null)->>'profileId';
+insert into t select 'japp2', id::text from hr.job_applications where profile_id = pg_temp.v('jc2');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
-select lives_ok($$select public.hr_admin_staff_reject(pg_temp.v('jc2'), 'Not this time', false)$$, 'reject uses the same action');
--- Add staff member (HR-02i).
+select throws_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp2'), 'declined')$$, '22023', 'Record a reason for this decision.', 'a decline needs a reason');
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp2'), 'declined', null, null, 'Not this time', false)$$, 'declined without the email');
+reset role;
+select is((select j.status || '/' || j.decision_note || '/' || p.status from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id where j.id = pg_temp.v('japp2')), 'declined/Not this time/rejected', 'the application is declined and the person rejected');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('jc2') and kind = 'rejected'), 0, 'unticked: no rejection email');
+-- A manual candidate is an HR-02 record (applied, no login) with a manual application; staff-admin adds the files.
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+insert into t select 'japp3', public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"mia.manual@example.test","phone":"0400 000 817"}', 'Referred by a trainer.', 'Call on Monday.')::text;
+select is((select c->>'staffStatus' || '/' || (c->>'source') || '/' || (c->>'recruiterNotes') from public.hr_admin_candidate(pg_temp.v('japp3')) c), 'applied/manual/Call on Monday.', 'a manual candidate: applied, manual application, notes');
+select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"mia.manual@example.test","phone":"0400 000 818"}', '', '')$$, '23505',
+ 'This email belongs to a staff record with a different mobile number. Open it from Employees.', 'the same email with another mobile is refused');
+select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"mia.manual@example.test","phone":"0400 000 817"}', '', '')$$, '23505', 'This person already has an open application for this job.', 'one open application per job');
+select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Ad","lastName":"Min","email":"admin.user@example.test","phone":"0400 000 819"}', '', '')$$, '23505', 'This email belongs to an active admin console user.', 'an active admin console user is not a candidate');
+reset role;
+insert into t select 'jc3', profile_id::text from hr.job_applications where id = pg_temp.v('japp3');
+select is((select count(*)::int from auth.users where lower(email) = 'mia.manual@example.test'), 0, 'no login is created for a manual candidate');
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('jc3') || '/resume/m.pdf');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_candidate_file(pg_temp.v('japp3'), 'resume', pg_temp.v('jc3') || '/resume/m.pdf', 'm.pdf', 'application/pdf', 10)->>'ok', 'true', 'staff-admin records a manual candidate''s resume on the staff application');
+select throws_ok($$select public.hr_admin_candidate_file(pg_temp.v('japp1'), 'resume', pg_temp.v('jc1') || '/resume/c.pdf', 'c.pdf', 'application/pdf', 10)$$, '23514', null, 'a Careers applicant''s files are never replaced');
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('japp3'), 'withdrawn', null, null, 'Took another job', false)$$, 'withdrawn');
+reset role;
+select is((select a.resume_filename || '/' || j.status || '/' || p.status from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id join hr.staff_applications a on a.profile_id = p.id where j.id = pg_temp.v('japp3')),
+ 'm.pdf/withdrawn/rejected', 'the resume is on the application; a withdrawal closes the application and the person');
+-- Add staff member (HR-02i): a record, then the document link (no job, so no Candidates step).
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_staff_add('Ada', 'Added', 'ada.added@example.test', '0400 000 813')->>'ok', 'true', 'an administrator adds a staff member');
 select throws_ok($$select public.hr_admin_staff_add('Ada', 'Again', 'ada.added@example.test', '0400 000 814')$$, '23505', 'This email or mobile already has a staff record. Open it from Employees.', 'the same email cannot be added twice');
 select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'not-an-email', '0400 000 815')$$, '22023', 'Enter a valid email address.', 'the address is checked');
+select lives_ok($$select public.hr_admin_staff_invite((select id from hr.staff_profiles where email = 'ada.added@example.test'), 'documents', pg_temp.h('ada-link'))$$, 'an added person (no job application) gets the document link from Employees');
+-- Employment details on Employees.
+select is(public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{"department":"Hospitality","jobTitle":"Senior Trainer","employmentType":"part_time","workLocation":"Melbourne CBD"}')->'employment'->>'department', 'Hospitality', 'the employment details are editable on Employees');
+select throws_ok(format($$select public.hr_admin_staff_employment_save(%L, '{"jobTitle":"x","employmentType":"full_time","managerId":"%s"}')$$, pg_temp.v('jc1'), pg_temp.v('jc1')), '23514', 'A person cannot be their own manager.', 'no self-management');
+select throws_ok(format($$select public.hr_admin_staff_employment_save(%L, '{"jobTitle":"x","employmentType":"full_time","managerId":"%s"}')$$, pg_temp.v('jc1'), pg_temp.v('jc2')), '22023', 'Choose an active employee as the manager.', 'the manager must be an active employee');
 reset role;
-select is((select status from hr.job_applications where profile_id = pg_temp.v('jc2')), 'declined', 'the job application follows: declined');
-select is((select p.status || '/' || e.actor_kind || '/' || e.note from hr.staff_profiles p join hr.staff_status_events e on e.profile_id = p.id where p.email = 'ada.added@example.test'),
- 'applied/admin/Added by an administrator', 'an added person is Applied, logged as added by an administrator');
+select is((select p.status || '/' || e.actor_kind || '/' || e.note from hr.staff_profiles p join hr.staff_status_events e on e.profile_id = p.id where p.email = 'ada.added@example.test' and e.to_status = 'applied'),
+ 'invited/admin/Added by an administrator', 'an added person is logged as added by an administrator');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000003';
 select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'x.y@example.test', '0400 000 816')$$, '42501', null, 'only an administrator can add staff');
-select throws_ok($$select public.hr_admin_job_applications(null)$$, '42501', null, 'only an administrator sees applicants');
+select throws_ok($$select public.hr_admin_candidates(null, null, null, 10, 0)$$, '42501', null, 'only an administrator sees candidates');
+select throws_ok($$select public.hr_admin_candidate_hire(pg_temp.v('japp2'), pg_temp.h('x'))$$, '42501', null, 'only an administrator hires');
+select throws_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{}')$$, '42501', null, 'only an administrator edits employment');
 reset role;
 select is(public.jobs_open(null)->0->>'title' is not null and not (public.jobs_open(null)::text like '%Closed role%'), true, 'the website lists open jobs only');
-select is((select count(*)::int from pg_proc where proname in ('hr_job_apply','hr_admin_job_decide','hr_admin_staff_create') and pronamespace = 'public'::regnamespace), 0,
- 'the login-based job apply, decide and admin-create functions are gone');
+select is((select count(*)::int from pg_proc where proname in ('hr_job_apply','hr_admin_job_decide','hr_admin_staff_create','hr_staff_start','hr_staff_precheck','hr_staff_document_register','hr_admin_candidate_document',
+  'hr_admin_employees','hr_admin_employee','hr_admin_employee_save','hr_employee_invite_target','hr_employee_invite_logged','hr_admin_job_applications') and pronamespace = 'public'::regnamespace), 0,
+ 'the login-based job, password sign-up, admin direct-upload and Master Data employee functions are gone');
+select is((select count(*)::int from pg_policies where schemaname = 'storage' and policyname like 'recruitment%'), 0, 'no admin direct-upload policy on the bucket');
+select is((select count(*)::int from pg_trigger where tgname in ('employment_on_activation', 'employment_activation_guard')), 0, 'the 20261109153953 activation triggers are gone (HR-02 activation does the checks)');
 select throws_ok($$update hr.staff_profiles set status = 'job_applied' where id = pg_temp.v('jc1')$$, '23514', null, 'job_applied is no longer a status');
 select is((select count(*)::int from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name in ('resume_document_id','cover_letter_document_id')), 0,
  'job applications no longer point at staff documents');
+select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled), 'staff_candidates,agency_staff,agency_jobs', 'the Staff group holds Candidates, Employees and Jobs');
+select is((select count(*)::int from public.admin_menu_items where id in ('agency_candidates', 'agency_employees') and is_enabled), 0, 'the Master Data copies of Candidates and Employees are disabled');
 
 -- ---------------------------------------------------------------- privileges
 select is(has_function_privilege('anon', 'public.hr_svc_onboarding_open(text)', 'execute'), false, 'anon cannot call the link functions');

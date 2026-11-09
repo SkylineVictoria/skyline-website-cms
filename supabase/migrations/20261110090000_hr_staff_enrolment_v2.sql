@@ -1,21 +1,25 @@
--- Staff enrolment v2 (HR-02a; extends the hr schema of 20261105180000/190000/200000, which are applied hosted and not edited).
--- LOCAL only until the owner releases it. Flow, with no login until the very end:
---   applied             public form (staff-register `apply`): name, email, phone, resume. Admin: reject or send a document invite.
+-- Staff enrolment v2 (HR-02a..j). Extends the hr schema of 20261105180000/190000/200000, 20261106120000/130000 (Jobs) and
+-- 20261109153953 (Master Data: candidate stages, hr.employment, hr.recruitment_events), all applied on hosted and never edited here.
+-- LOCAL only until the owner releases it (SUPABASE.md "HR-02 release order"). Flow, with no login until the very end:
+--   applied             public form (staff-register `apply`, from Enroll now > Staff or a Careers job): name, email, phone, resume; a
+--                       Careers application also records the job (cover letter text and/or file). Admin: reject, or send the document
+--                       link; a Careers applicant goes through Candidates (screening > shortlisted > interview > selected > Hire and send
+--                       document link). An admin may also add a person (Employees) or a manual candidate (Candidates).
 --   invited             a one-time link (hr.staff_invites stores only the sha256 of the token): personal details + documents.
 --   documents_submitted the applicant submitted; each document is reviewed. A rejected document lets the admin send a
 --                       re-upload link (back to invited, purpose 'reupload': only rejected documents can be replaced).
 --   offer_sent          the admin uploaded an offer PDF and sent it (a link of purpose 'offer').
 --   offer_signed        the applicant signed it on the page (typed name, consent, time, IP, user agent, signed PDF + sha256).
---   active              joining date + role: an existing confirmed auth account gets the role at once; otherwise Auth
+--   active              joining date (on hr.employment) + role: an existing confirmed auth account gets the role at once; otherwise Auth
 --                       invites the person and hr_staff_claim_account() activates them after they set a password.
 --   rejected / inactive as before; rejected > applied is a re-application or an admin reopen; inactive > applied is a former
 --                       staff member applying again.
 -- Applicants never call SQL directly: the token-checked Edge Functions call the service-role-only hr_svc_* functions with the
 -- token HASH. Admin functions keep hr.require_admin(). Documents keep the per-document review (pending/approved/rejected),
--- categories and expiry rules. Files: staff-documents/{profile id}/{doc slug|resume|offer}/{file}.
--- Legacy rows are mapped once: draft > applied, submitted/preboarding > documents_submitted (logged as system).
+-- categories and expiry rules. Files: staff-documents/{profile id}/{doc slug|resume|cover-letter|offer}/{file}.
+-- Legacy rows are mapped once: draft/job_applied > applied, submitted/preboarding > documents_submitted (logged as system).
 -- Rollback (manual, nothing hosted depends on it yet): drop the functions and tables created here, restore the bodies of the
--- redefined 20261105180000/190000 functions, the dropped policies and grants, the old status checks, and the menu row.
+-- redefined 20261105190000 / 20261109153953 functions, the dropped policies, triggers and grants, the old status checks, and the menu rows.
 
 -- ------------------------------------------------------------------ documents: review columns and categories
 alter table hr.staff_profiles add column if not exists is_australian_citizen boolean;
@@ -56,97 +60,93 @@ drop index if exists hr.staff_documents_one_current;
 create unique index staff_documents_one_current on hr.staff_documents(application_id, category) where is_current and category <> 'Academic';
 create index if not exists staff_documents_expiry_idx on hr.staff_documents(expiry_date) where is_current and expiry_date is not null;
 
--- ------------------------------------------------------------------ applications: resume, joining date, activation, retention
+-- ------------------------------------------------------------------ applications: resume, activation, retention (the joining date is on hr.employment)
 alter table hr.staff_applications
  add column if not exists resume_path text unique check (resume_path is null or char_length(resume_path) <= 400),
  add column if not exists resume_filename text check (resume_filename is null or char_length(resume_filename) between 1 and 255),
  add column if not exists resume_mime text check (resume_mime is null or resume_mime in ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
  add column if not exists resume_size integer check (resume_size is null or resume_size between 1 and 5242880),
  add column if not exists resume_uploaded_at timestamptz,
- add column if not exists joining_date date check (joining_date is null or joining_date between date '2000-01-01' and date '2100-12-31'),
  add column if not exists account_invited_at timestamptz,
  add column if not exists files_purged_at timestamptz;
 
--- ------------------------------------------------------------------ jobs on the no-login flow (HR-02i)
--- 20261106120000 / 20261106130000 created hr.jobs and hr.job_applications on hosted by hand (2 open jobs, 0 applications on 2026-11-09).
--- The jobs stay as they are. A job application now belongs to the staff application made through the public form: the resume is the
--- application's, the cover letter is text and/or a file on the job application; the login-based apply, decide and admin-create functions
--- go (staff-register, staff-admin and hr_svc_* replace them). Creates both tables on a stack that never ran 20261106120000.
-create table if not exists hr.jobs (
- id uuid primary key default gen_random_uuid(),
- title text not null check (char_length(btrim(title)) between 2 and 150),
- description text not null check (char_length(description) between 1 and 10000),
- employment_type text not null check (employment_type in ('full_time','part_time')),
- salary text not null default '' check (char_length(salary) <= 120),
- location text not null check (char_length(btrim(location)) between 1 and 150),
- status text not null default 'open' check (status in ('open','closed')),
- created_by uuid,
- created_at timestamptz not null default now(),
- updated_at timestamptz not null default now()
-);
-create table if not exists hr.job_applications (
- id uuid primary key default gen_random_uuid(),
- job_id uuid not null references hr.jobs(id) on delete restrict,
- profile_id uuid not null references hr.staff_profiles(id) on delete restrict,
- cover_letter text not null default '' check (char_length(cover_letter) <= 5000),
- status text not null default 'applied' check (status in ('applied','hired','declined')),
- decided_by uuid,
- decided_at timestamptz,
- decision_note text not null default '' check (char_length(decision_note) <= 2000),
- created_at timestamptz not null default now(),
- updated_at timestamptz not null default now(),
- unique (job_id, profile_id)
-);
-alter table hr.jobs enable row level security;
-alter table hr.job_applications enable row level security;
+-- ------------------------------------------------------------------ jobs, candidates and employment on the no-login flow (HR-02i / HR-02j)
+-- hr.jobs / hr.job_applications (20261106120000/130000) and the Master Data recruitment objects of 20261109153953 (candidate stages,
+-- manual candidates, hr.employment, hr.recruitment_events, job draft / department / vacancies) are on hosted; this builds on them.
+--   * A job application belongs to the staff application made through the public form: the resume is the application's (resume_path),
+--     the cover letter is text and/or a file on the job application. The document ids of the login-based flow go.
+--   * The pipeline stays: screening > shortlisted > interview > selected. "Hire and send document link" is allowed from selected only
+--     (hr_admin_candidate_hire: the job application becomes hired, hr.employment is created or updated from the job, HR-02's document link
+--     goes out). Declined / withdrawn go through hr_admin_candidate_progress and, for a person still just "applied", HR-02's reject.
+--   * Manual candidates are HR-02 records (applied, no login); their resume / cover letter arrive through staff-admin (hr_admin_candidate_file).
+--   * hr.employment holds department, title, type, manager and location (editable on Staff > Employees); the joining date is set at activation.
+--   * Gone: the login-based apply / decide / admin-create functions, the admin direct-upload policies and function, the Master Data employee
+--     list functions (Staff > Employees is the one list), the activation guard and employment-on-activation triggers (HR-02's activation
+--     checks the documents and writes the employment row itself).
 do $jobs$
 begin
- if exists (select 1 from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name = 'resume_document_id')
-    and exists (select 1 from hr.job_applications) then
-  raise exception 'Job applications of the login-based Jobs flow exist; move them first. Nothing was changed.';
+ if exists (select 1 from hr.job_applications where resume_document_id is not null or cover_letter_document_id is not null) then
+  raise exception 'Job applications with files of the login-based Jobs flow exist; move them first. Nothing was changed.';
  end if;
 end $jobs$;
+alter table hr.job_applications drop constraint if exists job_application_required_files;
 alter table hr.job_applications drop column if exists resume_document_id, drop column if exists cover_letter_document_id;
 alter table hr.job_applications
  add column if not exists cover_letter_path text unique check (cover_letter_path is null or char_length(cover_letter_path) <= 400),
  add column if not exists cover_letter_filename text check (cover_letter_filename is null or char_length(cover_letter_filename) between 1 and 255),
  add column if not exists cover_letter_mime text check (cover_letter_mime is null or cover_letter_mime in ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
  add column if not exists cover_letter_size integer check (cover_letter_size is null or cover_letter_size between 1 and 5242880);
-create index if not exists jobs_status_idx on hr.jobs(status, created_at desc);
 create index if not exists job_applications_profile_idx on hr.job_applications(profile_id);
-create index if not exists job_applications_job_idx on hr.job_applications(job_id, created_at desc);
--- Applicants have no login: their old read policy goes. Job posts stay readable through jobs_open() only.
+-- Applicants have no login: their old read policy goes. Job posts stay readable through jobs_open() only. Admins write files through
+-- staff-admin (service role), never the Data API.
 drop policy if exists job_applications_read on hr.job_applications;
-revoke all on hr.jobs, hr.job_applications from public, anon, authenticated;
+drop policy if exists recruitment_keep_application_files on storage.objects;
+drop policy if exists recruitment_admin_upload on storage.objects;
+drop policy if exists recruitment_admin_remove_orphan on storage.objects;
+revoke all on hr.jobs, hr.job_applications, hr.employment, hr.recruitment_events from public, anon, authenticated;
+drop trigger if exists employment_on_activation on hr.staff_profiles;
+drop trigger if exists employment_activation_guard on hr.staff_profiles;
+drop function if exists hr.record_staff_employment();
+drop function if exists hr.guard_employment_activation();
+drop function if exists hr.recruitment_file_is_unused(text);
 drop function if exists public.hr_job_apply(uuid, text, uuid, uuid);
 drop function if exists public.hr_admin_job_decide(uuid, text, text);
 drop function if exists public.hr_admin_staff_create(uuid, text, text, text, text, text, uuid);
+drop function if exists public.hr_admin_job_applications(uuid);
+drop function if exists public.hr_admin_candidate_document(uuid, text, text, text, text, integer);
+drop function if exists public.hr_admin_candidate_progress(uuid, text, timestamptz, text, text);
+drop function if exists public.hr_admin_employees(text, text, text, integer, integer);
+drop function if exists public.hr_admin_employee(uuid);
+drop function if exists public.hr_admin_employee_save(uuid, jsonb, jsonb);
+drop function if exists public.hr_employee_invite_target(uuid);
+drop function if exists public.hr_employee_invite_logged(uuid, uuid);
+drop function if exists hr.employee_json(hr.employment, hr.staff_profiles);
 drop function if exists hr.job_applications_json(uuid);
 
+-- The job a person is (being) hired for, else their latest application: for the Employees list.
 create or replace function hr.latest_job_title(p_profile uuid) returns text
 language sql stable security definer set search_path = hr, pg_temp as $fn$
- select j.title from hr.job_applications a join hr.jobs j on j.id = a.job_id where a.profile_id = p_profile order by a.created_at desc limit 1;
+ select j.title from hr.job_applications a join hr.jobs j on j.id = a.job_id where a.profile_id = p_profile
+ order by (a.status = 'hired') desc, a.created_at desc limit 1;
 $fn$;
 revoke all on function hr.latest_job_title(uuid) from public, anon, authenticated;
 
--- The person's job applications, for the Employees detail page.
+-- The person's job applications, for the Employees detail page and My HR.
 create or replace function hr.job_applications_json(p_profile uuid) returns jsonb
 language sql stable security definer set search_path = hr, pg_temp as $fn$
- select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'jobId', j.id, 'jobTitle', j.title, 'jobStatus', j.status, 'status', a.status,
-   'appliedAt', a.created_at, 'decidedAt', a.decided_at, 'coverLetter', a.cover_letter,
+ select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'jobId', j.id, 'jobTitle', j.title, 'jobStatus', j.status, 'status', a.status, 'stage', a.stage,
+   'source', a.source, 'appliedAt', a.created_at, 'decidedAt', a.decided_at, 'decisionNote', a.decision_note, 'coverLetter', a.cover_letter,
    'coverLetterFile', case when a.cover_letter_path is null then null else jsonb_build_object('filename', a.cover_letter_filename, 'storagePath', a.cover_letter_path, 'mimeType', a.cover_letter_mime) end)
    order by a.created_at desc), '[]'::jsonb)
  from hr.job_applications a join hr.jobs j on j.id = a.job_id where a.profile_id = p_profile;
 $fn$;
 revoke all on function hr.job_applications_json(uuid) from public, anon, authenticated;
 
--- A job application follows the person: sending the document link moves it on (hired), a rejection declines it.
+-- A rejection of the person declines their open and hired job applications. Hiring is explicit (hr_admin_candidate_hire).
 create or replace function hr.staff_job_applications_follow() returns trigger
 language plpgsql security definer set search_path = hr, pg_temp as $fn$
 begin
- if new.status = 'invited' and old.status = 'applied' then
-  update hr.job_applications set status = 'hired', decided_at = now(), decided_by = nullif(current_setting('hr.actor', true), '')::uuid where profile_id = new.id and status = 'applied';
- elsif new.status = 'rejected' and old.status is distinct from 'rejected' then
+ if new.status = 'rejected' and old.status is distinct from 'rejected' then
   update hr.job_applications set status = 'declined', decided_at = now(), decided_by = nullif(current_setting('hr.actor', true), '')::uuid,
    decision_note = left(coalesce(current_setting('hr.note', true), ''), 2000) where profile_id = new.id and status in ('applied','hired');
  end if;
@@ -155,16 +155,16 @@ end $fn$;
 drop trigger if exists staff_job_applications_follow on hr.staff_profiles;
 create trigger staff_job_applications_follow after update of status on hr.staff_profiles for each row execute function hr.staff_job_applications_follow();
 
--- Open jobs for the website (or one job by id, open or closed), and the admin functions of 20261106120000 restated for a fresh stack.
+-- Job posts for the website and the Jobs page: the 20261109153953 versions, restated (an earlier local version of this file replaced them).
 create or replace function hr.job_json(j hr.jobs) returns jsonb
-language sql stable set search_path = pg_catalog, pg_temp as $fn$
+language sql immutable parallel safe set search_path = pg_catalog, pg_temp as $fn$
  select jsonb_build_object('id', j.id, 'title', j.title, 'description', j.description, 'employmentType', j.employment_type, 'salary', j.salary,
-  'location', j.location, 'status', j.status, 'postedAt', j.created_at, 'updatedAt', j.updated_at);
+  'location', j.location, 'status', j.status, 'postedAt', j.created_at, 'updatedAt', j.updated_at, 'publishedAt', j.published_at, 'department', j.department, 'vacancies', j.vacancies);
 $fn$;
 create or replace function public.jobs_open(p_id uuid default null) returns jsonb
 language sql stable security definer set search_path = public, hr, pg_temp as $fn$
- select coalesce(jsonb_agg(hr.job_json(j) order by j.created_at desc), '[]'::jsonb) from hr.jobs j
- where (p_id is null and j.status = 'open') or j.id = p_id;
+ select coalesce(jsonb_agg(hr.job_json(j) order by j.created_at desc), '[]'::jsonb)
+ from hr.jobs j where (p_id is null and j.status = 'open') or (p_id is not null and j.id = p_id and (j.status = 'open' or (j.status = 'closed' and j.published_at is not null)));
 $fn$;
 revoke all on function public.jobs_open(uuid) from public;
 grant execute on function public.jobs_open(uuid) to anon, authenticated;
@@ -173,46 +173,14 @@ language plpgsql stable security definer set search_path = public, hr, pg_temp a
 begin
  perform hr.require_admin();
  return coalesce((select jsonb_agg(hr.job_json(j) || jsonb_build_object(
+   'candidateCount', (select count(distinct profile_id) from hr.job_applications a where a.job_id = j.id),
    'applied', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'applied'),
    'hired', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'hired'),
-   'declined', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'declined')) order by j.created_at desc) from hr.jobs j), '[]'::jsonb);
+   'declined', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status in ('declined','withdrawn')))
+  order by (j.status = 'open') desc, j.created_at desc) from hr.jobs j), '[]'::jsonb);
 end $fn$;
 revoke all on function public.hr_admin_job_list() from public, anon;
 grant execute on function public.hr_admin_job_list() to authenticated;
-create or replace function public.hr_admin_job_save(p_id uuid, p_job jsonb) returns jsonb
-language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
-declare v_admin uuid := hr.require_admin(); j hr.jobs;
-begin
- if p_id is null then
-  insert into hr.jobs(title, description, employment_type, salary, location, status, created_by)
-   values (btrim(p_job->>'title'), btrim(p_job->>'description'), p_job->>'employmentType', btrim(coalesce(p_job->>'salary', '')), btrim(p_job->>'location'), coalesce(p_job->>'status', 'open'), v_admin)
-   returning * into j;
- else
-  update hr.jobs set title = btrim(p_job->>'title'), description = btrim(p_job->>'description'), employment_type = p_job->>'employmentType',
-   salary = btrim(coalesce(p_job->>'salary', '')), location = btrim(p_job->>'location'), status = coalesce(p_job->>'status', status), updated_at = now()
-   where id = p_id returning * into j;
-  if not found then raise exception 'Job not found.' using errcode = 'P0002'; end if;
- end if;
- return hr.job_json(j);
-end $fn$;
-revoke all on function public.hr_admin_job_save(uuid, jsonb) from public, anon;
-grant execute on function public.hr_admin_job_save(uuid, jsonb) to authenticated;
-drop function if exists public.hr_admin_job_applications(uuid);
-create or replace function public.hr_admin_job_applications(p_job uuid default null) returns jsonb
-language plpgsql stable security definer set search_path = public, hr, pg_temp as $fn$
-begin
- perform hr.require_admin();
- return coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'jobId', j.id, 'jobTitle', j.title, 'employmentType', j.employment_type, 'location', j.location,
-   'profileId', p.id, 'name', btrim(concat_ws(' ', p.first_name, p.last_name)), 'email', p.email, 'phone', p.phone_e164, 'staffStatus', p.status,
-   'status', a.status, 'appliedAt', a.created_at, 'decidedAt', a.decided_at, 'decisionNote', a.decision_note, 'coverLetter', a.cover_letter,
-   'coverLetterFile', case when a.cover_letter_path is null then null else jsonb_build_object('filename', a.cover_letter_filename, 'storagePath', a.cover_letter_path, 'mimeType', a.cover_letter_mime) end,
-   'resume', case when s.resume_path is null then null else jsonb_build_object('filename', s.resume_filename, 'storagePath', s.resume_path, 'mimeType', s.resume_mime) end)
-   order by a.created_at desc)
-  from hr.job_applications a join hr.jobs j on j.id = a.job_id join hr.staff_profiles p on p.id = a.profile_id join hr.staff_applications s on s.profile_id = p.id
-  where p_job is null or a.job_id = p_job), '[]'::jsonb);
-end $fn$;
-revoke all on function public.hr_admin_job_applications(uuid) from public, anon;
-grant execute on function public.hr_admin_job_applications(uuid) to authenticated;
 
 -- ------------------------------------------------------------------ status machine
 alter table hr.staff_profiles drop constraint if exists staff_profiles_status_check;
@@ -370,6 +338,7 @@ create policy staff_documents_read on storage.objects for select to authenticate
 
 -- ------------------------------------------------------------------ obsolete functions (sign-up, applicant RPCs on auth.uid())
 drop function if exists public.hr_staff_start(text, text);
+drop function if exists public.hr_staff_precheck(text, text);
 drop function if exists public.hr_staff_save(jsonb);
 drop function if exists public.hr_staff_document_register(text, text, text, text, integer);
 drop function if exists public.hr_staff_document_remove(uuid);
@@ -599,8 +568,9 @@ begin
    -- The address already has an open application: tell THAT address (never a different one), at most once an hour. The
    -- caller's answer stays the same thank-you; staff-register's per-email rate limit applies before this is reached.
    if p_job is not null then
-    -- An open application applying for (another) job: the job is added to it; no email (nothing else changed).
-    insert into hr.job_applications(job_id, profile_id, cover_letter) values (p_job, p.id, v_letter) on conflict (job_id, profile_id) do nothing;
+    -- An open application applying for (another) job: the job is added to it (one open application per job); no email (nothing else changed).
+    insert into hr.job_applications(job_id, profile_id, cover_letter) select p_job, p.id, v_letter
+     where not exists (select 1 from hr.job_applications x where x.job_id = p_job and x.profile_id = p.id and x.status = 'applied');
    elsif not exists (select 1 from hr.staff_emails e where e.profile_id = p.id and e.kind = 'already_applied' and e.created_at > now() - interval '1 hour') then
     perform hr.queue_email(p.id, 'already_applied', 'applicant');
    end if;
@@ -615,15 +585,19 @@ begin
  else
   update hr.staff_profiles set first_name = v_first, last_name = v_last, phone_e164 = v_phone, status = 'applied' where id = p.id returning * into p;
   update hr.staff_applications set resume_path = null, resume_filename = null, resume_mime = null, resume_size = null, resume_uploaded_at = null,
-   submitted_at = null, reviewed_by = null, reviewed_at = null, review_note = '', joining_date = null, account_invited_at = null where profile_id = p.id;
+   submitted_at = null, reviewed_by = null, reviewed_at = null, review_note = '', account_invited_at = null where profile_id = p.id;
   update hr.staff_documents set is_current = false where profile_id = p.id and is_current;
   update hr.staff_roles set revoked_at = now() where profile_id = p.id and revoked_at is null;
  end if;
  if p_job is not null then
-  insert into hr.job_applications(job_id, profile_id, cover_letter) values (p_job, p.id, v_letter)
-   on conflict (job_id, profile_id) do update set status = 'applied', cover_letter = excluded.cover_letter, cover_letter_path = null, cover_letter_filename = null,
-    cover_letter_mime = null, cover_letter_size = null, decided_by = null, decided_at = null, decision_note = ''
-   returning id into v_job_app;
+  -- A new application for this job (a decided one stays in the job's history), or the open one of an application still waiting for its
+  -- resume, whose cover letter is replaced.
+  select id into v_job_app from hr.job_applications x where x.job_id = p_job and x.profile_id = p.id and x.status = 'applied';
+  if v_job_app is null then
+   insert into hr.job_applications(job_id, profile_id, cover_letter) values (p_job, p.id, v_letter) returning id into v_job_app;
+  else
+   update hr.job_applications set cover_letter = v_letter, cover_letter_path = null, cover_letter_filename = null, cover_letter_mime = null, cover_letter_size = null, stage = 'screening' where id = v_job_app;
+  end if;
  end if;
  return jsonb_build_object('ok', true, 'profileId', p.id, 'jobApplicationId', v_job_app);
 end $fn$;
@@ -649,6 +623,36 @@ begin
 end $fn$;
 revoke all on function public.hr_svc_job_cover_letter(uuid, text, text, text, integer) from public, anon, authenticated;
 grant execute on function public.hr_svc_job_cover_letter(uuid, text, text, text, integer) to service_role;
+
+-- A manual candidate's resume (the staff application's) or cover letter file (the job application's): staff-admin checks the content like
+-- the public form, stores it with the service role under {profile}/resume/ or {profile}/cover-letter/, then records it here as the caller
+-- (an administrator). Only an OPEN manual candidate; a Careers applicant's own files are never replaced. Returns the path it replaced
+-- (the function deletes it).
+create or replace function public.hr_admin_candidate_file(p_application uuid, p_which text, p_path text, p_filename text, p_mime text, p_size integer) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare a hr.job_applications; s hr.staff_applications; v_old text;
+begin
+ perform hr.require_admin();
+ if p_which not in ('resume','cover_letter') then raise exception 'Choose the resume or the cover letter.' using errcode = '22023'; end if;
+ select * into a from hr.job_applications where id = p_application for update;
+ if not found then raise exception 'Candidate application not found.' using errcode = 'P0002'; end if;
+ if a.source <> 'manual' or a.status <> 'applied' then raise exception 'Files can be added to an open manual candidate only; Careers applicants'' files stay as submitted.' using errcode = '23514'; end if;
+ select * into s from hr.staff_applications where profile_id = a.profile_id for update;
+ if not hr.staff_path_ok(p_path, a.profile_id, case p_which when 'resume' then 'resume' else 'cover-letter' end) then raise exception 'The file location is not valid.' using errcode = '22023'; end if;
+ if p_mime not in ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document') then raise exception 'Upload a PDF or Word (.docx) file.' using errcode = '22023'; end if;
+ if p_size is null or p_size < 1 or p_size > 5242880 then raise exception 'The file must be 5 MB or smaller.' using errcode = '22023'; end if;
+ if not hr.staff_object_exists(p_path) then raise exception 'The uploaded file was not found.' using errcode = 'P0002'; end if;
+ if p_which = 'resume' then
+  v_old := s.resume_path;
+  update hr.staff_applications set resume_path = p_path, resume_filename = left(btrim(coalesce(p_filename, 'resume')), 255), resume_mime = p_mime, resume_size = p_size, resume_uploaded_at = now() where id = s.id;
+ else
+  v_old := a.cover_letter_path;
+  update hr.job_applications set cover_letter_path = p_path, cover_letter_filename = left(btrim(coalesce(p_filename, 'cover-letter')), 255), cover_letter_mime = p_mime, cover_letter_size = p_size where id = a.id;
+ end if;
+ return jsonb_build_object('ok', true, 'replacedPath', v_old);
+end $fn$;
+revoke all on function public.hr_admin_candidate_file(uuid, text, text, text, text, integer) from public, anon;
+grant execute on function public.hr_admin_candidate_file(uuid, text, text, text, text, integer) to authenticated;
 
 -- Step 2: the resume the function uploaded to {profile}/resume/{file}. Queues "application received" and "new application".
 create or replace function public.hr_svc_apply_resume(p_profile uuid, p_path text, p_filename text, p_mime text, p_size integer) returns jsonb
@@ -1042,7 +1046,7 @@ begin
  update hr.staff_offers set filename = 'removed.pdf', signer_name = case when signer_name is null then null else 'removed' end,
   signer_ip = null, signer_user_agent = null where profile_id = p_profile;
  update hr.staff_emails set to_email = case when audience = 'applicant' then 'removed' else null end, payload = '{}'::jsonb, last_error = null where profile_id = p_profile;
- update hr.job_applications set cover_letter = '', cover_letter_path = null, cover_letter_filename = null, decision_note = '' where profile_id = p_profile;
+ update hr.job_applications set cover_letter = '', cover_letter_path = null, cover_letter_filename = null, decision_note = '', interview_notes = '', recruiter_notes = '' where profile_id = p_profile;
 end $fn$;
 revoke all on function hr.staff_anonymise(uuid) from public, anon, authenticated;
 
@@ -1125,12 +1129,12 @@ begin
  select coalesce(jsonb_agg(r order by (r->>'updatedAt') desc), '[]'::jsonb) into v_rows from (
   select jsonb_build_object('id', p.id, 'name', hr.staff_name(p), 'email', p.email, 'phone', p.phone_e164, 'status', p.status,
    'role', (select ro.role from hr.staff_roles ro where ro.profile_id = p.id and ro.revoked_at is null),
-   'hasResume', a.resume_path is not null, 'appliedAt', p.created_at, 'submittedAt', a.submitted_at, 'joiningDate', a.joining_date,
-   'updatedAt', p.updated_at, 'docs', hr.staff_doc_summary(p.id),
+   'hasResume', a.resume_path is not null, 'appliedAt', p.created_at, 'submittedAt', a.submitted_at, 'joiningDate', e.joining_date,
+   'updatedAt', p.updated_at, 'docs', hr.staff_doc_summary(p.id), 'department', coalesce(e.department, ''),
    'inviteExpiresAt', (select i.expires_at from hr.staff_invites i where i.profile_id = p.id and i.revoked_at is null and i.superseded_at is null and i.used_at is null
      order by i.created_at desc limit 1),
-   'emailFailed', hr.staff_email_failed(p.id), 'jobTitle', hr.latest_job_title(p.id)) as r
-  from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
+   'emailFailed', hr.staff_email_failed(p.id), 'jobTitle', coalesce(nullif(e.job_title, ''), hr.latest_job_title(p.id))) as r
+  from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id left join hr.employment e on e.profile_id = p.id
   where (v_statuses is null or p.status = any(v_statuses))
    and (v_search is null or concat_ws(' ', p.first_name, p.middle_name, p.last_name, p.email, p.phone_e164) ilike '%' || replace(replace(v_search, '%', ''), '_', '') || '%')
   order by p.updated_at desc limit least(greatest(coalesce(p_limit, 50), 1), 200) offset greatest(coalesce(p_offset, 0), 0)) q;
@@ -1161,7 +1165,7 @@ begin
   'roles', coalesce((select jsonb_agg(jsonb_build_object('role', r.role, 'grantedAt', r.granted_at, 'revokedAt', r.revoked_at) order by r.granted_at) from hr.staff_roles r where r.profile_id = p.id), '[]'::jsonb),
   'events', coalesce((select jsonb_agg(jsonb_build_object('from', e.from_status, 'to', e.to_status, 'actorKind', e.actor_kind, 'note', e.note, 'at', e.created_at) order by e.id) from hr.staff_status_events e where e.profile_id = p.id), '[]'::jsonb),
   'hasCmsAccess', exists (select 1 from public.cms_users c where c.auth_user_id = p.auth_user_id and c.status = 'Active'),
-  'jobApplications', hr.job_applications_json(p.id));
+  'jobApplications', hr.job_applications_json(p.id), 'employment', hr.employment_json(p.id));
 end $fn$;
 
 -- Documents are reviewed once they were submitted at least once.
@@ -1236,6 +1240,9 @@ begin
  select purpose into v_live from hr.staff_invites where profile_id = p.id and purpose <> 'offer' order by created_at desc limit 1;
  if p_purpose = 'documents' then
   if not (p.status = 'applied' or (p.status = 'invited' and v_live = 'documents')) then raise exception 'A document link can be sent to a new application only.' using errcode = '23514'; end if;
+  if p.status = 'applied' and exists (select 1 from hr.job_applications x where x.profile_id = p.id and x.status = 'applied')
+     and not exists (select 1 from hr.job_applications x where x.profile_id = p.id and x.status = 'hired') then
+   raise exception 'This person applied for a job: hire them from Candidates (or decline the application) to send the document link.' using errcode = '23514'; end if;
  else
   if not ((p.status = 'documents_submitted' or (p.status = 'invited' and v_live = 'reupload'))
      and exists (select 1 from hr.staff_documents d where d.profile_id = p.id and d.is_current and d.status = 'rejected')) then
@@ -1270,6 +1277,201 @@ begin
 end $fn$;
 revoke all on function public.hr_admin_staff_add(text, text, text, text) from public, anon;
 grant execute on function public.hr_admin_staff_add(text, text, text, text) to authenticated;
+
+-- ------------------------------------------------------------------ candidates (the Master Data pipeline of 20261109153953 on the no-login flow)
+-- A person entered by an administrator, or an existing record found by email (its mobile must match). New people are HR-02 records:
+-- applied, no login (the login comes with activation). The details of a person with a login keep their email.
+create or replace function hr.admin_save_person(p_id uuid, p_person jsonb) returns hr.staff_profiles
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare p hr.staff_profiles; v_email text := hr.email_key(p_person->>'email'); v_phone text := hr.phone_e164(p_person->>'phone');
+ v_first text := btrim(coalesce(p_person->>'firstName', '')); v_last text := btrim(coalesce(p_person->>'lastName', ''));
+begin
+ if v_email is null or v_email !~ '^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$' or char_length(v_email) > 254 then raise exception 'Enter a valid email address.' using errcode = '22023'; end if;
+ if v_phone is null then raise exception 'Enter a valid mobile number with its country code.' using errcode = '22023'; end if;
+ if char_length(v_first) not between 1 and 100 or char_length(v_last) not between 1 and 100 or (v_first || v_last) ~ '[[:cntrl:]<>]' then
+  raise exception 'Enter first and last names (up to 100 characters each).' using errcode = '22023'; end if;
+ if p_id is null then
+  perform pg_advisory_xact_lock(hashtextextended(v_email, 12309));
+  select * into p from hr.staff_profiles where email = v_email for update;
+  if p.id is not null then
+   if p.phone_e164 is distinct from v_phone then raise exception 'This email belongs to a staff record with a different mobile number. Open it from Employees.' using errcode = '23505'; end if;
+   return p;
+  end if;
+  if exists (select 1 from public.cms_users c where hr.email_key(c.email) = v_email and c.status = 'Active') then raise exception 'This email belongs to an active admin console user.' using errcode = '23505'; end if;
+  if exists (select 1 from hr.staff_profiles x where x.phone_e164 = v_phone) then raise exception 'This mobile number already has a staff record. Open it from Employees.' using errcode = '23505'; end if;
+  perform set_config('hr.actor', coalesce(auth.uid()::text, ''), true); perform set_config('hr.actor_kind', 'admin', true); perform set_config('hr.note', 'Added by an administrator', true);
+  insert into hr.staff_profiles(first_name, last_name, email, phone_e164) values (v_first, v_last, v_email, v_phone) returning * into p;
+  insert into hr.staff_applications(profile_id) values (p.id);
+ else
+  select * into p from hr.staff_profiles where id = p_id for update;
+  if not found then raise exception 'Staff record not found.' using errcode = 'P0002'; end if;
+  if p.auth_user_id is not null and v_email <> p.email then raise exception 'Change the linked sign-in email through account management.' using errcode = '23514'; end if;
+  if exists (select 1 from hr.staff_profiles x where x.id <> p.id and (x.email = v_email or x.phone_e164 = v_phone)) then raise exception 'Another staff record already uses this email or mobile.' using errcode = '23505'; end if;
+  if (p.email, p.phone_e164, p.first_name, p.last_name) is distinct from (v_email, v_phone, v_first, v_last) then
+   update hr.staff_profiles set email = v_email, phone_e164 = v_phone, first_name = v_first, last_name = v_last where id = p_id returning * into p;
+   insert into hr.recruitment_events(profile_id, actor_id, action) values (p.id, auth.uid(), 'Contact details updated');
+  end if;
+ end if;
+ return p;
+end $fn$;
+revoke all on function hr.admin_save_person(uuid, jsonb) from public, anon, authenticated;
+
+-- One candidate (a job application with its person), for the Candidates pages: the resume is the staff application's, the cover letter
+-- file the job application's.
+create or replace function hr.candidate_json(a hr.job_applications, p hr.staff_profiles, j hr.jobs) returns jsonb
+language sql stable security definer set search_path = hr, pg_temp as $fn$
+ select jsonb_build_object('id', a.id, 'profileId', p.id, 'jobId', j.id, 'jobTitle', j.title, 'jobStatus', j.status,
+  'firstName', p.first_name, 'lastName', p.last_name, 'email', p.email, 'phone', p.phone_e164, 'staffStatus', p.status,
+  'linkedAccount', p.auth_user_id is not null, 'appliedAt', a.created_at, 'source', a.source,
+  'status', a.status, 'stage', a.stage, 'interviewAt', a.interview_at, 'interviewNotes', a.interview_notes,
+  'recruiterNotes', a.recruiter_notes, 'coverLetter', a.cover_letter, 'decisionNote', a.decision_note,
+  'decidedAt', a.decided_at, 'employeeId', (select e.profile_id from hr.employment e where e.profile_id = p.id),
+  'filesPurged', coalesce((select s.files_purged_at is not null from hr.staff_applications s where s.profile_id = p.id), false),
+  'resume', (select case when s.resume_path is null then null else jsonb_build_object('filename', s.resume_filename, 'storagePath', s.resume_path, 'mimeType', s.resume_mime) end
+    from hr.staff_applications s where s.profile_id = p.id),
+  'coverLetterFile', case when a.cover_letter_path is null then null else jsonb_build_object('filename', a.cover_letter_filename, 'storagePath', a.cover_letter_path, 'mimeType', a.cover_letter_mime) end);
+$fn$;
+revoke all on function hr.candidate_json(hr.job_applications, hr.staff_profiles, hr.jobs) from public, anon, authenticated;
+
+-- Add (p_id null) or edit a manual candidate: the person, the job, the cover letter text and the recruiter notes. A Careers applicant's
+-- cover letter is never changed here. A person already onboarding or employed is handled from Employees.
+create or replace function public.hr_admin_candidate_save(p_id uuid, p_job uuid, p_person jsonb, p_cover_letter text, p_recruiter_notes text) returns uuid
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare a hr.job_applications; p hr.staff_profiles; j hr.jobs; v_person uuid; v_letter text := left(btrim(coalesce(p_cover_letter, '')), 5000); v_notes text := left(btrim(coalesce(p_recruiter_notes, '')), 5000);
+begin
+ perform hr.require_admin();
+ if p_id is not null then
+  select profile_id into v_person from hr.job_applications where id = p_id;
+  if v_person is null then raise exception 'Candidate application not found.' using errcode = 'P0002'; end if;
+ end if;
+ p := hr.admin_save_person(v_person, p_person);
+ if p_id is not null then
+  select * into a from hr.job_applications where id = p_id for update;
+  if a.job_id <> p_job and (a.source <> 'manual' or a.status <> 'applied' or a.stage <> 'screening') then
+   raise exception 'Only a manual application in screening can change jobs.' using errcode = '23514'; end if;
+ end if;
+ select * into j from hr.jobs where id = p_job for share;
+ if not found then raise exception 'Choose an existing job.' using errcode = '22023'; end if;
+ if (p_id is null or a.job_id <> p_job) and exists (select 1 from hr.job_applications x where x.profile_id = p.id and x.job_id = j.id and x.status = 'applied') then
+  raise exception 'This person already has an open application for this job.' using errcode = '23505'; end if;
+ if p_id is null and p.status not in ('applied','rejected','inactive') then
+  raise exception 'This person is already onboarding or employed; open their record from Employees.' using errcode = '23514'; end if;
+ if p_id is null then
+  insert into hr.job_applications(job_id, profile_id, source, cover_letter, recruiter_notes) values (j.id, p.id, 'manual', v_letter, v_notes) returning id into p_id;
+ else
+  update hr.job_applications set job_id = j.id, recruiter_notes = v_notes, cover_letter = case when a.source = 'manual' then v_letter else a.cover_letter end where id = a.id;
+ end if;
+ return p_id;
+end $fn$;
+revoke all on function public.hr_admin_candidate_save(uuid, uuid, jsonb, text, text) from public, anon;
+grant execute on function public.hr_admin_candidate_save(uuid, uuid, jsonb, text, text) to authenticated;
+
+-- The stages (screening, shortlisted, interview with its date and notes, selected after an interview) and the two closing decisions.
+-- Declined / withdrawn need a reason; when it was the last open application of a person who is still just "applied", their staff
+-- application is rejected the HR-02 way (links revoked, the rejection email unless p_notify is false). Hiring is hr_admin_candidate_hire.
+create or replace function public.hr_admin_candidate_progress(p_id uuid, p_action text, p_interview_at timestamptz default null, p_interview_notes text default null,
+ p_reason text default null, p_notify boolean default true) returns uuid
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin(); a hr.job_applications; p hr.staff_profiles; v_reason text := left(btrim(coalesce(p_reason, '')), 2000);
+begin
+ select * into a from hr.job_applications where id = p_id for update;
+ if not found then raise exception 'Candidate application not found.' using errcode = 'P0002'; end if;
+ select * into p from hr.staff_profiles where id = a.profile_id for update;
+ if p.auth_user_id = v_admin then raise exception 'You cannot decide your own job application.' using errcode = '42501'; end if;
+ if a.status <> 'applied' then raise exception 'This job application has already been decided.' using errcode = '23514'; end if;
+ if p_action in ('screening','shortlisted','interview','selected') then
+  if p_action = 'interview' and p_interview_at is null then raise exception 'Enter the interview date and time.' using errcode = '22023'; end if;
+  if p_action = 'selected' and a.stage not in ('interview','selected') then raise exception 'Record the interview before marking a candidate selected.' using errcode = '23514'; end if;
+  if char_length(coalesce(p_interview_notes, '')) > 5000 then raise exception 'The interview notes are too long.' using errcode = '22023'; end if;
+  update hr.job_applications set stage = p_action, interview_at = case when p_action = 'interview' then p_interview_at else interview_at end,
+   interview_notes = case when p_action in ('interview','selected') and p_interview_notes is not null then btrim(p_interview_notes) else interview_notes end where id = a.id;
+  return p.id;
+ end if;
+ if p_action = 'hired' then raise exception 'Use "Hire and send document link" once the candidate is selected.' using errcode = '22023'; end if;
+ if p_action is null or p_action not in ('declined','withdrawn') then raise exception 'Choose a valid recruitment action.' using errcode = '22023'; end if;
+ if v_reason = '' then raise exception 'Record a reason for this decision.' using errcode = '22023'; end if;
+ update hr.job_applications set status = p_action, decided_by = v_admin, decided_at = now(), decision_note = v_reason where id = a.id;
+ if p.status = 'applied' and not exists (select 1 from hr.job_applications x where x.profile_id = p.id and x.status = 'applied') then
+  perform public.hr_admin_staff_reject(p.id, v_reason, coalesce(p_notify, true));
+ end if;
+ return p.id;
+end $fn$;
+revoke all on function public.hr_admin_candidate_progress(uuid, text, timestamptz, text, text, boolean) from public, anon;
+grant execute on function public.hr_admin_candidate_progress(uuid, text, timestamptz, text, text, boolean) to authenticated;
+
+-- "Hire and send document link", from the selected stage only: the job application becomes hired, hr.employment is created or updated
+-- from the job (the joining date comes at activation), and HR-02's document link goes out (the Edge Function made the token and mails it;
+-- this records only its sha256). A rejected or inactive person is reopened for the hire; a person already onboarding is refused.
+create or replace function public.hr_admin_candidate_hire(p_id uuid, p_token_hash text) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin(); a hr.job_applications; p hr.staff_profiles; j hr.jobs; v_live text; r jsonb;
+begin
+ select * into a from hr.job_applications where id = p_id for update;
+ if not found then raise exception 'Candidate application not found.' using errcode = 'P0002'; end if;
+ select * into p from hr.staff_profiles where id = a.profile_id for update;
+ select * into j from hr.jobs where id = a.job_id;
+ if p.auth_user_id = v_admin then raise exception 'You cannot hire yourself.' using errcode = '42501'; end if;
+ if a.status <> 'applied' then raise exception 'This job application has already been decided.' using errcode = '23514'; end if;
+ if a.stage <> 'selected' then raise exception 'Mark the candidate selected before hiring.' using errcode = '23514'; end if;
+ select purpose into v_live from hr.staff_invites i where i.profile_id = p.id and i.purpose <> 'offer' and i.revoked_at is null and i.superseded_at is null and i.used_at is null and i.expires_at > now()
+  order by i.created_at desc limit 1;
+ if p.status in ('rejected','inactive') then
+  -- A closed record (a former applicant or staff member) is reopened for this hire: the old documents, review and role go; the resume stays.
+  update hr.staff_applications set submitted_at = null, reviewed_by = null, reviewed_at = null, review_note = '', account_invited_at = null where profile_id = p.id;
+  update hr.staff_documents set is_current = false where profile_id = p.id and is_current;
+  update hr.staff_roles set revoked_at = now(), revoked_by = v_admin where profile_id = p.id and revoked_at is null;
+  perform hr.staff_move(p.id, 'applied', 'Hired for ' || j.title, v_admin, false);
+ elsif not (p.status = 'applied' or (p.status = 'invited' and v_live = 'documents')) then
+  raise exception 'This person is already onboarding (%). Finish or reject that first.', replace(p.status, '_', ' ') using errcode = '23514';
+ end if;
+ update hr.job_applications set status = 'hired', decided_by = v_admin, decided_at = now(), decision_note = '' where id = a.id;
+ insert into hr.employment(profile_id, application_id, department, job_title, employment_type, work_location)
+  values (p.id, a.id, j.department, j.title, j.employment_type, j.location)
+  on conflict (profile_id) do update set application_id = excluded.application_id, department = excluded.department, job_title = excluded.job_title,
+   employment_type = excluded.employment_type, work_location = excluded.work_location, joining_date = null;
+ r := public.hr_admin_staff_invite(p.id, 'documents', p_token_hash);
+ return r || jsonb_build_object('profileId', p.id, 'jobTitle', j.title);
+end $fn$;
+revoke all on function public.hr_admin_candidate_hire(uuid, text) from public, anon;
+grant execute on function public.hr_admin_candidate_hire(uuid, text) to authenticated;
+
+-- ------------------------------------------------------------------ employment (hr.employment of 20261109153953)
+create or replace function hr.employment_json(p_profile uuid) returns jsonb
+language sql stable security definer set search_path = hr, pg_temp as $fn$
+ select jsonb_build_object('department', e.department, 'jobTitle', e.job_title, 'employmentType', e.employment_type, 'joiningDate', e.joining_date,
+  'managerId', e.manager_id, 'managerName', (select hr.staff_name(m) from hr.staff_profiles m where m.id = e.manager_id), 'workLocation', e.work_location,
+  'candidateId', e.application_id, 'since', e.created_at)
+ from hr.employment e where e.profile_id = p_profile;
+$fn$;
+revoke all on function hr.employment_json(uuid) from public, anon, authenticated;
+
+-- The employment details on Staff > Employees: department, title, type, manager (an active employee, no reporting cycle) and location.
+-- The joining date is set at activation and is not changed here.
+create or replace function public.hr_admin_staff_employment_save(p_id uuid, p_employment jsonb) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare p hr.staff_profiles; v_manager uuid := nullif(p_employment->>'managerId', '')::uuid;
+ v_title text := left(btrim(coalesce(p_employment->>'jobTitle', '')), 150); v_type text := nullif(p_employment->>'employmentType', '');
+ v_department text := left(btrim(coalesce(p_employment->>'department', '')), 120); v_location text := left(btrim(coalesce(p_employment->>'workLocation', '')), 150);
+begin
+ perform hr.require_admin();
+ select * into p from hr.staff_profiles where id = p_id for update;
+ if not found then raise exception 'Staff record not found.' using errcode = 'P0002'; end if;
+ if v_type is not null and v_type not in ('full_time','part_time') then raise exception 'Choose Full time or Part time.' using errcode = '22023'; end if;
+ if v_manager is not null then
+  if v_manager = p.id then raise exception 'A person cannot be their own manager.' using errcode = '23514'; end if;
+  if not exists (select 1 from hr.employment e join hr.staff_profiles m on m.id = e.profile_id where e.profile_id = v_manager and m.status = 'active') then
+   raise exception 'Choose an active employee as the manager.' using errcode = '22023'; end if;
+  if exists (with recursive chain as (select e.profile_id, e.manager_id from hr.employment e where e.profile_id = v_manager
+    union select e.profile_id, e.manager_id from hr.employment e join chain c on e.profile_id = c.manager_id) select 1 from chain where profile_id = p.id) then
+   raise exception 'The manager assignment would create a reporting cycle.' using errcode = '23514'; end if;
+ end if;
+ insert into hr.employment(profile_id, department, job_title, employment_type, manager_id, work_location) values (p.id, v_department, v_title, v_type, v_manager, v_location)
+ on conflict (profile_id) do update set department = excluded.department, job_title = excluded.job_title, employment_type = excluded.employment_type,
+  manager_id = excluded.manager_id, work_location = excluded.work_location;
+ return public.hr_admin_staff_detail(p.id);
+end $fn$;
+revoke all on function public.hr_admin_staff_employment_save(uuid, jsonb) from public, anon;
+grant execute on function public.hr_admin_staff_employment_save(uuid, jsonb) to authenticated;
 
 -- True when an email to or about this person failed and no later email of the same kind went out.
 create or replace function hr.staff_email_failed(p_profile uuid) returns boolean
@@ -1429,7 +1631,7 @@ revoke all on function hr.staff_grant_access(uuid, uuid, text, text) from public
 create or replace function public.hr_admin_staff_activate_account(p_id uuid, p_role text, p_joining_date date, p_auth_user_id uuid default null,
  p_confirm_admin boolean default false) returns jsonb
 language plpgsql security definer set search_path = public, hr, auth, pg_temp as $fn$
-declare v_admin uuid := hr.require_admin(); p hr.staff_profiles; u auth.users; v_current text; v_logins integer;
+declare v_admin uuid := hr.require_admin(); p hr.staff_profiles; u auth.users; v_current text; v_logins integer; v_problem text;
 begin
  if p_role is null or p_role not in ('admin','trainer') then raise exception 'Choose Admin or Trainer.' using errcode = '22023'; end if;
  if p_role = 'admin' and p_confirm_admin is not true then raise exception 'Confirm that this person should become an Admin.' using errcode = '23514'; end if;
@@ -1438,6 +1640,9 @@ begin
  if not found then raise exception 'Staff application not found.' using errcode = 'P0002'; end if;
  if p.status <> 'offer_signed' then raise exception 'Only a person who signed the offer can be activated.' using errcode = '23514'; end if;
  if p.auth_user_id is not null and p.auth_user_id = v_admin then raise exception 'You cannot activate your own account.' using errcode = '42501'; end if;
+ -- Every required document is approved and unexpired at activation too (a document may have expired since the offer went out).
+ v_problem := hr.staff_documents_problem(p.id);
+ if v_problem is not null then raise exception '%', v_problem using errcode = '23514'; end if;
  select count(*) into v_logins from auth.users where lower(btrim(coalesce(email, ''))) = p.email;
  if v_logins > 1 then raise exception 'More than one login uses this email; resolve that first.' using errcode = '23505'; end if;
  select * into u from auth.users where lower(btrim(coalesce(email, ''))) = p.email;
@@ -1450,7 +1655,8 @@ begin
  if p_auth_user_id = v_admin then raise exception 'You cannot activate your own account.' using errcode = '42501'; end if;
  if exists (select 1 from hr.staff_profiles s where s.auth_user_id = p_auth_user_id and s.id <> p.id) then raise exception 'That login already belongs to another staff member.' using errcode = '23505'; end if;
  update hr.staff_profiles set auth_user_id = p_auth_user_id where id = p.id;
- update hr.staff_applications set joining_date = p_joining_date, account_invited_at = now(), reviewed_by = v_admin, reviewed_at = now() where profile_id = p.id;
+ update hr.staff_applications set account_invited_at = now(), reviewed_by = v_admin, reviewed_at = now() where profile_id = p.id;
+ insert into hr.employment(profile_id, joining_date) values (p.id, p_joining_date) on conflict (profile_id) do update set joining_date = excluded.joining_date;
  select role into v_current from hr.staff_roles where profile_id = p.id and revoked_at is null;
  if v_current is distinct from p_role then
   update hr.staff_roles set revoked_at = now(), revoked_by = v_admin where profile_id = p.id and revoked_at is null;
@@ -1514,7 +1720,9 @@ begin
   'profile', to_jsonb(p) - 'auth_user_id',
   'status', p.status,
   'role', (select r.role from hr.staff_roles r where r.profile_id = p.id and r.revoked_at is null),
-  'joiningDate', a.joining_date,
+  'joiningDate', (select e.joining_date from hr.employment e where e.profile_id = p.id),
+  'employment', case when p.status = 'active' then hr.employment_json(p.id) end,
+  'jobApplications', hr.job_applications_json(p.id),
   'documents', case when p.status = 'active' then coalesce((select jsonb_agg(hr.staff_doc_json(d) order by d.category, d.created_at)
      from hr.staff_documents d where d.profile_id = p.id and d.is_current), '[]'::jsonb) else '[]'::jsonb end,
   'signedOffer', case when p.status = 'active' then (select jsonb_build_object('id', o.id, 'signedAt', o.signed_at, 'signedPath', o.signed_path, 'filename', o.filename)
@@ -1558,11 +1766,13 @@ begin
  end if;
 end $job$;
 
--- ------------------------------------------------------------------ admin sidebar: Staff becomes its own top-level group
--- A top-level "Staff" group right after "Agencies & Agents", with the existing 'agency_staff' row moved under it as
--- "Employees" (/admin/staff/employees). The row is UPDATED, not re-created, and keeps its id: 20261105200000 and the
--- release-staff check scripts refer to 'agency_staff'. The group copies that row's permission (admin-only today).
--- Safe to re-run. Fails loudly (nothing changed) when 'agencies' or 'agency_staff' is missing, or an unrelated 'staff' row exists.
+-- ------------------------------------------------------------------ admin sidebar: a top-level Staff group (Candidates, Employees, Jobs)
+-- "Staff" sits right after "Master Data" (the 'agencies' group, renamed by 20261109153953). Under it: 'staff_candidates' (new,
+-- /admin/staff/candidates), 'agency_staff' moved and renamed Employees (/admin/staff/employees; the row is UPDATED, not re-created:
+-- 20261105200000 and the release-staff check scripts refer to it) and 'agency_jobs' (20261106130000) moved as Jobs (/admin/jobs). The
+-- Candidates and Employees rows that 20261109153953 put under Master Data are disabled, not deleted. The group copies the Employees row's
+-- permission (admin-only today). Safe to re-run. Fails loudly (nothing changed) when 'agencies' or 'agency_staff' is missing, or an
+-- unrelated 'staff' row exists.
 do $menu$
 declare v_item public.admin_menu_items; v_after integer; v_next integer;
 begin
@@ -1582,7 +1792,12 @@ begin
    v_item.permission_key, v_item.permission_scope, true)
  on conflict (id) do update set parent_id = null, route = null, is_enabled = true,
   permission_key = excluded.permission_key, permission_scope = excluded.permission_scope;
- update public.admin_menu_items set parent_id = 'staff', label = 'Employees', route = '/admin/staff/employees', sort_order = 10, is_enabled = true
+ insert into public.admin_menu_items(id, parent_id, label, route, icon_key, sort_order, is_enabled, permission_key, permission_scope, is_system)
+  values ('staff_candidates', 'staff', 'Candidates', '/admin/staff/candidates', 'users', 10, true, v_item.permission_key, v_item.permission_scope, true)
+ on conflict (id) do update set parent_id = 'staff', label = 'Candidates', route = '/admin/staff/candidates', is_enabled = true;
+ update public.admin_menu_items set parent_id = 'staff', label = 'Employees', route = '/admin/staff/employees', sort_order = 20, is_enabled = true
   where id = 'agency_staff';
+ update public.admin_menu_items set parent_id = 'staff', label = 'Jobs', route = '/admin/jobs', sort_order = 30, is_enabled = true where id = 'agency_jobs';
+ update public.admin_menu_items set is_enabled = false where id in ('agency_candidates', 'agency_employees') and parent_id = 'agencies';
  alter table public.admin_menu_items enable trigger protect_admin_menu;
 end $menu$;

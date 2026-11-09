@@ -43,13 +43,13 @@ Deno.serve(async (req) => {
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "Authentication required." }, 401);
   const length = Number(req.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(length) || length > MAX_OFFER_BYTES + 64 * 1024) return json({ error: "The offer letter must be a PDF of 7 MB or smaller.", field: "file" }, 413);
+  if (!Number.isFinite(length) || length > MAX_OFFER_BYTES + 64 * 1024) return json({ error: "The file is too large: an offer letter may be 7 MB, a resume or cover letter 5 MB.", field: "file" }, 413);
   let body: Record<string, unknown> = {};
   let file: { name: string; bytes: Uint8Array } | null = null;
   try {
     if ((req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) {
       const form = await req.formData();
-      body = { action: form.get("action"), profileId: form.get("profileId") };
+      body = { action: form.get("action"), profileId: form.get("profileId"), applicationId: form.get("applicationId"), which: form.get("which") };
       const f = form.get("file");
       if (f && typeof f !== "string") file = { name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) };
     } else {

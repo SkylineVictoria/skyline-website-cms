@@ -11,18 +11,15 @@
 import type { CaptchaVerifier } from "../_shared/captcha.ts";
 import { cleanEmail } from "../_shared/user-input.ts";
 import { toE164 } from "../_shared/staff-phone.ts";
+import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
 
-export const MAX_RESUME_BYTES = 5 * 1024 * 1024;
+export { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename };
 /** The whole request (resume + fields) may not be larger than this; index.ts refuses bigger bodies before reading them. */
 export const MAX_REQUEST_BYTES = 2 * MAX_RESUME_BYTES + 64 * 1024;
 export const MAX_COVER_LETTER_CHARS = 5000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // eslint-disable-next-line no-control-regex -- a cover letter keeps line breaks and tabs, nothing else below space
 const LETTER_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-export const RESUME_TYPES = {
-  pdf: "application/pdf",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-} as const;
 
 export interface ApplyResult { status: number; body: Record<string, unknown>; headers?: Record<string, string> }
 export interface ApplyDeps {
@@ -45,32 +42,6 @@ function cleanPersonName(value: unknown, label: string): { ok: true; value: stri
   if (!name) return { ok: false, error: `Enter your ${label}.` };
   if (CONTROL.test(name) || name.length > 100) return { ok: false, error: `Check your ${label}.` };
   return { ok: true, value: name };
-}
-
-const ascii = (bytes: Uint8Array, from: number, to: number) => String.fromCharCode(...bytes.subarray(from, Math.min(to, bytes.length)));
-function includesAscii(bytes: Uint8Array, needle: string): boolean {
-  const n = new TextEncoder().encode(needle);
-  outer: for (let i = 0; i + n.length <= bytes.length; i++) {
-    for (let j = 0; j < n.length; j++) if (bytes[i + j] !== n[j]) continue outer;
-    return true;
-  }
-  return false;
-}
-
-/** The resume kind from its name AND its content: a PDF starts with %PDF-; a DOCX is a ZIP holding word/document.xml. */
-export function detectResume(filename: string, bytes: Uint8Array): "pdf" | "docx" | null {
-  const ext = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
-  if (ext === "pdf" && ascii(bytes, 0, 5) === "%PDF-") return "pdf";
-  if (ext === "docx" && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
-    && includesAscii(bytes, "[Content_Types].xml") && includesAscii(bytes, "word/document.xml")) return "docx";
-  return null;
-}
-
-/** A display name for the stored resume: no path, no control characters, at most 120 characters. */
-export function safeFilename(name: string, kind: "pdf" | "docx"): string {
-  // eslint-disable-next-line no-control-regex -- strip control characters from a user-supplied file name
-  const base = name.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
-  return base || `resume.${kind}`;
 }
 
 export async function handleApply(form: FormData, meta: { ip: string | null }, deps: ApplyDeps): Promise<ApplyResult> {

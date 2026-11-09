@@ -66,7 +66,7 @@ test("status transitions allow exactly the agreed moves", () => {
 });
 
 test("the TypeScript transition table matches the database function and the status list", () => {
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const body = sql.slice(sql.indexOf("function hr.staff_transition_allowed"), sql.indexOf("function hr.staff_status_guard"));
   const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
   assert.equal(pairs.length, 16);
@@ -112,7 +112,7 @@ test("Employees actions follow the status and what exists; each one is a legal m
   assert.ok(detailPage.includes("staffDocumentUrl(path, 120)"), "files open through 2-minute signed URLs");
   assert.ok(!/getPublicUrl|\.download\(/.test(detailPage), "no public URLs or raw downloads");
   assert.ok(detailPage.includes("fresh.profile.status !== detail.profile.status"), "the dialog re-checks the status before acting");
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
   assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)), "activation checks for an administrator first");
   assert.ok(fn.includes("p.status <> 'offer_signed'") && fn.includes("u.id <> p_auth_user_id") && fn.includes("where lower(btrim(coalesce(email, ''))) = p.email"), "only a signed offer, only the person's own login");
@@ -523,7 +523,7 @@ const PROFILE = "0b7b1c1e-0000-4000-8000-0000000000aa";
 test("staff-admin invite: only the hash goes to the database, the link only into the email, the log has neither", async () => {
   const run = adminDeps();
   const r = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
-  assert.deepEqual(r, { status: 200, body: { emailSent: true, expiresAt: "2026-11-23T00:00:00Z" } });
+  assert.deepEqual(r, { status: 200, body: { emailSent: true, expiresAt: "2026-11-23T00:00:00Z", profileId: PROFILE } });
   assert.deepEqual(run.names(), ["admin:hr_admin_staff_invite", "svc:hr_svc_email_log"]);
   assert.equal((run.calls[0][1] as Record<string, unknown>).p_token_hash, "h".repeat(64));
   assert.equal(run.mails[0].link, `https://x.example/staff/onboard#t=${"T".repeat(43)}`);
@@ -625,7 +625,7 @@ test("submit needs citizenship, every required document and current expiry dates
 });
 
 test("the document rules match the database", () => {
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   assert.deepEqual(status.requiredStaffCategories(true), ["Passport", "Academic", "Health Insurance"], "x/3 for citizens");
   assert.deepEqual(status.requiredStaffCategories(false), ["Passport", "Visa", "English", "Academic", "Health Insurance"], "x/5 for non-citizens");
   assert.deepEqual(status.requiredStaffCategories(null), status.requiredStaffCategories(false), "unanswered counts as a non-citizen");
@@ -676,7 +676,7 @@ test("expiry states, the shown document kinds and the checklist", () => {
 });
 
 test("an applicant can never write review fields or grant themselves access", () => {
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   assert.ok(/create policy staff_documents_admin_review on hr\.staff_documents for update to authenticated\s+using \(public\.cms_is_admin\(\) and not exists \(select 1 from hr\.staff_profiles p where p\.id = profile_id and p\.auth_user_id = auth\.uid\(\)\)\)/.test(sql), "only admins pass the review-field policy, never on their own documents");
   const review = sql.slice(sql.indexOf("function public.hr_admin_staff_document_review"));
   assert.ok(/v_admin uuid := hr\.require_admin\(\)/.test(review.slice(0, 300)), "document review checks for an administrator");
@@ -789,7 +789,7 @@ test("the Employees tabs cover every reviewed status once and match the database
   assert.deepEqual(status.STAFF_STATUSES.filter((s) => !all.includes(s)), [], "every status is in a tab");
   assert.deepEqual(tabs.filter((t) => t.countBadge).map((t) => t.id), ["applications", "documents", "offers"]);
   assert.equal(status.employeeTab("bogus").id, "applications");
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const fn = sql.slice(sql.indexOf("create or replace function public.hr_admin_staff_list"));
   assert.ok(fn.indexOf("perform hr.require_admin();") > 0 && fn.indexOf("perform hr.require_admin();") < fn.indexOf("select count(*)"), "the admin check runs before any read");
   assert.ok(fn.includes("s is null or s not in ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive')"), "every p_statuses value is validated");
@@ -999,7 +999,7 @@ test("activation follow-ups: existing login gets HR's 'access ready' email (no l
   assert.ok(hrMail.DRAINABLE_KINDS.includes("access_ready"));
   assert.match(read("supabase/functions/staff-admin/index.ts"), /inviteUserByEmail\(email, \{ data: \{ name, account_type: "staff" \}, redirectTo \}\)/, "the shared Invite user template can tell staff apart");
 
-  const waiting = { hr_admin_staff_detail: { data: { profile: { status: "offer_signed" }, application: { joining_date: "2026-12-01", account_invited_at: "2026-11-09T00:00:00Z" }, roles: [{ role: "trainer", revokedAt: null }] } },
+  const waiting = { hr_admin_staff_detail: { data: { profile: { status: "offer_signed" }, application: { account_invited_at: "2026-11-09T00:00:00Z" }, employment: { joiningDate: "2026-12-01" }, roles: [{ role: "trainer", revokedAt: null }] } },
     hr_admin_staff_activate_account: { data: { email: "ann@example.test", name: "Ann", existingLogin: false, activated: false, detail: {} } } };
   run = adminDeps({ db: waiting, login: { id: "invited-login", confirmed: false, invited: true, signedIn: false } });
   const r = await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps);
@@ -1009,7 +1009,7 @@ test("activation follow-ups: existing login gets HR's 'access ready' email (no l
   run = adminDeps({ db: waiting, login: { id: "invited-login", confirmed: false, invited: true, signedIn: true } });
   assert.equal((await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps)).status, 400, "a login that was already used is never re-invited");
   assert.ok(!run.names().includes("invite"));
-  run = adminDeps({ db: { hr_admin_staff_detail: { data: { profile: { status: "active" }, application: { joining_date: "2026-12-01", account_invited_at: "x" }, roles: [{ role: "trainer", revokedAt: null }] } } } });
+  run = adminDeps({ db: { hr_admin_staff_detail: { data: { profile: { status: "active" }, application: { account_invited_at: "x" }, employment: { joiningDate: "2026-12-01" }, roles: [{ role: "trainer", revokedAt: null }] } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps)).status, 400, "nothing waiting: nothing sent");
   assert.ok(!run.names().includes("invite"));
 });
@@ -1032,7 +1032,7 @@ test("retention purge: only the scheduled job may run it; files are deleted befo
   const failed = await staffAdmin.handleAdmin({ action: "purge" }, run.deps);
   assert.deepEqual([failed.status, failed.body.failed], [207, 1]);
   assert.ok(!svc.some(([n]) => n === "hr_svc_retention_mark"), "not marked: the next run tries again");
-  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   assert.ok(sql.includes("cron.schedule('hr-retention-purge', '15 3 * * *', 'select public.hr_retention_dispatch();')") && sql.includes("perform cron.alter_job(v_job, active := false)"), "a daily job, created inactive");
   assert.ok(!/eyJ[A-Za-z0-9_-]{10,}/.test(sql), "no key in the migration (Vault only)");
   assert.match(read("supabase/functions/staff-admin/index.ts"), /isWorker: body\.action === "purge" && \(await authorizeWorker\(/);
@@ -1093,4 +1093,53 @@ test("Add staff member: the record first, then the document link to the new reco
   assert.deepEqual(jobs.applyProblems({ hasResume: false, coverLetter: "" }), ["Attach your resume."]);
   assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "" }), [], "the cover letter is optional");
   assert.equal(jobs.jobFileProblem({ name: "old.doc", type: "application/msword", size: 10 }), "Upload a PDF or Word (.docx) file.");
+});
+
+/* ------------------------------------------------------------------ HR-02j Candidates: hire and send document link, manual candidate files */
+
+const APP = "0b7b1c1e-0000-4000-8000-0000000000cc";
+
+test("hire: the document link is made for the candidate's person (learned from the database), emailed, logged; a failed email cancels it", async () => {
+  const hired = { hr_admin_candidate_hire: { data: { invite: { id: "inv-9", expiresAt: "2026-11-23T00:00:00Z" }, email: "cara@example.test", name: "Cara", rejected: [], profileId: PROFILE, jobTitle: "Trainer" } } };
+  let run = adminDeps({ db: hired });
+  let r = await staffAdmin.handleAdmin({ action: "hire", applicationId: APP }, run.deps);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.profileId], [200, true, PROFILE]);
+  assert.deepEqual(run.calls[0], ["admin:hr_admin_candidate_hire", { p_id: APP, p_token_hash: "h".repeat(64) }], "only the hash reaches the database");
+  assert.equal((run.calls.find(([n]) => n === "svc:hr_svc_email_log")![1] as Record<string, unknown>).p_profile, PROFILE, "the log belongs to the person the database named");
+  assert.equal(run.mails[0].to, "cara@example.test");
+  assert.equal((await staffAdmin.handleAdmin({ action: "hire", profileId: PROFILE }, run.deps)).status, 400, "a candidate application id is required");
+  run = adminDeps({ db: hired, send: "failed" });
+  r = await staffAdmin.handleAdmin({ action: "hire", applicationId: APP }, run.deps);
+  assert.equal(r.status, 502);
+  assert.deepEqual(run.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-9" }, "the link nobody received is cancelled");
+  run = adminDeps({ db: { hr_admin_candidate_hire: { error: { code: "23514", message: "Mark the candidate selected before hiring." } } } });
+  r = await staffAdmin.handleAdmin({ action: "hire", applicationId: APP }, run.deps);
+  assert.deepEqual([r.status, r.body.error], [400, "Mark the candidate selected before hiring."]);
+  assert.ok(!run.names().includes("svc:hr_svc_email_log") && run.mails.length === 0, "nothing sent, nothing logged");
+});
+
+test("candidate_file: an open manual candidate only, checked by content, stored in the person's folder, recorded as the caller", async () => {
+  const open = { hr_admin_candidate: { data: { id: APP, profileId: PROFILE, source: "manual", status: "applied" } }, hr_admin_candidate_file: { data: { ok: true, replacedPath: `${PROFILE}/resume/old.pdf` } } };
+  let run = adminDeps({ db: open, file: { name: "fake/path/cv.pdf", bytes: PDF_BYTES } });
+  let r = await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "resume" }, run.deps);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((run.calls.find(([n]) => n === "upload")![1] as { p: string }).p, `${PROFILE}/resume/rnd.pdf`);
+  assert.deepEqual(run.calls.find(([n]) => n === "admin:hr_admin_candidate_file")![1], { p_application: APP, p_which: "resume", p_path: `${PROFILE}/resume/rnd.pdf`, p_filename: "cv.pdf", p_mime: "application/pdf", p_size: PDF_BYTES.length });
+  assert.deepEqual(run.calls.find(([n]) => n === "remove")![1], [`${PROFILE}/resume/old.pdf`], "the replaced file is deleted");
+  assert.ok(run.names().indexOf("admin:hr_admin_candidate") < run.names().indexOf("upload"), "the admin and state check comes before any storage write");
+  run = adminDeps({ db: open, file: { name: "cv.pdf", bytes: new Uint8Array([0x4d, 0x5a, 0, 1]) } });
+  r = await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "cover_letter" }, run.deps);
+  assert.equal(r.status, 400);
+  assert.ok(!run.names().includes("upload"), "a renamed non-PDF is never stored");
+  run = adminDeps({ db: { hr_admin_candidate: { data: { id: APP, profileId: PROFILE, source: "careers", status: "applied" } } }, file: { name: "cv.pdf", bytes: PDF_BYTES } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "resume" }, run.deps)).status, 400, "a Careers applicant's files are kept");
+  assert.ok(!run.names().includes("upload"));
+  run = adminDeps({ db: { hr_admin_candidate: { error: { code: "42501", message: "Only an administrator can do this." } } }, file: { name: "cv.pdf", bytes: PDF_BYTES } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "resume" }, run.deps)).status, 403);
+  run = adminDeps({ db: { ...open, hr_admin_candidate_file: { error: { code: "22023", message: "The file location is not valid." } } }, file: { name: "cv.pdf", bytes: PDF_BYTES } });
+  r = await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "resume" }, run.deps);
+  assert.equal(r.status, 400);
+  assert.deepEqual(run.calls.find(([n]) => n === "remove")![1], [`${PROFILE}/resume/rnd.pdf`], "a refused record removes the stored file");
+  assert.equal((await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "photo" }, run.deps)).status, 400, "resume or cover letter only");
+  assert.equal(staffAdmin.ACTIONS.includes("hire" as never) && staffAdmin.ACTIONS.includes("candidate_file" as never), true);
 });

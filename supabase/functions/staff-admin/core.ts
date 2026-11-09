@@ -8,13 +8,19 @@
 // "send again" makes exactly one new live link. An expired link is resent the same way. With sending switched off the link is
 // returned to the admin once to pass on.
 import type { HrMailConfig } from "../_shared/hr-mail.ts";
+import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
+//
+// Candidates (HR-02j): `hire` ("Hire and send document link", from the selected stage) lets the database mark the job application
+// hired, write the employment record from the job and make the document link, then mails it like send_invite; the person is learned
+// from the result. `candidate_file` stores a manual candidate's resume or cover letter after the same content checks as the public
+// form (admin and state first, with the caller's JWT; service-role storage; recorded as the caller).
 //
 // Offers (HR-02e): offer_upload checks the PDF by content (pdf-lib must load AND modify it; encrypted or protected files are
 // refused with a clear message) BEFORE anything is stored, stores it under {profile}/offer/ with the service role, and records
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add", "hire", "candidate_file"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -43,7 +49,7 @@ export interface AdminDeps {
   retentionMonths?: number;
   /** Deletes storage objects; resolves with an error text when the storage call failed (then nothing is marked). */
   purgeFiles?(paths: string[]): Promise<{ error: string | null }>;
-  /** The uploaded file (multipart offer_upload), or null. */
+  /** The uploaded file (multipart offer_upload / candidate_file), or null. */
   file?: { name: string; bytes: Uint8Array } | null;
   /** pdf-lib check of an offer (load and modify in memory). */
   inspectOffer(bytes: Uint8Array): Promise<{ ok: true; pages: number } | { ok: false; error: string }>;
@@ -73,31 +79,36 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
   const action = String(body.action ?? "");
   if (!(ACTIONS as readonly string[]).includes(action)) return { status: 400, body: { error: "Unknown action." } };
   const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
-  if (action !== "drain" && action !== "retry_email" && action !== "purge" && action !== "add" && !profileId) return { status: 400, body: { error: "Choose an application." } };
+  const applicationId = typeof body.applicationId === "string" && UUID.test(body.applicationId) ? body.applicationId : null;
+  const byCandidate = action === "hire" || action === "candidate_file";
+  if (byCandidate && !applicationId) return { status: 400, body: { error: "Choose a candidate." } };
+  if (!byCandidate && action !== "drain" && action !== "retry_email" && action !== "purge" && action !== "add" && !profileId) return { status: 400, body: { error: "Choose an application." } };
 
   // Makes a link (only its hash reaches the database through `rpc`), emails it inline, logs the outcome without the token, and
-  // cancels that link at once when the email failed. Shared by document, re-upload and offer links.
+  // cancels that link at once when the email failed. Shared by document, re-upload, offer and hire links. The person is `pid`, or,
+  // when the caller does not know them yet (hire: a candidate application id), the profileId the database answers with.
   const sendLinkFlow = async (purpose: LinkPurpose, rpc: string, args: Record<string, unknown>, pid: string | null = profileId): Promise<AdminResult> => {
     if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
     const link = await deps.newLink();
     const made = await deps.adminRpc(rpc, { ...args, p_token_hash: link.hash });
     if (made.error) return fromDb(made.error);
-    const invite = made.data as { invite: { id: string; expiresAt: string }; email: string; name: string; rejected?: Array<{ category: string; note: string }> };
+    const invite = made.data as { invite: { id: string; expiresAt: string }; email: string; name: string; rejected?: Array<{ category: string; note: string }>; profileId?: string };
+    const owner = pid ?? (typeof invite.profileId === "string" && UUID.test(invite.profileId) ? invite.profileId : null);
     const kind: LinkKind = purpose === "documents" ? "document_invite" : purpose === "reupload" ? "reupload_invite" : "offer";
     const url = deps.linkUrl(purpose, link.token);
     const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
     // The log never holds the token or the link: only which invite it was and what happened.
-    await deps.serviceRpc("hr_svc_email_log", { p_profile: pid, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+    await deps.serviceRpc("hr_svc_email_log", { p_profile: owner, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
       p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
     if (sent.state === "failed") {
-      const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: pid, p_invite: invite.invite.id });
-      return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null } };
+      const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: owner, p_invite: invite.invite.id });
+      return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null, profileId: owner } };
     }
     if (sent.state === "skipped") {
       // Sending is off: hand the link to the admin ONCE to pass on themselves. It is not stored anywhere.
-      return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again.", profileId: owner } };
     }
-    return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt } };
+    return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt, profileId: owner } };
   };
 
   // offer_signed > active. The database checks first (role, joining date, Admin confirmation, status) and says whether a
@@ -161,9 +172,9 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       // person still waiting (offer_signed, invited login never used); the new link replaces the old one.
       const d = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
       if (d.error) return fromDb(d.error);
-      const detail = d.data as { profile?: { status?: string }; application?: { joining_date?: string | null; account_invited_at?: string | null }; roles?: Array<{ role: string; revokedAt: string | null }> };
+      const detail = d.data as { profile?: { status?: string }; application?: { account_invited_at?: string | null }; employment?: { joiningDate?: string | null } | null; roles?: Array<{ role: string; revokedAt: string | null }> };
       const role = detail.roles?.find((r) => !r.revokedAt)?.role;
-      const joiningDate = detail.application?.joining_date ?? null;
+      const joiningDate = detail.employment?.joiningDate ?? null;
       if (detail.profile?.status !== "offer_signed" || !detail.application?.account_invited_at || (role !== "admin" && role !== "trainer") || !joiningDate) {
         return { status: 400, body: { error: "There is no activation invite waiting for this person." } };
       }
@@ -218,6 +229,37 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const newId = (made.data as { profileId: string }).profileId;
       const sent = await sendLinkFlow("documents", "hr_admin_staff_invite", { p_id: newId, p_purpose: "documents" }, newId);
       return { status: sent.status, body: { ...sent.body, profileId: newId } };
+    }
+    case "hire":
+      // Candidates > "Hire and send document link" (HR-02j), from the selected stage: the database marks the job application hired,
+      // writes the employment record from the job and makes the document link; the email, log and cancel rules are send_invite's.
+      return sendLinkFlow("documents", "hr_admin_candidate_hire", { p_id: applicationId }, null);
+    case "candidate_file": {
+      // A manual candidate's resume or cover letter (HR-02j). Admin and state first, with the caller's JWT (a non-admin or a Careers
+      // applicant never gets a file stored); then the public form's content checks; stored with the service role in the person's
+      // folder; recorded as the caller. A refused record removes the stored file; a replaced file is deleted.
+      const which = body.which === "resume" || body.which === "cover_letter" ? body.which : null;
+      if (!which) return { status: 400, body: { error: "Choose the resume or the cover letter." } };
+      const file = deps.file;
+      if (!file) return { status: 400, body: { error: "Choose a PDF or Word (.docx) file.", field: "file" } };
+      const before = await deps.adminRpc("hr_admin_candidate", { p_id: applicationId });
+      if (before.error) return fromDb(before.error);
+      const candidate = before.data as { profileId?: string; source?: string; status?: string } | null;
+      if (!candidate?.profileId || !UUID.test(candidate.profileId) || candidate.source !== "manual" || candidate.status !== "applied") {
+        return { status: 400, body: { error: "Files can be added to an open manual candidate only; a Careers applicant's files stay as submitted." } };
+      }
+      if (file.bytes.length > MAX_RESUME_BYTES) return { status: 400, body: { error: "The file must be 5 MB or smaller.", field: "file" } };
+      const kind = detectResume(file.name, file.bytes);
+      if (!kind) return { status: 400, body: { error: "Attach a PDF or Word (.docx) file.", field: "file" } };
+      const path = `${candidate.profileId}/${which === "resume" ? "resume" : "cover-letter"}/${deps.newId()}.${kind}`;
+      const stored = await deps.upload(path, file.bytes, RESUME_TYPES[kind]);
+      if (stored.error) return { status: 503, body: { error: "The upload failed. Please try again." } };
+      const name = safeFilename(file.name, kind);
+      const recorded = await deps.adminRpc("hr_admin_candidate_file", { p_application: applicationId, p_which: which, p_path: path, p_filename: name, p_mime: RESUME_TYPES[kind], p_size: file.bytes.length });
+      if (recorded.error) { await deps.remove([path]); return fromDb(recorded.error); }
+      const result = recorded.data as { replacedPath?: string | null } | null;
+      if (result?.replacedPath) await deps.remove([result.replacedPath]);
+      return { status: 200, body: { ok: true, which, filename: name } };
     }
     case "purge": {
       // Retention (HR-02h): files of applications rejected more than EF_HR_RETENTION_MONTHS ago are deleted from storage, then the

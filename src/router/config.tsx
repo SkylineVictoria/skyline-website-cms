@@ -70,6 +70,8 @@ import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import JobsPage from "@/pages/admin/JobsPage";
+import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
+import EmployeesPage, { EmployeeDetailPage } from "@/pages/admin/EmployeesPage";
 import StaffApplyPage from "@/pages/staff/StaffApplyPage";
 import StaffWorkspacePage from "@/pages/staff/StaffWorkspacePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
@@ -187,6 +189,11 @@ const routes: RouteObject[] = [
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
           { path: "staff", element: <RequireAdmin><StaffPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
+          { path: "candidates", element: <RequireAdmin><CandidatesPage /></RequireAdmin> },
+          { path: "candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
+          { path: "employees", element: <RequireAdmin><EmployeesPage /></RequireAdmin> },
+          { path: "employees/:id", element: <RequireAdmin><EmployeeDetailPage /></RequireAdmin> },
+          { path: "employees/:id/onboarding", element: <RequireAdmin><StaffDetailPage employee /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "staff/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },

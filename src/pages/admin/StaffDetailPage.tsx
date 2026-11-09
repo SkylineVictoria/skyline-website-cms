@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Button, Card, Field, Modal, PageHeader, TextArea } from "@/pages/admin/components/ui";
-import { adminDecideStaff, adminStaffDetail, staffDocumentUrl, type StaffDecision, type StaffDetail, type StaffDocument } from "@/lib/staffApi";
+import { adminDecideStaff, adminReviewStaffDocument, adminStaffDetail, staffDocumentUrl, type StaffDecision, type StaffDetail, type StaffDocument } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE, adminActionsFor, type StaffAdminAction, type StaffRole } from "@/lib/staffStatus";
-import { adminDecideJobApplication } from "@/lib/jobsApi";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 
 const ACTION_LABEL: Record<StaffAdminAction, string> = { approve: "Approve", reject: "Reject", activate: "Activate", deactivate: "Deactivate", reopen: "Reopen as draft" };
@@ -15,7 +14,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /** One person: details, documents (short-lived signed links), their job applications (hire / decline) and the Admin decisions. Admins only. */
-export default function StaffDetailPage() {
+export default function StaffDetailPage({ employee = false }: { employee?: boolean }) {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
   const [error, setError] = useState("");
@@ -25,8 +24,7 @@ export default function StaffDetailPage() {
   const [confirmAdmin, setConfirmAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState("");
-  const [jobDecision, setJobDecision] = useState<{ id: string; title: string; decision: "hired" | "declined" } | null>(null);
-  const [jobNote, setJobNote] = useState("");
+  const [review, setReview] = useState<{ document: StaffDocument; decision: "approved" | "rejected" } | null>(null);
 
   const load = useCallback(async () => {
     try { const next = await adminStaffDetail(id); setDetail(next); setRole(next.application.requested_role ?? "trainer"); setError(""); }
@@ -37,10 +35,10 @@ export default function StaffDetailPage() {
   const open = (next: StaffAdminAction) => { setAction(next); setNote(""); setConfirmAdmin(false); setDialogError(""); };
 
   const decide = async () => {
-    if (!action || !detail) return;
+    if (!action || !detail || busy) return;
     if (NOTE_REQUIRED[action] && !note.trim()) { setDialogError("Add a note explaining the decision."); return; }
-    if (action === "approve" && role === "admin" && !confirmAdmin) { setDialogError("Tick the box to confirm this person should become an Admin."); return; }
-    const decision: StaffDecision = action === "approve" ? { action, role, note: note.trim(), confirmAdmin } : { action, note: note.trim() };
+    if ((action === "approve" || strictActivation) && role === "admin" && !confirmAdmin) { setDialogError("Tick the box to confirm this person should become an Admin."); return; }
+    const decision: StaffDecision = strictActivation ? { action: "activateAccount", role, note: note.trim(), confirmAdmin } : action === "approve" ? { action, role, note: note.trim(), confirmAdmin } : { action, note: note.trim() };
     setBusy(true); setDialogError("");
     try { setDetail(await adminDecideStaff(detail.profile.id, decision)); setAction(null); }
     catch (e) { setDialogError(e instanceof Error ? e.message : "That could not be done."); }
@@ -48,17 +46,22 @@ export default function StaffDetailPage() {
   };
 
   const openPath = async (storagePath: string) => {
-    try { window.open(await staffDocumentUrl(storagePath, 120), "_blank", "noopener,noreferrer"); }
-    catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
+    const tab = window.open("about:blank", "_blank");
+    if (tab) tab.opener = null;
+    try {
+      const url = await staffDocumentUrl(storagePath, 120);
+      if (tab) tab.location.replace(url);
+      else window.location.assign(url);
+    } catch (e) { tab?.close(); setError((e as Error).message); }
   };
   const openDoc = (doc: StaffDocument) => openPath(doc.storagePath);
 
-  const askJob = (id: string, title: string, decision: "hired" | "declined") => { setJobDecision({ id, title, decision }); setJobNote(""); setDialogError(""); };
-  const decideJob = async () => {
-    if (!jobDecision || !detail) return;
+  const strictActivation = action === "activate" && !!detail?.requiredCategories && detail.profile.status !== "inactive";
+  const saveReview = async () => {
+    if (!review || busy) return;
     setBusy(true); setDialogError("");
-    try { setDetail(await adminDecideJobApplication(jobDecision.id, jobDecision.decision, jobNote)); setJobDecision(null); }
-    catch (e) { setDialogError(e instanceof Error ? e.message : "That could not be done."); }
+    try { setDetail(await adminReviewStaffDocument(review.document.id, review.decision, note.trim())); setReview(null); }
+    catch (e) { setDialogError((e as Error).message); }
     finally { setBusy(false); }
   };
 
@@ -66,18 +69,18 @@ export default function StaffDetailPage() {
   if (!detail) return <p className="text-sm text-foreground-600" role="status">Loading…</p>;
   const { profile, application } = detail;
   const activeRole = detail.roles.find((r) => !r.revokedAt)?.role;
-  const actions = adminActionsFor(profile.status);
+  const actions = detail.requiredCategories && profile.status === "submitted" ? (["activate", "reject"] as const) : adminActionsFor(profile.status);
   const address = [profile.address_street, profile.address_line2, profile.address_suburb, profile.address_state, profile.address_postcode, profile.address_country].filter(Boolean).join(", ");
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title={[profile.first_name, profile.middle_name, profile.last_name].filter(Boolean).join(" ") || profile.email}
+      <PageHeader breadcrumb={employee ? "Master Data / Employees / Onboarding" : "Staff"} title={[profile.first_name, profile.middle_name, profile.last_name].filter(Boolean).join(" ") || profile.email}
         description={`Requested role: ${application.requested_role ? ROLE_LABEL[application.requested_role] : "none"}${activeRole ? ` · Role on record: ${ROLE_LABEL[activeRole]}` : ""}`}
         actions={<>
           <span data-testid="staff-detail-status"><Badge tone={STAFF_STATUS_TONE[profile.status]}>{STAFF_STATUS_LABEL[profile.status]}</Badge></span>
           {actions.map((a) => <Button key={a} variant={a === "approve" || a === "activate" ? "primary" : "outline"} onClick={() => open(a)} data-testid={`staff-action-${a}`}>{ACTION_LABEL[a]}</Button>)}
         </>} />
-      <p className="-mt-3 mb-4 text-sm"><Link to="/admin/staff" className="text-primary-700 hover:underline">&larr; All staff</Link></p>
+      <p className="-mt-3 mb-4 text-sm"><Link to={employee ? `/admin/employees/${id}` : "/admin/staff"} className="text-primary-700 hover:underline">{employee ? "← Employee record" : "← All staff"}</Link></p>
       {error ? <p role="alert" className="mb-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -94,14 +97,22 @@ export default function StaffDetailPage() {
         </Card>
         <Card className="p-5">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Documents</h2>
+          {detail.requiredCategories ? <p className="mb-3 text-sm text-foreground-600">Required before activation: {detail.requiredCategories.join(", ")}.</p> : null}
           {detail.documents.length === 0 ? <p className="text-sm text-foreground-600">No documents uploaded.</p> : (
             <ul className="space-y-2" data-testid="staff-documents">
               {detail.documents.map((d) => (
                 <li key={d.id} className="rounded-md border border-background-200 px-3 py-2 text-sm">
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <span className="min-w-0"><span className="font-semibold">{d.category}</span> <span className="truncate text-foreground-600">{d.filename}</span></span>
                     <Button size="sm" variant="outline" onClick={() => void openDoc(d)}>View</Button>
+                    {d.status ? <Badge tone={d.status === "approved" ? "success" : "muted"}>{d.status}</Badge> : null}
+                    {detail.requiredCategories?.some((category) => category === d.category) && (profile.status === "submitted" || profile.status === "preboarding") ? <>
+                      <Button size="sm" variant="outline" disabled={d.status === "approved"} onClick={() => { setNote(""); setDialogError(""); setReview({ document: d, decision: "approved" }); }}>Approve</Button>
+                      <Button size="sm" variant="outline" disabled={d.status === "rejected"} onClick={() => { setNote(""); setDialogError(""); setReview({ document: d, decision: "rejected" }); }}>Reject</Button>
+                    </> : null}
                   </div>
+                  {d.expiryDate ? <p className="mt-1 text-xs">Expiry: {d.expiryDate}</p> : null}
+                  {d.reviewNote ? <p className="mt-1 text-xs">{d.reviewNote}</p> : null}
                   {d.extractionStatus === "done" ? <p className="mt-1 text-xs text-foreground-600">Read from the document: {[d.extracted.passport_number && `number ${d.extracted.passport_number}`, d.extracted.passport_expiry && `expires ${d.extracted.passport_expiry}`, d.extracted.dob && `born ${d.extracted.dob}`].filter(Boolean).join(" · ") || "details filled"}</p> : null}
                 </li>
               ))}
@@ -123,12 +134,7 @@ export default function StaffDetailPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge tone={a.status === "hired" ? "success" : a.status === "declined" ? "muted" : "warn"}>{JOB_APPLICATION_STATUS_LABEL[a.status]}</Badge>
-                    {a.status === "applied" ? (
-                      <>
-                        <Button size="sm" onClick={() => askJob(a.id, a.jobTitle, "hired")} data-testid="job-hire">Hire</Button>
-                        <Button size="sm" variant="outline" onClick={() => askJob(a.id, a.jobTitle, "declined")} data-testid="job-decline">Decline</Button>
-                      </>
-                    ) : null}
+                    <Link to={`/admin/candidates/${a.id}`} className="font-medium text-primary-700 hover:underline">View candidate</Link>
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -153,12 +159,12 @@ export default function StaffDetailPage() {
         </ol>
       </Card>
 
-      <Modal open={action !== null} title={action ? `${ACTION_LABEL[action]}: ${profile.email}` : ""} onClose={() => setAction(null)}
+      <Modal open={action !== null} title={action ? `${ACTION_LABEL[action]}: ${profile.email}` : ""} onClose={() => { if (!busy) setAction(null); }}
         footer={<><Button variant="outline" onClick={() => setAction(null)}>Cancel</Button><Button onClick={() => void decide()} disabled={busy} data-testid="staff-decision-confirm">{busy ? "Working…" : action ? ACTION_LABEL[action] : ""}</Button></>}>
         <div className="space-y-4">
-          {action === "approve" ? (
+          {action === "approve" || strictActivation ? (
             <>
-              <Field label="Role to grant" hint="The role is recorded now. CMS access for an Admin starts when you activate the account.">
+              <Field label="Role to grant" hint={strictActivation ? "Activation requires approved, current documents." : "CMS access for an Admin starts when you activate the account."}>
                 <div role="radiogroup" aria-label="Role to grant" className="flex gap-2">
                   {(["trainer", "admin"] as StaffRole[]).map((r) => (
                     <button key={r} type="button" role="radio" aria-checked={role === r} data-testid={`staff-grant-${r}`} onClick={() => { setRole(r); setConfirmAdmin(false); }}
@@ -180,16 +186,13 @@ export default function StaffDetailPage() {
         </div>
       </Modal>
 
-      <Modal open={jobDecision !== null} title={jobDecision ? `${jobDecision.decision === "hired" ? "Hire" : "Decline"}: ${jobDecision.title}` : ""} onClose={() => setJobDecision(null)}
-        footer={<><Button variant="outline" onClick={() => setJobDecision(null)}>Cancel</Button><Button onClick={() => void decideJob()} disabled={busy} data-testid="job-decision-confirm">{busy ? "Working…" : jobDecision?.decision === "hired" ? "Hire" : "Decline"}</Button></>}>
-        <div className="space-y-4">
-          <p className="text-sm text-foreground-700">{jobDecision?.decision === "hired"
-            ? "The person is told they are hired and asked to complete their staff registration (personal details, passport and other documents) on their staff page; you then approve it with a role as usual."
-            : "The application is marked declined. If it was their only open job application, their staff record becomes Rejected, with your note."}</p>
-          <Field label="Note (optional)" hint="Shown to the applicant on their staff page."><TextArea rows={3} value={jobNote} onChange={(e) => setJobNote(e.target.value)} data-testid="job-decision-note" /></Field>
-          {dialogError ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{dialogError}</p> : null}
-        </div>
-      </Modal>
+      {review ? <Modal open title={`${review.decision === "approved" ? "Approve" : "Reject"} ${review.document.category}`} onClose={() => { if (!busy) setReview(null); }}
+        footer={<><Button variant="outline" disabled={busy} onClick={() => setReview(null)}>Cancel</Button>
+          <Button disabled={busy} onClick={() => void saveReview()}>{busy ? "Saving…" : "Confirm review"}</Button></>}>
+        <p className="mb-3 text-sm">{review.document.filename}</p>
+        {review.decision === "rejected" ? <Field label="Reason" required><TextArea maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field> : null}
+        {dialogError ? <p role="alert" className="text-sm text-primary-700">{dialogError}</p> : null}
+      </Modal> : null}
     </div>
   );
 }

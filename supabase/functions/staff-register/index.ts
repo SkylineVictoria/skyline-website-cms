@@ -63,10 +63,11 @@ Deno.serve(async (req) => {
   let body: Record<string, unknown> = {};
   try { body = (await req.json()) as Record<string, unknown>; } catch { body = {}; }
   const action = String(body.action ?? "");
-  if (action !== "check" && action !== "send_code" && action !== "admin_add") return json({ error: "Unknown action." }, 400);
+  if (action !== "check" && action !== "send_code" && action !== "admin_add" && action !== "employee_invite") return json({ error: "Unknown action." }, 400);
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   if (action === "admin_add") return adminAdd(req, body, admin);
+  if (action === "employee_invite") return employeeInvite(req, body, admin);
   const callerKey = await hash(req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for") ?? "anonymous");
   if (!(await withinLimit(admin, `staff-register:caller:${action}:${callerKey}`, action === "check" ? 30 : 8, 600))) {
     return json({ error: "Please wait a few minutes before trying again." }, 429, { "Retry-After": "600" });
@@ -169,3 +170,30 @@ async function adminAdd(req: Request, body: Record<string, unknown>, admin: any)
   return json({ ok: true, profileId: data?.id ?? null, emailSent });
 }
 
+
+// deno-lint-ignore no-explicit-any
+async function employeeInvite(req: Request, body: Record<string, unknown>, admin: any): Promise<Response> {
+  const caller = await callerAdmin(req, admin);
+  if (!caller) return json({ error: "Only an administrator can invite an employee." }, 403);
+  const profileId = String(body.profileId ?? "");
+  const redirectTo = safeRedirect(body.redirectTo);
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(profileId) || !redirectTo) {
+    return json({ error: "Check the employee and invitation destination." }, 400);
+  }
+  const { data: target, error: targetError } = await admin.rpc("hr_employee_invite_target", { p_id: profileId });
+  if (targetError || !target) return json({ error: targetError?.message ?? "Employee record not found." }, 400);
+  if (!(await withinLimit(admin, `staff-register:employee-invite:${profileId}`, 3, 3600))) {
+    return json({ error: "Please wait before requesting another invitation." }, 429, { "Retry-After": "3600" });
+  }
+
+  const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { error } = target.hasAccount
+    ? await anon.auth.signInWithOtp({ email: target.email, options: { shouldCreateUser: false, emailRedirectTo: redirectTo } })
+    : await admin.auth.admin.inviteUserByEmail(target.email, {
+      redirectTo, data: { registrant: "staff", staff_phone: target.phone, name: target.name },
+    });
+  if (error) return json({ error: "The invitation could not be sent. Check the address or try again shortly." }, 502);
+  const { error: auditError } = await admin.rpc("hr_employee_invite_logged", { p_id: profileId, p_actor: caller.id });
+  if (auditError) console.error("Employee invitation audit write failed", auditError.code);
+  return json({ ok: true, emailSent: true });
+}

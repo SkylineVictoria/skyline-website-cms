@@ -1,7 +1,7 @@
 begin;
 -- Staff self-registration (hr schema): phone normalisation, duplicate checks, RLS, role and approval rules, status log.
 -- Fixtures only; rolled back. Run: npx supabase test db
-select plan(106);
+select plan(137);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -169,8 +169,8 @@ select throws_ok($$select public.hr_admin_job_save(null, '{"title":"T","descript
 select throws_ok($$select public.hr_admin_job_save(null, '{"title":"Trainer","description":"Teach.","employmentType":"casual","location":"Melbourne"}')$$, '22023', 'Choose Full time or Part time.', 'full time or part time only');
 select lives_ok($$select public.hr_admin_job_save(null, '{"title":"Trainer (test post)","description":"Teach.","employmentType":"part_time","location":"Melbourne"}')$$, 'an administrator posts a job');
 reset role;
-insert into hr.jobs(id, title, description, employment_type, salary, location) values
- ('f0000000-0000-0000-0000-000000000001', 'Commercial Cookery Trainer', 'Teach commercial cookery.', 'full_time', '$80,000 + super', 'Melbourne, VIC');
+insert into hr.jobs(id, title, description, employment_type, salary, location, published_at) values
+ ('f0000000-0000-0000-0000-000000000001', 'Commercial Cookery Trainer', 'Teach commercial cookery.', 'full_time', '$80,000 + super', 'Melbourne, VIC', now());
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(jsonb_array_length(public.hr_admin_job_list()), 2, 'the admin list shows every job');
@@ -199,9 +199,12 @@ set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_staff_list('job_applied')->>'total', '1', 'the staff list filters by Job applied');
 select is(public.hr_admin_staff_list('job_applied')->'rows'->0->>'jobTitle', 'Commercial Cookery Trainer', 'and names the job');
 select is((select e->>'applied' from jsonb_array_elements(public.hr_admin_job_list()) e where e->>'id' = 'f0000000-0000-0000-0000-000000000001'), '1', 'the job post counts the applicant');
+select throws_ok($$select public.hr_admin_job_decide((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'hired', null)$$, '23514', 'Mark the candidate selected before hiring.', 'hire requires selection');
+select lives_ok($$select public.hr_admin_candidate_progress((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'interview', now(), 'Interviewed', null)$$, 'record the interview');
+select lives_ok($$select public.hr_admin_candidate_progress((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'selected', null, null, null)$$, 'select the interviewed candidate');
 select is(public.hr_admin_job_decide((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'hired', null)->'profile'->>'status', 'draft', 'hired: the person completes the staff registration (a draft again)');
 select is((select status from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'hired', 'the job application is marked hired');
-select is((select note from hr.staff_status_events where from_status = 'job_applied' and to_status = 'draft' order by id desc limit 1), 'Hired for Commercial Cookery Trainer. Please complete your staff registration.', 'the applicant is told why');
+select is((select note from hr.staff_status_events where from_status = 'job_applied' and to_status = 'draft' order by id desc limit 1), 'Hired for Commercial Cookery Trainer. Complete onboarding.', 'the applicant is told why');
 select throws_ok($$select public.hr_admin_job_decide((select id from hr.job_applications where job_id = 'f0000000-0000-0000-0000-000000000001'), 'declined', null)$$, '23514', 'This job application has already been decided.', 'a decision is made once');
 select lives_ok($$select public.hr_admin_job_save('f0000000-0000-0000-0000-000000000001', '{"status":"closed"}')$$, 'the job is closed');
 reset role;
@@ -228,5 +231,64 @@ select is((select actor_kind from hr.staff_status_events e join hr.staff_profile
 reset role;
 select throws_ok($$update hr.staff_profiles set status = 'active' where auth_user_id = 'a0000000-0000-0000-0000-000000000002'$$, '23514', null, 'draft -> active is not an allowed transition');
 select throws_ok($$update hr.staff_status_events set note = 'edited'$$, '23514', 'The staff status log is append-only.', 'the log cannot be edited');
+-- Master Data recruitment. Same profile through manual entry, verified claim and hiring.
+insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data) values
+ ('a0000000-0000-0000-0000-000000000010','manual.candidate@example.test',now(),'{"staff_phone":"+61400000010"}');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select set_config('test.hr_draft', (public.hr_admin_job_save(null, '{"title":"Draft role","description":"Test only","employmentType":"full_time","location":"Melbourne","department":"Training","vacancies":3,"status":"draft"}')->>'id'), true);
+select is(jsonb_array_length(public.jobs_open(current_setting('test.hr_draft')::uuid)), 0, 'draft job is private even by known ID');
+select is(public.hr_admin_job_save(current_setting('test.hr_draft')::uuid,'{"status":"open"}')->>'vacancies','3','publishing preserves vacancy details');
+select is(public.jobs_open(current_setting('test.hr_draft')::uuid)->0->>'department','Training','published job is visible to Careers');
+select set_config('test.hr_candidate',public.hr_admin_candidate_save(null,current_setting('test.hr_draft')::uuid,
+ '{"firstName":"Manual","lastName":"Candidate","email":"manual.candidate@example.test","phone":"+61400000010"}','','Internal notes')::text,true);
+select is(public.hr_admin_candidates(current_setting('test.hr_draft')::uuid,'screening','manual',20,0)->>'total','1','manual candidate appears in filtered search');
+select is(public.hr_admin_employees(null,null,'manual.candidate@example.test',20,0)->>'total','0','screening candidate is outside the employee list');
+select throws_ok($$select public.hr_admin_candidate_save(null,current_setting('test.hr_draft')::uuid,'{"firstName":"Manual","lastName":"Candidate","email":"manual.candidate@example.test","phone":"+61400000010"}','','')$$,'23505',null,'duplicate application blocked');
+select throws_ok($$select public.hr_admin_candidate_progress(current_setting('test.hr_candidate')::uuid,'declined',null,null,'')$$,'22023','Record a reason for this decision.','rejection requires a reason');
+select set_config('test.hr_person',public.hr_admin_candidate(current_setting('test.hr_candidate')::uuid)->>'profileId',true);
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000010';
+select is(public.hr_staff_start()->'profile'->>'id',current_setting('test.hr_person'),'verified email and phone claim the same profile');
+select throws_ok($$select public.hr_admin_candidate(current_setting('test.hr_candidate')::uuid)$$,'42501',null,'applicant cannot read internal recruitment details');
+select throws_ok($$select public.hr_admin_employees(null,null,'',20,0)$$,'42501',null,'applicant cannot read employee records');
+select throws_ok($$select public.hr_employee_invite_target(current_setting('test.hr_person')::uuid)$$,'42501',null,'employee invitation target is service only');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_candidate_progress(current_setting('test.hr_candidate')::uuid,'interview',now(),'Interview',null),
+ public.hr_admin_candidate_progress(current_setting('test.hr_candidate')::uuid,'selected',null,null,null)$$,'interview and select manual candidate');
+select is(public.hr_admin_candidate_progress(current_setting('test.hr_candidate')::uuid,'hired',null,null,'')::text,current_setting('test.hr_person'),'hiring returns the employee ID for the same person');
+select is(public.hr_admin_employee(current_setting('test.hr_person')::uuid)->>'candidateId',current_setting('test.hr_candidate'),'employee links to the correct application');
+select is(public.hr_admin_employee(current_setting('test.hr_person')::uuid)->>'status','draft','hiring leaves access in onboarding');
+select is(public.hr_admin_employees('onboarding','Training','manual',20,0)->>'total','1','employee is searchable by department and status');
+reset role;
+select is((select count(*)::int from hr.staff_roles where profile_id = current_setting('test.hr_person')::uuid),0,'hiring grants no role');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select set_config('test.hr_job',current_setting('test.hr_draft'),true);
+select ok(exists (select 1 from jsonb_array_elements(public.hr_admin_candidate(current_setting('test.hr_candidate')::uuid)->'history') event where event->'details'->>'status' = 'hired'),'hiring decision is in the audit log');
+select set_config('test.hr_direct',public.hr_admin_employee_save(null,
+ '{"firstName":"Direct","lastName":"Employee","email":"direct.employee@example.test","phone":"+61400000011"}',
+ jsonb_build_object('jobTitle','Administrator','employmentType','full_time','managerId',current_setting('test.hr_person')))::text,true);
+select is(public.hr_admin_employee(current_setting('test.hr_direct')::uuid)->>'managerId',current_setting('test.hr_person'),'direct employee is linked to the selected manager');
+select throws_ok($$select public.hr_admin_employee_save(current_setting('test.hr_person')::uuid,
+ '{"firstName":"Manual","lastName":"Candidate","email":"manual.candidate@example.test","phone":"+61400000010"}',
+ jsonb_build_object('jobTitle','Trainer','employmentType','full_time','managerId',current_setting('test.hr_direct')))$$,
+ '23514','The manager assignment would create a reporting cycle.','cyclic reporting lines are rejected');
+select throws_ok($$select public.hr_admin_staff_activate(current_setting('test.hr_direct')::uuid)$$,'23514',null,'an unclaimed draft cannot be activated');
+reset role;
+select is(public.hr_employee_invite_target(current_setting('test.hr_direct')::uuid)->>'hasAccount','false','a direct hire has no Auth account before invitation');
+-- A prior employment ends and the person is rehired through a new attempt for the same job.
+update hr.staff_profiles set status = 'submitted' where id = current_setting('test.hr_person')::uuid;
+update hr.staff_profiles set status = 'preboarding' where id = current_setting('test.hr_person')::uuid;
+update hr.staff_profiles set status = 'active' where id = current_setting('test.hr_person')::uuid;
+update hr.staff_profiles set status = 'inactive' where id = current_setting('test.hr_person')::uuid;
+set local role authenticated;
+select set_config('test.hr_rehire',public.hr_admin_candidate_save(null,current_setting('test.hr_job')::uuid,
+ '{"firstName":"Manual","lastName":"Candidate","email":"manual.candidate@example.test","phone":"+61400000010"}','','')::text,true);
+select lives_ok($$select public.hr_admin_candidate_progress(current_setting('test.hr_rehire')::uuid,'interview',now(),null,null),
+ public.hr_admin_candidate_progress(current_setting('test.hr_rehire')::uuid,'selected',null,null,null)$$,'record a new interview and selection for rehire');
+select is(public.hr_admin_candidate_progress(current_setting('test.hr_rehire')::uuid,'hired',null,null,'')::text,current_setting('test.hr_person'),'rehire reuses the original employee ID');
+select is(public.hr_admin_candidate(current_setting('test.hr_candidate')::uuid)->>'status','hired','original hired application is preserved');
+select is(public.hr_admin_employee(current_setting('test.hr_person')::uuid)->>'status','draft','rehire requires onboarding before activation');
+reset role;
 select * from finish();
 rollback;

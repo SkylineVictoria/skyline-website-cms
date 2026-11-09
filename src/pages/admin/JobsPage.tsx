@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
+import { HR_PAGE_SIZE, hrDate } from "@/lib/recruitmentApi";
 import WizardSteps from "@/pages/admin/components/WizardSteps";
-import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, JOB_APPLICATION_STATUS_LABEL, jobPath, jobProblems, type JobForm } from "@/lib/jobs";
-import { adminListJobApplications, adminListJobs, adminSaveJob, type AdminJob, type JobApplicationRow } from "@/lib/jobsApi";
-import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE } from "@/lib/staffStatus";
+import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, jobPath, jobProblems, type JobForm } from "@/lib/jobs";
+import { adminListJobs, adminSaveJob, adminSetJobStatus, type AdminJob } from "@/lib/jobsApi";
 
 type Problems = Partial<Record<keyof JobForm, string>>;
-type Tab = "posts" | "applicants";
 const STEPS = ["Role", "Description", "Review and post"];
 
 function F({ problem, children, ...rest }: { label: string; required?: boolean; hint?: string; problem?: string; children: ReactNode }) {
@@ -15,131 +15,117 @@ function F({ problem, children, ...rest }: { label: string; required?: boolean; 
 }
 const Alert = ({ text }: { text: string }) => (text ? <p role="alert" className="mb-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{text}</p> : null);
 
-/** Agencies > Jobs: the job posts shown at /careers (post with a short wizard, edit, open or close) and everyone who applied. Admins only. */
+const statusLabel = { draft: "Draft", open: "Open", closed: "Closed" } as const;
+
 export default function JobsPage() {
-  const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "applicants" ? "applicants" : "posts";
+  const [params] = useSearchParams();
   const [jobs, setJobs] = useState<AdminJob[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("");
+  const [employmentType, setEmploymentType] = useState("");
+  const [sort, setSort] = useState("recent");
+  const [offset, setOffset] = useState(0);
   const [wizard, setWizard] = useState<{ id: string | null; form: JobForm } | null>(null);
+  const [view, setView] = useState<AdminJob | null>(null);
+  const [confirm, setConfirm] = useState<AdminJob | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    setError("");
-    try { setJobs(await adminListJobs()); }
-    catch (e) { setJobs(null); setError(e instanceof Error ? e.message : "The job posts could not be loaded."); }
+    try { setJobs(await adminListJobs()); setError(""); }
+    catch (e) { setError((e as Error).message); }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (params.get("tab") !== "applicants") void load(); }, [load, params]);
 
-  const open = (job?: AdminJob) => setWizard(job
-    ? { id: job.id, form: { title: job.title, description: job.description, employmentType: job.employmentType, salary: job.salary, location: job.location, status: job.status } }
-    : { id: null, form: { ...EMPTY_JOB } });
-
-  const toggle = async (job: AdminJob) => {
-    try { await adminSaveJob(job.id, { title: job.title, description: job.description, employmentType: job.employmentType, salary: job.salary, location: job.location, status: job.status === "open" ? "closed" : "open" }); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "The job could not be updated."); }
+  const open = (job?: AdminJob) => {
+    setView(null);
+    setWizard(job ? { id: job.id, form: job } : { id: null, form: { ...EMPTY_JOB } });
+  };
+  const changeStatus = async () => {
+    if (!confirm || busy) return;
+    setBusy(true);
+    try {
+      const status = confirm.status === "open" ? "closed" : "open";
+      await adminSetJobStatus(confirm.id, status);
+      setConfirm(null); setNotice(status === "open" ? "Job published to Careers." : "Job closed.");
+      await load();
+    } catch (e) { setConfirm(null); setError((e as Error).message); }
+    finally { setBusy(false); }
   };
 
-  return (
-    <div>
-      <PageHeader breadcrumb="Agencies" title="Jobs" description="Job posts shown on the website at /careers, and the people who applied. A visitor creates an account, applies with a resume and cover letter, and appears under Staff with the status Job applied."
-        actions={<Button onClick={() => open()} data-testid="job-new"><i className="ri-add-line" aria-hidden="true" /> New job post</Button>} />
-      <SectionTabs tabs={[{ id: "posts", label: "Job posts", icon: "ri-briefcase-line" }, { id: "applicants", label: "Applicants", icon: "ri-user-received-line" }]} active={tab}
-        onChange={(id) => setParams(id === "posts" ? {} : { tab: id })} />
-      <Alert text={error} />
-      {tab === "posts" ? <JobTable jobs={jobs} onEdit={open} onToggle={toggle} /> : <ApplicantsTable jobs={jobs ?? []} />}
-      {wizard ? <JobWizard id={wizard.id} initial={wizard.form} onClose={() => setWizard(null)} onSaved={() => { setWizard(null); void load(); }} /> : null}
+  if (params.get("tab") === "applicants") {
+    const job = params.get("job");
+    return <Navigate to={job ? `/admin/candidates?job=${encodeURIComponent(job)}` : "/admin/candidates"} replace />;
+  }
+  const rows = (jobs ?? []).filter((j) =>
+    (!filter || j.status === filter) && (!employmentType || j.employmentType === employmentType) &&
+    [j.title, j.location, j.department].some((v) => v?.toLowerCase().includes(search.trim().toLowerCase())),
+  ).sort((a, b) => sort === "title" ? a.title.localeCompare(b.title)
+    : sort === "candidates" ? (b.candidateCount ?? b.applied) - (a.candidateCount ?? a.applied) : b.postedAt.localeCompare(a.postedAt));
+  const pageOffset = Math.min(offset, Math.max(0, Math.ceil(rows.length / HR_PAGE_SIZE) - 1) * HR_PAGE_SIZE);
+  const label = (j: AdminJob) => j.status === "open" ? "Close" : j.status === "draft" ? "Publish" : "Reopen";
+  return <div>
+    <PageHeader breadcrumb="Master Data" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates."
+      actions={<Button onClick={() => open()} icon="ri-add-line" data-testid="job-new">Add Job</Button>} />
+    <HrNotice error>{error}</HrNotice><HrNotice>{notice}</HrNotice>
+    <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <TextInput aria-label="Search jobs" placeholder="Search title, department or location" value={search} onChange={(e) => { setSearch(e.target.value); setOffset(0); }} />
+      <Select aria-label="Filter by job status" value={filter} onChange={(e) => { setFilter(e.target.value); setOffset(0); }}><option value="">All job statuses</option>
+        {Object.entries(statusLabel).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</Select>
+      <Select aria-label="Filter by employment type" value={employmentType} onChange={(e) => { setEmploymentType(e.target.value); setOffset(0); }}>
+        <option value="">All employment types</option>{EMPLOYMENT_TYPES.map((t) => <option key={t} value={t}>{EMPLOYMENT_TYPE_LABEL[t]}</option>)}
+      </Select>
+      <Select aria-label="Sort jobs" value={sort} onChange={(e) => { setSort(e.target.value); setOffset(0); }}>
+        <option value="recent">Newest first</option><option value="title">Title A–Z</option><option value="candidates">Most candidates</option>
+      </Select>
     </div>
-  );
-}
-
-function JobTable({ jobs, onEdit, onToggle }: { jobs: AdminJob[] | null; onEdit: (job: AdminJob) => void; onToggle: (job: AdminJob) => void }) {
-  if (jobs === null) return <p className="text-sm text-foreground-600" role="status">Loading…</p>;
-  if (jobs.length === 0) return <EmptyState icon="ri-briefcase-line" title="No job posts yet" description="Click New job post: title, description, full time or part time, salary and location. It appears on the website at once." />;
-  return (
-    <Card className="overflow-x-auto">
-      <table className="w-full min-w-[760px] text-left text-sm" data-testid="jobs-table">
-        <thead className="border-b border-background-200 text-xs uppercase tracking-wide text-foreground-500">
-          <tr><th className="px-4 py-3">Title</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Location</th><th className="px-4 py-3">Salary</th><th className="px-4 py-3">Applicants</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Posted</th><th className="px-4 py-3" /></tr>
-        </thead>
-        <tbody>
-          {jobs.map((job) => (
-            <tr key={job.id} className="border-b border-background-100 last:border-0 hover:bg-background-100">
-              <td className="px-4 py-3 font-medium"><button type="button" onClick={() => onEdit(job)} className="cursor-pointer text-left text-primary-700 hover:underline">{job.title}</button></td>
-              <td className="px-4 py-3 text-foreground-700">{EMPLOYMENT_TYPE_LABEL[job.employmentType]}</td>
-              <td className="px-4 py-3 text-foreground-700">{job.location}</td>
-              <td className="px-4 py-3 text-foreground-700">{job.salary || "—"}</td>
-              <td className="px-4 py-3 text-foreground-700"><Link to={`/admin/jobs?tab=applicants&job=${job.id}`} className="text-primary-700 hover:underline">{job.applied} applied</Link>{job.hired ? ` · ${job.hired} hired` : ""}{job.declined ? ` · ${job.declined} declined` : ""}</td>
-              <td className="px-4 py-3"><Badge tone={job.status === "open" ? "success" : "muted"}>{job.status === "open" ? "Open" : "Closed"}</Badge></td>
-              <td className="px-4 py-3 text-xs text-foreground-500">{new Date(job.postedAt).toLocaleDateString()}</td>
-              <td className="px-4 py-3 text-right">
-                <div className="flex justify-end gap-2">
-                  <a href={jobPath(job.id)} target="_blank" rel="noopener noreferrer" className="rounded-md border border-background-300 px-2.5 py-1 text-xs font-semibold text-foreground-700 hover:bg-background-100">View on site</a>
-                  <Button size="sm" variant="outline" onClick={() => onEdit(job)}>Edit</Button>
-                  <Button size="sm" variant="outline" onClick={() => onToggle(job)}>{job.status === "open" ? "Close" : "Reopen"}</Button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
+    {!jobs && !error ? <p role="status">Loading jobs…</p> : null}
+    {jobs && !rows.length ? <EmptyState icon="ri-briefcase-line" title="No matching jobs" description="Add a job or adjust the current filters." /> : null}
+    {rows.length ? <Card className="data-table-frame">
+      <table className="data-table w-full text-left text-sm" data-testid="jobs-table">
+        <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
+          {["Job title", "Department", "Location", "Vacancies", "Candidates", "Status", "Actions"].map((heading) => <th className="px-4 py-3" key={heading}>{heading}</th>)}
+        </tr></thead>
+        <tbody>{rows.slice(pageOffset, pageOffset + HR_PAGE_SIZE).map((j) => <tr key={j.id} className="border-b border-background-100 last:border-0">
+          <td data-label="Job title" className="px-4 py-3"><button className="text-left font-medium text-primary-700 hover:underline" onClick={() => setView(j)}>{j.title}</button>
+            <div className="text-xs text-foreground-500">{EMPLOYMENT_TYPE_LABEL[j.employmentType]}</div></td>
+          <td data-label="Department" className="px-4 py-3">{j.department || "—"}</td><td data-label="Location" className="px-4 py-3">{j.location}</td><td data-label="Vacancies" className="px-4 py-3">{j.vacancies ?? 1}</td>
+          <td data-label="Candidates" className="px-4 py-3"><HrLink to={`/admin/candidates?job=${j.id}`}>{j.candidateCount ?? j.applied + j.hired + j.declined} candidates</HrLink></td>
+          <td data-label="Status" className="px-4 py-3"><Badge tone={j.status === "open" ? "success" : "muted"}>{statusLabel[j.status]}</Badge></td>
+          <td data-label="Actions" className="px-4 py-3"><div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => open(j)}>Edit</Button>
+            <Button size="sm" variant="outline" onClick={() => setConfirm(j)}>{label(j)}</Button>
+          </div></td>
+        </tr>)}</tbody>
       </table>
-    </Card>
-  );
-}
-
-/** Everyone who applied, newest first, filtered by job; each row opens the person under Staff (resume, cover letter, hire / decline). */
-function ApplicantsTable({ jobs }: { jobs: AdminJob[] }) {
-  const [params, setParams] = useSearchParams();
-  const job = params.get("job") ?? "";
-  const [rows, setRows] = useState<JobApplicationRow[] | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    setRows(null);
-    adminListJobApplications(job || null).then((r) => { if (!cancelled) setRows(r); }, (e) => { if (!cancelled) { setRows([]); setError(e instanceof Error ? e.message : "The applicants could not be loaded."); } });
-    return () => { cancelled = true; };
-  }, [job]);
-  return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="w-full sm:w-72">
-          <Select aria-label="Filter by job" value={job} onChange={(e) => setParams(e.target.value ? { tab: "applicants", job: e.target.value } : { tab: "applicants" })}>
-            <option value="">All jobs</option>
-            {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}{j.status === "closed" ? " (closed)" : ""}</option>)}
-          </Select>
-        </div>
-        {rows ? <p className="text-xs text-foreground-500" role="status">{rows.length} {rows.length === 1 ? "applicant" : "applicants"}</p> : null}
-      </div>
-      <Alert text={error} />
-      {rows === null ? <p className="text-sm text-foreground-600" role="status">Loading…</p> : null}
-      {rows && rows.length === 0 && !error ? <EmptyState icon="ri-user-received-line" title="No applicants yet" description="People who apply for a job post appear here and under Staff with the status Job applied." /> : null}
-      {rows && rows.length ? (
-        <Card className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left text-sm" data-testid="applicants-table">
-            <thead className="border-b border-background-200 text-xs uppercase tracking-wide text-foreground-500">
-              <tr><th className="px-4 py-3">Applicant</th><th className="px-4 py-3">Email</th><th className="px-4 py-3">Mobile</th><th className="px-4 py-3">Job</th><th className="px-4 py-3">Applied</th><th className="px-4 py-3">Application</th><th className="px-4 py-3">Staff status</th></tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-b border-background-100 last:border-0 hover:bg-background-100">
-                  <td className="px-4 py-3 font-medium"><Link to={`/admin/staff/${r.profileId}`} className="text-primary-700 hover:underline">{r.name || r.email}</Link></td>
-                  <td className="px-4 py-3 text-foreground-700">{r.email}</td>
-                  <td className="px-4 py-3 text-foreground-700">{r.phone}</td>
-                  <td className="px-4 py-3 text-foreground-700">{r.jobTitle}</td>
-                  <td className="px-4 py-3 text-xs text-foreground-500">{new Date(r.appliedAt).toLocaleDateString()}</td>
-                  <td className="px-4 py-3"><Badge tone={r.status === "hired" ? "success" : r.status === "declined" ? "muted" : "warn"}>{JOB_APPLICATION_STATUS_LABEL[r.status]}</Badge></td>
-                  <td className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[r.staffStatus]}>{STAFF_STATUS_LABEL[r.staffStatus]}</Badge></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      ) : null}
-    </div>
-  );
+    </Card> : null}
+    <HrPager offset={pageOffset} total={rows.length} onChange={setOffset} />
+    {view ? <Modal open title={view.title} onClose={() => setView(null)} footer={<><Button variant="outline" onClick={() => setView(null)}>Close</Button><Button onClick={() => open(view)}>Edit Job</Button></>}>
+      <dl className="grid gap-3 sm:grid-cols-2">
+        <HrValue label="Status">{statusLabel[view.status]}</HrValue><HrValue label="Employment type">{EMPLOYMENT_TYPE_LABEL[view.employmentType]}</HrValue>
+        <HrValue label="Department">{view.department}</HrValue><HrValue label="Location">{view.location}</HrValue>
+        <HrValue label="Salary range">{view.salary}</HrValue><HrValue label="Vacancies">{view.vacancies ?? 1}</HrValue>
+        <HrValue label="Published">{hrDate(view.publishedAt ?? null)}</HrValue>
+        <HrValue label="Candidates"><HrLink to={`/admin/candidates?job=${view.id}`}>View candidates</HrLink></HrValue>
+      </dl>
+      <dl className="my-4"><HrValue label="Description">{view.description}</HrValue></dl>
+      {view.status === "open" ? <Link className="text-sm font-medium text-primary-700 hover:underline" to={jobPath(view.id)} target="_blank" rel="noopener noreferrer">View on Careers</Link> : null}
+    </Modal> : null}
+    {confirm ? <Modal open title={`${label(confirm)} job`} onClose={() => { if (!busy) setConfirm(null); }} footer={<>
+      <Button variant="outline" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+      <Button disabled={busy} onClick={() => void changeStatus()}>{busy ? "Saving…" : label(confirm)}</Button>
+    </>}>
+      <p className="text-sm">{confirm.status === "open" ? `Close ${confirm.title} and stop accepting new applications?` : `Publish ${confirm.title} and accept applications on Careers?`}</p>
+    </Modal> : null}
+    {wizard ? <JobWizard id={wizard.id} initial={wizard.form} onClose={() => setWizard(null)} onSaved={(status) => {
+      setWizard(null); setNotice(status === "open" ? "Job saved and visible on Careers." : "Job saved."); void load();
+    }} /> : null}
+  </div>;
 }
 
 /** Three steps: the role (title, type, location, salary), the description, then a review with Post / Save. */
-function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initial: JobForm; onClose: () => void; onSaved: () => void }) {
+function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initial: JobForm; onClose: () => void; onSaved: (status: JobForm["status"]) => void }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<JobForm>(initial);
   const [problems, setProblems] = useState<Problems>({});
@@ -149,7 +135,7 @@ function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initi
 
   const next = () => {
     const found = jobProblems(form);
-    const own: Array<keyof JobForm> = step === 0 ? ["title", "employmentType", "location", "salary", "status"] : ["description"];
+    const own: Array<keyof JobForm> = step === 0 ? ["title", "employmentType", "location", "salary", "department", "vacancies", "status"] : ["description"];
     const here = Object.fromEntries(Object.entries(found).filter(([k]) => own.includes(k as keyof JobForm))) as Problems;
     setProblems(here);
     if (Object.keys(here).length) return;
@@ -160,18 +146,18 @@ function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initi
     const found = jobProblems(form);
     if (Object.keys(found).length) { setProblems(found); setStep(found.description && Object.keys(found).length === 1 ? 1 : 0); return; }
     setBusy(true); setError("");
-    try { await adminSaveJob(id, form); onSaved(); }
+    try { await adminSaveJob(id, form); onSaved(form.status); }
     catch (e) { setError(e instanceof Error ? e.message : "The job could not be saved."); }
     finally { setBusy(false); }
   };
 
   return (
-    <Modal open title={id ? "Edit job post" : "New job post"} onClose={onClose}
+    <Modal open title={id ? "Edit job post" : "New job post"} onClose={() => { if (!busy) onClose(); }}
       footer={<>
-        <Button variant="outline" onClick={step === 0 ? onClose : () => setStep((s) => s - 1)}>{step === 0 ? "Cancel" : "Back"}</Button>
+        <Button variant="outline" disabled={busy} onClick={step === 0 ? onClose : () => setStep((s) => s - 1)}>{step === 0 ? "Cancel" : "Back"}</Button>
         {step < STEPS.length - 1
           ? <Button onClick={next} data-testid="job-next">Next</Button>
-          : <Button onClick={() => void save()} disabled={busy} data-testid="job-save">{busy ? "Saving…" : id ? "Save changes" : form.status === "open" ? "Post job" : "Save as closed"}</Button>}
+          : <Button onClick={() => void save()} disabled={busy} data-testid="job-save">{busy ? "Saving…" : form.status === "open" ? "Save and publish" : form.status === "draft" ? "Save draft" : "Save closed job"}</Button>}
       </>}>
       <WizardSteps steps={STEPS} current={step} />
       {step === 0 ? (
@@ -184,9 +170,11 @@ function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initi
               </Select>
             </F>
             <F label="Location" required problem={problems.location}><TextInput value={form.location} onChange={(e) => patch({ location: e.target.value })} maxLength={150} placeholder="Melbourne, VIC" data-testid="job-location" /></F>
-            <F label="Salary" problem={problems.salary} hint="As shown on the website, e.g. $75,000 – $85,000 + super."><TextInput value={form.salary} onChange={(e) => patch({ salary: e.target.value })} maxLength={120} data-testid="job-salary" /></F>
+            <F label="Salary range" problem={problems.salary} hint="As shown on the website, e.g. $75,000 – $85,000 + super."><TextInput value={form.salary} onChange={(e) => patch({ salary: e.target.value })} maxLength={120} data-testid="job-salary" /></F>
+            <F label="Department" problem={problems.department}><TextInput maxLength={120} value={form.department ?? ""} onChange={(e) => patch({ department: e.target.value })} /></F>
+            <F label="Vacancies" required problem={problems.vacancies}><TextInput type="number" min={1} max={10000} value={Number.isNaN(form.vacancies) ? "" : form.vacancies ?? 1} onChange={(e) => patch({ vacancies: e.target.valueAsNumber })} /></F>
             <F label="Status" problem={problems.status}>
-              <Select value={form.status} onChange={(e) => patch({ status: e.target.value as JobForm["status"] })}><option value="open">Open (shown on the website)</option><option value="closed">Closed</option></Select>
+              <Select value={form.status} onChange={(e) => patch({ status: e.target.value as JobForm["status"] })}><option value="draft">Draft</option><option value="open">Open (published to Careers)</option><option value="closed">Closed</option></Select>
             </F>
           </div>
         </div>
@@ -203,7 +191,7 @@ function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initi
             <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Type</dt><dd>{EMPLOYMENT_TYPE_LABEL[form.employmentType]}</dd></div>
             <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Location</dt><dd>{form.location}</dd></div>
             <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Salary</dt><dd>{form.salary || "Not stated"}</dd></div>
-            <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Status</dt><dd>{form.status === "open" ? "Open: shown on the website" : "Closed: not shown"}</dd></div>
+            <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Status</dt><dd>{statusLabel[form.status]}</dd></div>
           </dl>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Description</p><p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-line rounded-md border border-background-200 p-3 text-sm text-foreground-800">{form.description}</p></div>
           <Alert text={error} />

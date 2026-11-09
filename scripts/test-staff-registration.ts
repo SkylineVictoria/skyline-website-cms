@@ -43,7 +43,7 @@ test("the browser, the edge function and the database normalise the same vectors
 /* ------------------------------------------------------------------ status transitions */
 
 test("status transitions allow exactly the agreed moves", () => {
-  const allowed: Array<[string, string]> = [["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"], ["preboarding", "active"], ["preboarding", "rejected"], ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"],
+  const allowed: Array<[string, string]> = [["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"], ["preboarding", "active"], ["preboarding", "rejected"], ["active", "inactive"], ["inactive", "active"], ["inactive", "draft"], ["rejected", "draft"],
     ["draft", "job_applied"], ["rejected", "job_applied"], ["job_applied", "draft"], ["job_applied", "rejected"]];
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), allowed.some(([a, b]) => a === from && b === to), `${from} -> ${to}`);
@@ -54,9 +54,11 @@ test("status transitions allow exactly the agreed moves", () => {
 test("the TypeScript transition table matches the database function and the status list", () => {
   // 20261106120000 (job posts) replaced the transition function and the status checks of 20261105180000.
   const sql = read("supabase/migrations/20261106120000_job_posts.sql");
-  const body = sql.slice(sql.indexOf("hr.staff_transition_allowed"), sql.indexOf("update storage.buckets"));
+  const latest = read("supabase/migrations/20261109143750_skyline_master_data_hr.sql");
+  const start = latest.indexOf("function hr.staff_transition_allowed");
+  const body = latest.slice(start, latest.indexOf("$fn$;", start));
   const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 12);
+  assert.equal(pairs.length, 13);
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), pairs.some(([a, b]) => a === from && b === to), `database ${from} -> ${to}`);
   }

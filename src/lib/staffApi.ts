@@ -8,12 +8,14 @@ import type { EmploymentType, JobApplicationStatus, JobStatus } from "@/lib/jobs
 export interface StaffProfile {
   id: string; first_name: string; middle_name: string; last_name: string; date_of_birth: string | null; email: string; phone_e164: string;
   address_street: string; address_line2: string; address_suburb: string; address_state: string; address_postcode: string; address_country: string;
-  emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; status: StaffStatus; created_at: string; updated_at: string;
+  emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; is_australian_citizen?: boolean | null; status: StaffStatus; created_at: string; updated_at: string;
 }
 export interface StaffApplicationRow { id: string; requested_role: StaffRole | null; submitted_at: string | null; review_note: string; reviewed_at: string | null }
-export type StaffDocCategory = "Passport" | "Visa" | "Driving Licence" | "PTE" | "English Certificate" | "Resume" | "Cover Letter";
+export type OnboardingCategory = "Passport" | "Visa" | "Academic" | "Health Insurance";
+export type StaffDocCategory = OnboardingCategory | "Driving Licence" | "PTE" | "English Certificate" | "Resume" | "Cover Letter";
 export interface StaffDocument {
   id: string; category: StaffDocCategory; filename: string; mimeType: string; fileSize: number; storagePath: string;
+  status?: "pending" | "approved" | "rejected"; reviewNote?: string; expiryDate?: string | null;
   extractionStatus: "pending" | "processing" | "done" | "no_fields" | "failed" | "unavailable"; extracted: Record<string, string>; extractionError?: string | null;
 }
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
@@ -25,7 +27,7 @@ export interface StaffJobApplication {
 }
 export interface StaffMe {
   profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[]; role: StaffRole | null; events: StaffEvent[];
-  jobApplications: StaffJobApplication[]; attachedToExistingAccount?: boolean;
+  requiredCategories?: OnboardingCategory[]; jobApplications: StaffJobApplication[]; attachedToExistingAccount?: boolean;
 }
 
 function fail(error: { message?: string } | null, fallback: string): never {
@@ -152,7 +154,7 @@ export async function staffAccessState(): Promise<StaffStatus | "none"> {
 export interface StaffListRow { id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null; jobTitle?: string | null; submittedAt: string | null; updatedAt: string }
 export interface StaffDetail {
   profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[];
-  roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; jobApplications: StaffJobApplication[];
+  requiredCategories?: OnboardingCategory[]; roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; jobApplications: StaffJobApplication[];
 }
 
 export async function adminListStaff(status: string, search: string, limit = 50, offset = 0): Promise<{ total: number; rows: StaffListRow[] }> {
@@ -177,16 +179,46 @@ export type StaffDecision =
   | { action: "approve"; role: StaffRole; note: string; confirmAdmin: boolean }
   | { action: "reject"; note: string }
   | { action: "activate"; note: string }
+  | { action: "activateAccount"; role: StaffRole; note: string; confirmAdmin: boolean }
   | { action: "deactivate"; note: string }
   | { action: "reopen"; note: string };
 
 export async function adminDecideStaff(id: string, decision: StaffDecision): Promise<StaffDetail> {
   const call = decision.action === "approve" ? supabase.rpc("hr_admin_staff_approve", { p_id: id, p_role: decision.role, p_note: decision.note || null, p_confirm_admin: decision.confirmAdmin })
     : decision.action === "reject" ? supabase.rpc("hr_admin_staff_reject", { p_id: id, p_note: decision.note })
+    : decision.action === "activateAccount" ? supabase.rpc("hr_admin_staff_activate_account", { p_id: id, p_role: decision.role, p_note: decision.note || null, p_confirm_admin: decision.confirmAdmin })
     : decision.action === "activate" ? supabase.rpc("hr_admin_staff_activate", { p_id: id, p_note: decision.note || null })
     : decision.action === "deactivate" ? supabase.rpc("hr_admin_staff_deactivate", { p_id: id, p_note: decision.note || null })
     : supabase.rpc("hr_staff_reopen", { p_id: id, p_note: decision.note });
   const { data, error } = await call;
   if (error) fail(error, "That could not be done.");
+  return data as StaffDetail;
+}
+
+export async function setStaffCitizenship(citizen: boolean): Promise<StaffMe> {
+  const { data, error } = await supabase.rpc("hr_staff_set_citizenship", { p_citizen: citizen });
+  if (error) fail(error, "Citizenship could not be saved.");
+  return data as StaffMe;
+}
+
+export async function uploadOnboardingDocument(uid: string, category: OnboardingCategory, file: File, expiry: string, replaces: string | null): Promise<void> {
+  const mime = file.type === "image/jpg" ? "image/jpeg" : file.type;
+  if (!EXTENSION[mime] || file.size < 1 || file.size > 10 * 1024 * 1024) throw new Error("Choose a PDF, JPG or PNG up to 10 MB.");
+  const slug = category.toLowerCase().replace(/\s+/g, "-");
+  const path = `${uid}/${slug}/${crypto.randomUUID()}.${EXTENSION[mime]}`;
+  const bucket = supabase.storage.from("staff-documents");
+  const { error: uploadError } = await bucket.upload(path, file, { contentType: mime, upsert: false });
+  if (uploadError) fail(uploadError, "The document could not be uploaded.");
+  const { data, error } = await supabase.rpc("hr_staff_document_add", { p_category: category, p_path: path,
+    p_filename: file.name.slice(0, 255), p_mime: mime, p_size: file.size, p_expiry: expiry || null, p_replaces: replaces });
+  if (error) { await bucket.remove([path]); fail(error, "The document could not be saved."); }
+  const result = data as { id: string; replacedPaths: string[] };
+  if (result.replacedPaths.length) await bucket.remove(result.replacedPaths);
+  if (category === "Passport" || category === "Visa") void requestStaffExtraction(result.id);
+}
+
+export async function adminReviewStaffDocument(id: string, decision: "approved" | "rejected", note: string): Promise<StaffDetail> {
+  const { data, error } = await supabase.rpc("hr_admin_staff_document_review", { p_doc: id, p_decision: decision, p_note: note || null });
+  if (error) fail(error, "The document review could not be saved.");
   return data as StaffDetail;
 }

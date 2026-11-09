@@ -1,15 +1,15 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { EmploymentType, JobApplicationStatus, JobForm, JobStatus } from "@/lib/jobs";
 import { JOB_FILE_EXTENSION, jobFileMime, jobFileProblem } from "@/lib/jobs";
-import type { StaffDetail, StaffMe } from "@/lib/staffApi";
+import type { StaffMe } from "@/lib/staffApi";
 import type { StaffStatus } from "@/lib/staffStatus";
 
 /** Browser-side calls for job posts (public list, CMS management) and job applications. The hr schema is reached through functions only. */
 
 export interface Job {
-  id: string; title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus; postedAt: string; updatedAt: string;
+  id: string; title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus; postedAt: string; updatedAt: string; department?: string; vacancies?: number; publishedAt?: string | null;
 }
-export interface AdminJob extends Job { applied: number; hired: number; declined: number }
+export interface AdminJob extends Job { candidateCount?: number; applied: number; hired: number; declined: number }
 /** One row of the Applicants tab: the application with the person it belongs to. */
 export interface JobApplicationRow {
   id: string; jobId: string; jobTitle: string; employmentType: EmploymentType; location: string; profileId: string; name: string; email: string; phone: string;
@@ -54,10 +54,9 @@ export async function adminSaveJob(id: string | null, form: JobForm): Promise<Jo
   return data as Job;
 }
 
-export async function adminDecideJobApplication(applicationId: string, decision: Exclude<JobApplicationStatus, "applied">, note: string): Promise<StaffDetail> {
-  const { data, error } = await supabase.rpc("hr_admin_job_decide", { p_application: applicationId, p_decision: decision, p_note: note.trim() || null });
-  if (error) fail(error, "That could not be done.");
-  return data as StaffDetail;
+export async function adminSetJobStatus(id: string, status: JobStatus): Promise<void> {
+  const { error } = await supabase.rpc("hr_admin_job_save", { p_id: id, p_job: { status } });
+  if (error) fail(error, "The job status could not be updated.");
 }
 
 /* ------------------------------------------------------------------ applicant */

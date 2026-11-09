@@ -73,6 +73,7 @@ export default function CareerApplyPage() {
   useEffect(() => { if (user) void loadMe(); else if (user === null) setMe(null); }, [user, loadMe]);
 
   const uid = user?.id ?? "";
+  const existing = me?.jobApplications?.find((a) => a.jobId === id && (a.status === "applied" || a.status === "hired"));
   const hasResume = Boolean(me?.documents.some((d) => d.category === "Resume"));
 
   // The resume chosen in step 1 is stored once the account (and so the staff record) exists.
@@ -105,8 +106,7 @@ export default function CareerApplyPage() {
         <div className="mt-5 flex flex-wrap gap-2"><Link to="/staff" className={button}>My staff page</Link><Link to="/careers" className={outline}>More openings</Link></div>
       </Card>
     );
-  } else if (me?.jobApplications.some((a) => a.jobId === job.id)) {
-    const existing = me.jobApplications.find((a) => a.jobId === job.id)!;
+  } else if (existing) {
     body = (
       <Card>
         <h2 className="font-heading text-xl font-bold text-foreground-950">You have already applied</h2>
@@ -342,7 +342,7 @@ function LetterStep({ job, me, uid, pendingResume, onChange, onBack, onSent }: {
     setBusy(true); setError("");
     try {
       let record = me, resumeId = resume?.id ?? "";
-      if (!resumeId && pendingResume) {
+      if (pendingResume) {
         const stored = await uploadJobDocument(record, uid, "Resume", pendingResume);
         resumeId = stored.id;
         record = (await getMyStaffApplication()) ?? record;

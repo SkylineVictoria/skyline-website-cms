@@ -28,7 +28,7 @@ const routes = new Set([
   '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
-  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', '/admin/jobs',
+  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/jobs', '/admin/candidates', '/admin/employees',
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

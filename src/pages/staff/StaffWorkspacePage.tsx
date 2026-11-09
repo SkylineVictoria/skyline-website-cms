@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { Button, Field, TextInput } from "@/pages/admin/components/ui";
+import { Badge, Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import WizardDocumentStep from "@/pages/agency/components/WizardDocumentStep";
 import { STAFF_WIZARD_STEPS, type PendingUpload, type WizardDoc, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import {
-  getMyStaffApplication, removeStaffDocument, requestStaffExtraction, saveStaffDraft, staffDocumentUrl, submitStaffApplication, uploadStaffDocument,
-  type StaffDocCategory, type StaffDocument, type StaffMe,
+  getMyStaffApplication, removeStaffDocument, requestStaffExtraction, saveStaffDraft, setStaffCitizenship, staffDocumentUrl, submitStaffApplication, uploadOnboardingDocument, uploadStaffDocument,
+  type OnboardingCategory, type StaffDocCategory, type StaffDocument, type StaffMe,
 } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, submitProblems, type StaffRole } from "@/lib/staffStatus";
 import { JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
@@ -88,7 +88,12 @@ export default function StaffWorkspacePage() {
           <strong>Congratulations, you were hired for {me.jobApplications.find((a) => a.status === "hired")?.jobTitle}.</strong> Complete your details below, upload your documents and submit to finish your staff registration.
         </p>
       ) : null}
-      {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : <StatusPanel me={me} />}
+      {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : <><StatusPanel me={me} />
+        {me.requiredCategories && (me.profile.status === "submitted" || me.profile.status === "preboarding") &&
+          me.documents.some((d) => d.status === "rejected") ? <section className="mt-4 rounded-card border border-background-200 bg-background-50 p-5">
+            <h2 className="mb-3 font-semibold">Replace documents requested by the reviewer</h2>
+            <OnboardingDocuments me={me} uid={uid} onChange={setMe} />
+          </section> : null}</>}
       <Timeline me={me} />
     </Frame>
   );
@@ -207,6 +212,13 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
     requestedRole: me.application.requested_role, hasPassport: me.documents.some((d) => d.category === "Passport"),
   });
 
+  if (me.requiredCategories) {
+    if (me.profile.is_australian_citizen == null) problems.push("Select your Australian citizenship status.");
+    for (const category of me.requiredCategories) {
+      if (category !== "Passport" && !me.documents.some((d) => d.category === category)) problems.push(`Upload ${category.toLowerCase()}.`);
+    }
+  }
+
   const submit = async () => {
     setSubmitError("");
     if (!(await flush())) return;
@@ -247,7 +259,16 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
             <p className="text-xs text-foreground-500">Upload your passport on the Documents step and we fill in blank details from it. You can change anything.</p>
           </div>
         ) : null}
-        {tab === "documents" ? <DocumentsTab me={me} uid={uid} onChange={onChange} /> : null}
+        {tab === "documents" ? (me.requiredCategories ? <div className="space-y-5">
+          <Field label="Are you an Australian citizen?" required><Select value={me.profile.is_australian_citizen == null ? "" : String(me.profile.is_australian_citizen)}
+            disabled={save === "saving"} onChange={(e) => {
+              const citizen = e.target.value === "true";
+              setSave("saving"); setSaveError("");
+              void setStaffCitizenship(citizen).then((next) => { onChange(next); setSave("saved"); },
+                (e: Error) => { setSave("error"); setSaveError(e.message); });
+            }}><option value="" disabled>Select an answer</option><option value="true">Yes</option><option value="false">No</option></Select></Field>
+          {me.profile.is_australian_citizen != null ? <OnboardingDocuments me={me} uid={uid} onChange={onChange} /> : null}
+        </div> : <DocumentsTab me={me} uid={uid} onChange={onChange} />) : null}
         {tab === "role" ? (
           <div className="space-y-3" role="radiogroup" aria-label="Requested role">
             <p className="text-sm text-foreground-700">Choose the role you are applying for. This is a request only: nothing is granted until an administrator approves it.</p>
@@ -279,7 +300,7 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
             ) : null}
             {submitError ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{submitError}</p> : null}
             <Button type="button" onClick={() => void submit()} disabled={submitting} data-testid="staff-submit">{submitting ? "Submitting…" : "Submit application"}</Button>
-            <p className="text-xs text-foreground-500">After you submit, you cannot edit the application unless an administrator reopens it.</p>
+            <p className="text-xs text-foreground-500">After you submit, the reviewer may ask you to replace documents or update your application.</p>
           </div>
         ) : null}
       </section>
@@ -316,4 +337,43 @@ function DocumentsTab({ me, uid, onChange }: { me: StaffMe; uid: string; onChang
       ))}
     </div>
   );
+}
+
+function OnboardingDocuments({ me, uid, onChange }: { me: StaffMe; uid: string; onChange: (m: StaffMe) => void }) {
+  const draft = me.profile.status === "draft";
+  return <div className="grid gap-3 sm:grid-cols-2">{me.requiredCategories?.flatMap((category) => {
+    const docs = me.documents.filter((d) => d.category === category);
+    const shown = draft ? docs : docs.filter((d) => d.status === "rejected");
+    return (shown.length ? shown : draft ? [null] : []).map((doc) =>
+      <OnboardingFile key={doc?.id ?? category} uid={uid} category={category} doc={doc} onChange={onChange} />);
+  })}</div>;
+}
+
+function OnboardingFile({ uid, category, doc, onChange }: { uid: string; category: OnboardingCategory; doc: StaffDocument | null; onChange: (m: StaffMe) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [expiry, setExpiry] = useState(doc?.expiryDate ?? "");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function upload() {
+    if (!file || busy) return;
+    if (category !== "Academic" && !expiry) { setError("Enter the expiry date."); return; }
+    setBusy(true); setError("");
+    try {
+      await uploadOnboardingDocument(uid, category, file, expiry, doc?.id ?? null);
+      const next = await getMyStaffApplication();
+      if (next) onChange(next);
+      setFile(null);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <div className="space-y-2 rounded-md border border-background-200 p-3">
+    <h3 className="font-semibold">{category}</h3>
+    {doc ? <p className="break-words text-sm">{doc.filename} {doc.status ? <Badge>{doc.status}</Badge> : null}</p> : null}
+    {doc?.reviewNote ? <p className="text-sm">{doc.reviewNote}</p> : null}
+    {category !== "Academic" ? <Field label={`${category} expiry date`} required><TextInput type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} /></Field> : null}
+    <Field label={doc ? `Replace ${category.toLowerCase()}` : `Choose ${category.toLowerCase()} file`}><input className="block w-full text-sm" type="file"
+      accept="application/pdf,image/jpeg,image/png" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+    <Button size="sm" disabled={!file || busy} onClick={() => void upload()}>{busy ? "Uploading…" : doc ? "Replace file" : "Upload file"}</Button>
+    {error ? <p role="alert" className="text-sm text-primary-700">{error}</p> : null}
+  </div>;
 }

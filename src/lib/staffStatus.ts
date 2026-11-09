@@ -19,7 +19,7 @@ export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
 const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
   ["draft", "submitted"], ["submitted", "preboarding"], ["submitted", "rejected"],
   ["preboarding", "active"], ["preboarding", "rejected"],
-  ["active", "inactive"], ["inactive", "active"], ["rejected", "draft"],
+  ["active", "inactive"], ["inactive", "active"], ["inactive", "draft"], ["rejected", "draft"],
   ["draft", "job_applied"], ["rejected", "job_applied"], ["job_applied", "draft"], ["job_applied", "rejected"],
 ];
 

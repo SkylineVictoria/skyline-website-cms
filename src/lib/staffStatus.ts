@@ -101,10 +101,10 @@ export function staffChecklist(docs: DocLike[], isAustralianCitizen: boolean | n
   return checklist(staffDocKinds(isAustralianCitizen, docs), docs, today);
 }
 
-/** Everything the applicant needs before Submit, in the order the wizard shows it. Mirrors hr_staff_submit. */
+/** Everything the applicant needs before Submit, in the order the wizard shows it. Mirrors hr_svc_onboarding_submit. */
 export interface StaffSubmitInput {
   firstName: string; lastName: string; dateOfBirth: string | null; addressStreet: string; addressCountry: string;
-  emergencyName: string; emergencyRelationship: string; emergencyPhone: string | null; requestedRole: string | null;
+  emergencyName: string; emergencyRelationship: string; emergencyPhone: string | null;
   isAustralianCitizen: boolean | null; documents: Array<{ category: string; expiryDate: string | null }>;
 }
 const MISSING: Partial<Record<StaffDocCategory, string>> = {
@@ -116,7 +116,6 @@ export function submitProblems(input: StaffSubmitInput, today = todayIso()): str
   if (!input.dateOfBirth) problems.push("Enter your date of birth.");
   if (!input.addressStreet.trim() || !input.addressCountry.trim()) problems.push("Enter your address.");
   if (!input.emergencyName.trim() || !input.emergencyRelationship.trim() || !input.emergencyPhone) problems.push("Enter an emergency contact: name, relationship and phone.");
-  if (!input.requestedRole) problems.push("Choose the role you are requesting.");
   if (input.isAustralianCitizen === null) problems.push("Tell us whether you are an Australian citizen.");
   for (const category of requiredStaffCategories(input.isAustralianCitizen)) {
     const mine = input.documents.filter((d) => d.category === category);

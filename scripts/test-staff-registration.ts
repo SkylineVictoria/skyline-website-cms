@@ -16,6 +16,7 @@ const core = await load.import<typeof import("../supabase/functions/staff-docume
 const mock = await load.import<typeof import("../supabase/functions/_shared/document-extraction/mock.ts")>("../supabase/functions/_shared/document-extraction/mock.ts");
 const apply = await load.import<typeof import("../supabase/functions/staff-register/core.ts")>("../supabase/functions/staff-register/core.ts");
 const captchaLib = await load.import<typeof import("../supabase/functions/_shared/captcha.ts")>("../supabase/functions/_shared/captcha.ts");
+const onboard = await load.import<typeof import("../supabase/functions/staff-onboarding/core.ts")>("../supabase/functions/staff-onboarding/core.ts");
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
@@ -235,6 +236,130 @@ test("CAPTCHA: the mock only works against a local Supabase URL; Turnstile is ve
   assert.deepEqual(await down.verify("x"), { ok: false, reason: "unavailable" });
 });
 
+/* ------------------------------------------------------------------ onboarding by link (staff-onboarding, HR-02c) */
+
+const LINK = "A".repeat(43);
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0]);
+function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; uploadError?: string } = {}) {
+  const calls: Array<[string, unknown]> = [];
+  const scheduled: string[] = [];
+  const deps = {
+    takeRateLimit: async (b: string) => { calls.push(["limit", b]); return options.limit ? options.limit(b) : true; },
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      calls.push([name, args]);
+      const answer = options.db?.[name];
+      if (answer) return { data: answer.data ?? null, error: answer.error ?? null };
+      if (name === "hr_svc_upload_target") return { data: { profileId: "p-1", folder: String(args.p_category).toLowerCase().replace(/ /g, "-") }, error: null };
+      if (name === "hr_svc_document_add") return { data: { id: "d-1", replacedPaths: ["p-1/passport/old.pdf"], view: { ok: 1 } }, error: null };
+      if (name === "hr_svc_document_path") return { data: "p-1/passport/x.pdf", error: null };
+      if (name === "hr_svc_document_remove") return { data: { removedPath: "p-1/academic/a.pdf", view: { ok: 2 } }, error: null };
+      return { data: { view: name }, error: null };
+    },
+    upload: async (p: string, bytes: Uint8Array, type: string) => { calls.push(["upload", { p, type, size: bytes.length }]); return { error: options.uploadError ?? null }; },
+    remove: async (paths: string[]) => { calls.push(["remove", paths]); },
+    signedUrl: async (p: string, seconds: number) => `signed:${p}:${seconds}`,
+    scheduleExtraction: (doc: { category: string }) => { scheduled.push(doc.category); },
+    hash: async (v: string) => `h(${v})`,
+    newId: () => "rnd",
+  };
+  return { deps, calls, scheduled, names: () => calls.map(([n]) => n) };
+}
+const linkRequest = (action: string, fields: Record<string, unknown> = {}, file: File | null = null, token: unknown = LINK) => ({ action, token, ip: "203.0.113.5", fields, file });
+
+test("onboarding: only the hash of the link reaches the database, and every bad link gets one neutral answer", async () => {
+  let run = linkDeps();
+  const ok = await onboard.handleOnboarding(linkRequest("open"), run.deps);
+  assert.equal(ok.status, 200);
+  const args = run.calls.find(([n]) => n === "hr_svc_onboarding_open")![1] as Record<string, unknown>;
+  assert.deepEqual(args, { p_token_hash: `h(${LINK})` });
+  assert.ok(!JSON.stringify(run.calls.filter(([n]) => n !== "limit")).includes(`"${LINK}"`), "the raw token is never sent to the database");
+  for (const token of ["", "short", "x".repeat(200), "has spaces in it and is long enough to pass the length check", null]) {
+    run = linkDeps();
+    const r = await onboard.handleOnboarding(linkRequest("open", {}, null, token), run.deps);
+    assert.deepEqual([r.status, r.body.code, r.body.error], [403, "link_invalid", onboard.LINK_INVALID], String(token));
+    assert.ok(!run.names().some((n) => n.startsWith("hr_svc")), "no database call for a malformed link");
+  }
+  run = linkDeps({ db: { hr_svc_onboarding_open: { error: { code: "28000", message: "anything" } } } });
+  const expired = await onboard.handleOnboarding(linkRequest("open"), run.deps);
+  assert.deepEqual([expired.status, expired.body.error], [403, onboard.LINK_INVALID], "the database's refusal maps to the same text");
+  run = linkDeps({ db: { hr_svc_onboarding_save: { error: { code: "23514", message: "This has already been sent and can no longer be changed." } } } });
+  const used = await onboard.handleOnboarding(linkRequest("save", { patch: { first_name: "X" } }), run.deps);
+  assert.deepEqual([used.status, used.body.error], [400, "This has already been sent and can no longer be changed."]);
+  run = linkDeps({ db: { hr_svc_onboarding_open: { error: { code: "XX000", message: "internal detail" } } } });
+  const crash = await onboard.handleOnboarding(linkRequest("open"), run.deps);
+  assert.ok(crash.status === 500 && !String(crash.body.error).includes("internal detail"), "internal errors are not shown");
+  assert.equal((await onboard.handleOnboarding(linkRequest("drop_table"), linkDeps().deps)).status, 400);
+});
+
+test("onboarding: rate limits per caller and per link fail closed", async () => {
+  let run = linkDeps({ limit: (b) => !b.startsWith("staff-onboarding:ip:") });
+  assert.equal((await onboard.handleOnboarding(linkRequest("open"), run.deps)).status, 429);
+  run = linkDeps({ limit: (b) => !b.startsWith("staff-onboarding:link:upload:") });
+  const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf")), run.deps);
+  assert.equal(r.status, 429);
+  assert.ok(!run.names().includes("upload"));
+});
+
+test("onboarding: a file is checked by content, the database approves the type BEFORE it is stored, and leftovers are removed", async () => {
+  let run = linkDeps();
+  const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf")), run.deps);
+  assert.equal(r.status, 200);
+  assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
+  assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
+  const added = run.calls.find(([n]) => n === "hr_svc_document_add")![1] as Record<string, unknown>;
+  assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/old.pdf"]], "the replaced file is deleted");
+  assert.deepEqual(run.scheduled, ["Passport"], "a passport is read");
+
+  run = linkDeps();
+  await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" }, new File([PNG_BYTES], "results.png")), run.deps);
+  assert.deepEqual(run.scheduled, [], "academic results are not read automatically");
+
+  for (const [label, file] of [["exe renamed", new File([new Uint8Array([0x4d, 0x5a, 1, 2])], "p.pdf")], ["png named pdf", new File([PNG_BYTES], "p.pdf")], ["gif", new File([new TextEncoder().encode("GIF89a....")], "p.gif")], ["empty", new File([], "p.pdf")], ["too big", new File([PDF_BYTES, new Uint8Array(onboard.MAX_DOCUMENT_BYTES)], "p.pdf")]] as const) {
+    run = linkDeps();
+    const bad = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, file), run.deps);
+    assert.equal(bad.status, 400, label);
+    assert.ok(!run.names().includes("hr_svc_upload_target") && !run.names().includes("upload"), `${label}: nothing stored`);
+  }
+
+  run = linkDeps({ db: { hr_svc_upload_target: { error: { code: "23514", message: "Only a rejected document can be replaced." } } } });
+  const refused = await onboard.handleOnboarding(linkRequest("upload", { category: "Visa" }, new File([PDF_BYTES], "v.pdf")), run.deps);
+  assert.deepEqual([refused.status, refused.body.error], [400, "Only a rejected document can be replaced."]);
+  assert.ok(!run.names().includes("upload"), "a refused type is never stored");
+
+  run = linkDeps({ db: { hr_svc_document_add: { error: { code: "22023", message: "Enter the expiry date of your passport." } } } });
+  const noExpiry = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf")), run.deps);
+  assert.equal(noExpiry.status, 400);
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/rnd.pdf"]], "an unrecorded file is deleted");
+
+  run = linkDeps();
+  assert.equal((await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "next year" }, new File([PDF_BYTES], "p.pdf")), run.deps)).body.field, "expiryDate");
+});
+
+test("onboarding: open a file, remove, expiry, re-read and submit go through the link", async () => {
+  const id = "0b7b1c1e-0000-4000-8000-000000000001";
+  let run = linkDeps();
+  assert.deepEqual((await onboard.handleOnboarding(linkRequest("view_url", { id }), run.deps)).body, { url: "signed:p-1/passport/x.pdf:300" }, "a 5-minute signed link");
+  run = linkDeps();
+  await onboard.handleOnboarding(linkRequest("remove", { id }), run.deps);
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/academic/a.pdf"]]);
+  run = linkDeps();
+  assert.equal((await onboard.handleOnboarding(linkRequest("remove", { id: "not-a-uuid" }), run.deps)).status, 400);
+  run = linkDeps();
+  assert.equal((await onboard.handleOnboarding(linkRequest("expiry", { id, expiryDate: "2030-02-30x" }), run.deps)).body.field, "expiryDate");
+  run = linkDeps({ db: { hr_svc_document_for_extraction: { data: { id, category: "Visa", filename: "v.pdf", mimeType: "application/pdf", storagePath: "p-1/visa/v.pdf" } } } });
+  await onboard.handleOnboarding(linkRequest("extract", { id }), run.deps);
+  assert.deepEqual(run.scheduled, ["Visa"]);
+  run = linkDeps();
+  assert.deepEqual((await onboard.handleOnboarding(linkRequest("submit"), run.deps)).body, { view: { view: "hr_svc_onboarding_submit" } });
+  const edge = read("supabase/functions/staff-onboarding/index.ts");
+  assert.ok(edge.includes('"Referrer-Policy": "no-referrer"') && edge.includes('"Cache-Control": "no-store"'));
+  assert.ok(read("supabase/config.toml").includes("[functions.staff-onboarding]\n# Staff onboarding by emailed link") || read("supabase/config.toml").replace(/\r\n/g, "\n").includes("[functions.staff-onboarding]\n# Staff onboarding by emailed link"), "registered in config.toml");
+  const browser = read("src/lib/staffOnboardingApi.ts");
+  assert.ok(browser.includes('window.location.hash') && browser.includes("history.replaceState"), "the token is read from the fragment and cleared from the address bar");
+  assert.ok(read("src/pages/staff/StaffOnboardingPage.tsx").includes('meta.content = "no-referrer"'));
+});
+
 test("staff-register creates no login and keeps no password code", () => {
   const edge = read("supabase/functions/staff-register/index.ts") + read("supabase/functions/staff-register/core.ts");
   for (const gone of ["auth.signUp(", "signInWithOtp", "passwordProblem", "hr_staff_precheck", "account_type", "sign_up"]) assert.ok(!edge.includes(gone), `${gone} is gone`);
@@ -250,7 +375,7 @@ const docs = (today: string) => [
   { category: "Passport", expiryDate: "2031-01-01" }, { category: "Visa", expiryDate: "2030-01-01" }, { category: "English", expiryDate: null },
   { category: "Academic", expiryDate: null }, { category: "Academic", expiryDate: null }, { category: "Health Insurance", expiryDate: today },
 ];
-const complete = { firstName: "Tara", lastName: "Trainer", dateOfBirth: "1990-05-06", addressStreet: "1 Example St", addressCountry: "Australia", emergencyName: "Em", emergencyRelationship: "Sibling", emergencyPhone: "+61422333444", requestedRole: "trainer", isAustralianCitizen: false as boolean | null, documents: docs("2026-11-09") };
+const complete = { firstName: "Tara", lastName: "Trainer", dateOfBirth: "1990-05-06", addressStreet: "1 Example St", addressCountry: "Australia", emergencyName: "Em", emergencyRelationship: "Sibling", emergencyPhone: "+61422333444", isAustralianCitizen: false as boolean | null, documents: docs("2026-11-09") };
 
 test("submit needs citizenship, every required document and current expiry dates", () => {
   const today = "2026-11-09";
@@ -266,8 +391,8 @@ test("submit needs citizenship, every required document and current expiry dates
   assert.deepEqual(status.submitProblems({ ...complete, documents: [...without("English"), { category: "English", expiryDate: "2026-01-01" }] }, today), ["Enter a current expiry date for your English test result."], "an English date is optional, but a past one blocks");
   assert.deepEqual(status.submitProblems({ ...complete, documents: [...complete.documents, { category: "Driving Licence", expiryDate: "2020-01-01" }] }, today), [], "the optional licence never blocks submit");
   assert.ok(status.submitProblems({ ...complete, isAustralianCitizen: null }, today).includes("Tell us whether you are an Australian citizen."));
-  assert.equal(status.submitProblems({ ...complete, requestedRole: null }, today).length, 1);
-  assert.ok(status.submitProblems({ firstName: "", lastName: "", dateOfBirth: null, addressStreet: "", addressCountry: "", emergencyName: "", emergencyRelationship: "", emergencyPhone: null, requestedRole: null, isAustralianCitizen: null, documents: [] }, today).length >= 10);
+  assert.ok(!status.submitProblems({ ...complete }, today).some((p) => /role/i.test(p)), "no role is asked of an applicant");
+  assert.ok(status.submitProblems({ firstName: "", lastName: "", dateOfBirth: null, addressStreet: "", addressCountry: "", emergencyName: "", emergencyRelationship: "", emergencyPhone: null, isAustralianCitizen: null, documents: [] }, today).length >= 9);
 });
 
 test("the document rules match the database", () => {

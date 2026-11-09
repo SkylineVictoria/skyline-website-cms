@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(186);
+select plan(193);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -148,6 +148,9 @@ select ok((select used_at is not null from hr.staff_invites where token_hash = p
 select is(public.hr_svc_onboarding_open(pg_temp.h('tok-3'))->>'readOnly', 'true', 'the used link still opens, read-only');
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"first_name":"Changed"}')$$, '23514', 'This has already been sent and can no longer be changed.', 'nothing changes after submit');
 select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('a1') and kind = 'admin_documents_submitted'), 1, 'the admins are told');
+select is(public.hr_svc_document_path(pg_temp.h('tok-3'), (select id from hr.staff_documents where storage_path = pg_temp.v('a1') || '/passport/p2.pdf')), pg_temp.v('a1') || '/passport/p2.pdf', 'a used link still opens its own files');
+select throws_ok($$select public.hr_svc_document_path(pg_temp.h('tok-3'), gen_random_uuid())$$, 'P0002', 'Document not found.', 'but no other file');
+select throws_ok($$select public.hr_svc_upload_target(pg_temp.h('tok-3'), 'Passport')$$, '23514', 'This has already been sent and can no longer be changed.', 'a used link cannot upload');
 
 -- ---------------------------------------------------------------- review and re-upload
 set local role authenticated;
@@ -158,6 +161,10 @@ select is(jsonb_array_length(public.hr_admin_staff_invite(pg_temp.v('a1'), 'reup
 reset role;
 select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'invited', 're-upload goes back to invited');
 select is(public.hr_svc_onboarding_open(pg_temp.h('tok-4'))->>'mode', 'reupload', 'the link opens in re-upload mode');
+select is(public.hr_svc_upload_target(pg_temp.h('tok-4'), 'Passport')::text, jsonb_build_object('profileId', pg_temp.v('a1'), 'folder', 'passport')::text, 'the rejected passport may be uploaded again, into the person''s folder');
+select throws_ok($$select public.hr_svc_upload_target(pg_temp.h('tok-4'), 'Visa')$$, '23514', 'Only a rejected document can be replaced.', 'a pending document is refused before any file is stored');
+select throws_ok($$select public.hr_svc_upload_target(pg_temp.h('tok-4'), 'Academic')$$, '23514', 'Only a rejected document can be replaced.', 'a re-upload link cannot add academic files');
+select throws_ok($$select public.hr_svc_upload_target(pg_temp.h('tok-4'), 'Payslip')$$, '22023', 'Unknown document type.', 'unknown types are refused');
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-4'), '{"first_name":"Changed"}')$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a re-upload link cannot change details');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/visa/v2.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/passport/p3.pdf');

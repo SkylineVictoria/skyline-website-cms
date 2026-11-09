@@ -591,6 +591,34 @@ begin
  return hr.staff_applicant_view(i);
 end $fn$;
 
+-- Before the function stores a file: may this link upload this document type now, and into which folder? The same rules as
+-- hr_svc_document_add (a re-upload link only replaces a REJECTED document), checked BEFORE any file is written.
+create or replace function public.hr_svc_upload_target(p_token_hash text, p_category text, p_replaces uuid default null) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare i hr.staff_invites; r hr.staff_documents;
+begin
+ i := hr.invite_for_write(p_token_hash, array['documents','reupload']);
+ if p_category is null or p_category not in ('Passport','Visa','English','Academic','Driving Licence','Health Insurance') then raise exception 'Unknown document type.' using errcode = '22023'; end if;
+ if i.purpose = 'reupload' then
+  if p_category = 'Academic' and p_replaces is null then raise exception 'Only a rejected document can be replaced.' using errcode = '23514'; end if;
+  select * into r from hr.staff_documents d where d.profile_id = i.profile_id and d.category = p_category and d.is_current
+   and (p_replaces is null or d.id = p_replaces) order by d.created_at desc limit 1;
+  if r.id is null or r.status <> 'rejected' then raise exception 'Only a rejected document can be replaced.' using errcode = '23514'; end if;
+ end if;
+ return jsonb_build_object('profileId', i.profile_id, 'folder', hr.staff_doc_slug(p_category));
+end $fn$;
+
+-- The stored path of one of the link holder's current documents, to open it (also after submit: read-only links still view).
+create or replace function public.hr_svc_document_path(p_token_hash text, p_id uuid) returns text
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare i hr.staff_invites; v_path text;
+begin
+ i := hr.invite_resolve(p_token_hash, array['documents','reupload']);
+ select d.storage_path into v_path from hr.staff_documents d where d.id = p_id and d.profile_id = i.profile_id and d.is_current;
+ if v_path is null then raise exception 'Document not found.' using errcode = 'P0002'; end if;
+ return v_path;
+end $fn$;
+
 -- The file to read for one of the link holder's current documents (staff-onboarding runs the shared reader).
 create or replace function public.hr_svc_document_for_extraction(p_token_hash text, p_id uuid) returns jsonb
 language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
@@ -751,6 +779,7 @@ begin
   'public.hr_svc_onboarding_open(text)', 'public.hr_svc_onboarding_save(text, jsonb)',
   'public.hr_svc_document_add(text, text, text, text, text, integer, date, uuid)', 'public.hr_svc_document_remove(text, uuid)',
   'public.hr_svc_document_set_expiry(text, uuid, date)', 'public.hr_svc_document_for_extraction(text, uuid)', 'public.hr_svc_onboarding_submit(text)',
+  'public.hr_svc_upload_target(text, text, uuid)', 'public.hr_svc_document_path(text, uuid)',
   'public.hr_svc_offer_open(text)', 'public.hr_svc_offer_sign(text, uuid, text, text, text, text, text, text)',
   'public.hr_svc_email_claim(integer, integer)', 'public.hr_svc_email_result(bigint, text, text, text)', 'public.hr_svc_email_log(uuid, text, text, text, text, jsonb)',
   'public.hr_svc_retention_due(integer, integer)', 'public.hr_svc_retention_mark(uuid, integer)'] loop

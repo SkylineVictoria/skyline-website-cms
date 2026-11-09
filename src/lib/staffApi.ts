@@ -1,5 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { staffDocSlug, type StaffDocCategory, type StaffDocReview, type StaffRole, type StaffStatus } from "@/lib/staffStatus";
+import type { StaffDocCategory, StaffDocReview, StaffRole, StaffStatus } from "@/lib/staffStatus";
 
 export type { StaffDocCategory } from "@/lib/staffStatus";
 
@@ -20,9 +20,10 @@ export interface StaffDocument {
 /** hr.staff_doc_summary: required document types, how many have a file, how many are fully approved, any expiring within 30 days. */
 export interface StaffDocSummary { required: number; uploaded: number; approved: number; rejected: number; expiringSoon: boolean; nextExpiry: string | null }
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
-export interface StaffMe {
-  profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
-  role: StaffRole | null; events: StaffEvent[]; attachedToExistingAccount?: boolean;
+/** hr_staff_me: the signed-in person's own staff record (documents and the signed offer once they are active). */
+export interface MyStaff {
+  profile: StaffProfile; status: StaffStatus; role: StaffRole | null; joiningDate: string | null; documents: StaffDocument[];
+  signedOffer: { id: string; signedAt: string; signedPath: string; filename: string } | null;
 }
 
 function fail(error: { message?: string } | null, fallback: string): never {
@@ -63,74 +64,10 @@ export async function applyAsStaff(input: StaffApplyInput): Promise<void> {
   if (data?.error) throw new Error(String(data.error));
 }
 
-export async function getMyStaffApplication(): Promise<StaffMe | null> {
+export async function getMyStaff(): Promise<MyStaff | null> {
   const { data, error } = await supabase.rpc("hr_staff_me");
-  if (error) fail(error, "We could not load your application.");
-  return (data ?? null) as StaffMe | null;
-}
-
-export async function saveStaffDraft(patch: Record<string, string | null>): Promise<StaffMe> {
-  const { data, error } = await supabase.rpc("hr_staff_save", { p_patch: patch });
-  if (error) fail(error, "Your changes could not be saved.");
-  return data as StaffMe;
-}
-
-export async function setStaffCitizenship(isAustralianCitizen: boolean): Promise<StaffMe> {
-  const { data, error } = await supabase.rpc("hr_staff_set_citizenship", { p_citizen: isAustralianCitizen });
-  if (error) fail(error, "Your answer could not be saved.");
-  return data as StaffMe;
-}
-
-export async function submitStaffApplication(): Promise<StaffMe> {
-  const { data, error } = await supabase.rpc("hr_staff_submit");
-  if (error) fail(error, "Your application could not be submitted.");
-  return data as StaffMe;
-}
-
-const EXTENSION: Record<string, string> = { "application/pdf": "pdf", "image/png": "png", "image/jpeg": "jpg" };
-/** Only these are read automatically (staff-document-extract); academic results and health insurance are reviewed by a person. */
-const READABLE: ReadonlySet<string> = new Set(["Passport", "Visa", "English", "Driving Licence"]);
-
-/**
- * Uploads to the private bucket at {uid}/{doc slug}/{random}.{ext}, registers the document with its expiry date, removes the file
- * it replaces (drafts only; after submission the rejected file is kept), then asks for it to be read.
- * `replaces` names the Academic file being replaced; single-file types always replace their current file.
- */
-export async function uploadStaffDocument(uid: string, category: StaffDocCategory, file: File, expiryDate: string | null, replaces?: string): Promise<string> {
-  const mime = file.type === "image/jpg" ? "image/jpeg" : file.type;
-  if (!EXTENSION[mime]) throw new Error("Upload a PDF, JPG or PNG.");
-  if (file.size <= 0 || file.size > 10 * 1024 * 1024) throw new Error("The file must be 10 MB or smaller.");
-  const path = `${uid}/${staffDocSlug(category)}/${crypto.randomUUID()}.${EXTENSION[mime]}`;
-  const up = await supabase.storage.from("staff-documents").upload(path, file, { contentType: mime, upsert: false });
-  if (up.error) throw new Error("The upload failed. Please try again.");
-  const { data, error } = await supabase.rpc("hr_staff_document_add", {
-    p_category: category, p_path: path, p_filename: file.name.slice(0, 255), p_mime: mime, p_size: file.size, p_expiry: expiryDate || null, p_replaces: replaces ?? null,
-  });
-  if (error) {
-    await supabase.storage.from("staff-documents").remove([path]);
-    fail(error, "The document could not be saved.");
-  }
-  const result = data as { id: string; replacedPaths: string[] };
-  if (result.replacedPaths.length) await supabase.storage.from("staff-documents").remove(result.replacedPaths);
-  if (READABLE.has(category)) void requestStaffExtraction(result.id);
-  return result.id;
-}
-
-export async function setStaffDocumentExpiry(id: string, expiryDate: string): Promise<StaffMe> {
-  const { data, error } = await supabase.rpc("hr_staff_document_set_expiry", { p_id: id, p_expiry: expiryDate || null });
-  if (error) fail(error, "The expiry date could not be saved.");
-  return data as StaffMe;
-}
-
-/** Best effort: a failure only means the details are typed in by hand. */
-export async function requestStaffExtraction(documentId: string): Promise<void> {
-  try { await supabase.functions.invoke("staff-document-extract", { body: { documentId } }); } catch { /* manual entry continues */ }
-}
-
-export async function removeStaffDocument(id: string): Promise<void> {
-  const { data, error } = await supabase.rpc("hr_staff_document_remove", { p_id: id });
-  if (error) fail(error, "The document could not be removed.");
-  if (typeof data === "string" && data) await supabase.storage.from("staff-documents").remove([data]);
+  if (error) fail(error, "We could not load your staff record.");
+  return (data ?? null) as MyStaff | null;
 }
 
 /** A short-lived signed link: the bucket is private, so files are never public URLs. */

@@ -5,6 +5,7 @@
 //
 //   node scripts/lab/staff-lab.mjs up       fresh stack + migrations + functions served (prints the URLs and keys file)
 //   node scripts/lab/staff-lab.mjs apply    end-to-end checks of the public staff application (HR-02b)
+//   node scripts/lab/staff-lab.mjs onboard  end-to-end checks of onboarding by link (HR-02c)
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -200,6 +201,151 @@ async function apply() {
   check("the per-caller rate limit answers 429 with Retry-After", limited !== null && limited.headers.get("retry-after") === "600");
 }
 
+/* ------------------------------------------------------------------ helpers shared by the HR-02c..f checks */
+
+const LAB_ADMIN = { id: "1ab00000-0000-4000-8000-0000000000a1", email: "lab.admin@example.test" };
+/** A CMS Admin in the lab database (idempotent), so admin RPCs run with a real admin JWT claim. */
+function ensureLabAdmin() {
+  psql(`insert into auth.users(id, email, email_confirmed_at, aud, role, raw_user_meta_data) values ('${LAB_ADMIN.id}', '${LAB_ADMIN.email}', now(), 'authenticated', 'authenticated', '{}') on conflict (id) do nothing;
+insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values ('lab-admin', 'Lab Admin', '${LAB_ADMIN.email}', 'Admin', 'Active', '${LAB_ADMIN.id}', false) on conflict (id) do nothing;`);
+}
+/** Runs SQL as the lab Admin (role authenticated + JWT sub), the way the admin console calls the hr_admin_* functions. */
+function asAdmin(sql) {
+  return psql(`begin; set local role authenticated; set local request.jwt.claim.sub = '${LAB_ADMIN.id}'; set local request.jwt.claims = '{"sub":"${LAB_ADMIN.id}","role":"authenticated"}';\n${sql}\ncommit;`);
+}
+/** A link token like staff-admin makes: 32 random bytes, base64url; only its sha256 goes to the database. */
+async function newLink() {
+  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+  const hash = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))).toString("hex");
+  return { token, hash };
+}
+async function onboardCall(lab, body, file) {
+  let init;
+  if (file) {
+    const form = new FormData();
+    for (const [k, v] of Object.entries(body)) form.set(k, String(v ?? ""));
+    form.set("file", file.blob, file.name);
+    init = { method: "POST", body: form, headers: { apikey: lab.anonKey } };
+  } else {
+    init = { method: "POST", body: JSON.stringify(body), headers: { apikey: lab.anonKey, "content-type": "application/json" } };
+  }
+  const res = await fetch(`${lab.apiUrl}/functions/v1/staff-onboarding`, init);
+  return { status: res.status, body: await res.json().catch(() => ({})), headers: res.headers };
+}
+/** A fresh applicant through the real staff-register function; returns the profile id. */
+async function freshApplicant(lab, label) {
+  const stamp = Date.now();
+  const email = `lab.${label}.${stamp}@example.test`;
+  const r = await postApply(lab, { firstName: "Lab", lastName: label, email, phone: `+6147${String(stamp).slice(-7)}`, agreed: "true", captchaToken: "mock-ok", website: "", __ip: `198.51.${stamp % 200}.${stamp % 250}` },
+    { blob: new Blob([PDF], { type: "application/pdf" }), name: "cv.pdf" });
+  if (r.status !== 200) throw new Error(`apply failed: ${r.status} ${JSON.stringify(r.body)}`);
+  return { id: psql(`select id from hr.staff_profiles where email = '${email}';`), email };
+}
+
+async function onboard() {
+  const lab = readLab();
+  ensureLabAdmin();
+  const person = await freshApplicant(lab, "onboard");
+  const link = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'documents', '${link.hash}');`);
+  check("the admin's document link makes the application 'invited'", psql(`select status from hr.staff_profiles where id = '${person.id}';`) === "invited");
+  check("only the link hash is stored", psql(`select count(*) from hr.staff_invites where profile_id = '${person.id}' and token_hash = '${link.hash}';`) === "1"
+    && psql(`select count(*) from hr.staff_invites where token_hash = '${link.token}';`) === "0");
+
+  const wrong = await onboardCall(lab, { action: "open", t: (await newLink()).token });
+  check("an unknown link gets 403 link_invalid", wrong.status === 403 && wrong.body.code === "link_invalid", JSON.stringify(wrong.body));
+  const opened = await onboardCall(lab, { action: "open", t: link.token });
+  check("the link opens the application (editable, documents mode)", opened.status === 200 && opened.body.view?.readOnly === false && opened.body.view?.mode === "documents", JSON.stringify(opened.body).slice(0, 200));
+  check("no-store and no-referrer headers", opened.headers.get("cache-control") === "no-store" && opened.headers.get("referrer-policy") === "no-referrer");
+  check("the applicant view carries no login id", !JSON.stringify(opened.body).includes("auth_user_id"));
+
+  const details = { first_name: "Lab", last_name: "Onboard", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000",
+    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "0422 333 444", is_australian_citizen: false };
+  const saved = await onboardCall(lab, { action: "save", t: link.token, patch: details });
+  check("personal details save through the link", saved.status === 200 && saved.body.view?.profile?.emergency_phone_e164 === "+61422333444", JSON.stringify(saved.body).slice(0, 200));
+
+  const pdf = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const png = { blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])], { type: "image/png" }), name: "results.png" };
+  const fake = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "2031-01-01" }, { blob: new Blob([new Uint8Array([0x4d, 0x5a, 0, 0])]), name: "passport.pdf" });
+  check("a renamed non-PDF is refused and nothing is stored", fake.status === 400 && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/passport/%';`) === "0", JSON.stringify(fake.body));
+  const future = (years) => `${new Date().getFullYear() + years}-06-30`;
+  const uploads = [["Passport", future(5), pdf("passport.pdf")], ["Visa", future(2), pdf("visa.pdf")], ["English", "", pdf("english.pdf")], ["Academic", "", png], ["Academic", "", pdf("transcript.pdf")], ["Health Insurance", future(1), pdf("oshc.pdf")]];
+  let allOk = true;
+  for (const [category, expiryDate, file] of uploads) {
+    const r = await onboardCall(lab, { action: "upload", t: link.token, category, expiryDate }, file);
+    if (r.status !== 200) { allOk = false; console.log(`     ${category}: ${r.status} ${JSON.stringify(r.body)}`); }
+  }
+  check("passport, visa, English, two academic files and health insurance upload", allOk);
+  check("every stored file is in the person's own folder", psql(`select count(*) from hr.staff_documents where profile_id = '${person.id}' and is_current and storage_path like '${person.id}/%';`) === "6"
+    && psql(`select count(*) from storage.objects o join hr.staff_documents d on d.storage_path = o.name where d.profile_id = '${person.id}' and d.is_current;`) === "6");
+  const noExpiry = await onboardCall(lab, { action: "upload", t: link.token, category: "Visa", expiryDate: "" }, pdf("visa2.pdf"));
+  check("a visa without an expiry date is refused and its file removed", noExpiry.status === 400
+    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/visa/%';`) === "1", JSON.stringify(noExpiry.body));
+
+  const passportId = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Passport' and is_current;`);
+  const url = await onboardCall(lab, { action: "view_url", t: link.token, id: passportId });
+  // Inside the local Edge runtime SUPABASE_URL is http://kong:8000 (reachable only by the containers); hosted signs public URLs.
+  const fileRes = url.body.url ? await fetch(String(url.body.url).replace("http://kong:8000", lab.apiUrl)) : null;
+  check("the applicant opens their own file through a short signed link", url.status === 200 && fileRes?.status === 200 && (await fileRes.text()).startsWith("%PDF-"), JSON.stringify(url.body).slice(0, 120));
+  // Another applicant with a document of their own (made through the real functions), then try to open it with THIS link.
+  const other = await freshApplicant(lab, "other");
+  const otherLink = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${other.id}', 'documents', '${otherLink.hash}');`);
+  await onboardCall(lab, { action: "upload", t: otherLink.token, category: "Passport", expiryDate: future(4) }, pdf("theirs.pdf"));
+  const otherId = psql(`select id from hr.staff_documents where profile_id = '${other.id}' and is_current;`);
+  const foreign = await onboardCall(lab, { action: "view_url", t: link.token, id: otherId });
+  check("another person's file cannot be opened with this link", otherId.length === 36 && foreign.status === 400 && !foreign.body.url, JSON.stringify(foreign.body));
+
+  // The reader runs after the response; without provider settings it records "unavailable" (manual entry continues).
+  let reading = "";
+  for (let i = 0; i < 20 && !["unavailable", "failed", "done", "no_fields"].includes(reading); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    reading = psql(`select extraction_status from hr.staff_documents where id = '${passportId}';`);
+  }
+  check("the passport reading ran after the upload (no provider in the lab: 'unavailable')", reading === "unavailable", reading);
+
+  const academic = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Academic' and filename = 'transcript.pdf' and is_current;`);
+  const removed = await onboardCall(lab, { action: "remove", t: link.token, id: academic });
+  check("removing a file deletes it from storage", removed.status === 200 && psql(`select count(*) from storage.objects o join hr.staff_documents d on d.storage_path = o.name where d.id = '${academic}';`) === "0");
+
+  const submitted = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit: documents_submitted and the link turns read-only", submitted.status === 200 && submitted.body.view?.readOnly === true
+    && psql(`select status from hr.staff_profiles where id = '${person.id}';`) === "documents_submitted", JSON.stringify(submitted.body).slice(0, 200));
+  check("the admins are told (queued)", psql(`select count(*) from hr.staff_emails where profile_id = '${person.id}' and kind = 'admin_documents_submitted';`) === "1");
+  const late = await onboardCall(lab, { action: "save", t: link.token, patch: { first_name: "Late" } });
+  check("nothing changes after submit (400)", late.status === 400 && psql(`select first_name from hr.staff_profiles where id = '${person.id}';`) === "Lab", JSON.stringify(late.body));
+  const lateUpload = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: future(5) }, pdf("again.pdf"));
+  check("no upload after submit, and nothing stored", lateUpload.status === 400 && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/passport/%';`) === "1");
+
+  // Re-upload: the admin rejects the passport and sends a re-upload link.
+  asAdmin(`select public.hr_admin_staff_document_review('${passportId}', 'rejected', 'Blurry');`);
+  const re = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'reupload', '${re.hash}');`);
+  const reView = await onboardCall(lab, { action: "open", t: re.token });
+  check("the re-upload link opens in re-upload mode", reView.status === 200 && reView.body.view?.mode === "reupload" && reView.body.view?.readOnly === false);
+  const visaAgain = await onboardCall(lab, { action: "upload", t: re.token, category: "Visa", expiryDate: future(2) }, pdf("visa3.pdf"));
+  check("a document that was not rejected cannot be replaced (nothing stored)", visaAgain.status === 400
+    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/visa/%';`) === "1", JSON.stringify(visaAgain.body));
+  const detailsAgain = await onboardCall(lab, { action: "save", t: re.token, patch: { first_name: "Changed" } });
+  check("a re-upload link cannot change personal details", detailsAgain.status === 403);
+  const passportAgain = await onboardCall(lab, { action: "upload", t: re.token, category: "Passport", expiryDate: future(6) }, pdf("passport-new.pdf"));
+  check("the rejected passport is replaced (the old file is kept)", passportAgain.status === 200
+    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/passport/%';`) === "2");
+  const reSubmit = await onboardCall(lab, { action: "submit", t: re.token });
+  check("the re-upload is sent: documents_submitted again", reSubmit.status === 200 && psql(`select status from hr.staff_profiles where id = '${person.id}';`) === "documents_submitted");
+
+  // Revoke and expiry.
+  const third = await newLink();
+  asAdmin(`select public.hr_admin_staff_document_review((select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Visa' and is_current), 'rejected', 'Expired soon');
+select public.hr_admin_staff_invite('${person.id}', 'reupload', '${third.hash}');
+select public.hr_admin_staff_invite_revoke('${person.id}');`);
+  check("a revoked link answers 403", (await onboardCall(lab, { action: "open", t: third.token })).status === 403);
+  const fourth = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'reupload', '${fourth.hash}');`);
+  psql(`update hr.staff_invites set created_at = now() - interval '20 days', expires_at = now() - interval '1 second' where token_hash = '${fourth.hash}';`);
+  check("an expired link answers 403", (await onboardCall(lab, { action: "open", t: fourth.token })).status === 403);
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -219,9 +365,10 @@ const command = process.argv[2] ?? "up";
 try {
   if (command === "up") await up();
   else if (command === "apply") await apply();
+  else if (command === "onboard") await onboard();
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
   process.exit(2);

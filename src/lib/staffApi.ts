@@ -1,5 +1,4 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { publicSiteOrigin } from "@/lib/siteUrl";
 import { staffDocSlug, type StaffDocCategory, type StaffDocReview, type StaffRole, type StaffStatus } from "@/lib/staffStatus";
 
 export type { StaffDocCategory } from "@/lib/staffStatus";
@@ -30,14 +29,23 @@ function fail(error: { message?: string } | null, fallback: string): never {
   throw new Error(error?.message || fallback);
 }
 
-/** Where the confirmation link returns to: this deployment's /staff/apply page. */
-export function staffApplyUrl(): string {
-  const base = __BASE_PATH__.split("/").filter(Boolean).join("/");
-  return `${publicSiteOrigin()}${base ? `/${base}` : ""}/staff/apply`;
-}
+export interface StaffApplyInput { firstName: string; lastName: string; email: string; phone: string; resume: File; agreed: boolean; captchaToken: string; website?: string }
 
-/** Calls the public staff-register function and surfaces its own error text (the neutral conflict messages). */
-async function register(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+/**
+ * Sends the public staff application (multipart: details, resume, CAPTCHA token) to the staff-register function. No login is
+ * created. A clash with an existing application gets the same thank-you as a success. Errors carry the field to highlight.
+ */
+export async function applyAsStaff(input: StaffApplyInput): Promise<void> {
+  const body = new FormData();
+  body.set("action", "apply");
+  body.set("firstName", input.firstName);
+  body.set("lastName", input.lastName);
+  body.set("email", input.email);
+  body.set("phone", input.phone);
+  body.set("agreed", input.agreed ? "true" : "false");
+  body.set("captchaToken", input.captchaToken);
+  body.set("website", input.website ?? "");
+  body.set("resume", input.resume, input.resume.name);
   const { data, error } = await supabase.functions.invoke("staff-register", { body });
   if (error) {
     let message = error.message;
@@ -50,37 +58,9 @@ async function register(body: Record<string, unknown>): Promise<Record<string, u
         field = parsed?.field;
       } catch { /* keep the generic message */ }
     }
-    throw Object.assign(new Error(message || "We could not reach the registration service. Please try again."), { field });
+    throw Object.assign(new Error(message || "We could not send your application. Please try again."), { field });
   }
   if (data?.error) throw new Error(String(data.error));
-  return (data ?? {}) as Record<string, unknown>;
-}
-
-/** Checks the email and number without creating anything. Throws the neutral message on a conflict. */
-export async function checkStaffContact(email: string, phone: string, agreed: boolean): Promise<void> {
-  await register({ action: "check", email, phone, agreed });
-}
-
-/** Creates the login (email + password). Auth emails a confirmation link; nobody can sign in before confirming. */
-export async function signUpStaff(input: { email: string; phone: string; password: string; passwordConfirm: string; agreed: boolean; website?: string }): Promise<void> {
-  await register({ action: "sign_up", ...input, website: input.website ?? "", redirectTo: staffApplyUrl() });
-}
-
-/** Sends the confirmation email again (Auth applies its own rate limit). */
-export async function resendStaffConfirmation(email: string): Promise<void> {
-  const { error } = await supabase.auth.resend({ type: "signup", email: email.trim().toLowerCase(), options: { emailRedirectTo: staffApplyUrl() } });
-  if (error) throw new Error("We could not send the email again. Please wait a minute and try again.");
-}
-
-export async function setStaffPassword(password: string): Promise<void> {
-  const { error } = await supabase.auth.updateUser({ password, data: { staff_password_set: true } });
-  if (error) throw new Error(error.message);
-}
-
-export async function startStaffApplication(phone?: string): Promise<StaffMe> {
-  const { data, error } = await supabase.rpc("hr_staff_start", { p_phone: phone ?? null, p_requested_role: null });
-  if (error) fail(error, "We could not start your application.");
-  return data as StaffMe;
 }
 
 export async function getMyStaffApplication(): Promise<StaffMe | null> {

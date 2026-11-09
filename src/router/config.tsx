@@ -67,7 +67,6 @@ import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import { LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
-import StaffApplyPage from "@/pages/staff/StaffApplyPage";
 import StaffWorkspacePage from "@/pages/staff/StaffWorkspacePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
@@ -105,7 +104,8 @@ const routes: RouteObject[] = [
     path: "/reset-password",
     element: <ResetPasswordPage />,
   },
-  { path: "/staff/apply", element: <StaffApplyPage /> },
+  // The password sign-up page is gone (HR-02b): old confirmation links land on Enroll now > Staff.
+  { path: "/staff/apply", element: <Navigate to="/login?mode=enroll&as=staff" replace /> },
   { path: "/staff", element: <StaffWorkspacePage /> },
   {
     path: "/agency",

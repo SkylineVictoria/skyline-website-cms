@@ -12,7 +12,7 @@ Only project **xcpydisstlvtvcsqnjob** (Skyline Web, ap-southeast-2, PostgreSQL 1
 | portal-document-extract | false | worker secret / user enqueue; leased, fenced | 12 |
 | public-assistant-index | false | worker secret | 5 |
 | public-assistant | false | public, rate-limited | 8 |
-| staff-register | false | public staff sign-up gate: rate-limited per IP and per email, password + confirmation check, duplicate check (hr_staff_precheck, service role), then Auth `signUp` (email + password; Auth emails the confirmation link). Local action `sign_up` replaces the deployed `send_code` (v1) | v1 DEPLOYED 2026-11-05; local change UNDEPLOYED |
+| staff-register | false | public staff application (HR-02b), multipart action `apply`: per-IP and per-email rate limits (fail closed), honeypot, name/email/E.164 phone, resume PDF/DOCX by name AND content (<= 5 MB), CAPTCHA (`EF_CAPTCHA_SECRET_KEY`: Cloudflare Turnstile siteverify; `local-mock` only against a local Supabase URL), then service-role `hr_svc_apply` + upload to `staff-documents/{profile}/resume/` + `hr_svc_apply_resume`. No login is created; an existing application gets the same thank-you. `no-store`, `no-referrer`. The deployed v1 (`check` / `sign_up`, Auth signUp) is replaced | v1 DEPLOYED 2026-11-05; local rewrite UNDEPLOYED |
 | staff-document-extract | true | applicant JWT; ownership via hr_staff_document_for_extraction; shared reader adapters, result via hr_staff_document_apply_extraction | v1 DEPLOYED 2026-11-05; local reader map change (English) UNDEPLOYED |
 | notification-delivery | true (+ in-function check: service-role key only; 401 no token, 403 anon/user token; `/webhook` returns 410, disabled) | service-role key as Bearer token (no worker secret) | not deployed |
 

@@ -15,15 +15,16 @@ import {
   type AgentEnrolForm, type EnrolErrors, type EnrolKind, type StudentEnrolForm,
 } from "@/lib/enrolForm";
 import { enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
-import { resendStaffConfirmation, signUpStaff } from "@/lib/staffApi";
+import { applyAsStaff } from "@/lib/staffApi";
+import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
 import { toE164 } from "@/lib/staffPhone";
 
 type Step = 1 | 2 | 3;
 
 /**
  * "Enroll now" on the sign-in page: who you are (step 1), your details (step 2), what happens next (step 3).
- * A student is enrolled at once and emailed a password link; an agent's business waits for SLIT's review; staff are
- * invite-only and are pointed back to their invitation email. Nothing here grants access: the password link and the
+ * A student is enrolled at once and emailed a password link; an agent's business waits for SLIT's review; staff send a
+ * resume and are reviewed (no login until they are hired). Nothing here grants access: the password link and the
  * review are what let someone in.
  */
 export default function EnrolWizard({ initialKind, onSignIn, onSignedIn }: { initialKind: EnrolKind | null; onSignIn: () => void; onSignedIn: (userId: string) => void }) {
@@ -99,7 +100,7 @@ function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; o
       </div>
       {kind === "staff" ? (
         <div className="mt-5 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-[13px] text-secondary-900" role="status">
-          An administrator reviews every staff application. Already invited? Open the link in the invitation email to set your password, then sign in.
+          Send your resume. An administrator reviews every staff application and, if we continue, emails you a private link for your details and documents.
         </div>
       ) : null}
       <Button type="button" className="mt-6 w-full" onClick={onContinue}>Continue</Button>
@@ -356,91 +357,97 @@ function DoneStep({ result, onSignIn }: { result: EnrolResult; onSignIn: () => v
 
 /* ----------------------------------------------------------------- step 2: staff */
 
+const RESUME_ACCEPT = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const MAX_RESUME_MB = 5;
+
 /**
- * Staff apply for an account ("Needs approval", like agents) with email, mobile and a password. The staff-register function
- * checks the email and number against existing staff, students, agents and admins BEFORE it creates the login, and answers a
- * clash with one neutral message. Supabase Auth then emails a confirmation link (email confirmation stays on); the link opens
- * /staff/apply, which starts the "Pending" profile and continues to the workspace wizard. No SMS is sent and the role chosen
- * later grants nothing until an administrator activates the account.
+ * Staff apply with name, email, mobile and a resume (PDF or Word .docx, up to 5 MB) behind a CAPTCHA. No login is created:
+ * staff-register stores the application ("Applied") and an administrator either rejects it or emails a link for the personal
+ * details and documents. The thank-you answer is the same whether or not an application already exists for these details.
  */
 function StaffStep({ onBack }: { onBack: () => void }) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
-  const [again, setAgain] = useState("");
+  const [resume, setResume] = useState<File | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [website, setWebsite] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaReset, setCaptchaReset] = useState(0);
   const [sent, setSent] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string; again?: string; agreed?: string; form?: string }>({});
+  const [errors, setErrors] = useState<{ firstName?: string; lastName?: string; email?: string; phone?: string; resume?: string; agreed?: string; captcha?: string; form?: string }>({});
   const [busy, setBusy] = useState(false);
 
-  const signUp = async (event: FormEvent<HTMLFormElement>) => {
+  const apply = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
     const mobile = String(new FormData(event.currentTarget).get("staff-mobile") ?? "");
     setPhone(mobile);
     const next: typeof errors = {};
+    if (!firstName.trim()) next.firstName = "Enter your first name.";
+    if (!lastName.trim()) next.lastName = "Enter your last name.";
     if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(email.trim())) next.email = "Enter a valid email address.";
     if (!toE164(mobile)) next.phone = "Enter your mobile number with its country code.";
-    if (password.length < MIN_PASSWORD_LENGTH) next.password = `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
-    if (password !== again) next.again = "The two passwords do not match.";
+    if (!resume) next.resume = "Attach your resume (PDF or Word .docx).";
+    else if (!/\.(pdf|docx)$/i.test(resume.name)) next.resume = "Attach your resume as a PDF or Word (.docx) file.";
+    else if (resume.size > MAX_RESUME_MB * 1024 * 1024) next.resume = `The resume must be ${MAX_RESUME_MB} MB or smaller.`;
     if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
+    if (!captchaToken) next.captcha = "Complete the security check.";
     setErrors(next);
     if (Object.keys(next).length) return;
     setBusy(true);
     try {
-      await signUpStaff({ email: email.trim().toLowerCase(), phone: toE164(mobile)!, password, passwordConfirm: again, agreed, website });
-      setPassword(""); setAgain(""); setSent(true);
+      await applyAsStaff({ firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim().toLowerCase(), phone: toE164(mobile)!, resume: resume!, agreed, captchaToken, website });
+      setSent(true);
     } catch (e) {
       const field = (e as { field?: string }).field;
-      const message = e instanceof Error ? e.message : "We could not create the account. Please try again.";
-      setErrors(field === "email" || field === "phone" || field === "password" ? { [field]: message } : { form: message });
+      const message = e instanceof Error ? e.message : "We could not send your application. Please try again.";
+      const known = ["firstName", "lastName", "email", "phone", "resume", "agreed", "captcha"];
+      setErrors(field && known.includes(field) ? { [field]: message } : { form: message });
+      setCaptchaReset((n) => n + 1); // a CAPTCHA token works once
     } finally { setBusy(false); }
-  };
-
-  const resend = () => {
-    setBusy(true); setNotice("");
-    void resendStaffConfirmation(email).then(() => setNotice("We sent the email again."), (e) => setNotice(e instanceof Error ? e.message : "We could not send the email.")).finally(() => setBusy(false));
   };
 
   if (sent) {
     return (
       <div>
-        <StepHeader step={3} kind="Staff" title="Confirm your email" onBack={() => { setSent(false); setErrors({}); setNotice(""); }} />
-        <div className="mt-6 space-y-4">
-          <p className="text-sm text-foreground-700" role="status" data-testid="staff-confirm-sent">We sent a confirmation link to <strong>{email.trim().toLowerCase()}</strong>. Open it to confirm your address; you then continue with your personal details and documents. After that, sign in with your email and password.</p>
-          <p className="text-xs text-foreground-500">Your account stays pending until an administrator reviews your documents and activates it.</p>
-          {notice ? <p className="text-sm text-foreground-700" role="status">{notice}</p> : null}
-          <button type="button" className="w-full cursor-pointer text-center text-sm font-semibold text-primary-700 hover:text-primary-800" disabled={busy} onClick={resend}>
-            Send the email again
-          </button>
+        <StepHeader step={3} kind="Staff" title="Thank you for applying" onBack={onBack} />
+        <div className="mt-6 space-y-3" role="status" data-testid="staff-apply-thanks">
+          <p className="text-sm text-foreground-700">We have received your application. An administrator will review your resume.</p>
+          <p className="text-sm text-foreground-700">If we would like to continue, we will email <strong>{email.trim().toLowerCase()}</strong> a private link to add your personal details and documents. You do not need an account or a password for that.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <form onSubmit={signUp} noValidate>
-      <StepHeader step={2} kind="Staff" title="Create your account" onBack={onBack} />
+    <form onSubmit={apply} noValidate>
+      <StepHeader step={2} kind="Staff" title="Apply for a staff position" onBack={onBack} />
       <div className="mt-6 space-y-4">
-        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" data-testid="staff-signup-email" /><Problem text={errors.email} /></Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="First name" required><TextInput value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" maxLength={100} data-testid="staff-apply-first-name" /><Problem text={errors.firstName} /></Field>
+          <Field label="Last name" required><TextInput value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="family-name" maxLength={100} data-testid="staff-apply-last-name" /><Problem text={errors.lastName} /></Field>
+        </div>
+        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" data-testid="staff-apply-email" /><Problem text={errors.email} /></Field>
         <div>
           <label htmlFor="staff-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="staff-mobile" name="staff-mobile" value={phone} required placeholder="041 234 5678" />
           <Problem text={errors.phone} />
         </div>
-        <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. You sign in with your email and this password.`}>
-          <TextInput type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" data-testid="staff-signup-password" /><Problem text={errors.password} />
-        </Field>
-        <Field label="Confirm password" required>
-          <TextInput type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" data-testid="staff-signup-password-confirm" /><Problem text={errors.again} />
-        </Field>
-        <p className="text-xs text-foreground-500">We email you a link to confirm your address. Your personal details and documents come next.</p>
+        <div>
+          <label htmlFor="staff-resume" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Resume <span className="text-primary-600">*</span></label>
+          <input id="staff-resume" type="file" accept={RESUME_ACCEPT} data-testid="staff-apply-resume"
+            onChange={(e) => setResume(e.target.files?.[0] ?? null)}
+            className="block w-full text-sm text-foreground-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-background-200 file:px-3 file:py-2 file:text-sm file:font-semibold" />
+          <p className="mt-1 text-xs text-foreground-500">PDF or Word (.docx), up to {MAX_RESUME_MB} MB. Kept private; only administrators can open it.</p>
+          <Problem text={errors.resume} />
+        </div>
         <div className="hidden" aria-hidden="true"><label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label></div>
         <Agree checked={agreed} onChange={setAgreed} error={errors.agreed} />
+        <div><StaffCaptcha onToken={setCaptchaToken} resetKey={captchaReset} /><Problem text={errors.captcha} /></div>
         <FormError text={errors.form} />
-        <Button type="submit" className="w-full" disabled={busy} data-testid="staff-signup-submit">{busy ? "Creating your account…" : "Create account"}</Button>
+        <Button type="submit" className="w-full" disabled={busy || !captchaConfigured} data-testid="staff-apply-submit">{busy ? "Sending…" : "Send application"}</Button>
       </div>
     </form>
   );

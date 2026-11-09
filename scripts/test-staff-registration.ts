@@ -14,6 +14,8 @@ const checklistLib = await load.import<typeof import("../src/lib/documentCheckli
 const routing = await load.import<typeof import("../src/lib/loginRouting.ts")>("../src/lib/loginRouting.ts");
 const core = await load.import<typeof import("../supabase/functions/staff-document-extract/core.ts")>("../supabase/functions/staff-document-extract/core.ts");
 const mock = await load.import<typeof import("../supabase/functions/_shared/document-extraction/mock.ts")>("../supabase/functions/_shared/document-extraction/mock.ts");
+const apply = await load.import<typeof import("../supabase/functions/staff-register/core.ts")>("../supabase/functions/staff-register/core.ts");
+const captchaLib = await load.import<typeof import("../supabase/functions/_shared/captcha.ts")>("../supabase/functions/_shared/captcha.ts");
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
@@ -95,28 +97,151 @@ test("a conflict is one neutral message that never names the kind of account", (
   for (const word of ["student", "agent", "admin user", "staff member", "already registered"]) assert.ok(!`${email!.message} ${number!.message}`.toLowerCase().includes(word), word);
   assert.equal(status.conflictMessage({ ok: true }), null);
   assert.equal(status.conflictMessage({ ok: false, reason: "invalid_phone" })?.field, "phone");
-  const edge = read("supabase/functions/staff-register/index.ts");
-  assert.ok(edge.includes(status.NEUTRAL_EMAIL_MESSAGE) && edge.includes(status.NEUTRAL_PHONE_MESSAGE), "the edge function uses the same texts");
 });
 
-test("the duplicate check covers staff, students, agents, portal users, invitations and admin users by email and phone", () => {
-  const sql = read("supabase/migrations/20261105190000_hr_staff_rpcs.sql");
-  const fn = sql.slice(sql.indexOf("function hr.contact_conflicts"), sql.indexOf("revoke all on function hr.contact_conflicts"));
-  for (const table of ["hr.staff_profiles", "public.enrollment_students", "public.agents", "public.portal_profiles", "public.agency_invitations", "public.cms_users"]) assert.ok(fn.includes(table), `checks ${table}`);
-  assert.ok(fn.includes("phone_e164(s.phone)") && fn.includes("phone_e164(g.phone)") && fn.includes("phone_e164(pp.phone)"), "phones are compared in E.164 form");
-  const edge = read("supabase/functions/staff-register/index.ts");
-  assert.ok(edge.indexOf("hr_staff_precheck") > 0 && edge.indexOf("hr_staff_precheck") < edge.indexOf("auth.signUp("), "the check runs before the account is created");
-  assert.ok(edge.includes("staff-register:caller:") && edge.includes("staff-register:email:"), "rate limits per IP and per email");
-  assert.ok(!edge.includes("signInWithOtp") && !edge.includes('channel: "sms"'), "no email code and no SMS: sign-up is email + password");
-  assert.ok(edge.indexOf("passwordProblem(body.password") > 0 && edge.indexOf("passwordProblem(body.password") < edge.indexOf("admin.rpc(\"hr_staff_precheck\""), "the password and its confirmation are checked before anything else");
-  assert.ok(!/session/.test(edge.slice(edge.indexOf("auth.signUp("), edge.indexOf("auth.signUp(") + 600).replace(/\/\/.*$/gm, "")), "the function never hands a session back: the email must be confirmed first");
+/* ------------------------------------------------------------------ public apply (staff-register, HR-02b) */
+
+const PDF_BYTES = new TextEncoder().encode("%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF");
+const DOCX_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new TextEncoder().encode("....[Content_Types].xml....word/document.xml....")]);
+function applyForm(overrides: Record<string, string | File | null> = {}): FormData {
+  const values: Record<string, string | File | null> = {
+    firstName: "Ann", lastName: "Applicant", email: "Ann@Example.test", phone: "0412 345 678", agreed: "true", captchaToken: captchaLib.LOCAL_MOCK_TOKEN,
+    website: "", resume: new File([PDF_BYTES], "cv.pdf", { type: "application/pdf" }), ...overrides,
+  };
+  const form = new FormData();
+  for (const [k, v] of Object.entries(values)) if (v !== null) form.set(k, v);
+  return form;
+}
+function applyDeps(options: { limit?: (bucket: string) => boolean; apply?: unknown; applyError?: boolean; uploadError?: string; resumeError?: boolean; captcha?: "mock" | "unavailable" } = {}) {
+  const calls: Array<[string, unknown]> = [];
+  const deps = {
+    captcha: options.captcha === "unavailable" ? captchaLib.selectCaptchaVerifier({}) : captchaLib.createMockCaptchaVerifier(),
+    takeRateLimit: async (bucket: string) => { calls.push(["limit", bucket]); return options.limit ? options.limit(bucket) : true; },
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      calls.push([name, args]);
+      if (name === "hr_svc_apply") return options.applyError ? { data: null, error: { message: "down" } } : { data: options.apply ?? { ok: true, profileId: "p-1" }, error: null };
+      return options.resumeError ? { data: null, error: { message: "bad" } } : { data: { ok: true }, error: null };
+    },
+    upload: async (p: string, bytes: Uint8Array, type: string) => { calls.push(["upload", { p, size: bytes.length, type }]); return { error: options.uploadError ?? null }; },
+    remove: async (p: string) => { calls.push(["remove", p]); },
+    hash: async (v: string) => `h(${v})`,
+    newId: () => "rnd",
+  };
+  return { deps, calls, names: () => calls.map(([n]) => n) };
+}
+
+test("apply: a complete application stores the resume in the person's own folder and records it", async () => {
+  const { deps, calls, names } = applyDeps();
+  const result = await apply.handleApply(applyForm(), { ip: "203.0.113.9" }, deps);
+  assert.deepEqual(result, { status: 200, body: { ok: true } });
+  assert.deepEqual(names(), ["limit", "limit", "hr_svc_apply", "upload", "hr_svc_apply_resume"], "IP limit, email limit, apply, upload, record");
+  assert.deepEqual(calls[0][1], "staff-register:caller:apply:h(203.0.113.9)");
+  assert.deepEqual(calls[1][1], "staff-register:email:apply:h(ann@example.test)", "the email limit uses the normalised address");
+  assert.deepEqual(calls[2][1], { p_first_name: "Ann", p_last_name: "Applicant", p_email: "ann@example.test", p_phone: "+61412345678" });
+  assert.deepEqual(calls[3][1], { p: "p-1/resume/rnd.pdf", size: PDF_BYTES.length, type: "application/pdf" });
+  assert.deepEqual(calls[4][1], { p_profile: "p-1", p_path: "p-1/resume/rnd.pdf", p_filename: "cv.pdf", p_mime: "application/pdf", p_size: PDF_BYTES.length });
 });
 
-test("the staff-register password rules match the browser", () => {
-  const edge = read("supabase/functions/staff-register/index.ts");
-  const browser = read("src/lib/passwords.ts");
-  assert.equal(edge.match(/MIN_PASSWORD_LENGTH = (\d+)/)?.[1], browser.match(/MIN_PASSWORD_LENGTH = (\d+)/)?.[1]);
-  assert.ok(edge.includes('"The two passwords do not match."'), "the confirmation must match");
+test("apply: a Word .docx resume is accepted by its content", async () => {
+  const { deps, calls } = applyDeps();
+  const result = await apply.handleApply(applyForm({ resume: new File([DOCX_BYTES], "My CV.docx") }), { ip: null }, deps);
+  assert.equal(result.status, 200);
+  assert.equal((calls.find(([n]) => n === "upload")![1] as { type: string }).type, apply.RESUME_TYPES.docx);
+});
+
+test("apply: the resume must really be a PDF or DOCX, named so, and at most 5 MB", async () => {
+  const bad: Array<[string, File]> = [
+    ["renamed exe", new File([new Uint8Array([0x4d, 0x5a, 1, 2])], "cv.pdf")],
+    ["pdf bytes named .docx", new File([PDF_BYTES], "cv.docx")],
+    ["a zip that is not Word", new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])], "cv.docx")],
+    ["old .doc", new File([PDF_BYTES], "cv.doc")],
+    ["empty", new File([], "cv.pdf")],
+    ["too big", new File([PDF_BYTES, new Uint8Array(apply.MAX_RESUME_BYTES)], "cv.pdf")],
+  ];
+  for (const [label, file] of bad) {
+    const { deps, names } = applyDeps();
+    const result = await apply.handleApply(applyForm({ resume: file }), { ip: null }, deps);
+    assert.equal(result.status, 400, label);
+    assert.equal(result.body.field, "resume", label);
+    assert.ok(!names().includes("hr_svc_apply") && !names().includes("upload"), `${label}: nothing is stored`);
+  }
+  const { deps } = applyDeps();
+  assert.equal((await apply.handleApply(applyForm({ resume: null }), { ip: null }, deps)).body.field, "resume", "a resume is required");
+  assert.equal(apply.safeFilename("C:\\fake\\path\\cv\u0007.pdf", "pdf"), "cv.pdf", "no path or control characters in the stored name");
+});
+
+test("apply: the CAPTCHA is checked before anything is stored, and an outage fails closed", async () => {
+  let run = applyDeps();
+  let result = await apply.handleApply(applyForm({ captchaToken: "forged" }), { ip: null }, run.deps);
+  assert.deepEqual([result.status, result.body.field], [400, "captcha"]);
+  assert.ok(!run.names().includes("hr_svc_apply"));
+  run = applyDeps({ captcha: "unavailable" });
+  result = await apply.handleApply(applyForm(), { ip: null }, run.deps);
+  assert.equal(result.status, 503, "no CAPTCHA configuration: refused");
+  assert.ok(!run.names().includes("hr_svc_apply"));
+});
+
+test("apply: rate limits per caller and per email fail closed", async () => {
+  let run = applyDeps({ limit: (b) => !b.startsWith("staff-register:caller:") });
+  let result = await apply.handleApply(applyForm(), { ip: "1.2.3.4" }, run.deps);
+  assert.deepEqual([result.status, result.headers?.["Retry-After"]], [429, "600"]);
+  run = applyDeps({ limit: (b) => !b.startsWith("staff-register:email:") });
+  result = await apply.handleApply(applyForm(), { ip: "1.2.3.4" }, run.deps);
+  assert.deepEqual([result.status, result.headers?.["Retry-After"]], [429, "3600"]);
+  assert.ok(!run.names().includes("hr_svc_apply"));
+});
+
+test("apply: the honeypot and an existing application get the same thank-you and store nothing", async () => {
+  let run = applyDeps();
+  assert.deepEqual(await apply.handleApply(applyForm({ website: "spam.example" }), { ip: null }, run.deps), { status: 200, body: { ok: true } });
+  assert.deepEqual(run.names(), ["limit"]);
+  run = applyDeps({ apply: { ok: false, reason: "exists" } });
+  assert.deepEqual(await apply.handleApply(applyForm(), { ip: null }, run.deps), { status: 200, body: { ok: true } }, "never reveals who has applied");
+  assert.ok(!run.names().includes("upload") && !run.names().includes("hr_svc_apply_resume"));
+});
+
+test("apply: field checks, and a failed record removes the stored file", async () => {
+  const cases: Array<[Record<string, string>, string]> = [
+    [{ firstName: "" }, "firstName"], [{ lastName: "<script>" }, "lastName"], [{ email: "nope" }, "email"], [{ phone: "12345" }, "phone"], [{ agreed: "false" }, "agreed"],
+  ];
+  for (const [over, field] of cases) assert.equal((await apply.handleApply(applyForm(over), { ip: null }, applyDeps().deps)).body.field, field, field);
+  let run = applyDeps({ uploadError: "storage down" });
+  assert.equal((await apply.handleApply(applyForm(), { ip: null }, run.deps)).status, 503);
+  assert.ok(!run.names().includes("hr_svc_apply_resume"));
+  run = applyDeps({ resumeError: true });
+  assert.equal((await apply.handleApply(applyForm(), { ip: null }, run.deps)).status, 503);
+  assert.deepEqual(run.calls.at(-1), ["remove", "p-1/resume/rnd.pdf"], "an unrecorded file is deleted");
+  run = applyDeps({ applyError: true });
+  assert.equal((await apply.handleApply(applyForm(), { ip: null }, run.deps)).status, 503);
+});
+
+test("CAPTCHA: the mock only works against a local Supabase URL; Turnstile is verified server-side", async () => {
+  assert.equal(captchaLib.selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: "local-mock", SUPABASE_URL: "http://127.0.0.1:54321" }).id, "mock");
+  assert.equal(captchaLib.selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: "local-mock", SUPABASE_URL: "http://kong:8000" }).id, "mock");
+  assert.equal(captchaLib.selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: "local-mock", SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co" }).id, "unconfigured", "never the mock on hosted");
+  assert.equal(captchaLib.selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: "", SUPABASE_URL: "http://127.0.0.1:54321" }).id, "unconfigured");
+  const sent: Array<{ url: string; body: string }> = [];
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    sent.push({ url, body: String(init.body) });
+    return new Response(JSON.stringify({ success: String(init.body).includes("response=good") }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const turnstile = captchaLib.selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: "secret-1", SUPABASE_URL: "https://x.supabase.co" }, { fetch: fakeFetch });
+  assert.deepEqual(await turnstile.verify("good", "203.0.113.9"), { ok: true });
+  assert.deepEqual(await turnstile.verify("bad"), { ok: false, reason: "rejected" });
+  assert.deepEqual(await turnstile.verify(""), { ok: false, reason: "missing" });
+  assert.equal(sent[0].url, captchaLib.TURNSTILE_VERIFY_URL);
+  assert.ok(sent[0].body.includes("secret=secret-1") && sent[0].body.includes("remoteip=203.0.113.9"));
+  const down = captchaLib.createTurnstileVerifier({ secret: "s", fetch: (async () => { throw new Error("offline"); }) as unknown as typeof fetch });
+  assert.deepEqual(await down.verify("x"), { ok: false, reason: "unavailable" });
+});
+
+test("staff-register creates no login and keeps no password code", () => {
+  const edge = read("supabase/functions/staff-register/index.ts") + read("supabase/functions/staff-register/core.ts");
+  for (const gone of ["auth.signUp(", "signInWithOtp", "passwordProblem", "hr_staff_precheck", "account_type", "sign_up"]) assert.ok(!edge.includes(gone), `${gone} is gone`);
+  assert.ok(edge.includes('"Referrer-Policy": "no-referrer"') && edge.includes('"Cache-Control": "no-store"'));
+  const browser = read("src/lib/staffApi.ts") + read("src/pages/login/EnrolWizard.tsx");
+  for (const gone of ["signUpStaff", "resendStaffConfirmation", "setStaffPassword", "staff-signup-password"]) assert.ok(!browser.includes(gone), `${gone} is gone from the browser`);
+  assert.ok(read("src/router/config.tsx").includes('{ path: "/staff/apply", element: <Navigate to="/login?mode=enroll&as=staff" replace /> }'), "old confirmation links land on Enroll now > Staff");
 });
 
 /* ------------------------------------------------------------------ documents and submit rules */

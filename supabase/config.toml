@@ -25,8 +25,8 @@ verify_jwt = false
 verify_jwt = true
 
 [functions.staff-register]
-# Public staff sign-up gate. It rate-limits per caller and per email, runs the duplicate check, then creates the login with Supabase Auth
-# signUp (email + password; Auth emails the confirmation link). All data access is service-role only inside the function.
+# Public staff application (no login is created): rate limit per caller and per email, CAPTCHA (EF_CAPTCHA_SECRET_KEY), resume
+# type/size checks, then hr_svc_apply / hr_svc_apply_resume. All data access is service-role only inside the function.
 verify_jwt = false
 
 [functions.staff-document-extract]

@@ -1268,6 +1268,43 @@ begin
      from hr.staff_offers o where o.profile_id = p.id and o.signed_at is not null order by o.signed_at desc limit 1) end);
 end $fn$;
 
+-- ------------------------------------------------------------------ retention job (HR-02h)
+-- Daily at 03:15 UTC pg_cron calls public.hr_retention_dispatch(), which POSTs {"action":"purge"} to staff-admin with the service-role
+-- key from Vault (never in this file, the job command or a log). staff-admin deletes the storage files of applications rejected more
+-- than EF_HR_RETENTION_MONTHS months ago (default 6) and marks them files_purged_at. The job is created INACTIVE; the owner turns it on
+-- at release, after storing the Vault secrets:
+--   select vault.create_secret('<service_role key>', 'hr_retention_service_role_key', 'HR retention job');
+--   select vault.create_secret('https://xcpydisstlvtvcsqnjob.supabase.co/functions/v1/staff-admin', 'hr_retention_function_url', 'HR retention job');
+--   select cron.alter_job((select jobid from cron.job where jobname = 'hr-retention-purge'), active := true);
+-- Without both secrets the dispatcher does nothing. Pause: active := false. Remove: select cron.unschedule('hr-retention-purge');
+create extension if not exists pg_net;
+create extension if not exists pg_cron;
+create or replace function public.hr_retention_dispatch() returns bigint
+language plpgsql security definer set search_path = public, vault, net, pg_temp as $fn$
+declare v_key text; v_url text;
+begin
+ if not pg_try_advisory_xact_lock(9342, 20261109) then return null; end if;
+ select decrypted_secret into v_key from vault.decrypted_secrets where name = 'hr_retention_service_role_key' limit 1;
+ select decrypted_secret into v_url from vault.decrypted_secrets where name = 'hr_retention_function_url' limit 1;
+ if nullif(v_key, '') is null or nullif(v_url, '') is null or v_url !~ '^https?://[^/]+/functions/v1/staff-admin$' then return null; end if;
+ -- Nothing due: no call.
+ if not exists (select 1 from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
+   where p.status = 'rejected' and a.files_purged_at is null and p.status_changed_at < now() - interval '1 month') then return null; end if;
+ return net.http_post(url := v_url, headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_key),
+  body := '{"action":"purge"}'::jsonb, timeout_milliseconds := 55000);
+end $fn$;
+revoke all on function public.hr_retention_dispatch() from public, anon, authenticated, service_role;
+grant execute on function public.hr_retention_dispatch() to postgres;
+do $job$
+declare v_job bigint;
+begin
+ select jobid into v_job from cron.job where jobname = 'hr-retention-purge' order by jobid limit 1;
+ if v_job is null then
+  v_job := cron.schedule('hr-retention-purge', '15 3 * * *', 'select public.hr_retention_dispatch();');
+  perform cron.alter_job(v_job, active := false);
+ end if;
+end $job$;
+
 -- ------------------------------------------------------------------ admin sidebar: Staff becomes its own top-level group
 -- A top-level "Staff" group right after "Agencies & Agents", with the existing 'agency_staff' row moved under it as
 -- "Employees" (/admin/staff/employees). The row is UPDATED, not re-created, and keeps its id: 20261105200000 and the

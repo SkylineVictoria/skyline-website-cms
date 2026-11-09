@@ -194,6 +194,7 @@ export default function StaffDetailPage() {
           {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails below to retry or send the link again.
         </p>
       ) : null}
+      {application.files_purged_at ? <p className={`mb-4 ${NOTICE}`} data-testid="staff-files-purged">The resume, documents and offer files were deleted on {new Date(application.files_purged_at).toLocaleDateString()} under the retention rule. The record stays.</p> : null}
       {summary.expiringSoon ? <p className={`mb-4 ${ALERT}`} data-testid="staff-detail-expiring">A document expires within 30 days or has expired. Check the dates below.</p> : null}
 
       <div className="grid gap-6 lg:grid-cols-5">
@@ -207,7 +208,7 @@ export default function StaffDetailPage() {
             <Row label="Applied">{when(profile.created_at)}</Row>
             <Row label="Documents submitted">{when(application.submitted_at)}</Row>
             <Row label="Resume">
-              {application.resume_path ? (
+              {application.resume_path && !application.files_purged_at ? (
                 <button type="button" className="cursor-pointer font-semibold text-primary-700 hover:underline" data-testid="staff-resume-view"
                   onClick={() => void view(`Resume: ${application.resume_filename ?? "resume"}`, application.resume_path!, application.resume_mime)}>
                   {application.resume_filename ?? "Open resume"}
@@ -242,7 +243,7 @@ export default function StaffDetailPage() {
                         </span>
                         <span className="flex flex-wrap items-center gap-2">
                           <Badge tone={REVIEW_TONE[d.status]}>{REVIEW_LABEL[d.status]}</Badge>
-                          <Button size="sm" variant="outline" onClick={() => void view(`${STAFF_DOC_LABEL[d.category as StaffDocCategory] ?? d.category}: ${d.filename}`, d.storagePath, d.mimeType)} data-testid={`staff-doc-view-${d.id}`}>Preview</Button>
+                          {application.files_purged_at ? null : <Button size="sm" variant="outline" onClick={() => void view(`${STAFF_DOC_LABEL[d.category as StaffDocCategory] ?? d.category}: ${d.filename}`, d.storagePath, d.mimeType)} data-testid={`staff-doc-view-${d.id}`}>Preview</Button>}
                           {canReview && d.status !== "approved" ? <Button size="sm" onClick={() => void review(d, "approved")} disabled={docBusy === d.id} data-testid={`staff-doc-approve-${d.id}`}>Approve</Button> : null}
                           {canReview && d.status !== "rejected" ? <Button size="sm" variant="outline" onClick={() => { setRejecting(d); setDocNote(""); setDialogError(""); }} disabled={docBusy === d.id} data-testid={`staff-doc-reject-${d.id}`}>Reject</Button> : null}
                         </span>
@@ -269,7 +270,7 @@ export default function StaffDetailPage() {
                     <span className="block truncate text-foreground-800">{o!.filename}</span>
                     <span className="text-xs text-foreground-600">{o!.signedAt ? `Signed by ${o!.signerName} on ${when(o!.signedAt)}` : o!.sentAt ? `Sent ${when(o!.sentAt)}, not signed yet` : `Uploaded ${when(o!.uploadedAt)}, not sent`}</span>
                   </span>
-                  <span className="flex gap-2">
+                  <span className={`flex gap-2 ${application.files_purged_at ? "hidden" : ""}`}>
                     <Button size="sm" variant="outline" onClick={() => void view(`Offer: ${o!.filename}`, o!.storagePath, "application/pdf")} data-testid="staff-offer-view">Offer</Button>
                     {o!.signedPath ? <Button size="sm" variant="outline" onClick={() => void view(`Signed offer: ${o!.filename}`, o!.signedPath!, "application/pdf")} data-testid="staff-offer-signed-view">Signed copy</Button> : null}
                   </span>

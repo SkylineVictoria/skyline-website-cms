@@ -9,6 +9,8 @@
 //   node scripts/lab/staff-lab.mjs emails   end-to-end checks of HR email: outbox, invite links, failures, retry (HR-02d)
 //   node scripts/lab/staff-lab.mjs offer    end-to-end checks of the offer: upload checks, send, view, sign, signed PDF emailed (HR-02e)
 //   node scripts/lab/staff-lab.mjs activate end-to-end checks of activation: Auth invite, password, claim, My HR, existing login (HR-02f)
+//   node scripts/lab/staff-lab.mjs retention the real pg_cron job deletes the files of applications rejected long ago (HR-02h)
+//   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -20,7 +22,7 @@
 // Document reading: staff-onboarding's reader calls OpenAI, redirected (local only, EF_OPENAI_API_URL) to a mock on port 57391
 // that answers a fixed passport (name, middle name, date of birth); nothing reaches OpenAI.
 import http from "node:http";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -235,6 +237,9 @@ function startMockPostmark() {
       req.on("end", () => {
         let body = {};
         try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
+        // Lab-only hooks for the Playwright suite (e2e): read what was "sent", switch failures on and off.
+        if (req.url === "/__messages") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(postmark.messages)); }
+        if (req.url?.startsWith("/__mode")) { postmark.mode = new URL(req.url, "http://x").searchParams.get("m") === "fail" ? "fail" : "ok"; res.writeHead(204); return res.end(); }
         const token = req.headers["x-postmark-server-token"];
         if (req.url !== "/email" || token !== LAB_SECRETS.EF_POSTMARK_SERVER_TOKEN) { res.writeHead(401); return res.end("{}"); }
         if (postmark.mode === "down") { res.writeHead(503); return res.end("{}"); }
@@ -789,6 +794,53 @@ async function activate() {
   check("resend is refused once the person is active", usedLogin.status === 400, JSON.stringify(usedLogin.body));
 }
 
+/* ------------------------------------------------------------------ retention (HR-02h) */
+
+async function retention() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  // Two rejected applicants with files: one rejected 7 months ago (due), one recently (kept).
+  const rejectedWithFiles = async (label) => {
+    const person = await freshApplicant(lab, label);
+    const link = await newLink();
+    asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'documents', '${link.hash}');`);
+    await completeDocuments(lab, link.token);
+    asAdmin(`select public.hr_admin_staff_reject('${person.id}', 'Lab retention', false);`);
+    return person;
+  };
+  const old = await rejectedWithFiles("purgeold");
+  const recent = await rejectedWithFiles("purgerecent");
+  psql(`update hr.staff_profiles set status_changed_at = now() - interval '7 months' where id = '${old.id}';`);
+  const files = (id) => psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${id}/%';`);
+  check("before: both rejected applicants still have their resume and documents in storage", files(old.id) === "6" && files(recent.id) === "6", `${files(old.id)} / ${files(recent.id)}`);
+
+  // Only the scheduled job (service_role) may purge.
+  const asAdminCall = await staffAdminCall(lab, jwt, { action: "purge" });
+  const anon = await fetch(`${lab.apiUrl}/functions/v1/staff-admin`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}`, "content-type": "application/json" }, body: JSON.stringify({ action: "purge" }) });
+  check("an administrator or the anon key cannot run the purge", asAdminCall.status === 403 && anon.status === 403 && files(old.id) === "6", `${asAdminCall.status}/${anon.status}`);
+
+  // The real pg_cron job, as installed by the migration: inactive, daily. For the lab it runs every 10 seconds for one round.
+  check("the migration installed the daily job, inactive", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-retention-purge';") === "false/15 3 * * *");
+  psql("select vault.create_secret('" + lab.serviceKey + "', 'hr_retention_service_role_key', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_service_role_key');");
+  psql("select vault.create_secret('http://kong:8000/functions/v1/staff-admin', 'hr_retention_function_url', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_function_url');");
+  psql("select cron.alter_job((select jobid from cron.job where jobname = 'hr-retention-purge'), schedule := '10 seconds', active := true);");
+  let purged = "";
+  for (let i = 0; i < 60 && purged !== "t"; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    purged = psql(`select (files_purged_at is not null)::text from hr.staff_applications where profile_id = '${old.id}';`).slice(0, 1);
+  }
+  psql("select cron.alter_job((select jobid from cron.job where jobname = 'hr-retention-purge'), schedule := '15 3 * * *', active := false);");
+  const ran = psql("select count(*) from cron.job_run_details d join cron.job j on j.jobid = d.jobid where j.jobname = 'hr-retention-purge' and d.status = 'succeeded';");
+  check("the cron job ran and called staff-admin through pg_net with the Vault key", Number(ran) >= 1 && purged === "t", `runs ${ran}, purged ${purged}`);
+  check("the old application's files are deleted from storage; the row and its metadata stay", files(old.id) === "0"
+    && psql(`select count(*) from hr.staff_documents where profile_id = '${old.id}';`) === "5" && psql(`select status from hr.staff_profiles where id = '${old.id}';`) === "rejected");
+  const objectGone = await fetch(`${lab.apiUrl}/storage/v1/object/staff-documents/${psql(`select resume_path from hr.staff_applications where profile_id = '${old.id}';`)}`, { headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}` } });
+  check("...the resume really is gone (storage answers not found)", objectGone.status === 400 || objectGone.status === 404, String(objectGone.status));
+  check("the recently rejected application keeps every file", files(recent.id) === "6" && psql(`select (files_purged_at is null)::text from hr.staff_applications where profile_id = '${recent.id}';`) === "true");
+  check("the job is back to daily and inactive", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-retention-purge';") === "false/15 3 * * *");
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -806,16 +858,24 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
-  if (["apply", "onboard", "emails", "offer", "activate"].includes(command)) { await startMockPostmark(); await startMockReader(); }
+  if (["apply", "onboard", "emails", "offer", "activate", "retention", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); }
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
   else if (command === "emails") await emails();
   else if (command === "offer") await offer();
   else if (command === "activate") await activate();
+  else if (command === "retention") await retention();
+  else if (command === "e2e") {
+    const lab = readLab();
+    const env = { ...process.env, E2E_SUPABASE_URL: lab.apiUrl, E2E_SUPABASE_ANON_KEY: lab.anonKey, E2E_SUPABASE_SERVICE_KEY: lab.serviceKey, E2E_MAIL_URL: lab.mailUrl,
+      E2E_DB_CONTAINER: DB_CONTAINER, E2E_POSTMARK_MOCK_URL: `http://127.0.0.1:${MOCK_POSTMARK_PORT}` };
+    const pw = await new Promise((resolve) => { const child = spawn(process.platform === "win32" ? "npx.cmd" : "npx", ["playwright", "test", ...process.argv.slice(3)], { cwd: REPO, env, stdio: "inherit", shell: process.platform === "win32" }); child.on("exit", (code) => resolve(code ?? 1)); });
+    if (pw !== 0) failures++;
+  }
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | e2e | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
   await stopMockPostmark(); await stopMockReader();

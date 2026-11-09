@@ -26,6 +26,8 @@ export default defineConfig({
       VITE_PUBLIC_SUPABASE_URL: E2E_API_URL,
       VITE_PUBLIC_SUPABASE_ANON_KEY: E2E_ANON_KEY,
       VITE_PUBLIC_SITE_URL: `http://127.0.0.1:${E2E_PORT}`,
+      // The staff form's security check renders the local mock (the functions accept "mock-ok" only against a local stack).
+      VITE_CAPTCHA_SITE_KEY: "local-mock",
     },
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],

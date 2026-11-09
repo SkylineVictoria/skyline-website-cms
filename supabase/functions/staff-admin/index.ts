@@ -9,6 +9,7 @@ import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail } from "
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
+import { authorizeWorker } from "../_shared/notification/delivery.ts";
 import * as PdfLib from "npm:pdf-lib@1.17.1";
 import { MAX_OFFER_BYTES, inspectOfferPdf } from "../_shared/offer-pdf.ts";
 
@@ -18,6 +19,8 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUB
 const env: Record<string, string> = { SUPABASE_URL };
 for (const name of HR_MAIL_ENV) env[name] = Deno.env.get(name) ?? "";
 const config = readHrMailConfig(env);
+const retentionRaw = Number(Deno.env.get("EF_HR_RETENTION_MONTHS") ?? "6");
+const RETENTION_MONTHS = Number.isInteger(retentionRaw) && retentionRaw >= 1 && retentionRaw <= 120 ? retentionRaw : 6;
 const provider = selectHrMailProvider(env);
 
 const headers = {
@@ -76,6 +79,10 @@ Deno.serve(async (req) => {
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
     sha256: async (bytes) => hex(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
     newId: () => crypto.randomUUID(),
+    // The retention job: a verified service_role token of this project (same check as the notification worker).
+    isWorker: body.action === "purge" && (await authorizeWorker(req.headers.get("Authorization"), SUPABASE_URL)) === 200,
+    retentionMonths: RETENTION_MONTHS,
+    purgeFiles: async (paths) => { const { error } = await bucket.remove(paths); return { error: error ? error.message : null }; },
     findLogin: async (email) => {
       const found = await findAuthUserByEmail(service, email.toLowerCase());
       if (found.error) return { login: null, error: found.error };

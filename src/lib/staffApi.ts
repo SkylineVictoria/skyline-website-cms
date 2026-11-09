@@ -104,7 +104,7 @@ export interface StaffOffer {
 }
 export interface StaffEmail { id: number; kind: string; audience: "applicant" | "admin"; state: "queued" | "sending" | "sent" | "failed" | "skipped"; createdAt: string; sentAt: string | null; error: string | null; attempts: number; retryable: boolean }
 export interface StaffApplicationDetail extends StaffApplicationRow {
-  resume_path: string | null; resume_filename: string | null; resume_mime: string | null; resume_size: number | null; joining_date: string | null; account_invited_at: string | null;
+  resume_path: string | null; resume_filename: string | null; resume_mime: string | null; resume_size: number | null; joining_date: string | null; account_invited_at: string | null; files_purged_at: string | null;
 }
 export interface StaffDetail {
   profile: StaffProfile; application: StaffApplicationDetail; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;

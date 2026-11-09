@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(232);
+select plan(235);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -327,6 +327,9 @@ update hr.staff_profiles set status_changed_at = now() - interval '7 months' whe
 select is(public.hr_svc_retention_due(6)->0->'paths'->>0, pg_temp.v('w1') || '/resume/w.pdf', 'a rejection older than the retention period lists its files');
 select is(public.hr_svc_retention_mark(pg_temp.v('r1'), 6), false, 'a recent or reopened application is never marked');
 select is(public.hr_svc_retention_mark(pg_temp.v('w1'), 6), true, 'the purge is recorded');
+select is((select active::text || '/' || schedule || '/' || command from cron.job where jobname = 'hr-retention-purge'), 'false/15 3 * * */select public.hr_retention_dispatch();', 'the daily retention job exists and is inactive until the owner turns it on');
+select is(public.hr_retention_dispatch(), null::bigint, 'without the Vault secrets the dispatcher makes no call');
+select is(has_function_privilege('authenticated', 'public.hr_retention_dispatch()', 'execute'), false, 'nobody but postgres runs the dispatcher');
 select is(jsonb_array_length(public.hr_svc_retention_due(6)), 0, 'a purged application is not listed again');
 select throws_ok($$select public.hr_svc_retention_due(0)$$, '22023', 'Retention must be 1 to 120 months.', 'the retention period is bounded');
 

@@ -1013,3 +1013,27 @@ test("activation follow-ups: existing login gets HR's 'access ready' email (no l
   assert.equal((await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps)).status, 400, "nothing waiting: nothing sent");
   assert.ok(!run.names().includes("invite"));
 });
+
+test("retention purge: only the scheduled job may run it; files are deleted before the application is marked; a storage failure is retried next run", async () => {
+  const due = { hr_svc_retention_due: { data: [{ profileId: PROFILE, paths: [`${PROFILE}/resume/r.pdf`, `${PROFILE}/passport/p.pdf`, "someone-else/x.pdf"] }] }, hr_svc_retention_mark: { data: true } };
+  const removed: string[][] = [];
+  const make = (extra: Record<string, unknown>) => { const run = adminDeps(); const svc: Array<[string, unknown]> = [];
+    Object.assign(run.deps, { serviceRpc: async (name: string, args: Record<string, unknown>) => { svc.push([name, args]); const a = (due as Record<string, { data: unknown }>)[name]; return { data: a?.data ?? null, error: null }; },
+      retentionMonths: 6, purgeFiles: async (paths: string[]) => { removed.push(paths); return { error: null }; } }, extra); return { run, svc }; };
+  let { run, svc } = make({ isWorker: false });
+  assert.equal((await staffAdmin.handleAdmin({ action: "purge" }, run.deps)).status, 403, "an admin or anyone else cannot purge");
+  assert.equal(svc.length, 0);
+  ({ run, svc } = make({ isWorker: true }));
+  const r = await staffAdmin.handleAdmin({ action: "purge" }, run.deps);
+  assert.deepEqual([r.status, r.body.applications, r.body.files], [200, 1, 2]);
+  assert.deepEqual(removed.at(-1), [`${PROFILE}/resume/r.pdf`, `${PROFILE}/passport/p.pdf`], "only that person's own folder");
+  assert.deepEqual(svc.map(([n]) => n), ["hr_svc_retention_due", "hr_svc_retention_mark"], "files first, then the mark");
+  ({ run, svc } = make({ isWorker: true, purgeFiles: async () => ({ error: "storage down" }) }));
+  const failed = await staffAdmin.handleAdmin({ action: "purge" }, run.deps);
+  assert.deepEqual([failed.status, failed.body.failed], [207, 1]);
+  assert.ok(!svc.some(([n]) => n === "hr_svc_retention_mark"), "not marked: the next run tries again");
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  assert.ok(sql.includes("cron.schedule('hr-retention-purge', '15 3 * * *', 'select public.hr_retention_dispatch();')") && sql.includes("perform cron.alter_job(v_job, active := false)"), "a daily job, created inactive");
+  assert.ok(!/eyJ[A-Za-z0-9_-]{10,}/.test(sql), "no key in the migration (Vault only)");
+  assert.match(read("supabase/functions/staff-admin/index.ts"), /isWorker: body\.action === "purge" && \(await authorizeWorker\(/);
+});

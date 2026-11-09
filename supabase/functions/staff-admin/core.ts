@@ -14,7 +14,7 @@ import type { HrMailConfig } from "../_shared/hr-mail.ts";
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -37,6 +37,12 @@ export interface AdminDeps {
   findLogin(email: string): Promise<{ login: LoginInfo | null; error: string | null }>;
   /** Auth invite (Supabase "Invite user" template) with the password-setup link to redirectTo; returns the new or re-invited login. */
   inviteLogin(email: string, name: string, redirectTo: string): Promise<{ userId: string | null; error: string | null }>;
+  /** Retention (purge): true only for a verified service_role token of this project (the scheduled job), never a person. */
+  isWorker?: boolean;
+  /** EF_HR_RETENTION_MONTHS (1-120, default 6). */
+  retentionMonths?: number;
+  /** Deletes storage objects; resolves with an error text when the storage call failed (then nothing is marked). */
+  purgeFiles?(paths: string[]): Promise<{ error: string | null }>;
   /** The uploaded file (multipart offer_upload), or null. */
   file?: { name: string; bytes: Uint8Array } | null;
   /** pdf-lib check of an offer (load and modify in memory). */
@@ -67,7 +73,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
   const action = String(body.action ?? "");
   if (!(ACTIONS as readonly string[]).includes(action)) return { status: 400, body: { error: "Unknown action." } };
   const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
-  if (action !== "drain" && action !== "retry_email" && !profileId) return { status: 400, body: { error: "Choose an application." } };
+  if (action !== "drain" && action !== "retry_email" && action !== "purge" && !profileId) return { status: 400, body: { error: "Choose an application." } };
 
   // Makes a link (only its hash reaches the database through `rpc`), emails it inline, logs the outcome without the token, and
   // cancels that link at once when the email failed. Shared by document, re-upload and offer links.
@@ -203,6 +209,25 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (r.error) return fromDb(r.error);
       await deps.drain().catch(() => undefined);
       return { status: 200, body: { detail: r.data } };
+    }
+    case "purge": {
+      // Retention (HR-02h): files of applications rejected more than EF_HR_RETENTION_MONTHS ago are deleted from storage, then the
+      // application is marked files_purged_at (rows and metadata stay). Only the scheduled job (service_role) may run it. A storage
+      // failure leaves that application unmarked, so the next run tries again; a file already gone counts as deleted.
+      if (!deps.isWorker || !deps.purgeFiles) return { status: 403, body: { error: "Only the scheduled retention job can do this." } };
+      const months = deps.retentionMonths ?? 6;
+      const due = await deps.serviceRpc("hr_svc_retention_due", { p_months: months, p_limit: 50 });
+      if (due.error) return { status: 500, body: { error: "The retention list could not be read." } };
+      const totals = { months, applications: 0, files: 0, failed: 0 };
+      for (const item of (due.data as Array<{ profileId: string; paths: string[] }>) ?? []) {
+        const paths = (item.paths ?? []).filter((p) => typeof p === "string" && p.startsWith(`${item.profileId}/`));
+        const removed = paths.length ? await deps.purgeFiles(paths) : { error: null };
+        if (removed.error) { totals.failed++; continue; }
+        const marked = await deps.serviceRpc("hr_svc_retention_mark", { p_profile: item.profileId, p_months: months });
+        if (marked.error || marked.data !== true) { totals.failed++; continue; }
+        totals.applications++; totals.files += paths.length;
+      }
+      return { status: totals.failed ? 207 : 200, body: totals };
     }
     case "drain": {
       // Admin-only: proves the caller is an admin with a cheap admin read before sending anything.

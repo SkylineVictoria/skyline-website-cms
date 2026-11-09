@@ -44,6 +44,8 @@ export default function CareerDetailPage() {
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Employment type</dt><dd className="text-foreground-900">{EMPLOYMENT_TYPE_LABEL[job.employmentType]}</dd></div>
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Location</dt><dd className="text-foreground-900">{job.location}</dd></div>
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Salary</dt><dd className="text-foreground-900">{job.salary || "Not stated"}</dd></div>
+                  {job.department ? <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Department</dt><dd className="text-foreground-900">{job.department}</dd></div> : null}
+                  {job.vacancies ? <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Vacancies</dt><dd className="text-foreground-900">{job.vacancies}</dd></div> : null}
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Posted</dt><dd className="text-foreground-900">{new Date(job.postedAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</dd></div>
                 </dl>
                 {job.status === "open" ? (

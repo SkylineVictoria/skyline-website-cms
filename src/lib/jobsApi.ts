@@ -7,8 +7,9 @@ import type { StaffStatus } from "@/lib/staffStatus";
 
 export interface Job {
   id: string; title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus; postedAt: string; updatedAt: string;
+  department?: string; vacancies?: number; publishedAt?: string | null;
 }
-export interface AdminJob extends Job { applied: number; hired: number; declined: number }
+export interface AdminJob extends Job { candidateCount?: number; applied: number; hired: number; declined: number }
 /** One row of the Applicants tab: the application with the person it belongs to. */
 export interface JobApplicationRow {
   id: string; jobId: string; jobTitle: string; employmentType: EmploymentType; location: string; profileId: string; name: string; email: string; phone: string;
@@ -52,4 +53,9 @@ export async function adminSaveJob(id: string | null, form: JobForm): Promise<Jo
   const { data, error } = await supabase.rpc("hr_admin_job_save", { p_id: id, p_job: { ...form, title: form.title.trim(), description: form.description.trim(), salary: form.salary.trim(), location: form.location.trim() } });
   if (error) fail(error, "The job could not be saved.");
   return data as Job;
+}
+
+export async function adminSetJobStatus(id: string, status: JobStatus): Promise<void> {
+  const { error } = await supabase.rpc("hr_admin_job_save", { p_id: id, p_job: { status } });
+  if (error) fail(error, "The job status could not be updated.");
 }

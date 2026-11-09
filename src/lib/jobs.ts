@@ -5,12 +5,12 @@ export type EmploymentType = "full_time" | "part_time";
 export const EMPLOYMENT_TYPES: readonly EmploymentType[] = ["full_time", "part_time"];
 export const EMPLOYMENT_TYPE_LABEL: Record<EmploymentType, string> = { full_time: "Full time", part_time: "Part time" };
 
-export type JobStatus = "open" | "closed";
-export type JobApplicationStatus = "applied" | "hired" | "declined";
-export const JOB_APPLICATION_STATUS_LABEL: Record<JobApplicationStatus, string> = { applied: "Applied", hired: "Hired", declined: "Declined" };
+export type JobStatus = "draft" | "open" | "closed";
+export type JobApplicationStatus = "applied" | "hired" | "declined" | "withdrawn";
+export const JOB_APPLICATION_STATUS_LABEL: Record<JobApplicationStatus, string> = { applied: "Applied", hired: "Hired", declined: "Rejected", withdrawn: "Withdrawn" };
 
-export interface JobForm { title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus }
-export const EMPTY_JOB: JobForm = { title: "", description: "", employmentType: "full_time", salary: "", location: "", status: "open" };
+export interface JobForm { title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus; department?: string; vacancies?: number }
+export const EMPTY_JOB: JobForm = { title: "", description: "", employmentType: "full_time", salary: "", location: "", status: "draft", department: "", vacancies: 1 };
 
 // eslint-disable-next-line no-control-regex -- control characters are never valid in a job post
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
@@ -26,7 +26,9 @@ export function jobProblems(form: JobForm): Partial<Record<keyof JobForm, string
   if (form.salary.trim().length > 120 || CONTROL.test(form.salary)) problems.salary = "The salary must be 120 characters or fewer.";
   const location = form.location.trim();
   if (!location || location.length > 150 || CONTROL.test(location)) problems.location = "Enter the job location.";
-  if (form.status !== "open" && form.status !== "closed") problems.status = "A job is open or closed.";
+  if (!["draft", "open", "closed"].includes(form.status)) problems.status = "Choose Draft, Open or Closed.";
+  if ((form.department?.trim().length ?? 0) > 120) problems.department = "The department must be 120 characters or fewer.";
+  if (form.vacancies !== undefined && (!Number.isInteger(form.vacancies) || form.vacancies < 1 || form.vacancies > 10000)) problems.vacancies = "Enter a vacancy count between 1 and 10,000.";
   return problems;
 }
 

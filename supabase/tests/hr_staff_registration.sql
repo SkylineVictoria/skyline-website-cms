@@ -552,7 +552,7 @@ select is((select count(*)::int from pg_trigger where tgname in ('employment_on_
 select throws_ok($$update hr.staff_profiles set status = 'job_applied' where id = pg_temp.v('jc1')$$, '23514', null, 'job_applied is no longer a status');
 select is((select count(*)::int from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name in ('resume_document_id','cover_letter_document_id')), 0,
  'job applications no longer point at staff documents');
-select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled), 'staff_candidates,agency_staff,agency_jobs', 'the Staff group holds Candidates, Employees and Jobs');
+select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled), 'staff_candidates,agency_staff,agency_jobs,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero', 'the Staff group holds Candidates, Employees, Jobs and the HRMS pages');
 select is((select count(*)::int from public.admin_menu_items where id in ('agency_candidates', 'agency_employees') and is_enabled), 0, 'the Master Data copies of Candidates and Employees are disabled');
 
 -- ---------------------------------------------------------------- privileges

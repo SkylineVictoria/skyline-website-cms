@@ -218,6 +218,12 @@ Owner decisions (2026-10-27), recorded for P08-04 to P08-07:
   - Acceptance: `supabase db reset` on a fresh local stack replays every migration with no lab shims; all `supabase/tests` suites run there; hosted is unchanged (the migration only creates what is absent).
   - Tests: fresh-stack replay + all SQL suites; a read-only hosted check that every guarded object already exists.
 
+## HRMS-01 Victoria HRMS: time & attendance, pay schedules, leave, public holidays, Xero export (owner brief 2026-11-10, overnight build)
+
+- HRMS-01 Time & attendance, pay schedules (fortnightly + monthly), leave (NES/Victoria, versioned policies, ledger balances), Victorian public holidays, timesheet approvals and the Xero Payroll AU export; admin pages under Staff and My HR sections; xero-push typed stub (never activated). status: IN_PROGRESS (2026-11-10). Deps: HR-02j (released 2026-11-10).
+  - Scope and decisions: SUPABASE.md "HRMS (Victoria)". Migrations 20261110120000..150000 (additive). Tests: supabase/tests/hrms_time_leave.sql, e2e/hrms.spec.ts (lab only).
+  - Acceptance: fresh lab replay of every migration; hrms_time_leave.sql and hr_staff_registration.sql green; Playwright (lab) punches, approval, lock, fortnightly and monthly export, leave on the timesheet, holiday on calendar and timesheet, sidebar and My HR sections; type-check, lint, build, deno check; then the HRMS release order.
+
 ## HR-02 Staff enrolment v2 (plan approved 2026-11-09; local only, nothing hosted)
 
 Replaces the password sign-up of 20261110090000 (LOCAL, never applied hosted, rewritten in place). 20261105180000/190000/200000 are applied hosted and stay untouched; every change to them is made by 20261110090000. Kept: hr schema, categories and expiry rules, per-document review, DocumentWizard, Employees page and tabs, append-only status log, sidebar move.

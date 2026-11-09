@@ -824,8 +824,27 @@ end $fn$;
 -- (ids, statuses, timestamps, expiry dates, review states, the status log). Names, email, mobile, date of birth, address, emergency
 -- contact, file names, values read from documents, notes, signer details and email addresses/payloads are cleared.
 create or replace function hr.staff_anonymise(p_profile uuid) returns void
-language plpgsql security definer set search_path = hr, pg_temp as $fn$
+language plpgsql security definer set search_path = hr, public, auth, pg_temp as $fn$
+declare v_login uuid;
 begin
+ -- The login goes too, but ONLY when it is the staff activation invite's own login that was never used: invited by staff-admin
+ -- (account_type staff), never signed in, and no other role (no CMS user, no portal profile = student/agent, no other staff record).
+ -- Anything else keeps its login; the record is just unlinked. Same transaction as the rest; a delete that something else
+ -- still references is skipped, never forced.
+ select p.auth_user_id into v_login from hr.staff_profiles p where p.id = p_profile;
+ if v_login is not null then
+  update hr.staff_profiles set auth_user_id = null where id = p_profile;
+  if exists (select 1 from auth.users u where u.id = v_login and u.invited_at is not null and u.last_sign_in_at is null
+       and coalesce(u.raw_user_meta_data->>'account_type', '') = 'staff')
+     and not exists (select 1 from public.cms_users c where c.auth_user_id = v_login)
+     and not exists (select 1 from public.portal_profiles pp where pp.auth_user_id = v_login)
+     and not exists (select 1 from hr.staff_profiles o where o.auth_user_id = v_login) then
+   begin
+    delete from auth.users where id = v_login;
+   exception when foreign_key_violation then null;
+   end;
+  end if;
+ end if;
  update hr.staff_profiles set first_name = '', middle_name = '', last_name = '', date_of_birth = null, email = null, phone_e164 = null,
   address_street = '', address_line2 = '', address_suburb = '', address_state = '', address_postcode = '', address_country = '',
   emergency_name = '', emergency_relationship = '', emergency_phone_e164 = null, is_australian_citizen = null

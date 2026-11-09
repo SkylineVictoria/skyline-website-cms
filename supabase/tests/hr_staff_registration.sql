@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(241);
+select plan(244);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -334,6 +334,31 @@ select is((select count(*)::int from hr.staff_status_events where profile_id = p
 select is((select coalesce(resume_path, 'null') || '/' || coalesce(resume_filename, 'null') from hr.staff_applications where profile_id = pg_temp.v('w1')), 'null/null', 'the resume reference is cleared');
 select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('w1') and (to_email not in ('removed') or payload <> '{}'::jsonb) and audience = 'applicant'), 0, 'email addresses and payloads are cleared');
 select throws_ok($$select public.hr_staff_reopen(pg_temp.v('w1'), 'again')$$, '23514', null, 'a purged application cannot be reopened');
+-- The login: deleted only when it is the never-used staff activation invite with no other role.
+insert into auth.users(id, email, email_confirmed_at, invited_at, last_sign_in_at, raw_user_meta_data, aud, role) values
+ ('a0000000-0000-0000-0000-0000000000d1', 'purge.unused@example.test', null, now() - interval '8 months', null, '{"account_type":"staff"}', 'authenticated', 'authenticated'),
+ ('a0000000-0000-0000-0000-0000000000d2', 'purge.used@example.test', now(), now() - interval '8 months', now() - interval '7 months', '{"account_type":"staff"}', 'authenticated', 'authenticated'),
+ ('a0000000-0000-0000-0000-0000000000d3', 'purge.cms@example.test', null, now() - interval '8 months', null, '{"account_type":"staff"}', 'authenticated', 'authenticated'),
+ ('a0000000-0000-0000-0000-0000000000d4', 'purge.agent@example.test', null, now() - interval '8 months', null, '{}', 'authenticated', 'authenticated');
+insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values
+ ('hr-test-purge-cms', 'Purge Cms', 'purge.cms@example.test', 'Editor', 'Inactive', 'a0000000-0000-0000-0000-0000000000d3', false);
+do $k$
+declare k text; n int := 0;
+begin
+ foreach k in array array['d1','d2','d3','d4'] loop
+  n := n + 1;
+  insert into pg_temp.t select 'k' || k, public.hr_svc_apply('Purge', k, 'purge.' || k || '@example.test', '0400 000 9' || lpad(n::text, 2, '0'))->>'profileId';
+  update hr.staff_profiles set auth_user_id = ('a0000000-0000-0000-0000-0000000000' || k)::uuid where id = pg_temp.v('k' || k);
+  perform set_config('hr.actor_kind', 'system', true);
+  update hr.staff_profiles set status = 'rejected' where id = pg_temp.v('k' || k);
+  update hr.staff_profiles set status_changed_at = now() - interval '7 months' where id = pg_temp.v('k' || k);
+  perform public.hr_svc_retention_mark(pg_temp.v('k' || k), 6);
+ end loop;
+end $k$;
+select is((select count(*)::int from auth.users where id = 'a0000000-0000-0000-0000-0000000000d1'), 0, 'the never-used staff invite login is deleted with the purge');
+select is((select count(*)::int from auth.users where id in ('a0000000-0000-0000-0000-0000000000d2','a0000000-0000-0000-0000-0000000000d3','a0000000-0000-0000-0000-0000000000d4')), 3,
+ 'a login that signed in, has a CMS role, or was not a staff invite is kept');
+select is((select count(*)::int from hr.staff_profiles where id in (pg_temp.v('kd1'), pg_temp.v('kd2'), pg_temp.v('kd3'), pg_temp.v('kd4')) and auth_user_id is null and email is null), 4, 'every purged record is unlinked and cleared');
 select is((select active::text || '/' || schedule || '/' || command from cron.job where jobname = 'hr-retention-purge'), 'false/15 3 * * */select public.hr_retention_dispatch();', 'the daily retention job exists and is inactive until the owner turns it on');
 select is(public.hr_retention_dispatch(), null::bigint, 'without the Vault secrets the dispatcher makes no call');
 select is(has_function_privilege('authenticated', 'public.hr_retention_dispatch()', 'execute'), false, 'nobody but postgres runs the dispatcher');

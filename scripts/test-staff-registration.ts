@@ -49,7 +49,7 @@ test("status transitions allow exactly the agreed moves", () => {
   const allowed: Array<[string, string]> = [["applied", "invited"], ["applied", "rejected"], ["invited", "documents_submitted"], ["invited", "rejected"],
     ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
     ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"], ["offer_signed", "active"], ["offer_signed", "rejected"],
-    ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"]];
+    ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"], ["inactive", "applied"]];
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), allowed.some(([a, b]) => a === from && b === to), `${from} -> ${to}`);
   }
@@ -61,7 +61,7 @@ test("the TypeScript transition table matches the database function and the stat
   const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
   const body = sql.slice(sql.indexOf("function hr.staff_transition_allowed"), sql.indexOf("function hr.staff_status_guard"));
   const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 15);
+  assert.equal(pairs.length, 16);
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
     assert.equal(status.canTransition(from, to), pairs.some(([a, b]) => a === from && b === to), `database ${from} -> ${to}`);
   }

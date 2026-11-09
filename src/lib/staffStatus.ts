@@ -23,7 +23,7 @@ const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
   ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
   ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"],
   ["offer_signed", "active"], ["offer_signed", "rejected"],
-  ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"],
+  ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"], ["inactive", "applied"],
 ];
 
 export function canTransition(from: StaffStatus, to: StaffStatus): boolean {

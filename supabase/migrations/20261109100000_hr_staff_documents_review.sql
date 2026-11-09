@@ -8,7 +8,8 @@
 --   offer_signed        the applicant signed it on the page (typed name, consent, time, IP, user agent, signed PDF + sha256).
 --   active              joining date + role: an existing confirmed auth account gets the role at once; otherwise Auth
 --                       invites the person and hr_staff_claim_account() activates them after they set a password.
---   rejected / inactive as before; rejected > applied is a re-application or an admin reopen.
+--   rejected / inactive as before; rejected > applied is a re-application or an admin reopen; inactive > applied is a former
+--                       staff member applying again.
 -- Applicants never call SQL directly: the token-checked Edge Functions call the service-role-only hr_svc_* functions with the
 -- token HASH. Admin functions keep hr.require_admin(). Documents keep the per-document review (pending/approved/rejected),
 -- categories and expiry rules. Files: staff-documents/{profile id}/{doc slug|resume|offer}/{file}.
@@ -91,7 +92,7 @@ language sql immutable parallel safe set search_path = pg_catalog, pg_temp as $f
   ('documents_submitted','invited'), ('documents_submitted','offer_sent'), ('documents_submitted','rejected'),
   ('offer_sent','offer_signed'), ('offer_sent','documents_submitted'), ('offer_sent','rejected'),
   ('offer_signed','active'), ('offer_signed','rejected'),
-  ('active','inactive'), ('inactive','active'), ('rejected','applied'));
+  ('active','inactive'), ('inactive','active'), ('rejected','applied'), ('inactive','applied'));
 $fn$;
 
 create or replace function hr.staff_status_guard() returns trigger
@@ -415,9 +416,11 @@ end $fn$;
 revoke all on function hr.staff_applicant_view(hr.staff_invites) from public, anon, authenticated;
 
 -- ------------------------------------------------------------------ public apply (service role, called by staff-register)
--- Step 1: the person. A new email gets a new profile (status applied). The same email with an earlier REJECTED application, or
--- an application still waiting for its resume, is reused (rejected > applied). Anything else answers {ok:false} with one neutral
--- reason. Existing students, agents and portal users MAY apply (they keep their login; activation grants the role to it).
+-- Step 1: the person. A new email gets a new profile (status applied). Only an OPEN application (applied with a resume,
+-- invited, documents_submitted, offer_sent, offer_signed) or an active staff member counts as a duplicate. A CLOSED one
+-- (rejected or inactive) with the same email is reused for the new application (rejected/inactive > applied; any live role
+-- is revoked), as is an application still waiting for its resume. A duplicate answers {ok:false, reason:'exists'}. The mobile
+-- number is unique across all profiles, so a number held by ANOTHER person's profile (open or closed) also answers 'exists'. Existing students, agents and portal users MAY apply (they keep their login; activation grants the role to it).
 create or replace function public.hr_svc_apply(p_first_name text, p_last_name text, p_email text, p_phone text) returns jsonb
 language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
 declare v_email text := hr.email_key(p_email); v_phone text := hr.phone_e164(p_phone); p hr.staff_profiles; a hr.staff_applications;
@@ -427,11 +430,12 @@ begin
  if v_phone is null then return jsonb_build_object('ok', false, 'reason', 'invalid_phone'); end if;
  if v_first = '' or v_last = '' or char_length(v_first) > 100 or char_length(v_last) > 100 or (v_first || v_last) ~ '[[:cntrl:]<>]' then
   return jsonb_build_object('ok', false, 'reason', 'invalid_name'); end if;
- if exists (select 1 from public.cms_users c where hr.email_key(c.email) = v_email) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
+ -- An ACTIVE admin console user cannot apply; a deactivated former Admin (cms_users Inactive) can.
+ if exists (select 1 from public.cms_users c where hr.email_key(c.email) = v_email and c.status = 'Active') then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
  select * into p from hr.staff_profiles where email = v_email for update;
  if found then
   select * into a from hr.staff_applications where profile_id = p.id;
-  if not (p.status = 'rejected' or (p.status = 'applied' and a.resume_path is null)) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
+  if not (p.status in ('rejected','inactive') or (p.status = 'applied' and a.resume_path is null)) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
  end if;
  if exists (select 1 from hr.staff_profiles s where s.phone_e164 = v_phone and s.id is distinct from p.id) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
  perform set_config('hr.actor_kind', 'applicant', true); perform set_config('hr.note', 'Applied', true);
@@ -443,6 +447,7 @@ begin
   update hr.staff_applications set resume_path = null, resume_filename = null, resume_mime = null, resume_size = null, resume_uploaded_at = null,
    submitted_at = null, reviewed_by = null, reviewed_at = null, review_note = '', joining_date = null, account_invited_at = null where profile_id = p.id;
   update hr.staff_documents set is_current = false where profile_id = p.id and is_current;
+  update hr.staff_roles set revoked_at = now() where profile_id = p.id and revoked_at is null;
  end if;
  return jsonb_build_object('ok', true, 'profileId', p.id);
 end $fn$;

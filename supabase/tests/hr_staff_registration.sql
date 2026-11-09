@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(179);
+select plan(186);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -285,6 +285,19 @@ set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select lives_ok($$select public.hr_admin_staff_reject(pg_temp.v('r1'), 'Still not suitable')$$, 'reject again');
 select is(public.hr_staff_reopen(pg_temp.v('r1'), 'Reconsidered')->'profile'->>'status', 'applied', 'an admin reopens a rejected application');
 reset role;
+
+-- duplicates: only an OPEN application (or an active staff member) counts; a closed one (rejected or inactive) may apply again
+select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '0400 000 101')->>'reason', 'exists', 'an open application (offer signed) is a duplicate');
+select is(public.hr_svc_apply('Wes', 'Again', 'wes@example.test', '0400 000 301')->>'profileId', pg_temp.v('w1')::text, 'a rejected application is reopened by applying again');
+update hr.staff_profiles set status = 'rejected' where id = pg_temp.v('w1');
+select is(public.hr_svc_apply('Sam', 'Student', 'student.login@example.test', '0400 000 501')->>'reason', 'exists', 'an active staff member is a duplicate');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_deactivate(pg_temp.v('s1'), 'Left again')$$, 'deactivate before re-applying');
+reset role;
+select is(public.hr_svc_apply('Sam', 'Student', 'STUDENT.login@example.test', '0400 000 501')->>'profileId', pg_temp.v('s1')::text, 'an inactive former staff member may apply again (same record)');
+select is((select status || '/' || (select count(*) from hr.staff_roles r where r.profile_id = p.id and r.revoked_at is null) from hr.staff_profiles p where p.id = pg_temp.v('s1')), 'applied/0', 'inactive -> applied, and the old role is revoked');
+select is(public.hr_svc_apply('Other', 'Person', 'other.person@example.test', '0400 000 501')->>'reason', 'exists', 'another person''s number is still a duplicate');
 
 -- ---------------------------------------------------------------- retention
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('w1') || '/resume/w.pdf');

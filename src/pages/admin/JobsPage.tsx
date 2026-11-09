@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
 import { HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
-import { HR_PAGE_SIZE, hrDate } from "@/lib/recruitmentApi";
+import { HR_PAGE_SIZE, hrDate, listCandidatesByJob, type CandidateRow } from "@/lib/recruitmentApi";
 import WizardSteps from "@/pages/admin/components/WizardSteps";
 import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, jobPath, jobProblems, type JobForm } from "@/lib/jobs";
 import { adminListJobs, adminSaveJob, adminSetJobStatus, type AdminJob } from "@/lib/jobsApi";
@@ -19,7 +20,9 @@ const Alert = ({ text }: { text: string }) => (text ? <p role="alert" className=
 const statusLabel = { draft: "Draft", open: "Open", closed: "Closed" } as const;
 
 export default function JobsPage() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const treeView = params.get("view") === "tree";
+  const [byJob, setByJob] = useState<Map<string, CandidateRow[]> | null>(null);
   const [jobs, setJobs] = useState<AdminJob[] | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -38,6 +41,14 @@ export default function JobsPage() {
     catch (e) { setError((e as Error).message); }
   }, []);
   useEffect(() => { if (params.get("tab") !== "applicants") void load(); }, [load, params]);
+  // Tree view: every candidate of every job, loaded when the tree is shown (and again after the jobs reload).
+  useEffect(() => {
+    if (!treeView || !jobs) return;
+    let current = true;
+    setByJob(null);
+    void listCandidatesByJob(jobs.map((j) => j.id)).then((m) => { if (current) setByJob(m); }, (e: Error) => { if (current) setError(e.message); });
+    return () => { current = false; };
+  }, [treeView, jobs]);
 
   const open = (job?: AdminJob) => {
     setView(null);
@@ -69,6 +80,8 @@ export default function JobsPage() {
   return <div>
     <PageHeader breadcrumb="Staff" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates (Staff > Candidates)."
       actions={<Button onClick={() => open()} icon="ri-add-line" data-testid="job-new">Add Job</Button>} />
+    <SectionTabs tabs={[{ id: "list", label: "List", icon: "ri-list-check" }, { id: "tree", label: "Tree", icon: "ri-node-tree" }]}
+      active={treeView ? "tree" : "list"} onChange={(id) => setParams(id === "tree" ? { view: "tree" } : {})} />
     <HrNotice error>{error}</HrNotice><HrNotice>{notice}</HrNotice>
     <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
       <TextInput aria-label="Search jobs" placeholder="Search title, department or location" value={search} onChange={(e) => { setSearch(e.target.value); setOffset(0); }} />
@@ -82,8 +95,11 @@ export default function JobsPage() {
       </Select>
     </div>
     {!jobs && !error ? <p role="status">Loading jobs…</p> : null}
+    {treeView && jobs && rows.length && !byJob && !error ? <p role="status">Loading candidates…</p> : null}
+    {treeView && jobs && rows.length && byJob ? <RecruitmentTree byDepartment jobs={rows} byJob={byJob}
+      emptyText={{ title: "No matching jobs", description: "Add a job or adjust the current filters." }} /> : null}
     {jobs && !rows.length ? <EmptyState icon="ri-briefcase-line" title="No matching jobs" description="Add a job or adjust the current filters." /> : null}
-    {rows.length ? <Card className="data-table-frame">
+    {!treeView && rows.length ? <Card className="data-table-frame">
       <table className="data-table w-full text-left text-sm" data-testid="jobs-table">
         <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
           {["Job title", "Department", "Location", "Vacancies", "Candidates", "Status", "Actions"].map((heading) => <th className="px-4 py-3" key={heading}>{heading}</th>)}
@@ -101,7 +117,7 @@ export default function JobsPage() {
         </tr>)}</tbody>
       </table>
     </Card> : null}
-    <HrPager offset={pageOffset} total={rows.length} onChange={setOffset} />
+    {!treeView ? <HrPager offset={pageOffset} total={rows.length} onChange={setOffset} /> : null}
     {view ? <Modal open title={view.title} onClose={() => setView(null)} footer={<><Button variant="outline" onClick={() => setView(null)}>Close</Button><Button onClick={() => open(view)}>Edit Job</Button></>}>
       <dl className="grid gap-3 sm:grid-cols-2">
         <HrValue label="Status">{statusLabel[view.status]}</HrValue><HrValue label="Employment type">{EMPLOYMENT_TYPE_LABEL[view.employmentType]}</HrValue>

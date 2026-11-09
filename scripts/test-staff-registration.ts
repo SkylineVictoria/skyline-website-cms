@@ -1171,3 +1171,26 @@ test("org chart: the tree, cycles, who can manage whom and search", async () => 
   assert.ok(sql.includes("with recursive chain") && sql.includes("cannot be their own manager") && sql.includes("Choose an active employee as the manager."), "the database refuses cycles, self-management and inactive managers");
   assert.ok(read("src/router/config.tsx").includes('path: "staff/employees/org-chart"'), "the org chart is routed under Employees");
 });
+
+test("jobs and candidates tree: department > job > stage > candidate, and search", async () => {
+  const tree = await load.import<typeof import("../src/lib/recruitmentTree.ts")>("../src/lib/recruitmentTree.ts");
+  type J = import("../src/lib/jobsApi.ts").AdminJob;
+  type C = import("../src/lib/recruitmentApi.ts").CandidateRow;
+  const job = (id: string, title: string, department = ""): J =>
+    ({ id, title, department, description: "", employmentType: "full_time", salary: "", location: "Melbourne", status: "open", postedAt: "", updatedAt: "", applied: 0, hired: 0, declined: 0 });
+  const cand = (id: string, firstName: string, status: C["status"], stage: C["stage"] = "screening"): C =>
+    ({ id, profileId: `p-${id}`, jobTitle: "", source: "careers", appliedAt: "2026-11-01T00:00:00Z", status, stage, firstName, lastName: "", email: `${id}@example.test`, phone: "" });
+  const jobs = [job("t", "Trainer", "Education"), job("a", "Admissions Officer", "Admissions"), job("c", "Cleaner")];
+  const byJob = new Map([["t", [cand("1", "Zoe", "applied", "interview"), cand("2", "Amy", "applied", "interview"), cand("3", "Bob", "hired", "selected"), cand("4", "Cy", "declined")]], ["a", []]]);
+  const depts = tree.buildDepartmentTree(jobs, byJob);
+  assert.deepEqual(depts.map((d) => d.name), ["Admissions", "Education", "No department"], "departments A-Z, no department last");
+  const trainer = depts[1].jobs[0];
+  assert.deepEqual(trainer.stages.map((s) => s.key), ["interview", "hired", "declined"], "pipeline order, empty stages left out");
+  assert.deepEqual(trainer.stages[0].candidates.map((c) => c.firstName), ["Amy", "Zoe"], "candidates sorted by name");
+  assert.equal(trainer.total, 4); assert.equal(trainer.inProgress, 2);
+  assert.equal(tree.treeStage(cand("x", "X", "withdrawn", "interview")), "withdrawn", "a closed application sits under how it closed");
+  assert.equal(tree.jobBranchMatches(trainer, "zoe"), true, "a candidate match keeps the job");
+  assert.equal(tree.jobBranchMatches(trainer, "education"), true);
+  assert.equal(tree.jobBranchMatches(depts[0].jobs[0], "zoe"), false);
+  assert.ok(read("src/pages/admin/JobsPage.tsx").includes("<RecruitmentTree byDepartment") && read("src/pages/admin/CandidatesPage.tsx").includes("<RecruitmentTree"), "both pages offer the tree view");
+});

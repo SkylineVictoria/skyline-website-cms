@@ -20,9 +20,15 @@ export interface StaffDocument {
 /** hr.staff_doc_summary: required document types, how many have a file, how many are fully approved, any expiring within 30 days. */
 export interface StaffDocSummary { required: number; uploaded: number; approved: number; rejected: number; expiringSoon: boolean; nextExpiry: string | null }
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
-/** hr_staff_me: the signed-in person's own staff record (documents and the signed offer once they are active). */
+/** hr.employment (HR-02j): the employment details; the joining date is set at activation. */
+export interface StaffEmployment {
+  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | null; joiningDate: string | null;
+  managerId: string | null; managerName: string | null; workLocation: string; candidateId: string | null; since: string;
+}
+/** hr_staff_me: the signed-in person's own staff record (documents, employment and the signed offer once they are active). */
 export interface MyStaff {
   profile: StaffProfile; status: StaffStatus; role: StaffRole | null; joiningDate: string | null; documents: StaffDocument[];
+  employment: StaffEmployment | null; jobApplications: StaffJobApplication[];
   signedOffer: { id: string; signedAt: string; signedPath: string; filename: string } | null;
 }
 
@@ -103,10 +109,12 @@ export async function staffAccessState(): Promise<StaffStatus | "none"> {
 export interface StaffListRow {
   id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null;
   submittedAt: string | null; updatedAt: string; docs: StaffDocSummary; hasResume?: boolean; inviteExpiresAt?: string | null; emailFailed?: boolean; jobTitle?: string | null;
+  department?: string; joiningDate?: string | null;
 }
-/** A Careers application on the person's record (HR-02i). */
+/** A job application on the person's record (HR-02i/j): Careers or a manual candidate, with its recruitment stage. */
 export interface StaffJobApplication {
-  id: string; jobId: string; jobTitle: string; jobStatus: "open" | "closed"; status: "applied" | "hired" | "declined"; appliedAt: string; decidedAt: string | null;
+  id: string; jobId: string; jobTitle: string; jobStatus: "draft" | "open" | "closed"; status: "applied" | "hired" | "declined" | "withdrawn";
+  stage: "screening" | "shortlisted" | "interview" | "selected"; source: "careers" | "manual"; appliedAt: string; decidedAt: string | null; decisionNote: string;
   coverLetter: string; coverLetterFile: { filename: string; storagePath: string; mimeType: string | null } | null;
 }
 export interface StaffInvite { id: string; purpose: "documents" | "reupload" | "offer"; createdAt: string; expiresAt: string; usedAt: string | null; lastSeenAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" }
@@ -116,13 +124,15 @@ export interface StaffOffer {
 }
 export interface StaffEmail { id: number; kind: string; audience: "applicant" | "admin"; state: "queued" | "sending" | "sent" | "failed" | "skipped"; createdAt: string; sentAt: string | null; error: string | null; attempts: number; retryable: boolean }
 export interface StaffApplicationDetail extends StaffApplicationRow {
-  resume_path: string | null; resume_filename: string | null; resume_mime: string | null; resume_size: number | null; joining_date: string | null; account_invited_at: string | null; files_purged_at: string | null;
+  resume_path: string | null; resume_filename: string | null; resume_mime: string | null; resume_size: number | null; account_invited_at: string | null; files_purged_at: string | null;
 }
 export interface StaffDetail {
   profile: StaffProfile; application: StaffApplicationDetail; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
   roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; hasAccount: boolean;
-  invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean; jobApplications: StaffJobApplication[];
+  invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean; jobApplications: StaffJobApplication[]; employment: StaffEmployment | null;
 }
+/** The editable employment fields (hr_admin_staff_employment_save); the joining date is set at activation, not here. */
+export interface StaffEmploymentForm { department: string; jobTitle: string; employmentType: "full_time" | "part_time" | ""; managerId: string; workLocation: string }
 
 /** One or more statuses (p_statuses); an empty list means every status. */
 export async function adminListStaff(statuses: readonly StaffStatus[], search: string, limit = 50, offset = 0): Promise<{ total: number; rows: StaffListRow[] }> {
@@ -150,6 +160,7 @@ export async function adminReviewStaffDocument(documentId: string, decision: "ap
 export interface StaffAdminResult {
   detail?: StaffDetail | null; emailSent?: boolean; linkCancelled?: boolean; link?: string; note?: string; expiresAt?: string;
   inviteSent?: boolean; activated?: boolean; existingLogin?: boolean; resent?: boolean; offer?: StaffOffer; pages?: number; profileId?: string;
+  ok?: boolean; which?: "resume" | "cover_letter"; filename?: string;
 }
 export class StaffAdminError extends Error {
   readonly status: number;
@@ -187,7 +198,22 @@ export const staffAdminActions = {
   retryEmail: (emailId: number) => staffAdmin({ action: "retry_email", emailId }),
   /** HR-02i: an application on the person's behalf, then the document link at once. */
   add: (person: { firstName: string; lastName: string; email: string; phone: string }) => staffAdmin({ action: "add", ...person }),
+  /** HR-02j Candidates: "Hire and send document link" for a candidate application (selected stage); answers like sendLink, plus profileId. */
+  hire: (applicationId: string) => staffAdmin({ action: "hire", applicationId }),
+  /** HR-02j: a manual candidate's resume or cover letter, checked by content and stored by the function. */
+  candidateFile: (applicationId: string, which: "resume" | "cover_letter", file: File) => {
+    const form = new FormData();
+    form.set("action", "candidate_file"); form.set("applicationId", applicationId); form.set("which", which); form.set("file", file, file.name);
+    return staffAdmin(form);
+  },
 };
+
+/** The employment details on Staff > Employees (department, title, type, manager, location). */
+export async function adminSaveEmployment(id: string, form: StaffEmploymentForm): Promise<StaffDetail> {
+  const { data, error } = await supabase.rpc("hr_admin_staff_employment_save", { p_id: id, p_employment: { ...form, employmentType: form.employmentType || null, managerId: form.managerId || null } });
+  if (error) fail(error, "The employment details could not be saved.");
+  return data as StaffDetail;
+}
 
 async function adminRpc(name: string, args: Record<string, unknown>, fallback: string): Promise<StaffDetail> {
   const { data, error } = await supabase.rpc(name, args);

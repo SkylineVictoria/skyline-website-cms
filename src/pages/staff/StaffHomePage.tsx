@@ -98,6 +98,17 @@ export default function StaffHomePage() {
                 <Row label="Status" value={STAFF_STATUS_LABEL[me.status]} />
               </dl>
             </Section>
+            {me.employment ? (
+              <Section title="Your employment" testId="my-hr-employment">
+                <dl>
+                  <Row label="Job title" value={me.employment.jobTitle} />
+                  <Row label="Department" value={me.employment.department} />
+                  <Row label="Employment type" value={me.employment.employmentType === "full_time" ? "Full time" : me.employment.employmentType === "part_time" ? "Part time" : ""} />
+                  <Row label="Work location" value={me.employment.workLocation} />
+                  <Row label="Manager" value={me.employment.managerName ?? ""} />
+                </dl>
+              </Section>
+            ) : null}
             <Section title="Your details" testId="my-hr-profile">
               <dl>
                 <Row label="Email" value={p.email} />

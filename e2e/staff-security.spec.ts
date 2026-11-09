@@ -28,6 +28,8 @@ test("hr functions are not reachable from the browser: anon and signed-in users 
     expect(svc.error, `${who} cannot call hr_svc_*`).not.toBeNull();
     const list = await client.rpc("hr_admin_staff_list", { p_status: null, p_search: null, p_limit: 5, p_offset: 0, p_statuses: null });
     expect(list.error, `${who} cannot list staff`).not.toBeNull();
+    const candidates = await client.rpc("hr_admin_candidates", { p_job: null, p_state: null, p_search: "", p_limit: 5, p_offset: 0 });
+    expect(candidates.error, `${who} cannot list candidates`).not.toBeNull();
     const file = await client.storage.from("staff-documents").list();
     expect(file.data ?? []).toHaveLength(0);
   }
@@ -39,6 +41,8 @@ test("staff-admin answers only administrators; the retention purge only the sche
   const someone = sql("select id from hr.staff_profiles order by created_at desc limit 1");
   const { error } = await asStudent.functions.invoke("staff-admin", { body: { action: "send_invite", profileId: someone, purpose: "documents" } });
   expect(error).not.toBeNull();
+  const hire = await asStudent.functions.invoke("staff-admin", { body: { action: "hire", applicationId: "00000000-0000-4000-8000-000000000000" } });
+  expect(hire.error, "a student cannot hire").not.toBeNull();
   const anonCall = await fetch(`${E2E_API_URL}/functions/v1/staff-admin`, { method: "POST", headers: { apikey: E2E_ANON_KEY, "content-type": "application/json" }, body: JSON.stringify({ action: "purge" }) });
   expect(anonCall.status).toBe(401);
   const admin = await signedInClient((await createAdmin("sec-purge")).email);

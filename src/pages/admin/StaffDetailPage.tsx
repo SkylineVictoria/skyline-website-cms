@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { STAFF_EMPLOYEES_PATH } from "@/pages/admin/lib/staffRoutes";
-import { Badge, Button, Card, Field, Modal, PageHeader, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
+import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  StaffAdminError, adminDeactivateStaff, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminStaffDetail, staffAdminActions, staffDocumentUrl,
-  type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail,
+  StaffAdminError, adminDeactivateStaff, adminListStaff, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
+  type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow,
 } from "@/lib/staffApi";
+import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 import {
   EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist,
   type EmployeeAction, type StaffDocCategory, type StaffRole,
@@ -16,8 +17,11 @@ import {
  * the status and what exists (links, rejected documents, offer, activation invite), and the server re-checks each one. Link and
  * offer emails are sent by the staff-admin function: a failed email is shown here with its reason (the link is cancelled; send it
  * again), failed notification emails can be retried, and with email switched off the link is shown ONCE to pass on. Files (resume,
- * documents, offer, signed offer) open through short-lived signed URLs. The status history is at the bottom.
+ * documents, offer, signed offer) open through short-lived signed URLs. The status history is at the bottom. HR-02j: the employment
+ * details (hr.employment, written by a hire or edited here; the joining date comes with activation), and a Careers applicant or manual
+ * candidate gets the document link from Staff > Candidates ("Hire"), so Send document link is not offered while a job application is open.
  */
+const STAGE_LABEL = { screening: "Screening", shortlisted: "Shortlisted", interview: "Interview", selected: "Selected" } as const;
 
 const ROLE_LABEL: Record<StaffRole, string> = { admin: "Admin", trainer: "Trainer" };
 const REVIEW_TONE = { pending: "warn", approved: "success", rejected: "muted" } as const;
@@ -64,6 +68,7 @@ export default function StaffDetailPage() {
   const [docNote, setDocNote] = useState("");
   const [docBusy, setDocBusy] = useState("");
   const [retrying, setRetrying] = useState(0);
+  const [editingEmployment, setEditingEmployment] = useState(false);
 
   const load = useCallback(async () => {
     try { const next = await adminStaffDetail(id); setDetail(next); setError(""); return next; }
@@ -74,7 +79,7 @@ export default function StaffDetailPage() {
   const openAction = (next: EmployeeAction) => {
     setAction(next); setNote(""); setNotify(true); setConfirmAdmin(false); setOfferFile(null); setDialogError("");
     setRole(detail?.roles.find((r) => !r.revokedAt)?.role ?? detail?.application.requested_role ?? "trainer");
-    setJoiningDate(detail?.application.joining_date ?? "");
+    setJoiningDate(detail?.employment?.joiningDate ?? "");
   };
 
   const run = async (): Promise<StaffAdminResult | StaffDetail | null> => {
@@ -158,6 +163,7 @@ export default function StaffDetailPage() {
   const openOffer = detail.offers.find((o) => !o.withdrawnAt && !o.signedAt) ?? null;
   const signedOffer = detail.offers.find((o) => o.signedAt) ?? null;
   const liveLinks = detail.invites.filter((i) => i.state === "live");
+  const openJob = detail.jobApplications.find((j) => j.status === "applied") ?? null;
   const actions = employeeActions({
     status: profile.status,
     liveDocumentLink: liveLinks.some((i) => i.purpose !== "offer"),
@@ -165,7 +171,10 @@ export default function StaffDetailPage() {
     allApproved: summary.required > 0 && summary.approved === summary.required,
     offer: openOffer ? { sent: Boolean(openOffer.sentAt) } : null,
     activationInvited: profile.status === "offer_signed" && Boolean(application.account_invited_at),
+    openJobApplication: openJob !== null,
   });
+  const employment = detail.employment;
+  const joining = employment?.joiningDate ?? null;
   const canReview = profile.status === "documents_submitted";
   const address = [profile.address_street, profile.address_line2, profile.address_suburb, profile.address_state, profile.address_postcode, profile.address_country].filter(Boolean).join(", ");
   const checklist = staffChecklist(detail.documents, profile.is_australian_citizen);
@@ -179,7 +188,7 @@ export default function StaffDetailPage() {
   return (
     <div>
       <PageHeader breadcrumb="Staff / Employees" title={name}
-        description={`${activeRole ? `Role: ${ROLE_LABEL[activeRole]} · ` : ""}Documents approved ${summary.approved}/${summary.required}${application.joining_date ? ` · Joining ${new Date(`${application.joining_date}T00:00:00`).toLocaleDateString()}` : ""}`}
+        description={`${activeRole ? `Role: ${ROLE_LABEL[activeRole]} · ` : ""}${employment?.jobTitle ? `${employment.jobTitle} · ` : ""}Documents approved ${summary.approved}/${summary.required}${joining ? ` · Joining ${new Date(`${joining}T00:00:00`).toLocaleDateString()}` : ""}`}
         actions={<>
           <span data-testid="staff-detail-status"><Badge tone={STAFF_STATUS_TONE[profile.status]}>{STAFF_STATUS_LABEL[profile.status]}</Badge></span>
           {actions.map((a, i) => (
@@ -192,6 +201,12 @@ export default function StaffDetailPage() {
       {failedEmails.length ? (
         <p className={`mb-4 ${ALERT}`} data-testid="staff-email-failed">
           {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails below to retry or send the link again.
+        </p>
+      ) : null}
+      {profile.status === "applied" && openJob ? (
+        <p className={`mb-4 ${NOTICE}`} data-testid="staff-hire-hint">
+          This person applied for <strong>{openJob.jobTitle}</strong> ({STAGE_LABEL[openJob.stage]}). The document link is sent by hiring them from{" "}
+          <Link to={staffCandidatePath(openJob.id)} className="font-semibold text-primary-700 hover:underline">Candidates</Link> once they are selected.
         </p>
       ) : null}
       {application.files_purged_at ? <p className={`mb-4 ${NOTICE}`} data-testid="staff-files-purged">The resume, documents and offer files were deleted on {new Date(application.files_purged_at).toLocaleDateString()} under the retention rule. The record stays.</p> : null}
@@ -259,6 +274,22 @@ export default function StaffDetailPage() {
         </Card>
       </div>
 
+      <Card className="mt-6 p-5"><div data-testid="staff-employment">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-heading text-base font-bold text-foreground-950">Employment</h2>
+          <Button size="sm" variant="outline" onClick={() => setEditingEmployment(true)} data-testid="staff-employment-edit">{employment ? "Edit employment" : "Add employment details"}</Button>
+        </div>
+        {employment ? (
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Row label="Job title">{employment.jobTitle}</Row><Row label="Department">{employment.department}</Row>
+            <Row label="Employment type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
+            <Row label="Work location">{employment.workLocation}</Row>
+            <Row label="Manager">{employment.managerId ? <Link to={`${STAFF_EMPLOYEES_PATH}/${employment.managerId}`} className="font-semibold text-primary-700 hover:underline">{employment.managerName ?? "Manager"}</Link> : ""}</Row>
+            <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set at activation</span>}</Row>
+          </dl>
+        ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the joining date is set at activation.</p>}
+      </div></Card>
+
       {detail.jobApplications.length ? (
         <Card className="mt-6 p-5"><div data-testid="staff-job-applications">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Job applications</h2>
@@ -266,10 +297,11 @@ export default function StaffDetailPage() {
             {detail.jobApplications.map((j) => (
               <li key={j.id} className="rounded-md border border-background-200 px-3 py-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span><span className="font-semibold text-foreground-900">{j.jobTitle}</span>{j.jobStatus === "closed" ? <span className="ml-1 text-xs text-foreground-500">(closed)</span> : null}
-                    <span className="block text-xs text-foreground-600">Applied {when(j.appliedAt)}{j.decidedAt ? ` · ${j.status === "hired" ? "document link sent" : "declined"} ${when(j.decidedAt)}` : ""}</span></span>
+                  <span><span className="font-semibold text-foreground-900">{j.jobTitle}</span>{j.jobStatus !== "open" ? <span className="ml-1 text-xs text-foreground-500">({j.jobStatus})</span> : null}
+                    <span className="block text-xs text-foreground-600">{j.source === "manual" ? "Entered by an administrator" : "Applied"} {when(j.appliedAt)}{j.decidedAt ? ` · ${j.status === "hired" ? "hired, document link sent" : j.status} ${when(j.decidedAt)}` : ""}</span></span>
                   <span className="flex items-center gap-2">
-                    <Badge tone={j.status === "hired" ? "success" : j.status === "declined" ? "muted" : "warn"}>{j.status === "hired" ? "Hired" : j.status === "declined" ? "Declined" : "Applied"}</Badge>
+                    <Badge tone={j.status === "hired" ? "success" : j.status === "applied" ? "warn" : "muted"}>{j.status === "applied" ? STAGE_LABEL[j.stage] : JOB_APPLICATION_STATUS_LABEL[j.status]}</Badge>
+                    <Link to={staffCandidatePath(j.id)} className="text-xs font-semibold text-primary-700 hover:underline">Open in Candidates</Link>
                     {j.coverLetterFile && !application.files_purged_at ? <Button size="sm" variant="outline" onClick={() => void view(`Cover letter: ${j.coverLetterFile!.filename}`, j.coverLetterFile!.storagePath, j.coverLetterFile!.mimeType)}>Cover letter</Button> : null}
                   </span>
                 </div>
@@ -400,6 +432,9 @@ export default function StaffDetailPage() {
         ) : null}
       </Modal>
 
+      {editingEmployment ? <EmploymentDialog profileId={profile.id} employment={employment} onClose={() => setEditingEmployment(false)}
+        onSaved={(next) => { setEditingEmployment(false); setDetail(next); setNotice("The employment details were saved."); }} /> : null}
+
       <Modal open={shownLink !== null} title="Email is switched off: pass this link on" onClose={() => setShownLink(null)}
         footer={<Button onClick={() => setShownLink(null)}>I have copied it</Button>}>
         {shownLink ? (
@@ -430,4 +465,55 @@ function doneMessage(action: EmployeeAction, result: StaffAdminResult | null): s
     case "reactivate": return "Reactivated.";
     case "reopen": return "Reopened.";
   }
+}
+
+/** The employment fields of hr.employment (HR-02j). The manager is an active employee (searched by name); the joining date is set at activation. */
+function EmploymentDialog({ profileId, employment, onClose, onSaved }: { profileId: string; employment: StaffEmployment | null; onClose: () => void; onSaved: (detail: StaffDetail) => void }) {
+  const [form, setForm] = useState<StaffEmploymentForm>({
+    department: employment?.department ?? "", jobTitle: employment?.jobTitle ?? "", employmentType: employment?.employmentType ?? "", managerId: employment?.managerId ?? "", workLocation: employment?.workLocation ?? "",
+  });
+  const [managerSearch, setManagerSearch] = useState("");
+  const [managers, setManagers] = useState<StaffListRow[]>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const patch = (p: Partial<StaffEmploymentForm>) => setForm((f) => ({ ...f, ...p }));
+
+  useEffect(() => {
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void adminListStaff(["active"], managerSearch, 25, 0).then((data) => { if (current) setManagers(data.rows.filter((m) => m.id !== profileId)); }, () => { if (current) setManagers([]); });
+    }, 200);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [managerSearch, profileId]);
+
+  const save = async () => {
+    setBusy(true); setError("");
+    try { onSaved(await adminSaveEmployment(profileId, form)); }
+    catch (e) { setError(e instanceof Error ? e.message : "The employment details could not be saved."); }
+    finally { setBusy(false); }
+  };
+  const currentManager = employment?.managerId && !managers.some((m) => m.id === employment.managerId) ? { id: employment.managerId, name: employment.managerName ?? "Current manager" } : null;
+  return (
+    <Modal open title="Employment details" onClose={() => { if (!busy) onClose(); }}
+      footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button disabled={busy} onClick={() => void save()} data-testid="staff-employment-save">{busy ? "Saving…" : "Save"}</Button></>}>
+      <div className="space-y-3" data-testid="staff-employment-dialog">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Job title"><TextInput maxLength={150} value={form.jobTitle} onChange={(e) => patch({ jobTitle: e.target.value })} data-testid="staff-employment-title" /></Field>
+          <Field label="Department"><TextInput maxLength={120} value={form.department} onChange={(e) => patch({ department: e.target.value })} data-testid="staff-employment-department" /></Field>
+          <Field label="Employment type"><Select value={form.employmentType} onChange={(e) => patch({ employmentType: e.target.value as StaffEmploymentForm["employmentType"] })} data-testid="staff-employment-type">
+            <option value="">Not set</option><option value="full_time">Full time</option><option value="part_time">Part time</option>
+          </Select></Field>
+          <Field label="Work location"><TextInput maxLength={150} value={form.workLocation} onChange={(e) => patch({ workLocation: e.target.value })} data-testid="staff-employment-location" /></Field>
+          <Field label="Find a manager" hint="Active employees only."><TextInput placeholder="Search by name or email" value={managerSearch} onChange={(e) => setManagerSearch(e.target.value)} /></Field>
+          <Field label="Manager"><Select value={form.managerId} onChange={(e) => patch({ managerId: e.target.value })} data-testid="staff-employment-manager">
+            <option value="">No manager assigned</option>
+            {currentManager ? <option value={currentManager.id}>{currentManager.name}</option> : null}
+            {managers.map((m) => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
+          </Select></Field>
+        </div>
+        <p className="text-xs text-foreground-600">The joining date is recorded when the account is activated{employment?.joiningDate ? ` (${new Date(`${employment.joiningDate}T00:00:00`).toLocaleDateString()})` : ""}.</p>
+        {error ? <p role="alert" className={ALERT} data-testid="staff-employment-error">{error}</p> : null}
+      </div>
+    </Modal>
+  );
 }

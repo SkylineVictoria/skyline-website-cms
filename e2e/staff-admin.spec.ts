@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
-  createAdmin, employeeAction, expectStatus, onboard, protectedPdf, resetRateLimits, setHrMailMode, signInAsAdmin, signedInClient, sql, staffAt, waitForHrMail,
+  PDF, candidateAction, createAdmin, employeeAction, expectStatus, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, signInAsAdmin, signedInClient, sql, staffAt, waitForHrMail,
 } from "./support";
 
 // Staff > Employees (HR-02g) in the browser, against the LOCAL lab stack only: the sidebar, tabs, every lifecycle action with its
@@ -9,7 +9,7 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(() => { resetRateLimits(); });
 test.afterEach(async () => { await setHrMailMode("ok"); });
 
-test("Staff is its own sidebar group with Employees; the old addresses redirect", async ({ page }) => {
+test("Staff is its own sidebar group with Candidates, Employees and Jobs; the old and the Master Data addresses redirect", async ({ page }) => {
   const admin = await createAdmin("menu-admin");
   const someone = await staffAt(await signedInClient(admin.email), "menu", "documents_submitted");
   await signInAsAdmin(page, admin.email);
@@ -20,7 +20,48 @@ test("Staff is its own sidebar group with Employees; the old addresses redirect"
   await expect(page.getByText(someone.email).first()).toBeVisible();
   const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "Staff" }) }).first();
   await expect(sidebar.locator('a[href="/admin/staff/employees"]')).toHaveText("Employees");
+  await expect(sidebar.locator('a[href="/admin/staff/candidates"]')).toHaveText("Candidates");
+  await expect(sidebar.locator('a[href="/admin/jobs"]')).toHaveText("Jobs");
   expect(sql(`select parent_id || '/' || label || '/' || route from public.admin_menu_items where id = 'agency_staff'`)).toBe("staff/Employees//admin/staff/employees");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("staff_candidates,agency_staff,agency_jobs");
+  await page.goto("/admin/candidates");
+  await expect(page).toHaveURL(/\/admin\/staff\/candidates$/);
+  await page.goto(`/admin/employees/${someone.id}`);
+  await expect(page).toHaveURL(new RegExp(`/admin/staff/employees/${someone.id}$`));
+  await page.goto("/admin/jobs?tab=applicants");
+  await expect(page).toHaveURL(/\/admin\/staff\/candidates$/);
+});
+
+test("Candidates: a manual candidate (no login) gets a resume through staff-admin; a decline without the email closes the application and the person", async ({ page }) => {
+  const admin = await createAdmin("manual-admin");
+  const job = sql(`insert into hr.jobs(title, description, employment_type, location) values ('E2E Manual ${Date.now()}', 'Teach.', 'part_time', 'Sydney') returning id || '|' || title`).split("\n")[0].split("|");
+  const who = person("manual");
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`/admin/staff/candidates?job=${job[0]}`);
+  await page.getByTestId("candidate-add").click();
+  await page.getByTestId("hr-person-first").fill("Mia");
+  await page.getByTestId("hr-person-last").fill("Manual");
+  await page.getByTestId("hr-person-email").fill(who.email);
+  await page.getByTestId("hr-person-phone").fill(who.local);
+  await page.getByTestId("candidate-job").selectOption(job[0]);
+  await page.getByTestId("candidate-recruiter-notes").fill("Referred by a trainer.");
+  await page.getByTestId("candidate-save").click();
+  await expect(page).toHaveURL(/\/admin\/staff\/candidates\/[0-9a-f-]{36}$/);
+  const profileId = sql(`select id from hr.staff_profiles where email = '${who.email}'`);
+  expect(sql(`select status || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles where id = '${profileId}'`)).toBe("applied/0");
+  await page.getByTestId("candidate-upload-resume").setInputFiles({ name: "cv.pdf", mimeType: "application/pdf", buffer: Buffer.from("MZ not a pdf") });
+  await expect(page.getByText(/Attach a PDF or Word/)).toBeVisible();
+  expect(sql(`select resume_path is null from hr.staff_applications where profile_id = '${profileId}'`)).toBe("t");
+  await page.getByTestId("candidate-upload-resume").setInputFiles({ name: "cv.pdf", mimeType: "application/pdf", buffer: PDF });
+  await expect(page.getByTestId("candidate-view-resume")).toContainText("cv.pdf");
+  expect(sql(`select (resume_path like '${profileId}/resume/%')::text from hr.staff_applications where profile_id = '${profileId}'`)).toBe("true");
+  await candidateAction(page, "declined", async () => {
+    await page.getByTestId("candidate-reason").fill("Role filled");
+    await page.getByTestId("candidate-notify").uncheck();
+  });
+  await expect(page.getByTestId("candidate-status")).toHaveText("Declined");
+  await expect(page.getByTestId("candidate-actions")).toHaveCount(0);
+  expect(sql(`select p.status || '/' || (select count(*) from hr.staff_emails e where e.profile_id = p.id and e.kind = 'rejected') from hr.staff_profiles p where p.id = '${profileId}'`)).toBe("rejected/0");
 });
 
 test("withdraw an offer: the dialog needs a note, the status goes back and the offer link stops working", async ({ page }) => {
@@ -89,7 +130,7 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
   await expect(page.getByTestId("staff-email-failed")).toBeVisible();
   await page.goto("/admin/staff/employees?tab=closed");
   await page.getByLabel("Search staff").fill(p.email);
-  await expect(page.getByTestId("staff-email-failed-badge")).toBeVisible();
+  await expect(page.getByTestId("staff-email-failed-badge").first()).toBeVisible();
   await page.getByRole("row", { name: p.email }).getByRole("link").click();
   await setHrMailMode("ok");
   await page.locator("[data-testid^='staff-email-retry-']").first().click();

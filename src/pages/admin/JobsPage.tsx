@@ -6,6 +6,7 @@ import { HR_PAGE_SIZE, hrDate } from "@/lib/recruitmentApi";
 import WizardSteps from "@/pages/admin/components/WizardSteps";
 import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, jobPath, jobProblems, type JobForm } from "@/lib/jobs";
 import { adminListJobs, adminSaveJob, adminSetJobStatus, type AdminJob } from "@/lib/jobsApi";
+import { STAFF_CANDIDATES_PATH } from "@/pages/admin/lib/staffRoutes";
 
 type Problems = Partial<Record<keyof JobForm, string>>;
 const STEPS = ["Role", "Description", "Review and post"];
@@ -56,7 +57,7 @@ export default function JobsPage() {
 
   if (params.get("tab") === "applicants") {
     const job = params.get("job");
-    return <Navigate to={job ? `/admin/candidates?job=${encodeURIComponent(job)}` : "/admin/candidates"} replace />;
+    return <Navigate to={job ? `${STAFF_CANDIDATES_PATH}?job=${encodeURIComponent(job)}` : STAFF_CANDIDATES_PATH} replace />;
   }
   const rows = (jobs ?? []).filter((j) =>
     (!filter || j.status === filter) && (!employmentType || j.employmentType === employmentType) &&
@@ -66,7 +67,7 @@ export default function JobsPage() {
   const pageOffset = Math.min(offset, Math.max(0, Math.ceil(rows.length / HR_PAGE_SIZE) - 1) * HR_PAGE_SIZE);
   const label = (j: AdminJob) => j.status === "open" ? "Close" : j.status === "draft" ? "Publish" : "Reopen";
   return <div>
-    <PageHeader breadcrumb="Master Data" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates."
+    <PageHeader breadcrumb="Staff" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates (Staff > Candidates)."
       actions={<Button onClick={() => open()} icon="ri-add-line" data-testid="job-new">Add Job</Button>} />
     <HrNotice error>{error}</HrNotice><HrNotice>{notice}</HrNotice>
     <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -91,7 +92,7 @@ export default function JobsPage() {
           <td data-label="Job title" className="px-4 py-3"><button className="text-left font-medium text-primary-700 hover:underline" onClick={() => setView(j)}>{j.title}</button>
             <div className="text-xs text-foreground-500">{EMPLOYMENT_TYPE_LABEL[j.employmentType]}</div></td>
           <td data-label="Department" className="px-4 py-3">{j.department || "—"}</td><td data-label="Location" className="px-4 py-3">{j.location}</td><td data-label="Vacancies" className="px-4 py-3">{j.vacancies ?? 1}</td>
-          <td data-label="Candidates" className="px-4 py-3"><HrLink to={`/admin/candidates?job=${j.id}`}>{j.candidateCount ?? j.applied + j.hired + j.declined} candidates</HrLink></td>
+          <td data-label="Candidates" className="px-4 py-3"><HrLink to={`${STAFF_CANDIDATES_PATH}?job=${j.id}`}>{j.candidateCount ?? j.applied + j.hired + j.declined} candidates</HrLink></td>
           <td data-label="Status" className="px-4 py-3"><Badge tone={j.status === "open" ? "success" : "muted"}>{statusLabel[j.status]}</Badge></td>
           <td data-label="Actions" className="px-4 py-3"><div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={() => open(j)}>Edit</Button>
@@ -107,7 +108,7 @@ export default function JobsPage() {
         <HrValue label="Department">{view.department}</HrValue><HrValue label="Location">{view.location}</HrValue>
         <HrValue label="Salary range">{view.salary}</HrValue><HrValue label="Vacancies">{view.vacancies ?? 1}</HrValue>
         <HrValue label="Published">{hrDate(view.publishedAt ?? null)}</HrValue>
-        <HrValue label="Candidates"><HrLink to={`/admin/candidates?job=${view.id}`}>View candidates</HrLink></HrValue>
+        <HrValue label="Candidates"><HrLink to={`${STAFF_CANDIDATES_PATH}?job=${view.id}`}>View candidates</HrLink></HrValue>
       </dl>
       <dl className="my-4"><HrValue label="Description">{view.description}</HrValue></dl>
       {view.status === "open" ? <Link className="text-sm font-medium text-primary-700 hover:underline" to={jobPath(view.id)} target="_blank" rel="noopener noreferrer">View on Careers</Link> : null}

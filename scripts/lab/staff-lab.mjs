@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // HR-02 staff enrolment lab: a FRESH, separate local Supabase stack (project "skyline-staff-lab", ports 57320-57329) built from
-// the repo's migrations (all of them, including 20261109100000) and Edge Functions, with the local mail inbox and the Turnstile
+// the repo's migrations (all of them, including 20261110090000) and Edge Functions, with the local mail inbox and the Turnstile
 // mock. Re-runnable: `up` always throws the previous lab stack away first. Nothing here talks to a hosted project.
 //
 //   node scripts/lab/staff-lab.mjs up       fresh stack + migrations + functions served (prints the URLs and keys file)
@@ -67,8 +67,8 @@ begin
  end loop;
 end $$;
 `,
-  // LAB FIXTURE (HR-02i): one person left at the Jobs status job_applied by 20261106120000, so the replay proves that 20261109100000 maps
-  // it to applied (hosted has none). Runs between 20261106130000 and 20261109100000.
+  // LAB FIXTURE (HR-02i): one person left at the Jobs status job_applied by 20261106120000, so the replay proves that 20261110090000 maps
+  // it to applied (hosted has none). Runs between 20261106130000 and 20261109153953.
   "20261108000000_lab_fixture_job_applied.sql": `do $$
 declare v_user uuid := '1ab00000-0000-4000-8000-00000000f001'; v_profile uuid;
 begin
@@ -238,7 +238,7 @@ async function apply() {
   }
   check("the per-caller rate limit answers 429 with Retry-After", limited !== null && limited.headers.get("retry-after") === "600");
 
-  // HR-02i: the Jobs status job_applied left by 20261106120000 (lab fixture) is mapped to applied by 20261109100000.
+  // HR-02i: the Jobs status job_applied left by 20261106120000 (lab fixture) is mapped to applied by 20261110090000.
   check("a person at the old Jobs status job_applied is mapped to applied, and the move is logged",
     psql("select status from hr.staff_profiles where email = 'lab.jobapplied@example.test';") === "applied"
     && psql("select count(*) from hr.staff_status_events e join hr.staff_profiles p on p.id = e.profile_id where p.email = 'lab.jobapplied@example.test' and e.from_status = 'job_applied' and e.to_status = 'applied';") === "1");
@@ -267,6 +267,49 @@ async function apply() {
   const jobAgain = await postApply(lab, { ...careers, jobId }, pdfFile("cv2.pdf"));
   check("...applying again for the same job: the same thank-you, still one job application", jobAgain.status === 200
     && psql(`select count(*) from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id where p.email = '${careers.email}';`) === "1");
+
+  // HR-02j Candidates: the stages as the admin console calls them, then "Hire and send document link" through staff-admin.
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  const appId = psql(`select j.id from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id where p.email = '${careers.email}' and j.status = 'applied';`);
+  let fromEmployees = "";
+  try { fromEmployees = asAdmin(`select public.hr_admin_staff_invite((select id from hr.staff_profiles where email = '${careers.email}'), 'documents', '${"a".repeat(64)}');`); }
+  catch (e) { fromEmployees = e instanceof Error ? e.message : String(e); }
+  check("Employees cannot send the document link to a Careers applicant with an open job application", /hire them from Candidates/.test(fromEmployees), fromEmployees.slice(0, 160));
+  const early = await staffAdminCall(lab, jwt, { action: "hire", applicationId: appId });
+  check("Candidates: no hire before the selected stage", early.status === 400 && /selected/.test(early.body.error ?? ""), JSON.stringify(early.body));
+  for (const [action, extra] of [["shortlisted", {}], ["interview", { p_interview_at: new Date(Date.now() + 86_400_000).toISOString(), p_interview_notes: "Bring the portfolio." }], ["selected", {}]]) {
+    const r = await restRpc(lab, jwt, "hr_admin_candidate_progress", { p_id: appId, p_action: action, ...extra });
+    if (r.status !== 200) throw new Error(`${action}: ${JSON.stringify(r.body)}`);
+  }
+  const hired = await staffAdminCall(lab, jwt, { action: "hire", applicationId: appId });
+  const hiredRow = psql(`select p.status || '|' || j.status || '|' || e.job_title || '|' || coalesce(e.joining_date::text, 'none') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id join hr.employment e on e.profile_id = p.id where p.email = '${careers.email}' and j.id = '${appId}';`);
+  check("Hire and send document link: the application is hired, the employment record comes from the job, the person is invited and the link is emailed",
+    hired.status === 200 && hired.body.emailSent === true && hiredRow === "invited|hired|Lab Trainer|none" && mailsTo(careers.email).some((m) => /#t=/.test(m.text ?? "")), `${hired.status} ${JSON.stringify(hired.body)} ${hiredRow}`);
+
+  // A manual candidate: an HR-02 record (applied, no login); the resume comes through staff-admin after the content checks; declined closes both.
+  const manualEmail = `lab.manual.${cs}@example.test`;
+  const manual = await restRpc(lab, jwt, "hr_admin_candidate_save", { p_id: null, p_job: jobId, p_person: { firstName: "Mia", lastName: "Manual", email: manualEmail, phone: `+6146${String(cs).slice(-7)}` }, p_cover_letter: "", p_recruiter_notes: "Call on Monday." });
+  const manualId = String(manual.body ?? "");
+  const manualProfile = psql(`select id from hr.staff_profiles where email = '${manualEmail}';`);
+  const sendFile = async (name, bytes) => {
+    const f = new FormData();
+    f.set("action", "candidate_file"); f.set("applicationId", manualId); f.set("which", "resume"); f.set("file", new Blob([bytes], { type: "application/pdf" }), name);
+    const res = await fetch(`${lab.apiUrl}/functions/v1/staff-admin`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}` }, body: f });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  const fakeResume = await sendFile("cv.pdf", new Uint8Array([0x4d, 0x5a, 0, 1]));
+  const realResume = await sendFile("cv.pdf", PDF);
+  check("a manual candidate (applied, no login) gets a resume through staff-admin: a renamed non-PDF is refused, a PDF lands in the person's folder",
+    manual.status === 200 && psql(`select status || '|' || coalesce(auth_user_id::text, 'none') from hr.staff_profiles where id = '${manualProfile}';`) === "applied|none"
+    && fakeResume.status === 400 && realResume.status === 200
+    && psql(`select (resume_path like '${manualProfile}/resume/%')::text from hr.staff_applications where profile_id = '${manualProfile}';`) === "true", `${manual.status} ${fakeResume.status} ${realResume.status}`);
+  const careersFile = await (async () => { const f = new FormData(); f.set("action", "candidate_file"); f.set("applicationId", appId); f.set("which", "resume"); f.set("file", new Blob([PDF], { type: "application/pdf" }), "cv.pdf");
+    const res = await fetch(`${lab.apiUrl}/functions/v1/staff-admin`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}` }, body: f }); return res.status; })();
+  check("a Careers applicant's files are never replaced by an administrator", careersFile === 400, String(careersFile));
+  const declined = await restRpc(lab, jwt, "hr_admin_candidate_progress", { p_id: manualId, p_action: "declined", p_reason: "Role filled", p_notify: false });
+  check("declined without the email: the application and the person close, no rejection email",
+    declined.status === 200 && psql(`select p.status || '|' || (select count(*) from hr.staff_emails e where e.profile_id = p.id and e.kind = 'rejected') from hr.staff_profiles p where p.id = '${manualProfile}';`) === "rejected|0", JSON.stringify(declined.body));
 }
 
 /* ------------------------------------------------------------------ mock Postmark (runs inside the check commands) */

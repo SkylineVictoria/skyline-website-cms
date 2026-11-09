@@ -35,7 +35,7 @@ export default function StaffPage() {
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff. Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent."
+      <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff (a Careers applicant is hired from Candidates first). Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent."
         actions={<Button onClick={() => setAdding(true)} data-testid="staff-add"><i className="ri-user-add-line" aria-hidden="true" /> Add staff member</Button>} />
       {adding ? <AddStaffDialog onClose={() => setAdding(false)} /> : null}
       <div role="tablist" aria-label="Employees by status" className="mb-4 flex flex-wrap gap-1 border-b border-background-200">
@@ -63,7 +63,7 @@ export default function StaffPage() {
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.id} className="border-b border-background-100 last:border-0 hover:bg-background-100">
-                  <td className="px-4 py-3 font-medium"><Link to={staffEmployeePath(row.id)} className="text-primary-700 hover:underline">{row.name || "(no name yet)"}</Link><span className="block text-xs font-normal text-foreground-500">{row.email}</span>{row.jobTitle ? <span className="block text-xs font-normal text-foreground-600" data-testid="staff-job-title">Job: {row.jobTitle}</span> : null}</td>
+                  <td className="px-4 py-3 font-medium"><Link to={staffEmployeePath(row.id)} className="text-primary-700 hover:underline">{row.name || "(no name yet)"}</Link><span className="block text-xs font-normal text-foreground-500">{row.email}</span>{row.jobTitle || row.department ? <span className="block text-xs font-normal text-foreground-600" data-testid="staff-job-title">{[row.jobTitle, row.department].filter(Boolean).join(" · ")}</span> : null}</td>
                   <td className="px-4 py-3 capitalize text-foreground-700">{row.role ?? row.requestedRole ?? "—"}{!row.role && row.requestedRole ? <span className="block text-xs normal-case text-foreground-500">requested</span> : null}</td>
                   <td className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[row.status]}>{STAFF_STATUS_LABEL[row.status]}</Badge>{row.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
                   <td className="px-4 py-3 text-foreground-700" data-testid="staff-docs-count" title={`${row.docs.uploaded} of ${row.docs.required} uploaded${row.docs.rejected ? `, ${row.docs.rejected} rejected` : ""}`}>

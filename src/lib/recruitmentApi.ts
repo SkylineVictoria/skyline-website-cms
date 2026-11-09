@@ -1,6 +1,14 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { JOB_FILE_EXTENSION, jobFileMime, jobFileProblem, type EmploymentType, type JobApplicationStatus } from "@/lib/jobs";
+import { staffAdminActions } from "@/lib/staffApi";
+import type { EmploymentType, JobApplicationStatus, JobStatus } from "@/lib/jobs";
 import type { StaffStatus } from "@/lib/staffStatus";
+
+/**
+ * Staff > Candidates (HR-02j): the recruitment pipeline of a job application (screening > shortlisted > interview > selected), then
+ * "Hire and send document link" (staff-admin `hire`: the employment record from the job and HR-02's document link) or declined /
+ * withdrawn (HR-02's reject for a person who is still just applied, email optional). A Careers applicant's resume is the staff
+ * application's and their cover letter file the job application's; a manual candidate's files arrive through staff-admin.
+ */
 
 export const HR_PAGE_SIZE = 20;
 export const hrDate = (value: string | null) => value ? new Date(value).toLocaleString("en-AU") : "—";
@@ -22,21 +30,14 @@ export interface CandidateRow extends PersonForm {
   id: string; profileId: string; jobTitle: string; source: "manual" | "careers"; appliedAt: string;
   status: JobApplicationStatus; stage: Stage;
 }
-interface CandidateFile { filename: string; storagePath: string }
+export interface CandidateFile { filename: string; storagePath: string; mimeType: string | null }
 export interface Candidate extends CandidateRow {
-  jobId: string; linkedAccount: boolean; interviewAt: string | null; interviewNotes: string; recruiterNotes: string;
-  coverLetter: string; decisionNote: string; decidedAt: string | null; employeeId: string | null; history: HistoryEvent[];
-  resume: CandidateFile | null; coverLetterDocument: CandidateFile | null;
+  jobId: string; jobStatus: JobStatus; staffStatus: StaffStatus; linkedAccount: boolean; interviewAt: string | null; interviewNotes: string; recruiterNotes: string;
+  coverLetter: string; decisionNote: string; decidedAt: string | null; employeeId: string | null; filesPurged: boolean; history: HistoryEvent[];
+  resume: CandidateFile | null; coverLetterFile: CandidateFile | null;
 }
-export interface EmploymentForm {
-  department: string; jobTitle: string; employmentType: EmploymentType | ""; joiningDate: string; managerId: string; workLocation: string;
-}
-export interface Employee extends PersonForm, Omit<EmploymentForm, "employmentType" | "joiningDate" | "managerId"> {
-  id: string; candidateId: string | null; linkedAccount: boolean; status: StaffStatus; managerName: string | null;
-  employmentType: EmploymentType | null; joiningDate: string | null; managerId: string | null;
-}
-export interface EmployeeDetail extends Employee { history: HistoryEvent[] }
 export interface Page<T> { rows: T[]; total: number }
+export type { EmploymentType };
 
 async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.rpc(name, args);
@@ -50,38 +51,15 @@ export function listCandidates(job: string, state: string, search: string, limit
 export function getCandidate(id: string) {
   return rpc<Candidate>("hr_admin_candidate", { p_id: id });
 }
+/** Add (id null) or edit a manual candidate: the person, the job, the cover letter text and the recruiter notes. */
 export function saveCandidate(id: string | null, jobId: string, person: PersonForm, letter: string, notes: string) {
   return rpc<string>("hr_admin_candidate_save", { p_id: id, p_job: jobId, p_person: person, p_cover_letter: letter, p_recruiter_notes: notes });
 }
-export function progressCandidate(id: string, action: CandidateAction, interview: string, notes: string, reason: string) {
-  return rpc<string>("hr_admin_candidate_progress", { p_id: id, p_action: action, p_interview_at: interview || null,
-    p_interview_notes: notes || null, p_reason: reason });
+/** A stage change, or declined / withdrawn with a reason (notify: email the person when it closes their application). */
+export function progressCandidate(id: string, action: Stage | "declined" | "withdrawn", interview: string, notes: string, reason: string, notify = true) {
+  return rpc<string>("hr_admin_candidate_progress", { p_id: id, p_action: action, p_interview_at: interview || null, p_interview_notes: notes || null, p_reason: reason || null, p_notify: notify });
 }
-export async function uploadCandidateFile(id: string, category: "Resume" | "Cover Letter", file: File) {
-  const problem = jobFileProblem(file);
-  if (problem) throw new Error(problem);
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) throw new Error("Sign in to upload the file.");
-  const mime = jobFileMime(file)!;
-  const path = `recruitment/${data.user.id}/${id}/${crypto.randomUUID()}.${JOB_FILE_EXTENSION[mime]}`;
-  const bucket = supabase.storage.from("staff-documents");
-  const { error } = await bucket.upload(path, file, { contentType: mime, upsert: false });
-  if (error) throw new Error(error.message);
-  try {
-    await rpc("hr_admin_candidate_document", { p_id: id, p_category: category, p_path: path, p_filename: file.name.slice(0, 255), p_mime: mime, p_size: file.size });
-  } catch (e) {
-    await bucket.remove([path]);
-    throw e;
-  }
-}
-
-export function listEmployees(state: string, department: string, search: string, limit: number, offset: number) {
-  return rpc<Page<Employee> & { departments: string[] }>("hr_admin_employees",
-    { p_state: state || null, p_department: department || null, p_search: search, p_limit: limit, p_offset: offset });
-}
-export function getEmployee(id: string) {
-  return rpc<EmployeeDetail>("hr_admin_employee", { p_id: id });
-}
-export function saveEmployee(id: string | null, person: PersonForm, employment: EmploymentForm) {
-  return rpc<string>("hr_admin_employee_save", { p_id: id, p_person: person, p_employment: employment });
-}
+/** "Hire and send document link" (selected stage): answers like a document link (emailSent, or the link once when email is off) plus profileId. */
+export const hireCandidate = (id: string) => staffAdminActions.hire(id);
+/** A manual candidate's resume or cover letter file: checked by content and stored by staff-admin, never uploaded from the browser. */
+export const uploadCandidateFile = (id: string, which: "resume" | "cover_letter", file: File) => staffAdminActions.candidateFile(id, which, file);

@@ -7,7 +7,7 @@ export const EMPLOYMENT_TYPE_LABEL: Record<EmploymentType, string> = { full_time
 
 export type JobStatus = "draft" | "open" | "closed";
 export type JobApplicationStatus = "applied" | "hired" | "declined" | "withdrawn";
-export const JOB_APPLICATION_STATUS_LABEL: Record<JobApplicationStatus, string> = { applied: "Applied", hired: "Hired", declined: "Rejected", withdrawn: "Withdrawn" };
+export const JOB_APPLICATION_STATUS_LABEL: Record<JobApplicationStatus, string> = { applied: "Applied", hired: "Hired", declined: "Declined", withdrawn: "Withdrawn" };
 
 export interface JobForm { title: string; description: string; employmentType: EmploymentType; salary: string; location: string; status: JobStatus; department?: string; vacancies?: number }
 export const EMPTY_JOB: JobForm = { title: "", description: "", employmentType: "full_time", salary: "", location: "", status: "draft", department: "", vacancies: 1 };

@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
-  PASSWORD, PDF, authLanding, createAdmin, employeeAction, expectStatus, hrMails, inDays, latestLink, linkToken, offerPdf, onboard, person, resetRateLimits,
-  signInAsAdmin, signInThroughTheForm, signOutEverywhere, sql, waitForHrMail,
+  PDF, candidateAction, createAdmin, employeeAction, expectStatus, hrMails, journeyFromDocumentLink, onboard, person, resetRateLimits, signInAsAdmin, sql, waitForHrMail,
 } from "./support";
 
 // Staff enrolment v2 end to end, against the LOCAL lab stack only (scripts/lab/staff-lab.mjs e2e): the public form without a login,
@@ -9,7 +8,7 @@ import {
 test.describe.configure({ mode: "serial" });
 test.beforeEach(() => { resetRateLimits(); });
 
-test("one full journey: apply, documents by link, review, offer signed, activation, sign in to My HR", async ({ browser, baseURL }) => {
+test("Enroll now > Staff: one full journey from the public form to My HR (document link from Employees)", async ({ browser, baseURL }) => {
   const applicant = person("journey");
   const admin = await createAdmin("journey-admin");
   const visitor = await (await browser.newContext()).newPage();
@@ -38,76 +37,9 @@ test("one full journey: apply, documents by link, review, offer signed, activati
   await expectStatus(office, "Applied");
   await employeeAction(office, "send_documents_link");
   await expectStatus(office, "Invited");
-  const token = linkToken((await waitForHrMail(applicant.email, /details and documents/i)).text);
-
-  // 3. The applicant fills in details and uploads documents on /staff/onboard (no login), then submits.
-  await visitor.goto(`/staff/onboard#t=${token}`);
-  await expect(visitor.getByTestId("staff-tab-details")).toBeVisible();
-  expect(visitor.url()).not.toContain(token);
-  await visitor.getByTestId("staff-date_of_birth").fill("1991-02-03");
-  await visitor.getByTestId("staff-address_street").fill("1 Journey St");
-  await visitor.getByTestId("staff-address_country").fill("Australia");
-  await visitor.getByTestId("staff-emergency_name").fill("Em Contact");
-  await visitor.getByTestId("staff-emergency_relationship").fill("Sibling");
-  await visitor.getByTestId("staff-emergency_phone").fill("+61 422 333 444");
-  await visitor.getByTestId("staff-citizen-yes").click();
-  await visitor.getByTestId("staff-next").click();
-  for (const [slug, expiry] of [["passport", inDays(1500)], ["academic", ""], ["health-insurance", inDays(300)]]) {
-    const step = visitor.getByTestId(`staff-doc-${slug}`);
-    if (expiry) await visitor.getByTestId(`staff-expiry-${slug}`).fill(expiry);
-    await step.locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: PDF });
-    await expect.poll(() => sql(`select count(*) from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.id = '${profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
-  }
-  await visitor.getByTestId("staff-next").click();
-  await visitor.getByTestId("staff-submit").click();
-  await expect(visitor.getByTestId("staff-onboard-submitted")).toBeVisible();
-  await waitForHrMail("hr.one@lab.example.test", /has uploaded documents/);
-
-  // 4. Review, offer upload and send in the admin UI.
-  await office.reload();
-  await expectStatus(office, "Documents submitted");
-  for (const id of sql(`select id from hr.staff_documents where profile_id = '${profileId}' and is_current`).split("\n")) {
-    await office.getByTestId(`staff-doc-approve-${id}`).click();
-    await expect(office.getByTestId(`staff-doc-approve-${id}`)).toHaveCount(0);
-  }
-  await employeeAction(office, "upload_offer", async () => office.getByTestId("staff-offer-file").setInputFiles({ name: "offer.pdf", mimeType: "application/pdf", buffer: await offerPdf(2) }));
-  await expect(office.getByTestId("staff-action-send_offer")).toBeVisible();
-  await employeeAction(office, "send_offer");
-  await expectStatus(office, "Offer sent");
-  const offerToken = linkToken((await waitForHrMail(applicant.email, /offer letter from Skyline/i)).text);
-
-  // 5. The applicant signs on the page.
-  await visitor.goto(`/staff/offer#t=${offerToken}`);
-  await expect(visitor.getByRole("heading", { name: "Your offer letter" })).toBeVisible();
-  await expect(visitor.getByTestId("offer-open-pdf")).toHaveAttribute("target", "_blank");
-  await visitor.getByLabel(/Your full name/).fill("Jo Journey");
-  await visitor.getByRole("checkbox").check();
-  await visitor.getByRole("button", { name: "Sign the offer" }).click();
-  await expect(visitor.getByRole("heading", { name: "Your signed offer" })).toBeVisible();
-  const signedMail = await waitForHrMail(applicant.email, /Your signed offer letter/);
-  expect(signedMail.attachments[0]?.ContentType).toBe("application/pdf");
-
-  // 6. Activation: the Auth invite, the password on /staff/welcome, then My HR.
-  await office.reload();
-  await expectStatus(office, "Offer signed");
-  await employeeAction(office, "activate", async () => office.getByTestId("staff-joining-date").fill(inDays(21)));
-  await expect(office.getByTestId("staff-action-resend_activation")).toBeVisible();
-  await visitor.goto(await authLanding(await latestLink(applicant.email), baseURL!));
-  await expect(visitor.getByRole("heading", { name: "Welcome to Skyline" })).toBeVisible();
-  await visitor.getByLabel(/^Password/).fill(PASSWORD);
-  await visitor.getByLabel(/^Confirm password/).fill(PASSWORD);
-  await visitor.getByRole("button", { name: "Set password and continue" }).click();
-  await expect(visitor.getByRole("heading", { name: "My HR" })).toBeVisible();
-  expect(sql(`select status from hr.staff_profiles where id = '${profileId}'`)).toBe("active");
-
-  // 7. A fresh sign-in through the normal form lands on My HR with the role, documents and the signed offer.
-  await signOutEverywhere(visitor);
-  await signInThroughTheForm(visitor, applicant.email);
-  await expect(visitor).toHaveURL(/\/staff$/);
-  await expect(visitor.getByRole("heading", { name: "My HR" })).toBeVisible();
-  await expect(visitor.getByTestId("my-hr-role")).toContainText("Trainer");
-  await expect(visitor.getByTestId("my-hr-document")).toHaveCount(3);
-  await expect(visitor.getByRole("button", { name: "Open the signed offer" })).toBeVisible();
+  // 3-7. Details and documents by link, review, offer, signing, activation, sign in to My HR (shared with the Careers journey).
+  await journeyFromDocumentLink(visitor, office, baseURL!, { email: applicant.email, profileId, fullName: "Jo Journey", street: "1 Journey St" });
+  expect(sql(`select (joining_date is not null)::text from hr.employment where profile_id = '${profileId}'`)).toBe("true");
 });
 
 test("the public form: the same thank-you for an address that already applied, and a fake resume is refused", async ({ page }) => {
@@ -142,8 +74,8 @@ test("an unknown or used onboarding link shows 'This link cannot be used'", asyn
   expect((await onboard({ action: "open", t: "y".repeat(43) })).status).toBe(403);
 });
 
-test("Careers: apply for a job with the same no-login form, then Jobs > Applicants sends the document link", async ({ browser }) => {
-  const job = sql(`insert into hr.jobs(title, description, employment_type, location) values ('E2E Trainer ${Date.now()}', 'Teach our students.', 'full_time', 'Melbourne') returning id || '|' || title`).split("\n")[0].split("|");
+test("Careers: the same no-login form with the job, then Candidates (shortlist, interview, selected, hire and send document link) and the full journey to My HR", async ({ browser, baseURL }) => {
+  const job = sql(`insert into hr.jobs(title, description, employment_type, location, department) values ('E2E Trainer ${Date.now()}', 'Teach our students.', 'full_time', 'Melbourne', 'Training') returning id || '|' || title`).split("\n")[0].split("|");
   const who = person("careers");
   const visitor = await (await browser.newContext()).newPage();
   await visitor.goto("/careers");
@@ -162,22 +94,41 @@ test("Careers: apply for a job with the same no-login form, then Jobs > Applican
   await visitor.getByTestId("job-apply-submit").click();
   await expect(visitor.getByTestId("job-apply-thanks")).toBeVisible();
   const profileId = sql(`select id from hr.staff_profiles where email = '${who.email}'`);
-  expect(sql(`select p.status || '/' || j.status || '/' || (j.cover_letter_path is not null) || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("applied/applied/true/0");
+  expect(sql(`select p.status || '/' || j.status || '/' || j.stage || '/' || (j.cover_letter_path is not null) || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("applied/applied/screening/true/0");
   await waitForHrMail(who.email, new RegExp(`We received your application: ${job[1]}`));
 
+  // The admin: no document link from Employees while the job application is open; the pipeline on Candidates.
   const admin = await createAdmin("careers-admin");
   const office = await (await browser.newContext()).newPage();
   await signInAsAdmin(office, admin.email);
-  await office.goto(`/admin/jobs?tab=applicants&job=${job[0]}`);
-  await expect(office.getByTestId("applicants-table")).toContainText(who.email);
-  const appId = sql(`select id from hr.job_applications where profile_id = '${profileId}'`);
-  await office.getByTestId(`applicant-send-${appId}`).click();
-  await expect(office.getByTestId("applicant-dialog")).toContainText("Hired");
-  await office.getByTestId("applicant-confirm").click();
-  await expect(office.getByTestId("applicants-notice")).toContainText("document link was emailed");
-  expect(sql(`select p.status || '/' || j.status from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("invited/hired");
-  await waitForHrMail(who.email, /details and documents/i);
   await office.goto(`/admin/staff/employees/${profileId}`);
-  await expect(office.getByTestId("staff-job-applications")).toContainText(job[1]);
+  await expect(office.getByTestId("staff-hire-hint")).toContainText(job[1]);
+  await expect(office.getByTestId("staff-action-send_documents_link")).toHaveCount(0);
+  await office.goto(`/admin/staff/candidates?job=${job[0]}`);
+  await expect(office.getByTestId("candidates-table")).toContainText(who.email);
+  await office.getByRole("link", { name: "Cam Careers" }).click();
+  await expect(office).toHaveURL(/\/admin\/staff\/candidates\/[0-9a-f-]{36}$/);
+  await expect(office.getByTestId("candidate-view-resume")).toContainText("cv.pdf");
+  await expect(office.getByTestId("candidate-view-cover_letter")).toContainText("letter.pdf");
+  await expect(office.getByTestId("candidate-action-hired")).toHaveCount(0);
+  await candidateAction(office, "shortlisted");
+  await expect(office.getByTestId("candidate-status")).toHaveText("Shortlisted");
+  await candidateAction(office, "interview", async () => {
+    await office.getByTestId("candidate-interview-at").fill("2026-12-01T10:00");
+    await office.getByTestId("candidate-interview-notes").fill("Bring the portfolio.");
+  });
+  await expect(office.getByTestId("candidate-status")).toHaveText("Interview");
+  await candidateAction(office, "selected");
+  await expect(office.getByTestId("candidate-status")).toHaveText("Selected");
+  await candidateAction(office, "hired");
+  await expect(office).toHaveURL(new RegExp(`/admin/staff/employees/${profileId}$`));
+  await expectStatus(office, "Invited");
+  await expect(office.getByTestId("staff-employment")).toContainText(job[1]);
+  await expect(office.getByTestId("staff-job-applications")).toContainText("Hired");
   await expect(office.getByTestId("staff-job-cover-letter")).toHaveText("I would love to teach here.");
+  expect(sql(`select p.status || '/' || j.status || '/' || e.job_title || '/' || e.department || '/' || coalesce(e.joining_date::text, 'none') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id join hr.employment e on e.profile_id = p.id where p.id = '${profileId}'`)).toBe(`invited/hired/${job[1]}/Training/none`);
+
+  // The rest is the same as Enroll now: documents by link, review, offer, signing, activation, My HR (with the job).
+  await journeyFromDocumentLink(visitor, office, baseURL!, { email: who.email, profileId, fullName: "Cam Careers", street: "2 Careers Rd", jobTitle: job[1] });
+  expect(sql(`select (joining_date is not null)::text from hr.employment where profile_id = '${profileId}'`)).toBe("true");
 });

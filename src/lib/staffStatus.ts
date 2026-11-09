@@ -16,7 +16,7 @@ export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
   active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
-/** Same table as hr.staff_transition_allowed() (migration 20261109100000). Resending or revoking a link changes no status. */
+/** Same table as hr.staff_transition_allowed() (migration 20261110090000). Resending or revoking a link changes no status. */
 const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
   ["applied", "invited"], ["applied", "rejected"],
   ["invited", "documents_submitted"], ["invited", "rejected"],
@@ -47,10 +47,12 @@ export interface EmployeeContext {
   /** The open (not withdrawn, not signed) offer: uploaded only, or sent. */
   offer: { sent: boolean } | null;
   activationInvited: boolean;
+  /** HR-02j: an open job application (a Careers applicant or manual candidate): the document link comes from Candidates ("Hire"). */
+  openJobApplication?: boolean;
 }
 export function employeeActions(c: EmployeeContext): EmployeeAction[] {
   switch (c.status) {
-    case "applied": return ["send_documents_link", "reject"];
+    case "applied": return c.openJobApplication ? ["reject"] : ["send_documents_link", "reject"];
     case "invited": return [...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
     case "documents_submitted": {
       const out: EmployeeAction[] = [];

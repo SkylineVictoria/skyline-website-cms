@@ -21,10 +21,10 @@ export function HrPager({ offset, total, onChange }: { offset: number; total: nu
 
 export function HrFields({ value, onChange, linked }: { value: PersonForm; onChange: (value: PersonForm) => void; linked?: boolean }) {
   return <div className="grid gap-3 sm:grid-cols-2">
-    <Field label="First name" required><TextInput required maxLength={100} value={value.firstName} onChange={(e) => onChange({ ...value, firstName: e.target.value })} /></Field>
-    <Field label="Last name" required><TextInput required maxLength={100} value={value.lastName} onChange={(e) => onChange({ ...value, lastName: e.target.value })} /></Field>
-    <Field label="Email" required hint={linked ? "Managed through the linked sign-in account." : undefined}><TextInput required readOnly={linked} type="email" maxLength={254} value={value.email} onChange={(e) => onChange({ ...value, email: e.target.value })} /></Field>
-    <Field label="Phone" required hint="Include the country code."><TextInput required type="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} /></Field>
+    <Field label="First name" required><TextInput required maxLength={100} value={value.firstName} onChange={(e) => onChange({ ...value, firstName: e.target.value })} data-testid="hr-person-first" /></Field>
+    <Field label="Last name" required><TextInput required maxLength={100} value={value.lastName} onChange={(e) => onChange({ ...value, lastName: e.target.value })} data-testid="hr-person-last" /></Field>
+    <Field label="Email" required hint={linked ? "Managed through the linked sign-in account." : undefined}><TextInput required readOnly={linked} type="email" maxLength={254} value={value.email} onChange={(e) => onChange({ ...value, email: e.target.value })} data-testid="hr-person-email" /></Field>
+    <Field label="Mobile" required hint="Australian mobile, or with the country code."><TextInput required type="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} data-testid="hr-person-phone" /></Field>
   </div>;
 }
 

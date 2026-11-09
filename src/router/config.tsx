@@ -69,7 +69,8 @@ import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
-import { LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
+import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
+import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
@@ -192,13 +193,20 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
-          // Staff group > Employees. The old Agencies > Staff addresses redirect here (the menu row may still point at /admin/staff
-          // until migration 20261109100000 moves it).
+          // Staff group (HR-02j): Candidates, Employees, Jobs. The old Agencies > Staff addresses and the Master Data addresses of
+          // 20261109153953 (/admin/candidates, /admin/employees) redirect here.
           { path: "staff", element: <Navigate to="/admin/staff/employees" replace /> },
           { path: "staff/employees", element: <RequireAdmin><StaffPage /></RequireAdmin> },
           { path: "staff/employees/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
+          { path: "staff/candidates", element: <RequireAdmin><CandidatesPage /></RequireAdmin> },
+          { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
+          { path: "candidates", element: <Navigate to="/admin/staff/candidates" replace /> },
+          { path: "candidates/:id", element: <LegacyCandidateRedirect /> },
+          { path: "employees", element: <Navigate to="/admin/staff/employees" replace /> },
+          { path: "employees/:id", element: <LegacyEmployeeRedirect /> },
+          { path: "employees/:id/onboarding", element: <LegacyEmployeeRedirect /> },
           { path: "staff/:id", element: <LegacyStaffDetailRedirect /> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },

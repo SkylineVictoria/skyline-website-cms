@@ -5,6 +5,12 @@
 // link that was used (submitted) is read-only. Files pass through this function: type and size are checked by content before
 // anything is stored, and the database says whether this link may upload that document type BEFORE the file is written.
 import { STAFF_READER_CATEGORY } from "./reader.ts";
+import { OFFER_CONSENT, type Signature } from "../_shared/offer-pdf.ts";
+//
+// Offer by link (HR-02e; /staff/offer#t=, purpose offer): offer_open, offer_view_url (offer, or the signed copy afterwards) and
+// offer_sign. Signing re-checks the link, downloads the offer and compares it with the sha256 recorded at upload, adds the
+// signature page (typed name, time, IP, browser, the fixed consent text, the offer hash), stores the signed copy as a NEW file
+// and records it with its own sha256; any refusal after the upload removes that file. The consent text is fixed server-side.
 
 export const LINK_INVALID = "This link is not valid any more. Ask us for a new one.";
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -12,10 +18,10 @@ export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;
 /** Invalid-link answers allowed per caller IP in BAD_LINK_WINDOW seconds before that IP is refused for every action. */
 export const BAD_LINK_LIMIT = 20;
 export const BAD_LINK_WINDOW = 600;
-export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit"] as const;
+export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
-export interface OnboardingRequest { action: string; token: unknown; ip: string | null; fields: Record<string, unknown>; file?: File | null }
+export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null }
 export interface OnboardingResult { status: number; body: Record<string, unknown>; headers?: Record<string, string> }
 export interface DocumentToRead { id: string; category: string; filename: string; mimeType: string; storagePath: string }
 export interface OnboardingDeps {
@@ -29,6 +35,11 @@ export interface OnboardingDeps {
   scheduleExtraction(doc: DocumentToRead): void;
   hash(value: string): Promise<string>;
   newId(): string;
+  /** Offer signing: the stored file, its sha256, and the signature page added with pdf-lib. */
+  download(path: string): Promise<Uint8Array | null>;
+  sha256(bytes: Uint8Array): Promise<string>;
+  stampOffer(original: Uint8Array, signature: Signature): Promise<Uint8Array>;
+  now(): Date;
 }
 
 const TOKEN = /^[A-Za-z0-9_-]{40,128}$/;
@@ -94,6 +105,18 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
   const docId = (): string | null => (typeof req.fields.id === "string" && UUID.test(req.fields.id) ? req.fields.id : null);
 
   switch (action) {
+    case "offer_open": {
+      const { data, error } = await call("hr_svc_offer_open");
+      return error ? fromDb(error) : { status: 200, body: { view: data, consent: OFFER_CONSENT } };
+    }
+    case "offer_view_url": {
+      const which = req.fields.which === "signed" ? "signed" : "offer";
+      const { data, error } = await call("hr_svc_offer_path", { p_which: which });
+      if (error) return fromDb(error);
+      const url = await deps.signedUrl(String(data), 300);
+      return url ? { status: 200, body: { url } } : { status: 500, body: { error: "The offer could not be opened." } };
+    }
+    case "offer_sign": return signOffer(req, deps, call);
     case "open": return view("hr_svc_onboarding_open");
     case "submit": return view("hr_svc_onboarding_submit");
     case "save": {
@@ -164,4 +187,35 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       return { status: 200, body: { view: result.view, id: result.id } };
     }
   }
+}
+
+type Call = (name: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
+
+async function signOffer(req: OnboardingRequest, deps: OnboardingDeps, call: Call): Promise<OnboardingResult> {
+  const name = String(req.fields.name ?? "").replace(/\s+/g, " ").trim();
+  // eslint-disable-next-line no-control-regex -- a signature name never carries control characters
+  if (!name || name.length > 200 || /[\u0000-\u001f\u007f<>]/.test(name)) return bad("Type your full name to sign.", "name");
+  if (req.fields.consent !== true) return bad("Tick the box to agree.", "consent");
+  const offer = await call("hr_svc_offer_file");
+  if (offer.error) return fromDb(offer.error);
+  const file = offer.data as { profileId: string; offerId: string; path: string; sha256: string; filename: string };
+  const original = await deps.download(file.path);
+  // The file must be exactly the one the admin uploaded and sent.
+  if (!original || (await deps.sha256(original)) !== file.sha256) return { status: 500, body: { error: "The offer letter could not be checked. Please contact us." } };
+  const signedAt = deps.now().toISOString();
+  let signed: Uint8Array;
+  try {
+    signed = await deps.stampOffer(original, { signerName: name, signedAt, ip: req.ip, userAgent: (req.userAgent ?? "").slice(0, 500) || null, consent: OFFER_CONSENT,
+      offerFilename: file.filename, offerSha256: file.sha256 });
+  } catch {
+    return { status: 500, body: { error: "The offer could not be signed. Please contact us." } };
+  }
+  const signedSha = await deps.sha256(signed);
+  const path = `${file.profileId}/offer/signed-${deps.newId()}.pdf`;
+  const stored = await deps.upload(path, signed, "application/pdf");
+  if (stored.error) return { status: 503, body: { error: "Signing failed. Please try again." } };
+  const recorded = await call("hr_svc_offer_sign", { p_offer: file.offerId, p_signer_name: name, p_consent_text: OFFER_CONSENT, p_ip: req.ip,
+    p_user_agent: (req.userAgent ?? "").slice(0, 500) || null, p_signed_path: path, p_signed_sha256: signedSha });
+  if (recorded.error) { await deps.remove([path]); return fromDb(recorded.error); }
+  return { status: 200, body: { view: recorded.data, consent: OFFER_CONSENT } };
 }

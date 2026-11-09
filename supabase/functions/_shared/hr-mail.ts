@@ -6,7 +6,7 @@
 //   * Outbox mail (hr.staff_emails, queued by the database in the same transaction as the change): application received,
 //     already applied, new application (admin), documents uploaded (admin), rejected. drainHrEmails() claims, sends and
 //     records each one. Never a token in these.
-//   * Link mail (document invite, re-upload invite; offer in HR-02e): the token exists only in the request that made it. The
+//   * Link mail (document invite, re-upload invite, offer): the token exists only in the request that made it. The
 //     function sends it inline with sendLinkEmail() and logs the outcome WITHOUT the token. If the send fails the caller cancels
 //     that link at once, so nobody holds a valid link they never received, and "send again" makes exactly one new link.
 //
@@ -16,8 +16,9 @@ import { isLocalSupabaseUrl } from "./captcha.ts";
 
 export type HrEmailKind = "application_received" | "already_applied" | "admin_new_application" | "document_invite" | "reupload_invite"
   | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected";
-/** Outbox kinds this module can send now (the offer and the signed copies with their PDF arrive in HR-02e). */
-export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected"];
+/** Outbox kinds this module sends. The two signed-offer kinds carry the signed PDF (DrainPort.attachment). */
+export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed"];
+export const ATTACHMENT_KINDS: readonly HrEmailKind[] = ["signed_offer", "admin_offer_signed"];
 const EMAIL = /^[^@\s<>",]+@[^@\s<>",]+\.[^@\s<>",]+$/;
 
 export interface HrMailConfig { from: { name: string; email: string } | null; adminTo: string[]; siteUrl: string | null; problems: string[] }
@@ -83,6 +84,16 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
     case "rejected":
       return { subject: "Your staff application",
         text: `Hello ${name},\n\nThank you for your interest in working with us. After reviewing your application we will not be continuing with it at this time.\n\nWe wish you all the best.${SIGN_OFF}` };
+    case "signed_offer":
+      return { subject: "Your signed offer letter",
+        text: `Hello ${name},\n\nThank you for signing your offer letter. A copy of the signed letter is attached for your records.\n\nWe will be in touch about your start and your staff account.${SIGN_OFF}` };
+    case "admin_offer_signed":
+      return { subject: oneLine(`${name} signed the offer`),
+        text: `${name} (${oneLine(payload.email, 254)}) has signed the offer letter. The signed copy is attached.${adminLink}` };
+    case "offer":
+      if (!ctx.link) return null;
+      return { subject: "Your offer letter from Skyline",
+        text: `Hello ${name},\n\nWe are pleased to offer you a position. Please read your offer letter and, if you accept it, sign it on the page using this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${SIGN_OFF}` };
     case "document_invite":
       if (!ctx.link) return null;
       return { subject: "Next step: your details and documents",
@@ -107,8 +118,11 @@ export function outcomeState(outcome: SendOutcome): { state: "sent" | "queued" |
 }
 
 export interface HrEmailRow { id: number; profileId: string; kind: HrEmailKind; audience: "applicant" | "admin"; to: string | null; payload: Record<string, unknown>; attempts: number }
+export type HrAttachment = { name: string; contentType: string; contentBase64: string };
 export interface DrainPort {
   claim(kinds: readonly string[], limit: number): Promise<HrEmailRow[]>;
+  /** The signed offer PDF for a signed-offer email (payload.offerId), or null when it cannot be found. */
+  attachment?(row: HrEmailRow): Promise<HrAttachment | null>;
   result(id: number, state: "sent" | "queued" | "failed", messageId?: string, error?: string): Promise<void>;
 }
 
@@ -122,7 +136,14 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
     const missing = !config.from ? "EF_HR_EMAIL_FROM is not set" : !to ? (row.audience === "admin" ? "EF_HR_ADMIN_NOTIFY_TO is not set" : "no recipient") : null;
     const message = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
     if (missing || !message) { await port.result(row.id, "failed", undefined, missing ?? "no template"); totals.failed++; continue; }
-    const outcome = await provider.send({ deliveryId: `hr-${row.id}`, from: config.from!, to, subject: message.subject, textBody: message.text });
+    let attachments: HrAttachment[] | undefined;
+    if (ATTACHMENT_KINDS.includes(row.kind)) {
+      // These emails exist to deliver the signed PDF: without it they are not sent (failed, visible to the admin, retryable).
+      const file = port.attachment ? await port.attachment(row).catch(() => null) : null;
+      if (!file) { await port.result(row.id, "failed", undefined, "the signed offer PDF could not be attached"); totals.failed++; continue; }
+      attachments = [file];
+    }
+    const outcome = await provider.send({ deliveryId: `hr-${row.id}`, from: config.from!, to, subject: message.subject, textBody: message.text, ...(attachments ? { attachments } : {}) });
     const mapped = outcomeState(outcome);
     await port.result(row.id, mapped.state, mapped.messageId, mapped.error);
     if (mapped.state === "sent") totals.sent++; else if (mapped.state === "queued") totals.requeued++; else totals.failed++;
@@ -131,7 +152,7 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
 }
 
 /** A link email, sent inline. "skipped" = sending is switched off: the caller shows the link to the admin once instead. */
-export async function sendLinkEmail(provider: EmailProvider | null, config: HrMailConfig, mail: { kind: "document_invite" | "reupload_invite"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
+export async function sendLinkEmail(provider: EmailProvider | null, config: HrMailConfig, mail: { kind: "document_invite" | "reupload_invite" | "offer"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
   Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }> {
   if (!provider) return { state: "skipped", error: "email sending is switched off" };
   if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };

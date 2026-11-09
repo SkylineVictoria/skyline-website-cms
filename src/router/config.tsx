@@ -69,6 +69,7 @@ import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import { LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
+import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 
@@ -108,6 +109,7 @@ const routes: RouteObject[] = [
   // The password sign-up page is gone (HR-02b): old confirmation links land on Enroll now > Staff.
   { path: "/staff/apply", element: <Navigate to="/login?mode=enroll&as=staff" replace /> },
   { path: "/staff/onboard", element: <StaffOnboardingPage /> },
+  { path: "/staff/offer", element: <StaffOfferPage /> },
   { path: "/staff", element: <StaffHomePage /> },
   {
     path: "/agency",

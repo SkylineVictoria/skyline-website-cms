@@ -1,5 +1,5 @@
 // Staff administration (verify_jwt = true): link emails (document / re-upload invites), reject with the optional email, retry
-// a failed email, drain the HR outbox. hr_admin_* run with the caller's JWT (hr.require_admin decides); the service role is used
+// a failed email, drain the HR outbox; offers: upload (multipart, PDF checked with pdf-lib), send, withdraw. hr_admin_* run with the caller's JWT (hr.require_admin decides); the service role is used
 // only to log email outcomes and to send queued mail. Rules and order live in core.ts.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -7,6 +7,8 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail } from "../_shared/hr-mail.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
+import * as PdfLib from "npm:pdf-lib@1.17.1";
+import { MAX_OFFER_BYTES, inspectOfferPdf } from "../_shared/offer-pdf.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -35,11 +37,24 @@ Deno.serve(async (req) => {
   if (configuration) return json(configuration, 503);
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "Authentication required." }, 401);
+  const length = Number(req.headers.get("content-length") ?? "0");
+  if (!Number.isFinite(length) || length > MAX_OFFER_BYTES + 64 * 1024) return json({ error: "The offer letter must be a PDF of 7 MB or smaller.", field: "file" }, 413);
   let body: Record<string, unknown> = {};
-  try { body = (await req.json()) as Record<string, unknown>; } catch { return json({ error: "The request could not be read." }, 400); }
+  let file: { name: string; bytes: Uint8Array } | null = null;
+  try {
+    if ((req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) {
+      const form = await req.formData();
+      body = { action: form.get("action"), profileId: form.get("profileId") };
+      const f = form.get("file");
+      if (f && typeof f !== "string") file = { name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) };
+    } else {
+      body = (await req.json()) as Record<string, unknown>;
+    }
+  } catch { return json({ error: "The request could not be read." }, 400); }
 
   const caller = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false } });
   const service = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const bucket = service.storage.from("staff-documents");
   const asError = (e: { code?: string; message?: string } | null) => (e ? { code: e.code, message: e.message } : null);
 
   const result = await handleAdmin(body, {
@@ -53,6 +68,12 @@ Deno.serve(async (req) => {
     sendLink: (mail) => sendLinkEmail(provider, config, mail),
     linkUrl: (purpose, token) => linkUrl(config.siteUrl!, purpose, token),
     drain: () => drainHrOutbox(service, env),
+    file,
+    inspectOffer: (bytes) => inspectOfferPdf(PdfLib, bytes),
+    upload: async (path, bytes, contentType) => { const { error } = await bucket.upload(path, bytes, { contentType, upsert: false }); return { error: error ? error.message : null }; },
+    remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
+    sha256: async (bytes) => hex(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
+    newId: () => crypto.randomUUID(),
   });
   return json(result.body, result.status);
 });

@@ -8,11 +8,18 @@
 // "send again" makes exactly one new live link. An expired link is resent the same way. With sending switched off the link is
 // returned to the admin once to pass on.
 import type { HrMailConfig } from "../_shared/hr-mail.ts";
+//
+// Offers (HR-02e): offer_upload checks the PDF by content (pdf-lib must load AND modify it; encrypted or protected files are
+// refused with a clear message) BEFORE anything is stored, stores it under {profile}/offer/ with the service role, and records
+// it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
+// replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+type LinkKind = "document_invite" | "reupload_invite" | "offer";
+type LinkPurpose = "documents" | "reupload" | "offer";
 export interface AdminResult { status: number; body: Record<string, unknown> }
 type DbError = { code?: string; message?: string } | null;
 export interface AdminDeps {
@@ -22,9 +29,18 @@ export interface AdminDeps {
   serviceRpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: DbError }>;
   newLink(): Promise<{ token: string; hash: string }>;
   config: HrMailConfig;
-  sendLink(mail: { kind: "document_invite" | "reupload_invite"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
+  sendLink(mail: { kind: LinkKind; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
     Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
-  linkUrl(purpose: "documents" | "reupload", token: string): string;
+  linkUrl(purpose: LinkPurpose, token: string): string;
+  /** The uploaded file (multipart offer_upload), or null. */
+  file?: { name: string; bytes: Uint8Array } | null;
+  /** pdf-lib check of an offer (load and modify in memory). */
+  inspectOffer(bytes: Uint8Array): Promise<{ ok: true; pages: number } | { ok: false; error: string }>;
+  /** Service-role storage in the private staff-documents bucket. */
+  upload(path: string, bytes: Uint8Array, contentType: string): Promise<{ error: string | null }>;
+  remove(paths: string[]): Promise<void>;
+  sha256(bytes: Uint8Array): Promise<string>;
+  newId(): string;
   /** Sends queued outbox mail now (best effort). */
   drain(): Promise<{ sent: number; failed: number; requeued: number }>;
 }
@@ -35,36 +51,79 @@ function fromDb(error: NonNullable<DbError>): AdminResult {
   return { status: 500, body: { error: "Something went wrong. Please try again shortly." } };
 }
 
+/** A safe display name for the offer file (no path, no control characters, ends in .pdf). */
+export function offerName(name: string): string {
+  // eslint-disable-next-line no-control-regex -- strip control characters from a user-supplied file name
+  const base = name.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 200) || "offer-letter";
+  return /\.pdf$/i.test(base) ? base : `${base}.pdf`;
+}
+
 export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps): Promise<AdminResult> {
   const action = String(body.action ?? "");
   if (!(ACTIONS as readonly string[]).includes(action)) return { status: 400, body: { error: "Unknown action." } };
   const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
   if (action !== "drain" && action !== "retry_email" && !profileId) return { status: 400, body: { error: "Choose an application." } };
 
+  // Makes a link (only its hash reaches the database through `rpc`), emails it inline, logs the outcome without the token, and
+  // cancels that link at once when the email failed. Shared by document, re-upload and offer links.
+  const sendLinkFlow = async (purpose: LinkPurpose, rpc: string, args: Record<string, unknown>): Promise<AdminResult> => {
+    if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+    const link = await deps.newLink();
+    const made = await deps.adminRpc(rpc, { ...args, p_token_hash: link.hash });
+    if (made.error) return fromDb(made.error);
+    const invite = made.data as { invite: { id: string; expiresAt: string }; email: string; name: string; rejected?: Array<{ category: string; note: string }> };
+    const kind: LinkKind = purpose === "documents" ? "document_invite" : purpose === "reupload" ? "reupload_invite" : "offer";
+    const url = deps.linkUrl(purpose, link.token);
+    const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
+    // The log never holds the token or the link: only which invite it was and what happened.
+    await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+      p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
+    if (sent.state === "failed") {
+      const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: invite.invite.id });
+      return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null } };
+    }
+    if (sent.state === "skipped") {
+      // Sending is off: hand the link to the admin ONCE to pass on themselves. It is not stored anywhere.
+      return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+    }
+    return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt } };
+  };
+
   switch (action as AdminAction) {
     case "send_invite": {
       const purpose = body.purpose === "reupload" ? "reupload" : body.purpose === "documents" ? "documents" : null;
       if (!purpose) return { status: 400, body: { error: "Choose a document or re-upload link." } };
-      if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
-      const link = await deps.newLink();
-      const made = await deps.adminRpc("hr_admin_staff_invite", { p_id: profileId, p_purpose: purpose, p_token_hash: link.hash });
-      if (made.error) return fromDb(made.error);
-      const invite = made.data as { invite: { id: string; expiresAt: string }; email: string; name: string; rejected?: Array<{ category: string; note: string }> };
-      const kind = purpose === "documents" ? "document_invite" : "reupload_invite";
-      const url = deps.linkUrl(purpose, link.token);
-      const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
-      // The log never holds the token or the link: only which invite it was and what happened.
-      await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
-        p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
-      if (sent.state === "failed") {
-        const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: invite.invite.id });
-        return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null } };
+      return sendLinkFlow(purpose, "hr_admin_staff_invite", { p_id: profileId, p_purpose: purpose });
+    }
+    case "offer_send":
+      // First send (documents_submitted > offer_sent) or resend (a new link replaces the old one); same failure rules.
+      return sendLinkFlow("offer", "hr_admin_staff_offer_send", { p_id: profileId });
+    case "offer_withdraw": {
+      const note = String(body.note ?? "").trim();
+      if (!note || note.length > 2000) return { status: 400, body: { error: "Add a note explaining why the offer is withdrawn." } };
+      const r = await deps.adminRpc("hr_admin_staff_offer_withdraw", { p_id: profileId, p_note: note });
+      return r.error ? fromDb(r.error) : { status: 200, body: { detail: r.data } };
+    }
+    case "offer_upload": {
+      const file = deps.file;
+      if (!file) return { status: 400, body: { error: "Choose the offer letter (PDF).", field: "file" } };
+      // Admin and state first, with the caller's JWT: a non-admin or a wrong state never gets a file stored.
+      const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
+      if (before.error) return fromDb(before.error);
+      if ((before.data as { profile?: { status?: string } } | null)?.profile?.status !== "documents_submitted") {
+        return { status: 400, body: { error: "Upload an offer once the documents are submitted (withdraw a sent offer first)." } };
       }
-      if (sent.state === "skipped") {
-        // Sending is off: hand the link to the admin ONCE to pass on themselves. It is not stored anywhere.
-        return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
-      }
-      return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt } };
+      const checked = await deps.inspectOffer(file.bytes);
+      if (!checked.ok) return { status: 400, body: { error: checked.error, field: "file" } };
+      const sha256 = await deps.sha256(file.bytes);
+      const path = `${profileId}/offer/${deps.newId()}.pdf`;
+      const stored = await deps.upload(path, file.bytes, "application/pdf");
+      if (stored.error) return { status: 503, body: { error: "The upload failed. Please try again." } };
+      const added = await deps.adminRpc("hr_admin_staff_offer_add", { p_id: profileId, p_path: path, p_filename: offerName(file.name), p_size: file.bytes.length, p_sha256: sha256 });
+      if (added.error) { await deps.remove([path]); return fromDb(added.error); }
+      const result = added.data as { offer: unknown; replacedPath?: string | null };
+      if (result.replacedPath) await deps.remove([result.replacedPath]);
+      return { status: 200, body: { offer: result.offer, pages: checked.pages } };
     }
     case "revoke_invite": {
       const r = await deps.adminRpc("hr_admin_staff_invite_revoke", { p_id: profileId, p_purpose: "documents" });

@@ -75,3 +75,14 @@ export const onboarding = {
     return viewOf(await invoke(body));
   },
 };
+
+/** /staff/offer#t=: the offer sent by link (HR-02e). The consent wording comes from the server and is stored with the signature. */
+export interface OfferView {
+  name: string; status: StaffStatus; readOnly: boolean; expiresAt: string;
+  offer: { id: string; filename: string; fileSize: number; sentAt: string | null; signedAt: string | null; signerName: string | null };
+}
+export const offerLink = {
+  open: async (t: string) => { const r = await invoke({ action: "offer_open", t }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
+  viewUrl: async (t: string, which: "offer" | "signed") => String((await invoke({ action: "offer_view_url", t, which })).url ?? ""),
+  sign: async (t: string, name: string, consent: boolean) => { const r = await invoke({ action: "offer_sign", t, name, consent }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
+};

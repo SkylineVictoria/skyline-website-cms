@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(221);
+select plan(230);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -191,6 +191,10 @@ select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'of
 select ok((select expires_at between now() + interval '29 days' and now() + interval '31 days' from hr.staff_invites where token_hash = pg_temp.h('off-1')), 'an offer link lasts 30 days');
 select throws_ok($$select public.hr_svc_offer_open(pg_temp.h('tok-4'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a document link does not open the offer');
 select is(public.hr_svc_offer_open(pg_temp.h('off-1'))->'offer'->>'filename', 'offer.pdf', 'the offer opens');
+select is(public.hr_svc_offer_file(pg_temp.h('off-1'))->>'sha256', repeat('c', 64), 'the signer gets the offer and the hash recorded at upload');
+select is(public.hr_svc_offer_path(pg_temp.h('off-1'), 'offer'), pg_temp.v('a1') || '/offer/offer.pdf', 'the offer page shows the offer');
+select throws_ok($$select public.hr_svc_offer_path(pg_temp.h('off-1'), 'signed')$$, 'P0002', 'The offer has not been signed yet.', 'no signed copy before signing');
+select throws_ok($$select public.hr_svc_offer_file(pg_temp.h('tok-4'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a document link cannot sign');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/offer/signed.pdf');
 select throws_ok($$select public.hr_svc_offer_sign(pg_temp.h('off-1'), (select id from hr.staff_offers where profile_id = pg_temp.v('a1')), '', 'I agree', '203.0.113.5', 'UA', pg_temp.v('a1') || '/offer/signed.pdf', repeat('d', 64))$$, '22023', 'Type your full name to sign.', 'a typed name is required');
 select throws_ok($$select public.hr_svc_offer_sign(pg_temp.h('off-1'), (select id from hr.staff_offers where profile_id = pg_temp.v('a1')), 'Ann Applicant', 'I agree', '203.0.113.5', 'UA', pg_temp.v('a1') || '/offer/offer.pdf', repeat('d', 64))$$, '22023', 'The signed file location is not valid.', 'the signed copy is a separate file');
@@ -199,6 +203,9 @@ select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'of
 select is((select signer_name || '/' || signer_ip || '/' || signed_sha256 from hr.staff_offers where profile_id = pg_temp.v('a1')), 'Ann Applicant/203.0.113.5/' || repeat('d', 64), 'name, IP and the signed file hash are recorded');
 select is((select string_agg(kind || ':' || audience, ',' order by id) from hr.staff_emails where profile_id = pg_temp.v('a1') and kind in ('signed_offer','admin_offer_signed')), 'signed_offer:applicant,admin_offer_signed:admin', 'the signed PDF goes to the applicant and to HR');
 select throws_ok($$select public.hr_svc_offer_sign(pg_temp.h('off-1'), (select id from hr.staff_offers where profile_id = pg_temp.v('a1')), 'Ann Applicant', 'I agree', 'x', 'UA', pg_temp.v('a1') || '/offer/signed.pdf', repeat('d', 64))$$, '23514', 'This has already been sent and can no longer be changed.', 'an offer is signed once');
+select throws_ok($$select public.hr_svc_offer_file(pg_temp.h('off-1'))$$, '23514', 'This has already been sent and can no longer be changed.', 'a signed offer gives nothing more to sign');
+select is(public.hr_svc_offer_path(pg_temp.h('off-1'), 'signed'), pg_temp.v('a1') || '/offer/signed.pdf', 'after signing the link shows the signed copy');
+select is(public.hr_svc_offer_signed_file((select id from hr.staff_offers where profile_id = pg_temp.v('a1')))->>'sha256', repeat('d', 64), 'the outbox finds the signed copy and its hash');
 
 -- withdraw (a second person)
 insert into t select 'w1', public.hr_svc_apply('Wes', 'Withdrawn', 'wes@example.test', '0400 000 301')->>'profileId';
@@ -390,6 +397,8 @@ select is(has_function_privilege('anon', 'public.hr_svc_onboarding_open(text)', 
 select is(has_function_privilege('authenticated', 'public.hr_svc_document_add(text, text, text, text, text, integer, date, uuid)', 'execute'), false, 'a signed-in user cannot call the link functions');
 select is(has_function_privilege('authenticated', 'public.hr_svc_apply(text, text, text, text)', 'execute'), false, 'the browser cannot apply around the CAPTCHA');
 select is(has_function_privilege('service_role', 'public.hr_svc_offer_sign(text, uuid, text, text, text, text, text, text)', 'execute'), true, 'the service role can');
+select is(has_function_privilege('anon', 'public.hr_svc_offer_file(text)', 'execute'), false, 'anon cannot read the offer file');
+select is(has_function_privilege('authenticated', 'public.hr_svc_offer_signed_file(uuid)', 'execute'), false, 'a signed-in user cannot read the signed file record');
 select is(has_table_privilege('authenticated', 'hr.staff_invites', 'select'), false, 'link hashes are not readable by users');
 select is(has_table_privilege('authenticated', 'hr.staff_emails', 'select'), false, 'the outbox is not readable by users');
 select is(has_column_privilege('authenticated', 'hr.staff_profiles', 'first_name', 'update'), false, 'no applicant edits through the Data API');

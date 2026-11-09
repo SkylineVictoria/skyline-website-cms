@@ -708,6 +708,52 @@ begin
  return public.hr_svc_offer_open(p_token_hash);
 end $fn$;
 
+-- What staff-onboarding needs to sign (HR-02e): the unsigned sent offer of this link, with its storage path and the sha256
+-- recorded at upload (the function checks the downloaded file against it before stamping). Only while the link can still sign.
+-- Never sent to the browser.
+create or replace function public.hr_svc_offer_file(p_token_hash text) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare i hr.staff_invites; p hr.staff_profiles; o hr.staff_offers;
+begin
+ i := hr.invite_for_write(p_token_hash, array['offer']);
+ select * into p from hr.staff_profiles where id = i.profile_id;
+ select * into o from hr.staff_offers where profile_id = p.id and sent_at is not null and withdrawn_at is null and signed_at is null;
+ if not found then raise exception 'This offer can no longer be signed.' using errcode = '23514'; end if;
+ return jsonb_build_object('profileId', p.id, 'offerId', o.id, 'path', o.storage_path, 'sha256', o.sha256, 'filename', o.filename, 'name', hr.staff_name(p));
+end $fn$;
+
+-- The file the offer page may show through a short signed URL: the offer itself, or (after signing) the signed copy.
+create or replace function public.hr_svc_offer_path(p_token_hash text, p_which text default 'offer') returns text
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare i hr.staff_invites; o hr.staff_offers;
+begin
+ i := hr.invite_resolve(p_token_hash, array['offer']);
+ select * into o from hr.staff_offers where profile_id = i.profile_id and sent_at is not null and withdrawn_at is null order by sent_at desc limit 1;
+ if not found then raise exception 'This link is not valid any more. Ask us for a new one.' using errcode = '28000'; end if;
+ if p_which = 'signed' then
+  if o.signed_path is null then raise exception 'The offer has not been signed yet.' using errcode = 'P0002'; end if;
+  return o.signed_path;
+ end if;
+ if p_which <> 'offer' then raise exception 'Unknown file.' using errcode = '22023'; end if;
+ return o.storage_path;
+end $fn$;
+
+-- The signed copy for the outbox (signed_offer / admin_offer_signed attach it). Service role only.
+create or replace function public.hr_svc_offer_signed_file(p_offer uuid) returns jsonb
+language sql stable security definer set search_path = public, hr, pg_temp as $fn$
+ select jsonb_build_object('path', o.signed_path, 'filename', o.filename, 'signerName', o.signer_name, 'signedAt', o.signed_at, 'sha256', o.signed_sha256)
+ from hr.staff_offers o where o.id = p_offer and o.signed_at is not null;
+$fn$;
+
+do $grants$
+declare f text;
+begin
+ foreach f in array array['public.hr_svc_offer_file(text)', 'public.hr_svc_offer_path(text, text)', 'public.hr_svc_offer_signed_file(uuid)'] loop
+  execute format('revoke all on function %s from public, anon, authenticated', f);
+  execute format('grant execute on function %s to service_role', f);
+ end loop;
+end $grants$;
+
 -- ------------------------------------------------------------------ email outbox (service role)
 -- Claims queued mail (and mail whose lease ran out), at most 3 attempts. Admin mail has to_email null.
 -- p_kinds limits the claim to the kinds the sender has templates for (null = every kind).

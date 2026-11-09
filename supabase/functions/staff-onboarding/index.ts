@@ -10,6 +10,8 @@ import { createDocumentExtractionProvider } from "../_shared/document-extraction
 import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
 import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
+import * as PdfLib from "npm:pdf-lib@1.17.1";
+import { stampSignedOffer } from "../_shared/offer-pdf.ts";
 
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
 
@@ -82,7 +84,8 @@ Deno.serve(async (req) => {
     EdgeRuntime.waitUntil(task);
   };
 
-  const result = await handleOnboarding({ action, token, ip, fields, file }, {
+  const userAgent = req.headers.get("user-agent");
+  const result = await handleOnboarding({ action, token, ip, userAgent, fields, file }, {
     takeRateLimit: async (b, limit, windowSeconds) => {
       const { data, error } = await admin.rpc("public_assistant_take_rate_limit", { p_bucket: b, p_limit: limit, p_window_seconds: windowSeconds });
       return !error && data === true; // a failed limiter fails closed
@@ -98,8 +101,13 @@ Deno.serve(async (req) => {
     scheduleExtraction,
     hash: sha256,
     newId: () => crypto.randomUUID(),
+    download: async (path) => { const { data } = await bucket.download(path); return data ? new Uint8Array(await data.arrayBuffer()) : null; },
+    sha256: async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)))].map((x) => x.toString(16).padStart(2, "0")).join(""),
+    stampOffer: (original, signature) => stampSignedOffer(PdfLib, original, signature),
+    now: () => new Date(),
   });
   // Submit queues "X has uploaded documents" for the admins: send it after the response.
-  if (action === "submit" && result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
+  // Signing queues the signed copy for the applicant and HR (with the PDF attached).
+  if ((action === "submit" || action === "offer_sign") && result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
   return json(result.body, result.status, result.headers ?? {});
 });

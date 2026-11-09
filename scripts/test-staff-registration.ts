@@ -3,6 +3,7 @@ import test from "node:test";
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createJiti } from "jiti";
+import * as PdfLib from "pdf-lib";
 
 // Offline unit tests for staff self-registration: phone normalisation (three twins kept in step), status transitions (kept in step with
 // the database), duplicate-check messages, submit rules, login routing and document reading with the deterministic mock provider.
@@ -19,6 +20,8 @@ const captchaLib = await load.import<typeof import("../supabase/functions/_share
 const onboard = await load.import<typeof import("../supabase/functions/staff-onboarding/core.ts")>("../supabase/functions/staff-onboarding/core.ts");
 const hrMail = await load.import<typeof import("../supabase/functions/_shared/hr-mail.ts")>("../supabase/functions/_shared/hr-mail.ts");
 const mailLib = await load.import<typeof import("../supabase/functions/_shared/notification/delivery.ts")>("../supabase/functions/_shared/notification/delivery.ts");
+const offerPdf = await load.import<typeof import("../supabase/functions/_shared/offer-pdf.ts")>("../supabase/functions/_shared/offer-pdf.ts");
+const drainLib = await load.import<typeof import("../supabase/functions/_shared/hr-mail-drain.ts")>("../supabase/functions/_shared/hr-mail-drain.ts");
 const staffAdmin = await load.import<typeof import("../supabase/functions/staff-admin/core.ts")>("../supabase/functions/staff-admin/core.ts");
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
@@ -243,7 +246,7 @@ test("CAPTCHA: the mock only works against a local Supabase URL; Turnstile is ve
 
 const LINK = "A".repeat(43);
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0]);
-function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; uploadError?: string } = {}) {
+function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; uploadError?: string; original?: Uint8Array | null; stampFails?: boolean } = {}) {
   const calls: Array<[string, unknown]> = [];
   const scheduled: string[] = [];
   const bad = new Map<string, number>();
@@ -266,6 +269,10 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
     scheduleExtraction: (doc: { category: string }) => { scheduled.push(doc.category); },
     hash: async (v: string) => `h(${v})`,
     newId: () => "rnd",
+    download: async (p: string) => { calls.push(["download", p]); return options.original === undefined ? new Uint8Array([1, 2, 3]) : options.original; },
+    sha256: async (bytes: Uint8Array) => `sha(${bytes.length})`,
+    stampOffer: async (original: Uint8Array, sig: Record<string, unknown>) => { calls.push(["stamp", sig]); if (options.stampFails) throw new Error("x"); return new Uint8Array(original.length + 5); },
+    now: () => new Date("2026-11-09T10:00:00Z"),
   };
   return { deps, calls, scheduled, names: () => calls.map(([n]) => n) };
 }
@@ -443,7 +450,7 @@ test("HR outbox drain: sends, requeues provider hiccups, fails visibly, never re
   const out = outboxPort(rows);
   const totals = await hrMail.drainHrEmails(out.port, provider, config);
   assert.deepEqual(totals, { sent: 2, failed: 2, requeued: 1 });
-  assert.deepEqual(out.kinds(), [...hrMail.DRAINABLE_KINDS], "only kinds with templates are claimed (offer mail waits for HR-02e)");
+  assert.deepEqual(out.kinds(), [...hrMail.DRAINABLE_KINDS], "only kinds with templates are claimed");
   assert.deepEqual(out.results.map(([id, state]) => `${id}:${state}`), ["1:sent", "2:sent", "3:queued", "4:failed", "5:failed"]);
   assert.match(out.results[4][3] ?? "", /may have been delivered/, "an unknown outcome is failed (admin decides), never resent automatically");
   assert.equal(provider.sent[1].to, "a@example.test, b@example.test", "admin mail goes to every EF_HR_ADMIN_NOTIFY_TO address");
@@ -456,7 +463,7 @@ test("HR outbox drain: sends, requeues provider hiccups, fails visibly, never re
   assert.deepEqual(noAdmins.results[0].slice(1, 2).concat(noAdmins.results[0][3]!), ["failed", "EF_HR_ADMIN_NOTIFY_TO is not set"], "a missing admin list is a visible failure");
 });
 
-function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; siteUrl?: string | null } = {}) {
+function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; siteUrl?: string | null; file?: { name: string; bytes: Uint8Array } | null; inspect?: { ok: boolean; pages?: number; error?: string } } = {}) {
   const calls: Array<[string, unknown]> = [];
   const mails: Array<Record<string, unknown>> = [];
   let drains = 0;
@@ -472,8 +479,14 @@ function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<
     newLink: async () => ({ token: "T".repeat(43), hash: "h".repeat(64) }),
     config: { ...hrMail.readHrMailConfig(MAIL_ENV), siteUrl: options.siteUrl === undefined ? "https://x.example" : options.siteUrl },
     sendLink: async (mail: Record<string, unknown>) => { mails.push(mail); return options.send === "failed" ? { state: "failed" as const, error: "inactive_recipient" } : options.send === "skipped" ? { state: "skipped" as const, error: "off" } : { state: "sent" as const, messageId: "m-1" }; },
-    linkUrl: (purpose: "documents" | "reupload", token: string) => hrMail.linkUrl("https://x.example", purpose, token),
+    linkUrl: (purpose: "documents" | "reupload" | "offer", token: string) => hrMail.linkUrl("https://x.example", purpose, token),
     drain: async () => { drains++; return { sent: 0, failed: 0, requeued: 0 }; },
+    file: options.file ?? null,
+    inspectOffer: async (bytes: Uint8Array) => (options.inspect ?? { ok: true as const, pages: 2 }) as { ok: true; pages: number } | { ok: false; error: string },
+    upload: async (p: string, bytes: Uint8Array) => { calls.push(["upload", { p, size: bytes.length }]); return { error: null }; },
+    remove: async (paths: string[]) => { calls.push(["remove", paths]); },
+    sha256: async (bytes: Uint8Array) => "f".repeat(64),
+    newId: () => "rnd",
   };
   return { deps, calls, mails, drains: () => drains, names: () => calls.map(([n]) => n) };
 }
@@ -753,4 +766,145 @@ test("the Employees tabs cover every reviewed status once and match the database
   assert.ok(fn.indexOf("perform hr.require_admin();") > 0 && fn.indexOf("perform hr.require_admin();") < fn.indexOf("select count(*)"), "the admin check runs before any read");
   assert.ok(fn.includes("s is null or s not in ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive')"), "every p_statuses value is validated");
   assert.ok(sql.includes("drop function if exists public.hr_admin_staff_list(text, text, integer, integer);"), "no ambiguous overload is left behind");
+});
+
+/* ------------------------------------------------------------------ HR-02e offers */
+
+async function makePdf(pages = 2): Promise<Uint8Array> {
+  const doc = await PdfLib.PDFDocument.create();
+  for (let i = 0; i < pages; i++) doc.addPage().drawText(`Offer page ${i + 1}`, { x: 50, y: 700 });
+  return await doc.save({ useObjectStreams: false });
+}
+/** A PDF whose trailer declares encryption (what a password-protected export looks like to pdf-lib). */
+async function encryptedPdf(): Promise<Uint8Array> {
+  const text = new TextDecoder("latin1").decode(await makePdf(1));
+  const marked = text.replace(/trailer\s*<</, "trailer\n<< /Encrypt << /Filter /Standard /V 1 /R 2 /O <00> /U <00> /P -4 >>");
+  assert.notEqual(marked, text, "fixture: the trailer was found");
+  return Uint8Array.from(marked, (c) => c.charCodeAt(0));
+}
+
+test("offer PDF: a real PDF passes (pdf-lib loads AND modifies it); encrypted, fake, empty and oversized files are refused clearly", async () => {
+  assert.deepEqual(await offerPdf.inspectOfferPdf(PdfLib, await makePdf(3)), { ok: true, pages: 3 });
+  assert.deepEqual(await offerPdf.inspectOfferPdf(PdfLib, await encryptedPdf()), { ok: false, error: offerPdf.OFFER_ENCRYPTED });
+  assert.match(offerPdf.OFFER_ENCRYPTED, /password-protected or encrypted/);
+  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new TextEncoder().encode("MZ not a pdf"))).ok, false);
+  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new TextEncoder().encode("%PDF-1.7\n garbage with no objects"))).ok, false, "a file that only starts like a PDF is refused");
+  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new Uint8Array(0))).ok, false);
+  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new Uint8Array(offerPdf.MAX_OFFER_BYTES + 1))).ok, false, "over 7 MB (it is emailed back signed)");
+});
+
+test("offer PDF: signing keeps every original page and adds one signature page", async () => {
+  const signed = await offerPdf.stampSignedOffer(PdfLib, await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0) ".repeat(8), consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
+  const doc = await PdfLib.PDFDocument.load(signed);
+  assert.equal(doc.getPageCount(), 3, "2 original pages + the signature page");
+  assert.match(doc.getSubject() ?? "", /signed by Ann Applicant/, "accents are made PDF-safe");
+});
+
+test("staff-admin offer upload: admin and state first, PDF checked before storage, recorded with its sha256, replaced unsent offer deleted", async () => {
+  const file = { name: "Offer Letter.pdf", bytes: new Uint8Array(100) };
+  const detail = { hr_admin_staff_detail: { data: { profile: { status: "documents_submitted" } } }, hr_admin_staff_offer_add: { data: { offer: { id: "o-1" }, replacedPath: `${PROFILE}/offer/old.pdf` } } };
+  let run = adminDeps({ file, db: detail });
+  let r = await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_detail", "upload", "admin:hr_admin_staff_offer_add", "remove"]);
+  assert.deepEqual(run.calls[2][1], { p_id: PROFILE, p_path: `${PROFILE}/offer/rnd.pdf`, p_filename: "Offer Letter.pdf", p_size: 100, p_sha256: "f".repeat(64) });
+  assert.deepEqual(run.calls[3][1], [`${PROFILE}/offer/old.pdf`], "the unsent offer it replaces is deleted");
+
+  run = adminDeps({ file, db: detail, inspect: { ok: false, error: offerPdf.OFFER_ENCRYPTED } });
+  r = await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps);
+  assert.deepEqual([r.status, r.body.error, r.body.field], [400, offerPdf.OFFER_ENCRYPTED, "file"], "the admin is told why");
+  assert.ok(!run.names().includes("upload"), "nothing is stored");
+
+  run = adminDeps({ file, db: { hr_admin_staff_detail: { data: { profile: { status: "invited" } } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps)).status, 400);
+  assert.ok(!run.names().includes("upload"), "wrong state: nothing stored");
+  run = adminDeps({ file, db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps)).status, 403);
+  assert.ok(!run.names().includes("upload"), "non-admin: nothing stored");
+  run = adminDeps({ file, db: { ...detail, hr_admin_staff_offer_add: { error: { code: "23514", message: "Upload an offer once the documents are submitted (withdraw a sent offer first)." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps)).status, 400);
+  assert.deepEqual(run.calls.at(-1), ["remove", [`${PROFILE}/offer/rnd.pdf`]], "a refused record removes the stored file");
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, adminDeps().deps)).status, 400, "no file");
+  assert.equal(staffAdmin.offerName("C:\\x\\letter"), "letter.pdf");
+});
+
+test("staff-admin offer send/withdraw: the offer link follows the link rules (hash only, failed send cancels it); withdraw needs a note", async () => {
+  const sent = { hr_admin_staff_offer_send: { data: { invite: { id: "inv-9", expiresAt: "2026-12-09T00:00:00Z" }, email: "ann@example.test", name: "Ann" } } };
+  let run = adminDeps({ db: sent });
+  let r = await staffAdmin.handleAdmin({ action: "offer_send", profileId: PROFILE }, run.deps);
+  assert.equal(r.status, 200);
+  assert.deepEqual(run.calls[0], ["admin:hr_admin_staff_offer_send", { p_id: PROFILE, p_token_hash: "h".repeat(64) }]);
+  assert.equal(run.mails[0].kind, "offer");
+  assert.equal(run.mails[0].link, `https://x.example/staff/offer#t=${"T".repeat(43)}`);
+  assert.ok(!JSON.stringify(run.calls).includes("T".repeat(43)), "the token reaches no database call");
+  run = adminDeps({ db: sent, send: "failed" });
+  r = await staffAdmin.handleAdmin({ action: "offer_send", profileId: PROFILE }, run.deps);
+  assert.equal(r.status, 502);
+  assert.deepEqual(run.calls.at(-1), ["admin:hr_admin_staff_invite_cancel", { p_id: PROFILE, p_invite: "inv-9" }], "the offer link nobody received is cancelled");
+  run = adminDeps();
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_withdraw", profileId: PROFILE, note: " " }, run.deps)).status, 400);
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_withdraw", profileId: PROFILE, note: "Role filled" }, run.deps)).status, 200);
+  assert.deepEqual(run.calls.at(-1), ["admin:hr_admin_staff_offer_withdraw", { p_id: PROFILE, p_note: "Role filled" }]);
+  const mail = hrMail.renderHrEmail("offer", { name: "Ann" }, { siteUrl: "https://x.example", link: "https://x.example/staff/offer#t=abc", expiresAt: "2026-12-09T00:00:00Z" });
+  assert.match(mail?.text ?? "", /staff\/offer#t=abc/);
+  assert.equal(hrMail.renderHrEmail("offer", {}, { siteUrl: "https://x.example" }), null, "no offer email without its link");
+});
+
+test("onboarding offer sign: link-checked, the stored offer must match its upload hash, signed copy is a new file recorded with its own hash", async () => {
+  const file = { hr_svc_offer_file: { data: { profileId: "p-1", offerId: "o-1", path: "p-1/offer/o.pdf", sha256: "sha(3)", filename: "offer.pdf" } } };
+  let run = linkDeps({ db: { ...file, hr_svc_offer_sign: { data: { readOnly: true } } } });
+  const req = { action: "offer_sign", token: LINK, ip: "203.0.113.5", userAgent: "UA-1", fields: { name: "  Ann   Applicant ", consent: true } };
+  let r = await onboard.handleOnboarding(req, run.deps);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_offer_file", "download", "stamp", "upload", "hr_svc_offer_sign"]);
+  const stamp = run.calls.find(([n]) => n === "stamp")![1] as Record<string, unknown>;
+  assert.deepEqual([stamp.signerName, stamp.ip, stamp.userAgent, stamp.consent, stamp.offerSha256, stamp.signedAt], ["Ann Applicant", "203.0.113.5", "UA-1", offerPdf.OFFER_CONSENT, "sha(3)", "2026-11-09T10:00:00.000Z"]);
+  assert.deepEqual(run.calls.find(([n]) => n === "hr_svc_offer_sign")![1], { p_token_hash: `h(${LINK})`, p_offer: "o-1", p_signer_name: "Ann Applicant", p_consent_text: offerPdf.OFFER_CONSENT,
+    p_ip: "203.0.113.5", p_user_agent: "UA-1", p_signed_path: "p-1/offer/signed-rnd.pdf", p_signed_sha256: "sha(8)" });
+  assert.equal(r.body.consent, offerPdf.OFFER_CONSENT, "the page shows the exact wording that is stored");
+
+  for (const fields of [{ name: "", consent: true }, { name: "Ann", consent: "yes" }, { name: "<b>Ann</b>", consent: true }]) {
+    run = linkDeps({ db: file });
+    assert.equal((await onboard.handleOnboarding({ ...req, fields }, run.deps)).status, 400, JSON.stringify(fields));
+    assert.ok(!run.names().includes("hr_svc_offer_file"), "nothing is read before the form is valid");
+  }
+  run = linkDeps({ db: file, original: new Uint8Array(4) });
+  assert.equal((await onboard.handleOnboarding(req, run.deps)).status, 500, "a stored offer that differs from the uploaded one is never signed");
+  assert.ok(!run.names().includes("upload"));
+  run = linkDeps({ db: file, stampFails: true });
+  assert.equal((await onboard.handleOnboarding(req, run.deps)).status, 500);
+  assert.ok(!run.names().includes("upload"));
+  run = linkDeps({ db: { ...file, hr_svc_offer_sign: { error: { code: "23514", message: "This offer can no longer be signed." } } } });
+  assert.equal((await onboard.handleOnboarding(req, run.deps)).status, 400);
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/offer/signed-rnd.pdf"]], "a refused signature removes the signed file");
+  run = linkDeps({ db: { hr_svc_offer_file: { error: { code: "28000", message: "x" } } } });
+  r = await onboard.handleOnboarding(req, run.deps);
+  assert.deepEqual([r.status, r.body.code], [403, "link_invalid"], "a document link, a revoked or expired offer link: the neutral answer");
+});
+
+test("onboarding offer view: 5-minute signed URL for the offer or (after signing) the signed copy", async () => {
+  const run = linkDeps({ db: { hr_svc_offer_path: { data: "p-1/offer/signed-x.pdf" } } });
+  const r = await onboard.handleOnboarding(linkRequest("offer_view_url", { which: "signed" }), run.deps);
+  assert.deepEqual(r.body, { url: "signed:p-1/offer/signed-x.pdf:300" });
+  assert.deepEqual(run.calls.find(([n]) => n === "hr_svc_offer_path")![1], { p_token_hash: `h(${LINK})`, p_which: "signed" });
+});
+
+test("HR outbox: signed-offer emails go out only with the signed PDF attached, to the applicant and to HR", async () => {
+  const config = hrMail.readHrMailConfig(MAIL_ENV);
+  const rows = [
+    { id: 1, profileId: "p", kind: "signed_offer", audience: "applicant", to: "ann@example.test", payload: { name: "Ann", offerId: "o-1" }, attempts: 1 },
+    { id: 2, profileId: "p", kind: "admin_offer_signed", audience: "admin", to: null, payload: { name: "Ann", email: "ann@example.test", offerId: "o-1" }, attempts: 1 },
+    { id: 3, profileId: "p", kind: "signed_offer", audience: "applicant", to: "bob@example.test", payload: { name: "Bob", offerId: "o-2" }, attempts: 1 },
+  ];
+  const provider = mailLib.createMockEmailProvider([{ kind: "accepted", messageId: "m" }]);
+  const out = outboxPort(rows);
+  const port = { ...out.port, attachment: async (row: { payload: Record<string, unknown> }) => (row.payload.offerId === "o-1" ? { name: "offer-signed.pdf", contentType: "application/pdf", contentBase64: "JVBERi0=" } : null) };
+  await hrMail.drainHrEmails(port as never, provider, config);
+  assert.deepEqual(out.results.map(([id, state]) => `${id}:${state}`), ["1:sent", "2:sent", "3:failed"]);
+  assert.equal(provider.sent.length, 2);
+  assert.ok(provider.sent.every((m) => m.attachments?.[0]?.name === "offer-signed.pdf" && m.attachments[0].contentType === "application/pdf"));
+  assert.equal(provider.sent[1].to, "a@example.test, b@example.test", "HR gets the signed copy");
+  assert.match(out.results[2][3] ?? "", /could not be attached/, "no PDF: not sent, failed for the admin to see");
+  assert.equal(drainLib.signedName("Offer Letter.pdf"), "Offer Letter-signed.pdf");
 });

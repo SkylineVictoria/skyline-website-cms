@@ -33,6 +33,15 @@ const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =
 const NEUTRAL_EMAIL = "This email can't be used. Sign in or contact the administrator.";
 const NEUTRAL_PHONE = "This number can't be used. Sign in or contact the administrator.";
 
+/** Same minimum as src/lib/passwords.ts (MIN_PASSWORD_LENGTH); bcrypt reads at most 72 bytes. */
+const MIN_PASSWORD_LENGTH = 10;
+function passwordProblem(value: unknown, again: unknown): string | null {
+  if (typeof value !== "string" || value.length < MIN_PASSWORD_LENGTH) return `Use a password of at least ${MIN_PASSWORD_LENGTH} characters.`;
+  if (new TextEncoder().encode(value).length > 72) return "Use a password of at most 72 characters.";
+  if (value !== again) return "The two passwords do not match.";
+  return null;
+}
+
 const hash = async (value: string) =>
   [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))].map((x) => x.toString(16).padStart(2, "0")).join("");
 
@@ -63,7 +72,7 @@ Deno.serve(async (req) => {
   let body: Record<string, unknown> = {};
   try { body = (await req.json()) as Record<string, unknown>; } catch { body = {}; }
   const action = String(body.action ?? "");
-  if (action !== "check" && action !== "send_code" && action !== "admin_add" && action !== "employee_invite") return json({ error: "Unknown action." }, 400);
+  if (action !== "check" && action !== "send_code" && action !== "admin_add" && action !== "employee_invite" && action !== "sign_up") return json({ error: "Unknown action." }, 400);
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   if (action === "admin_add") return adminAdd(req, body, admin);
@@ -80,6 +89,10 @@ Deno.serve(async (req) => {
   const phone = toE164(body.phone);
   if (!phone) return json({ error: "Enter your mobile number with its country code." }, 400);
   if (body.agreed !== true) return json({ error: "Please agree to the terms and privacy policy." }, 400);
+  if (action === "sign_up") {
+    const problem = passwordProblem(body.password, body.passwordConfirm);
+    if (problem) return json({ error: problem, field: "password" }, 400);
+  }
   if (!(await withinLimit(admin, `staff-register:email:${action}:${await hash(email.value)}`, action === "check" ? 12 : 3, 3600))) {
     return json({ error: "Please wait a while before requesting another email for this address." }, 429, { "Retry-After": "3600" });
   }
@@ -97,6 +110,21 @@ Deno.serve(async (req) => {
   // The code / link comes from Supabase Auth (custom SMTP), exactly like student sign-up mail; the phone number rides in the
   // sign-up metadata so the link can be opened on another device. hr_staff_start reads and re-validates it.
   const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  // Older deployed clients use password registration and an email confirmation link.
+  if (action === "sign_up") {
+    const { error } = await anon.auth.signUp({
+      email: email.value,
+      password: String(body.password),
+      options: { emailRedirectTo: safeRedirect(body.redirectTo), data: { account_type: "staff", staff_phone: phone, registrant: "staff", staff_password_set: true } },
+    });
+    if (error) {
+      // Auth's own password policy (strength, leaked-password check) is safe to show; anything else stays generic.
+      if (/password/i.test(error.message)) return json({ error: error.message, field: "password" }, 400);
+      return json({ error: "We could not create the account. Please try again shortly." }, 502);
+    }
+    return json({ ok: true, phone });
+  }
+
   const { error } = await anon.auth.signInWithOtp({
     email: email.value,
     options: { shouldCreateUser: true, emailRedirectTo: safeRedirect(body.redirectTo), data: { staff_phone: phone, registrant: "staff" } },

@@ -1,0 +1,96 @@
+// Staff administration actions that need more than one database call or an email (verify_jwt = true). Runtime-neutral and
+// injectable (tested offline). Every hr_admin_* call runs with the CALLER's JWT, so hr.require_admin() decides who may act;
+// service-role calls are limited to logging email outcomes and draining the outbox.
+//
+// Link emails (HR-02d): the function makes a random token, passes only its sha256 to hr_admin_staff_invite (which replaces any
+// earlier link of that kind) and sends the link inline. The token is never stored. If the send fails, that link is cancelled at
+// once (hr_admin_staff_invite_cancel): no valid link exists that nobody received, the failure is logged for the admin, and
+// "send again" makes exactly one new live link. An expired link is resent the same way. With sending switched off the link is
+// returned to the admin once to pass on.
+import type { HrMailConfig } from "../_shared/hr-mail.ts";
+
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain"] as const;
+export type AdminAction = (typeof ACTIONS)[number];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface AdminResult { status: number; body: Record<string, unknown> }
+type DbError = { code?: string; message?: string } | null;
+export interface AdminDeps {
+  /** hr_admin_* with the caller's JWT. */
+  adminRpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: DbError }>;
+  /** hr_svc_* with the service role (email log). */
+  serviceRpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: DbError }>;
+  newLink(): Promise<{ token: string; hash: string }>;
+  config: HrMailConfig;
+  sendLink(mail: { kind: "document_invite" | "reupload_invite"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
+    Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
+  linkUrl(purpose: "documents" | "reupload", token: string): string;
+  /** Sends queued outbox mail now (best effort). */
+  drain(): Promise<{ sent: number; failed: number; requeued: number }>;
+}
+
+function fromDb(error: NonNullable<DbError>): AdminResult {
+  if (error.code === "42501") return { status: 403, body: { error: error.message || "Only an administrator can do this." } };
+  if (["23514", "22023", "P0002", "23505"].includes(error.code ?? "")) return { status: 400, body: { error: error.message || "That could not be done." } };
+  return { status: 500, body: { error: "Something went wrong. Please try again shortly." } };
+}
+
+export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps): Promise<AdminResult> {
+  const action = String(body.action ?? "");
+  if (!(ACTIONS as readonly string[]).includes(action)) return { status: 400, body: { error: "Unknown action." } };
+  const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
+  if (action !== "drain" && action !== "retry_email" && !profileId) return { status: 400, body: { error: "Choose an application." } };
+
+  switch (action as AdminAction) {
+    case "send_invite": {
+      const purpose = body.purpose === "reupload" ? "reupload" : body.purpose === "documents" ? "documents" : null;
+      if (!purpose) return { status: 400, body: { error: "Choose a document or re-upload link." } };
+      if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+      const link = await deps.newLink();
+      const made = await deps.adminRpc("hr_admin_staff_invite", { p_id: profileId, p_purpose: purpose, p_token_hash: link.hash });
+      if (made.error) return fromDb(made.error);
+      const invite = made.data as { invite: { id: string; expiresAt: string }; email: string; name: string; rejected?: Array<{ category: string; note: string }> };
+      const kind = purpose === "documents" ? "document_invite" : "reupload_invite";
+      const url = deps.linkUrl(purpose, link.token);
+      const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
+      // The log never holds the token or the link: only which invite it was and what happened.
+      await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+        p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
+      if (sent.state === "failed") {
+        const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: invite.invite.id });
+        return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null } };
+      }
+      if (sent.state === "skipped") {
+        // Sending is off: hand the link to the admin ONCE to pass on themselves. It is not stored anywhere.
+        return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      }
+      return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt } };
+    }
+    case "revoke_invite": {
+      const r = await deps.adminRpc("hr_admin_staff_invite_revoke", { p_id: profileId, p_purpose: "documents" });
+      return r.error ? fromDb(r.error) : { status: 200, body: { detail: r.data } };
+    }
+    case "reject": {
+      const note = String(body.note ?? "").trim();
+      if (!note || note.length > 2000) return { status: 400, body: { error: "Add a note explaining the decision." } };
+      const r = await deps.adminRpc("hr_admin_staff_reject", { p_id: profileId, p_note: note, p_notify: body.notify !== false });
+      if (r.error) return fromDb(r.error);
+      await deps.drain().catch(() => undefined);
+      return { status: 200, body: { detail: r.data } };
+    }
+    case "retry_email": {
+      const id = Number(body.emailId);
+      if (!Number.isSafeInteger(id) || id < 1) return { status: 400, body: { error: "Email not found." } };
+      const r = await deps.adminRpc("hr_admin_staff_email_retry", { p_email: id });
+      if (r.error) return fromDb(r.error);
+      await deps.drain().catch(() => undefined);
+      return { status: 200, body: { detail: r.data } };
+    }
+    case "drain": {
+      // Admin-only: proves the caller is an admin with a cheap admin read before sending anything.
+      const check = await deps.adminRpc("hr_admin_staff_list", { p_status: null, p_search: null, p_limit: 1, p_offset: 0, p_statuses: null });
+      if (check.error) return fromDb(check.error);
+      return { status: 200, body: await deps.drain() };
+    }
+  }
+}

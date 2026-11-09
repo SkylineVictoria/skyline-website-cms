@@ -17,6 +17,9 @@ const mock = await load.import<typeof import("../supabase/functions/_shared/docu
 const apply = await load.import<typeof import("../supabase/functions/staff-register/core.ts")>("../supabase/functions/staff-register/core.ts");
 const captchaLib = await load.import<typeof import("../supabase/functions/_shared/captcha.ts")>("../supabase/functions/_shared/captcha.ts");
 const onboard = await load.import<typeof import("../supabase/functions/staff-onboarding/core.ts")>("../supabase/functions/staff-onboarding/core.ts");
+const hrMail = await load.import<typeof import("../supabase/functions/_shared/hr-mail.ts")>("../supabase/functions/_shared/hr-mail.ts");
+const mailLib = await load.import<typeof import("../supabase/functions/_shared/notification/delivery.ts")>("../supabase/functions/_shared/notification/delivery.ts");
+const staffAdmin = await load.import<typeof import("../supabase/functions/staff-admin/core.ts")>("../supabase/functions/staff-admin/core.ts");
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
@@ -243,8 +246,10 @@ const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; uploadError?: string } = {}) {
   const calls: Array<[string, unknown]> = [];
   const scheduled: string[] = [];
+  const bad = new Map<string, number>();
   const deps = {
-    takeRateLimit: async (b: string) => { calls.push(["limit", b]); return options.limit ? options.limit(b) : true; },
+    takeRateLimit: async (b: string) => { calls.push(["limit", b]); if (b.startsWith("staff-onboarding:bad:")) bad.set(b, (bad.get(b) ?? 0) + 1); return options.limit ? options.limit(b) : true; },
+    rateCount: async (b: string) => bad.get(b) ?? 0,
     rpc: async (name: string, args: Record<string, unknown>) => {
       calls.push([name, args]);
       const answer = options.db?.[name];
@@ -289,6 +294,16 @@ test("onboarding: only the hash of the link reaches the database, and every bad 
   const crash = await onboard.handleOnboarding(linkRequest("open"), run.deps);
   assert.ok(crash.status === 500 && !String(crash.body.error).includes("internal detail"), "internal errors are not shown");
   assert.equal((await onboard.handleOnboarding(linkRequest("drop_table"), linkDeps().deps)).status, 400);
+});
+
+test("onboarding: an IP that guesses links is locked out after 20 invalid answers in 10 minutes", async () => {
+  const run = linkDeps();
+  for (let i = 0; i < onboard.BAD_LINK_LIMIT; i++) assert.equal((await onboard.handleOnboarding(linkRequest("open", {}, null, `guess.${i}`), run.deps)).status, 403);
+  const locked = await onboard.handleOnboarding(linkRequest("open"), run.deps);
+  assert.deepEqual([locked.status, locked.headers?.["Retry-After"]], [429, "600"], "even a valid link is refused from that IP for now");
+  const other = await onboard.handleOnboarding({ ...linkRequest("open"), ip: "198.51.100.200" }, run.deps);
+  assert.equal(other.status, 200, "other callers are not affected");
+  assert.equal(onboard.BAD_LINK_WINDOW, 600);
 });
 
 test("onboarding: rate limits per caller and per link fail closed", async () => {
@@ -358,6 +373,165 @@ test("onboarding: open a file, remove, expiry, re-read and submit go through the
   const browser = read("src/lib/staffOnboardingApi.ts");
   assert.ok(browser.includes('window.location.hash') && browser.includes("history.replaceState"), "the token is read from the fragment and cleared from the address bar");
   assert.ok(read("src/pages/staff/StaffOnboardingPage.tsx").includes('meta.content = "no-referrer"'));
+});
+
+/* ------------------------------------------------------------------ HR email (HR-02d) */
+
+const MAIL_ENV = { EF_HR_EMAIL_FROM: "Skyline HR <HR@Example.test>", EF_HR_ADMIN_NOTIFY_TO: "a@example.test, B@example.test,a@example.test", EF_HR_PUBLIC_SITE_URL: "https://skyline-website-cms.vercel.app/" };
+
+test("HR mail configuration: sender, comma-separated admins, public site; problems are named", () => {
+  const ok = hrMail.readHrMailConfig(MAIL_ENV);
+  assert.deepEqual(ok.from, { name: "Skyline HR", email: "hr@example.test" });
+  assert.deepEqual(ok.adminTo, ["a@example.test", "b@example.test"], "trimmed, lower-cased, de-duplicated");
+  assert.equal(ok.siteUrl, "https://skyline-website-cms.vercel.app");
+  assert.deepEqual(ok.problems, []);
+  const bad = hrMail.readHrMailConfig({ EF_HR_EMAIL_FROM: "nope", EF_HR_ADMIN_NOTIFY_TO: "a@example.test, not-an-address", EF_HR_PUBLIC_SITE_URL: "http://evil.example/" });
+  assert.deepEqual(bad.problems, ["EF_HR_EMAIL_FROM", "EF_HR_ADMIN_NOTIFY_TO", "EF_HR_PUBLIC_SITE_URL"]);
+  assert.equal(hrMail.readHrMailConfig({ ...MAIL_ENV, EF_HR_PUBLIC_SITE_URL: "http://127.0.0.1:57330" }).siteUrl, "http://127.0.0.1:57330", "plain http only for a local site");
+  assert.equal(hrMail.linkUrl("https://x.example", "documents", "tok_en-1"), "https://x.example/staff/onboard#t=tok_en-1", "the token travels in the fragment");
+});
+
+test("HR mail: the local Postmark mock is only reachable against a local Supabase", async () => {
+  const seen: string[] = [];
+  const fakeFetch = (async (url: string) => { seen.push(String(url)); return new Response(JSON.stringify({ ErrorCode: 0, MessageID: "abcdef12-3456" }), { status: 200 }); }) as unknown as typeof fetch;
+  const on = { EF_NOTIFICATION_EMAIL_ENABLED: "true", EF_POSTMARK_SERVER_TOKEN: "t", EF_POSTMARK_API_URL: "http://host.docker.internal:57390" };
+  const message = { deliveryId: "d", from: { name: "n", email: "f@example.test" }, to: "x@example.test", subject: "s", textBody: "b" };
+  await hrMail.selectHrMailProvider({ ...on, SUPABASE_URL: "http://kong:8000" }, { fetch: fakeFetch })!.send(message);
+  await hrMail.selectHrMailProvider({ ...on, SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co" }, { fetch: fakeFetch })!.send(message);
+  assert.deepEqual(seen, ["http://host.docker.internal:57390/email", "https://api.postmarkapp.com/email"], "hosted always talks to Postmark itself");
+  assert.equal(hrMail.selectHrMailProvider({ SUPABASE_URL: "http://kong:8000" }), null, "sending off without the switches");
+});
+
+test("HR mail templates: applicant mail without a link has no URL; links and names are one line; no token in admin mail", () => {
+  for (const kind of ["application_received", "already_applied", "rejected"] as const) {
+    const m = hrMail.renderHrEmail(kind, { name: "Ann" }, { siteUrl: "https://x.example", profileId: "p-1" })!;
+    assert.ok(!/https?:\/\//.test(m.text), `${kind} has no link`);
+  }
+  const admin = hrMail.renderHrEmail("admin_documents_submitted", { name: "Ann\nBcc: evil@example.test", email: "ann@example.test", reupload: true }, { siteUrl: "https://x.example", profileId: "p-1" })!;
+  assert.ok(!admin.subject.includes("\n") && admin.subject.endsWith("has uploaded documents again"));
+  assert.ok(admin.text.includes("https://x.example/admin/staff/employees/p-1"));
+  const invite = hrMail.renderHrEmail("reupload_invite", { name: "Ann" }, { siteUrl: "https://x.example", link: "https://x.example/staff/onboard#t=abc", expiresAt: "2026-11-23T00:00:00Z", rejected: [{ category: "Passport", note: "Blurry" }] })!;
+  assert.ok(invite.text.includes("https://x.example/staff/onboard#t=abc") && invite.text.includes("- Passport: Blurry") && invite.text.includes("do not forward"));
+  assert.equal(hrMail.renderHrEmail("document_invite", {}, { siteUrl: null }), null, "a link email needs its link");
+});
+
+function outboxPort(rows: Array<Record<string, unknown>>) {
+  const results: Array<[number, string, string | undefined, string | undefined]> = [];
+  let claimedKinds: readonly string[] = [];
+  return {
+    results, kinds: () => claimedKinds,
+    port: {
+      claim: async (kinds: readonly string[]) => { claimedKinds = kinds; return rows as never; },
+      result: async (id: number, state: string, messageId?: string, error?: string) => { results.push([id, state, messageId, error]); },
+    },
+  };
+}
+
+test("HR outbox drain: sends, requeues provider hiccups, fails visibly, never resends an unknown outcome, stays queued when off", async () => {
+  const config = hrMail.readHrMailConfig(MAIL_ENV);
+  const rows = [
+    { id: 1, profileId: "p", kind: "application_received", audience: "applicant", to: "ann@example.test", payload: { name: "Ann" }, attempts: 1 },
+    { id: 2, profileId: "p", kind: "admin_new_application", audience: "admin", to: null, payload: { name: "Ann", email: "ann@example.test" }, attempts: 1 },
+    { id: 3, profileId: "p", kind: "rejected", audience: "applicant", to: "ann@example.test", payload: {}, attempts: 1 },
+    { id: 4, profileId: "p", kind: "already_applied", audience: "applicant", to: "ann@example.test", payload: {}, attempts: 1 },
+    { id: 5, profileId: "p", kind: "rejected", audience: "applicant", to: "bob@example.test", payload: {}, attempts: 1 },
+  ];
+  const provider = mailLib.createMockEmailProvider([
+    { kind: "accepted", messageId: "msg-00000001" }, { kind: "accepted", messageId: "msg-00000002" }, { kind: "retry", code: "rate_limit" },
+    { kind: "failed", code: "inactive_recipient" }, { kind: "unknown", code: "timeout" },
+  ]);
+  const out = outboxPort(rows);
+  const totals = await hrMail.drainHrEmails(out.port, provider, config);
+  assert.deepEqual(totals, { sent: 2, failed: 2, requeued: 1 });
+  assert.deepEqual(out.kinds(), [...hrMail.DRAINABLE_KINDS], "only kinds with templates are claimed (offer mail waits for HR-02e)");
+  assert.deepEqual(out.results.map(([id, state]) => `${id}:${state}`), ["1:sent", "2:sent", "3:queued", "4:failed", "5:failed"]);
+  assert.match(out.results[4][3] ?? "", /may have been delivered/, "an unknown outcome is failed (admin decides), never resent automatically");
+  assert.equal(provider.sent[1].to, "a@example.test, b@example.test", "admin mail goes to every EF_HR_ADMIN_NOTIFY_TO address");
+  assert.equal(provider.sent[0].from.email, "hr@example.test");
+  const off = outboxPort(rows);
+  assert.deepEqual(await hrMail.drainHrEmails(off.port, null, config), { sent: 0, failed: 0, requeued: 0 });
+  assert.deepEqual(off.kinds(), [], "switched off: nothing is claimed, the rows stay queued");
+  const noAdmins = outboxPort([rows[1]]);
+  await hrMail.drainHrEmails(noAdmins.port, provider, hrMail.readHrMailConfig({ ...MAIL_ENV, EF_HR_ADMIN_NOTIFY_TO: "" }));
+  assert.deepEqual(noAdmins.results[0].slice(1, 2).concat(noAdmins.results[0][3]!), ["failed", "EF_HR_ADMIN_NOTIFY_TO is not set"], "a missing admin list is a visible failure");
+});
+
+function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; siteUrl?: string | null } = {}) {
+  const calls: Array<[string, unknown]> = [];
+  const mails: Array<Record<string, unknown>> = [];
+  let drains = 0;
+  const deps = {
+    adminRpc: async (name: string, args: Record<string, unknown>) => {
+      calls.push([`admin:${name}`, args]);
+      const a = options.db?.[name];
+      if (a) return { data: a.data ?? null, error: a.error ?? null };
+      if (name === "hr_admin_staff_invite") return { data: { invite: { id: "inv-1", expiresAt: "2026-11-23T00:00:00Z" }, email: "ann@example.test", name: "Ann", rejected: [] }, error: null };
+      return { data: { detail: name }, error: null };
+    },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => { calls.push([`svc:${name}`, args]); return { data: 1, error: null }; },
+    newLink: async () => ({ token: "T".repeat(43), hash: "h".repeat(64) }),
+    config: { ...hrMail.readHrMailConfig(MAIL_ENV), siteUrl: options.siteUrl === undefined ? "https://x.example" : options.siteUrl },
+    sendLink: async (mail: Record<string, unknown>) => { mails.push(mail); return options.send === "failed" ? { state: "failed" as const, error: "inactive_recipient" } : options.send === "skipped" ? { state: "skipped" as const, error: "off" } : { state: "sent" as const, messageId: "m-1" }; },
+    linkUrl: (purpose: "documents" | "reupload", token: string) => hrMail.linkUrl("https://x.example", purpose, token),
+    drain: async () => { drains++; return { sent: 0, failed: 0, requeued: 0 }; },
+  };
+  return { deps, calls, mails, drains: () => drains, names: () => calls.map(([n]) => n) };
+}
+const PROFILE = "0b7b1c1e-0000-4000-8000-0000000000aa";
+
+test("staff-admin invite: only the hash goes to the database, the link only into the email, the log has neither", async () => {
+  const run = adminDeps();
+  const r = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
+  assert.deepEqual(r, { status: 200, body: { emailSent: true, expiresAt: "2026-11-23T00:00:00Z" } });
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_invite", "svc:hr_svc_email_log"]);
+  assert.equal((run.calls[0][1] as Record<string, unknown>).p_token_hash, "h".repeat(64));
+  assert.equal(run.mails[0].link, `https://x.example/staff/onboard#t=${"T".repeat(43)}`);
+  const logged = JSON.stringify(run.calls[1][1]);
+  assert.ok(!logged.includes("T".repeat(43)) && !logged.includes("#t="), "the log never holds the token or the link");
+  assert.ok(!JSON.stringify(r.body).includes("T".repeat(43)), "nor does the answer when the email was sent");
+});
+
+test("staff-admin invite: a failed send cancels that link (no valid link nobody received) and tells the admin", async () => {
+  const run = adminDeps({ send: "failed" });
+  const r = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "reupload" }, run.deps);
+  assert.equal(r.status, 502);
+  assert.equal(r.body.emailSent, false);
+  assert.match(String(r.body.error), /could not be sent \(inactive_recipient\).*cancelled.*Send again/);
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_invite", "svc:hr_svc_email_log", "admin:hr_admin_staff_invite_cancel"]);
+  assert.deepEqual(run.calls[2][1], { p_id: PROFILE, p_invite: "inv-1" }, "exactly the link that was just made");
+  assert.equal((run.calls[1][1] as Record<string, unknown>).p_state, "failed", "the failure is logged for the admin");
+});
+
+test("staff-admin invite: sending off hands the link to the admin once; missing site URL and non-admins are refused", async () => {
+  let run = adminDeps({ send: "skipped" });
+  const r = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.link], [200, false, `https://x.example/staff/onboard#t=${"T".repeat(43)}`]);
+  assert.ok(!run.names().includes("admin:hr_admin_staff_invite_cancel"), "the link stays valid: the admin passes it on");
+  run = adminDeps({ siteUrl: null });
+  assert.equal((await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps)).status, 503);
+  assert.deepEqual(run.names(), [], "no link is made when it could not be addressed");
+  run = adminDeps({ db: { hr_admin_staff_invite: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  const denied = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
+  assert.deepEqual([denied.status, run.mails.length], [403, 0]);
+  for (const body of [{ action: "send_invite", profileId: "x", purpose: "documents" }, { action: "send_invite", profileId: PROFILE, purpose: "offer" }, { action: "nuke" }]) {
+    assert.equal((await staffAdmin.handleAdmin(body, adminDeps().deps)).status, 400, JSON.stringify(body));
+  }
+});
+
+test("staff-admin: reject (email by default), retry a failed email, drain; each sends queued mail", async () => {
+  let run = adminDeps();
+  await staffAdmin.handleAdmin({ action: "reject", profileId: PROFILE, note: "Not suitable" }, run.deps);
+  assert.deepEqual(run.calls[0], ["admin:hr_admin_staff_reject", { p_id: PROFILE, p_note: "Not suitable", p_notify: true }]);
+  assert.equal(run.drains(), 1);
+  run = adminDeps();
+  await staffAdmin.handleAdmin({ action: "reject", profileId: PROFILE, note: "Not suitable", notify: false }, run.deps);
+  assert.equal((run.calls[0][1] as Record<string, unknown>).p_notify, false, "the checkbox can be unticked");
+  assert.equal((await staffAdmin.handleAdmin({ action: "reject", profileId: PROFILE, note: " " }, adminDeps().deps)).status, 400);
+  run = adminDeps();
+  await staffAdmin.handleAdmin({ action: "retry_email", emailId: 42 }, run.deps);
+  assert.deepEqual([run.calls[0], run.drains()], [["admin:hr_admin_staff_email_retry", { p_email: 42 }], 1]);
+  run = adminDeps({ db: { hr_admin_staff_list: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  assert.deepEqual([(await staffAdmin.handleAdmin({ action: "drain" }, run.deps)).status, run.drains()], [403, 0], "only an admin can trigger a drain");
 });
 
 test("staff-register creates no login and keeps no password code", () => {

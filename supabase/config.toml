@@ -38,3 +38,9 @@ verify_jwt = true
 # Staff onboarding by emailed link (no login): the link token is the credential and is re-checked by the database on every call
 # (hr_svc_*, service role only). Personal details, documents (checked by content), reading, submit. no-store, no-referrer.
 verify_jwt = false
+
+[functions.staff-admin]
+# Staff administration that needs email or several calls: document / re-upload link emails (token made here, only its hash
+# stored; a failed send cancels that link), reject with the optional email, retry a failed email, drain the HR outbox.
+# hr_admin_* run with the caller's JWT (hr.require_admin).
+verify_jwt = true

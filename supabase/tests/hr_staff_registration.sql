@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(193);
+select plan(221);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -25,7 +25,7 @@ insert into public.cms_users(id, name, email, role, status, auth_user_id, must_c
  ('hr-test-admin', 'Test Admin', 'admin.user@example.test', 'Admin', 'Active', 'a0000000-0000-0000-0000-000000000004', false);
 
 create temp table t(k text primary key, v text);
-grant select on t to public;
+grant select, insert on t to public;
 create function pg_temp.v(text) returns uuid language sql stable as $$ select v::uuid from t where k = $1 $$;
 create function pg_temp.h(text) returns text language sql immutable as $$ select encode(sha256(convert_to($1, 'UTF8')), 'hex') $$;
 create function pg_temp.obj(text) returns void language sql as $$ insert into storage.objects(bucket_id, name) values ('staff-documents', $1) $$;
@@ -78,6 +78,9 @@ select lives_ok($$select public.hr_svc_apply_resume(pg_temp.v('a1'), pg_temp.v('
 select is((select string_agg(kind || ':' || audience || ':' || coalesce(to_email, '-'), ',' order by id) from hr.staff_emails where profile_id = pg_temp.v('a1')),
  'application_received:applicant:ann.applicant@example.test,admin_new_application:admin:-', 'received (applicant) and new application (admin) are queued');
 select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '0400 000 101')->>'reason', 'exists', 'a complete application cannot be submitted twice');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('a1') and kind = 'already_applied' and to_email = 'ann.applicant@example.test'), 1, 'that address is told it already has an application');
+select is(public.hr_svc_apply('Ann', 'Thrice', 'ann.applicant@example.test', '0400 000 101')->>'reason', 'exists', 'a third try');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('a1') and kind = 'already_applied'), 1, 'at most one such email an hour');
 select is(public.hr_svc_apply('Sam', 'Student', 'student.login@example.test', '0400 000 103')->>'ok', 'true', 'an existing student login may apply');
 select is((select count(*)::int from auth.users where lower(email) = 'student.login@example.test'), 1, 'no second login was created');
 
@@ -305,6 +308,7 @@ reset role;
 select is(public.hr_svc_apply('Sam', 'Student', 'STUDENT.login@example.test', '0400 000 501')->>'profileId', pg_temp.v('s1')::text, 'an inactive former staff member may apply again (same record)');
 select is((select status || '/' || (select count(*) from hr.staff_roles r where r.profile_id = p.id and r.revoked_at is null) from hr.staff_profiles p where p.id = pg_temp.v('s1')), 'applied/0', 'inactive -> applied, and the old role is revoked');
 select is(public.hr_svc_apply('Other', 'Person', 'other.person@example.test', '0400 000 501')->>'reason', 'exists', 'another person''s number is still a duplicate');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('s1') and kind = 'already_applied'), 0, 'neither an active admin console user nor a number-only clash is emailed');
 
 -- ---------------------------------------------------------------- retention
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('w1') || '/resume/w.pdf');
@@ -324,6 +328,54 @@ select lives_ok($$select public.hr_svc_email_result((select min(id) from hr.staf
 select is(jsonb_array_length(public.hr_svc_email_claim(50)), 0, 'leased mail is not claimed twice');
 select throws_ok($$select public.hr_svc_email_log(pg_temp.v('a1'), 'rejected', 'sent')$$, '22023', 'Only link emails are logged this way.', 'only link emails are logged inline');
 select throws_ok($$select hr.queue_email(pg_temp.v('a1'), 'offer', 'applicant', '{"token":"secret"}')$$, '23514', null, 'a token is never stored in an email row');
+insert into t select 'e1', hr.queue_email(pg_temp.v('a1'), 'rejected', 'applicant');
+select is(jsonb_array_length(public.hr_svc_email_claim(50, 120, array['admin_new_application'])), 0, 'the claim only takes the kinds the sender can send');
+select is(public.hr_svc_email_claim(50, 120, array['rejected'])->0->>'kind', 'rejected', 'a kind it can send is claimed');
+select lives_ok($$select public.hr_svc_email_result((select v::bigint from t where k = 'e1'), 'failed', null, 'rejected')$$, 'a provider refusal is recorded');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_staff_detail(pg_temp.v('a1'))->>'emailFailed', 'true', 'the failure is visible to the admin');
+select is((select r->>'emailFailed' from jsonb_array_elements(public.hr_admin_staff_list(null, null, 200, 0)->'rows') r where r->>'id' = pg_temp.v('a1')::text), 'true', '...also in the list');
+select is((select e->>'retryable' from jsonb_array_elements(public.hr_admin_staff_detail(pg_temp.v('a1'))->'emails') e where (e->>'id')::bigint = (select v::bigint from t where k = 'e1')), 'true', 'a failed queued email can be retried');
+select lives_ok($$select public.hr_admin_staff_email_retry((select v::bigint from t where k = 'e1'))$$, 'the admin retries it');
+select throws_ok($$select public.hr_admin_staff_email_retry((select v::bigint from t where k = 'e1'))$$, '23514', 'Only a failed email can be sent again.', 'only a failed email');
+reset role;
+select is((select state || '/' || attempts from hr.staff_emails where id = (select v::bigint from t where k = 'e1')), 'queued/0', 'back in the queue with fresh attempts');
+insert into t select 'e2', public.hr_svc_email_log(pg_temp.v('a1'), 'offer', 'failed', null, 'rejected');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_staff_email_retry((select v::bigint from t where k = 'e2'))$$, '23514', 'Send the link again instead: a new link replaces the old one.', 'a link email is never re-sent from the outbox');
+reset role;
+
+-- a link whose email could not be sent is cancelled; sending again makes exactly one live link
+insert into t select 'c1', public.hr_svc_apply('Cora', 'Cancel', 'cora@example.test', '0400 000 901')->>'profileId';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+insert into t select 'ci1', public.hr_admin_staff_invite(pg_temp.v('c1'), 'documents', pg_temp.h('cora-1'))->'invite'->>'id';
+select throws_ok($$select public.hr_admin_staff_invite_cancel(pg_temp.v('c1'), gen_random_uuid())$$, 'P0002', 'There is no live link to cancel.', 'only that person''s live link');
+select lives_ok($$select public.hr_admin_staff_invite_cancel(pg_temp.v('c1'), pg_temp.v('ci1'))$$, 'the unsent link is cancelled');
+reset role;
+select throws_ok($$select public.hr_svc_onboarding_open(pg_temp.h('cora-1'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a cancelled link never opens');
+select is((select status from hr.staff_profiles where id = pg_temp.v('c1')), 'invited', 'the status stays invited');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_invite(pg_temp.v('c1'), 'documents', pg_temp.h('cora-2'))$$, 'send again');
+reset role;
+select is((select count(*)::int from hr.staff_invites where profile_id = pg_temp.v('c1') and revoked_at is null and superseded_at is null and used_at is null), 1, 'exactly one live link');
+update hr.staff_invites set created_at = now() - interval '20 days', expires_at = now() - interval '1 second' where token_hash = pg_temp.h('cora-2');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_invite(pg_temp.v('c1'), 'documents', pg_temp.h('cora-3'))$$, 'an expired link can be sent again');
+reset role;
+select is(public.hr_svc_onboarding_open(pg_temp.h('cora-3'))->>'readOnly', 'false', 'the new link works');
+select is((select count(*)::int from hr.staff_invites where profile_id = pg_temp.v('c1') and revoked_at is null and superseded_at is null and used_at is null), 1, 'still exactly one live link');
+
+-- the read-only rate-limit counter (staff-onboarding's invalid-link lockout)
+select ok(public.public_assistant_take_rate_limit('hr-test-bucket', 5, 600) and public.public_assistant_take_rate_limit('hr-test-bucket', 5, 600), 'two requests');
+select is(public.hr_svc_rate_count('hr-test-bucket', 600), 2, 'the counter reads the current window');
+select is(public.hr_svc_rate_count('hr-test-bucket', 600), 2, 'reading does not count');
+select is(public.hr_svc_rate_count('hr-unknown-bucket', 600), 0, 'an unknown bucket is 0');
+select is(has_function_privilege('anon', 'public.hr_svc_rate_count(text, integer)', 'execute'), false, 'service role only');
 
 -- ---------------------------------------------------------------- document reading fills EMPTY details only, while invited
 insert into t select 'x1', public.hr_svc_apply('Xena', 'Keep', 'xena@example.test', '0400 000 701')->>'profileId';

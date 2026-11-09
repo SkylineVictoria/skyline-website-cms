@@ -9,6 +9,9 @@ import { STAFF_READER_CATEGORY } from "../staff-document-extract/core.ts";
 export const LINK_INVALID = "This link is not valid any more. Ask us for a new one.";
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;
+/** Invalid-link answers allowed per caller IP in BAD_LINK_WINDOW seconds before that IP is refused for every action. */
+export const BAD_LINK_LIMIT = 20;
+export const BAD_LINK_WINDOW = 600;
 export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
@@ -17,6 +20,8 @@ export interface OnboardingResult { status: number; body: Record<string, unknown
 export interface DocumentToRead { id: string; category: string; filename: string; mimeType: string; storagePath: string }
 export interface OnboardingDeps {
   takeRateLimit(bucket: string, limit: number, windowSeconds: number): Promise<boolean>;
+  /** Reads a bucket's count in its current window without adding to it (hr_svc_rate_count). */
+  rateCount(bucket: string, windowSeconds: number): Promise<number>;
   rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
   upload(path: string, bytes: Uint8Array, contentType: string): Promise<{ error: string | null }>;
   remove(paths: string[]): Promise<void>;
@@ -60,9 +65,21 @@ export function safeDocumentName(name: string): string {
 export async function handleOnboarding(req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
   if (!(ACTIONS as readonly string[]).includes(req.action)) return bad("Unknown action.");
   const action = req.action as OnboardingAction;
-  if (!(await deps.takeRateLimit(`staff-onboarding:ip:${await deps.hash(req.ip ?? "anonymous")}`, 300, 600))) {
+  const ipKey = await deps.hash(req.ip ?? "anonymous");
+  const badBucket = `staff-onboarding:bad:ip:${ipKey}`;
+  // Guessing links: after BAD_LINK_LIMIT invalid-link answers in the window, this IP gets nothing but 429 until it passes.
+  if ((await deps.rateCount(badBucket, BAD_LINK_WINDOW)) >= BAD_LINK_LIMIT) {
+    return { status: 429, body: { error: "Please wait a few minutes before trying again." }, headers: { "Retry-After": String(BAD_LINK_WINDOW) } };
+  }
+  if (!(await deps.takeRateLimit(`staff-onboarding:ip:${ipKey}`, 300, 600))) {
     return { status: 429, body: { error: "Please wait a few minutes before trying again." }, headers: { "Retry-After": "600" } };
   }
+  const result = await handleLink(action, req, deps);
+  if (result.body.code === "link_invalid") await deps.takeRateLimit(badBucket, BAD_LINK_LIMIT, BAD_LINK_WINDOW);
+  return result;
+}
+
+async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
   if (typeof req.token !== "string" || !TOKEN.test(req.token)) return linkInvalid();
   const link = await deps.hash(req.token);
   const perLink = action === "upload" ? 60 : 600;

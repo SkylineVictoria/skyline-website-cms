@@ -6,12 +6,16 @@
 //   node scripts/lab/staff-lab.mjs up       fresh stack + migrations + functions served (prints the URLs and keys file)
 //   node scripts/lab/staff-lab.mjs apply    end-to-end checks of the public staff application (HR-02b)
 //   node scripts/lab/staff-lab.mjs onboard  end-to-end checks of onboarding by link (HR-02c)
+//   node scripts/lab/staff-lab.mjs emails   end-to-end checks of HR email: outbox, invite links, failures, retry (HR-02d)
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
 // Work files live in the OS temp dir (never the repo). The repo's migrations do not replay on a fresh stack because a few objects
 // exist only on hosted; LAB_SHIMS below creates minimal stand-ins for them (lab only, see OPS-01 for the real fix).
 // Secrets: only the local stack's own demo keys are used; supabase/functions/.env is never copied.
+// Email: the functions send through the Postmark adapter, redirected (local only, EF_POSTMARK_API_URL) to a mock Postmark server
+// that this script runs on port 57390 while a check command runs; nothing reaches Postmark.
+import http from "node:http";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,7 +28,16 @@ const PROJECT = "skyline-staff-lab";
 const DB_CONTAINER = `supabase_db_${PROJECT}`;
 const PORTS = { shadow: 57320, api: 57321, db: 57322, studio: 57323, mail: 57324, analytics: 57327, pooler: 57329, inspector: 57383 };
 const SITE = "http://127.0.0.1:57330";
-const LAB_SECRETS = { EF_CAPTCHA_SECRET_KEY: "local-mock", EF_NOTIFICATION_EMAIL_ENABLED: "false" };
+const MOCK_POSTMARK_PORT = 57390;
+const LAB_SECRETS = {
+  EF_CAPTCHA_SECRET_KEY: "local-mock",
+  EF_NOTIFICATION_EMAIL_ENABLED: "true",
+  EF_POSTMARK_SERVER_TOKEN: "lab-postmark-token",
+  EF_POSTMARK_API_URL: `http://host.docker.internal:${MOCK_POSTMARK_PORT}`,
+  EF_HR_EMAIL_FROM: "Skyline HR <hr@lab.example.test>",
+  EF_HR_ADMIN_NOTIFY_TO: "hr.one@lab.example.test, hr.two@lab.example.test",
+  EF_HR_PUBLIC_SITE_URL: "http://127.0.0.1:57330",
+};
 const EXCLUDE = "studio,imgproxy,logflare,vector,supavisor,realtime,postgres-meta";
 
 // LAB ONLY stand-ins for hosted state the repo cannot replay (file name = position in the migration order). Never shipped.
@@ -178,15 +191,15 @@ async function apply() {
   check("the resume file is in the private bucket", psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name = '${row[3]}';`) === "1");
   check("the bucket is private", psql("select public from storage.buckets where id = 'staff-documents';") === "f");
   check("no auth user was created", psql(`select count(*) from auth.users where lower(email) = '${email}';`) === "0");
-  check("received (applicant) and new application (admin) emails are queued",
-    psql(`select string_agg(e.kind || ':' || e.state, ',' order by e.id) from hr.staff_emails e join hr.staff_profiles p on p.id = e.profile_id where p.email = '${email}';`) === "application_received:queued,admin_new_application:queued");
+  check("received (applicant) and new application (admin) emails are sent right after the answer",
+    await waitFor(`select string_agg(e.kind || ':' || e.state, ',' order by e.id) from hr.staff_emails e join hr.staff_profiles p on p.id = e.profile_id where p.email = '${email}';`, "application_received:sent,admin_new_application:sent") === "application_received:sent,admin_new_application:sent");
   const anonRead = await fetch(`${lab.apiUrl}/storage/v1/object/staff-documents/${row[3]}`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } });
   check("the resume cannot be read anonymously", anonRead.status >= 400, String(anonRead.status));
 
   const again = await postApply(lab, { ...base, firstName: "Again", __ip: "198.51.100.3" }, pdf);
   check("the same email again gets the same thank-you", again.status === 200 && again.body.ok === true, JSON.stringify(again.body));
-  check("...and nothing new is stored", psql(`select count(*) from hr.staff_emails e join hr.staff_profiles p on p.id = e.profile_id where p.email = '${email}';`) === "2"
-    && psql(`select first_name from hr.staff_profiles where email = '${email}';`) === "Lab");
+  check("...nothing is changed, and that address alone is told it already applied", psql(`select first_name from hr.staff_profiles where email = '${email}';`) === "Lab"
+    && await waitFor(`select string_agg(e.kind || ':' || e.state, ',' order by e.id) from hr.staff_emails e join hr.staff_profiles p on p.id = e.profile_id where p.email = '${email}' and e.kind = 'already_applied';`, "already_applied:sent") === "already_applied:sent");
 
   psql(`update hr.staff_profiles set status = 'rejected' where email = '${email}';`);
   const reapply = await postApply(lab, { ...base, firstName: "Returning", __ip: "198.51.100.4" }, pdf);
@@ -201,13 +214,61 @@ async function apply() {
   check("the per-caller rate limit answers 429 with Retry-After", limited !== null && limited.headers.get("retry-after") === "600");
 }
 
+/* ------------------------------------------------------------------ mock Postmark (runs inside the check commands) */
+
+const postmark = { messages: [], mode: "ok", server: null };
+function startMockPostmark() {
+  return new Promise((resolve, reject) => {
+    postmark.server = http.createServer((req, res) => {
+      const parts = [];
+      req.on("data", (c) => parts.push(c));
+      req.on("end", () => {
+        let body = {};
+        try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
+        const token = req.headers["x-postmark-server-token"];
+        if (req.url !== "/email" || token !== LAB_SECRETS.EF_POSTMARK_SERVER_TOKEN) { res.writeHead(401); return res.end("{}"); }
+        if (postmark.mode === "down") { res.writeHead(503); return res.end("{}"); }
+        postmark.messages.push({ to: body.To, from: body.From, subject: body.Subject, text: body.TextBody, mode: postmark.mode });
+        if (postmark.mode === "fail") { res.writeHead(422, { "content-type": "application/json" }); return res.end(JSON.stringify({ ErrorCode: 406, Message: "Inactive recipient" })); }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: crypto.randomUUID() }));
+      });
+    });
+    postmark.server.on("error", reject);
+    postmark.server.listen(MOCK_POSTMARK_PORT, "0.0.0.0", () => resolve());
+  });
+}
+const stopMockPostmark = () => new Promise((r) => (postmark.server ? postmark.server.close(() => r()) : r()));
+const mailsTo = (address) => postmark.messages.filter((m) => String(m.to ?? "").split(",").map((a) => a.trim()).includes(address));
+/** Waits (up to ~10 s) until the SQL answers the expected value: mail is sent after the HTTP response. */
+async function waitFor(sql, expected) {
+  let value = "";
+  for (let i = 0; i < 40; i++) { value = psql(sql); if (value === expected) return value; await new Promise((r) => setTimeout(r, 250)); }
+  return value;
+}
+
 /* ------------------------------------------------------------------ helpers shared by the HR-02c..f checks */
 
-const LAB_ADMIN = { id: "1ab00000-0000-4000-8000-0000000000a1", email: "lab.admin@example.test" };
-/** A CMS Admin in the lab database (idempotent), so admin RPCs run with a real admin JWT claim. */
-function ensureLabAdmin() {
-  psql(`insert into auth.users(id, email, email_confirmed_at, aud, role, raw_user_meta_data) values ('${LAB_ADMIN.id}', '${LAB_ADMIN.email}', now(), 'authenticated', 'authenticated', '{}') on conflict (id) do nothing;
-insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values ('lab-admin', 'Lab Admin', '${LAB_ADMIN.email}', 'Admin', 'Active', '${LAB_ADMIN.id}', false) on conflict (id) do nothing;`);
+const LAB_ADMIN = { id: "1ab00000-0000-4000-8000-0000000000a1", email: "lab.admin@example.test", password: "lab-admin-password-1" };
+/** A CMS Admin with a password in the lab (idempotent): admin RPCs and the staff-admin function run with a real admin JWT. */
+async function ensureLabAdmin() {
+  const lab = readLab();
+  if (psql(`select count(*) from auth.users where id = '${LAB_ADMIN.id}';`) === "0") {
+    const res = await fetch(`${lab.apiUrl}/auth/v1/admin/users`, { method: "POST", headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: LAB_ADMIN.id, email: LAB_ADMIN.email, password: LAB_ADMIN.password, email_confirm: true }) });
+    if (!res.ok) throw new Error(`could not create the lab admin: ${res.status} ${await res.text()}`);
+  }
+  psql(`insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values ('lab-admin', 'Lab Admin', '${LAB_ADMIN.email}', 'Admin', 'Active', '${LAB_ADMIN.id}', false) on conflict (id) do nothing;`);
+}
+async function adminToken(lab) {
+  const res = await fetch(`${lab.apiUrl}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: lab.anonKey, "content-type": "application/json" }, body: JSON.stringify({ email: LAB_ADMIN.email, password: LAB_ADMIN.password }) });
+  const body = await res.json();
+  if (!body.access_token) throw new Error(`lab admin sign-in failed: ${JSON.stringify(body)}`);
+  return body.access_token;
+}
+async function staffAdminCall(lab, jwt, body) {
+  const res = await fetch(`${lab.apiUrl}/functions/v1/staff-admin`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 /** Runs SQL as the lab Admin (role authenticated + JWT sub), the way the admin console calls the hr_admin_* functions. */
 function asAdmin(sql) {
@@ -244,7 +305,7 @@ async function freshApplicant(lab, label) {
 
 async function onboard() {
   const lab = readLab();
-  ensureLabAdmin();
+  await ensureLabAdmin();
   const person = await freshApplicant(lab, "onboard");
   const link = await newLink();
   asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'documents', '${link.hash}');`);
@@ -346,6 +407,106 @@ select public.hr_admin_staff_invite_revoke('${person.id}');`);
   check("an expired link answers 403", (await onboardCall(lab, { action: "open", t: fourth.token })).status === 403);
 }
 
+/** Details and every required document (non-citizen) through a link, ready to submit. */
+async function completeDocuments(lab, token) {
+  const pdfFile = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const year = new Date().getFullYear();
+  await onboardCall(lab, { action: "save", t: token, patch: { first_name: "Lab", last_name: "Mail", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_country: "Australia",
+    emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "0422 333 444", is_australian_citizen: false } });
+  for (const [category, expiryDate] of [["Passport", `${year + 5}-06-30`], ["Visa", `${year + 2}-06-30`], ["English", ""], ["Academic", ""], ["Health Insurance", `${year + 1}-06-30`]]) {
+    const r = await onboardCall(lab, { action: "upload", t: token, category, expiryDate }, pdfFile(`${category}.pdf`));
+    if (r.status !== 200) throw new Error(`upload ${category} failed: ${JSON.stringify(r.body)}`);
+  }
+}
+const liveLinks = (id) => psql(`select count(*) from hr.staff_invites where profile_id = '${id}' and revoked_at is null and superseded_at is null and used_at is null and expires_at > now();`);
+const tokenIn = (text) => decodeURIComponent(String(text ?? "").match(/#t=([A-Za-z0-9_%-]+)/)?.[1] ?? "");
+
+async function emails() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  const person = await freshApplicant(lab, "mail");
+
+  // Outbox mail sent by the functions themselves.
+  await waitFor(`select count(*) from hr.staff_emails where profile_id = '${person.id}' and state = 'sent';`, "2");
+  const received = mailsTo(person.email).find((m) => /received/i.test(m.subject));
+  check("'application received' reached the applicant, plain text without any link", !!received && !/https?:\/\//.test(received.text), JSON.stringify(received ?? null).slice(0, 160));
+  const toAdmins = postmark.messages.find((m) => m.subject === "New staff application: Lab mail");
+  check("'new application' reached every EF_HR_ADMIN_NOTIFY_TO address", toAdmins?.to === "hr.one@lab.example.test, hr.two@lab.example.test", JSON.stringify(toAdmins ?? null).slice(0, 160));
+  check("the sender is EF_HR_EMAIL_FROM", /hr@lab\.example\.test/.test(received?.from ?? ""));
+
+  // Invite link: made and mailed by staff-admin; only the hash is stored; the log has no token.
+  const denied = await staffAdminCall(lab, lab.anonKey, { action: "send_invite", profileId: person.id, purpose: "documents" });
+  check("staff-admin refuses a caller who is not an admin", denied.status === 401 || denied.status === 403, String(denied.status));
+  const sent = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "documents" });
+  const invite = mailsTo(person.email).find((m) => /details and documents/i.test(m.subject));
+  const token = tokenIn(invite?.text);
+  check("the admin sends the document link: emailed, 200, no token in the answer", sent.status === 200 && sent.body.emailSent === true && !!token && !JSON.stringify(sent.body).includes(token), JSON.stringify(sent.body));
+  check("the link in the email opens the application", (await onboardCall(lab, { action: "open", t: token })).status === 200);
+  check("the database and the email log hold no token", psql(`select count(*) from hr.staff_invites where token_hash = '${token}';`) === "0"
+    && psql(`select count(*) from hr.staff_emails where profile_id = '${person.id}' and (payload::text like '%${token.slice(0, 16)}%' or payload::text like '%#t=%');`) === "0"
+    && psql(`select state from hr.staff_emails where profile_id = '${person.id}' and kind = 'document_invite' order by id desc limit 1;`) === "sent");
+
+  // A failed send: that link is cancelled at once and the admin sees the failure; the earlier link was replaced.
+  postmark.mode = "fail";
+  const failed = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "documents" });
+  postmark.mode = "ok";
+  check("a failed send answers 502 and says the link was cancelled", failed.status === 502 && failed.body.emailSent === false && failed.body.linkCancelled === true, JSON.stringify(failed.body).slice(0, 200));
+  check("...no valid link is left (the new one cancelled, the old one replaced)", liveLinks(person.id) === "0" && (await onboardCall(lab, { action: "open", t: token })).status === 403);
+  const detail = JSON.parse(psql(`begin; set local role authenticated; set local request.jwt.claim.sub = '${LAB_ADMIN.id}'; select public.hr_admin_staff_detail('${person.id}')::text; commit;`).split("\n").find((l) => l.startsWith("{")) ?? "{}");
+  check("...and the admin sees the failure (detail.emailFailed, the failed invite email)", detail.emailFailed === true && detail.emails?.some((e) => e.kind === "document_invite" && e.state === "failed"));
+  const again = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "documents" });
+  const token2 = tokenIn(mailsTo(person.email).filter((m) => /details and documents/i.test(m.subject) && m.mode === "ok").at(-1)?.text);
+  check("send again: exactly one live link, and it works", again.status === 200 && liveLinks(person.id) === "1" && (await onboardCall(lab, { action: "open", t: token2 })).status === 200);
+  check("...and the failure flag clears once the same kind is sent", psql(`select hr.staff_email_failed('${person.id}');`) === "f");
+
+  // An expired link is sent again the same way.
+  psql(`update hr.staff_invites set created_at = now() - interval '20 days', expires_at = now() - interval '1 second' where profile_id = '${person.id}' and revoked_at is null and superseded_at is null and used_at is null;`);
+  check("an expired link stops working", (await onboardCall(lab, { action: "open", t: token2 })).status === 403);
+  const renewed = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "documents" });
+  const token3 = tokenIn(mailsTo(person.email).filter((m) => /details and documents/i.test(m.subject) && m.mode === "ok").at(-1)?.text);
+  check("the admin resends an expired link: one live link that works", renewed.status === 200 && token3 !== token2 && liveLinks(person.id) === "1" && (await onboardCall(lab, { action: "open", t: token3 })).status === 200);
+
+  // Documents uploaded: the admins are told.
+  await completeDocuments(lab, token3);
+  const submitted = await onboardCall(lab, { action: "submit", t: token3 });
+  check("submit works", submitted.status === 200, JSON.stringify(submitted.body).slice(0, 160));
+  await waitFor(`select state from hr.staff_emails where profile_id = '${person.id}' and kind = 'admin_documents_submitted';`, "sent");
+  check("'Lab Mail has uploaded documents' reached the admins", postmark.messages.some((m) => m.subject === "Lab Mail has uploaded documents" && m.to === "hr.one@lab.example.test, hr.two@lab.example.test"));
+
+  // Re-upload link with the rejected document and its note.
+  const passport = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Passport' and is_current;`);
+  asAdmin(`select public.hr_admin_staff_document_review('${passport}', 'rejected', 'The photo page is cut off');`);
+  const re = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "reupload" });
+  const reMail = mailsTo(person.email).find((m) => /upload a document again/i.test(m.subject));
+  check("the re-upload email names the document and the note, and its link opens in re-upload mode", re.status === 200 && /Passport: The photo page is cut off/.test(reMail?.text ?? "")
+    && (await onboardCall(lab, { action: "open", t: tokenIn(reMail?.text) })).body.view?.mode === "reupload");
+
+  // Outbox retries: a provider outage is retried, then failed after 3 attempts, then retried by the admin.
+  postmark.mode = "down";
+  const rejected = await staffAdminCall(lab, jwt, { action: "reject", profileId: person.id, note: "Position filled" });
+  await staffAdminCall(lab, jwt, { action: "drain" });
+  await staffAdminCall(lab, jwt, { action: "drain" });
+  const failedRow = psql(`select id || '|' || state || '|' || attempts from hr.staff_emails where profile_id = '${person.id}' and kind = 'rejected';`).split("|");
+  check("a provider outage is retried (3 attempts), then the rejection email is marked failed", rejected.status === 200 && failedRow[1] === "failed" && failedRow[2] === "3", failedRow.join("|"));
+  postmark.mode = "ok";
+  const retried = await staffAdminCall(lab, jwt, { action: "retry_email", emailId: Number(failedRow[0]) });
+  check("the admin retries it and it is sent", retried.status === 200 && await waitFor(`select state from hr.staff_emails where id = ${failedRow[0]};`, "sent") === "sent"
+    && mailsTo(person.email).some((m) => m.subject === "Your staff application"));
+  const noLink = await staffAdminCall(lab, jwt, { action: "retry_email", emailId: Number(psql(`select id from hr.staff_emails where profile_id = '${person.id}' and kind = 'document_invite' and state = 'failed' limit 1;`)) });
+  check("a failed link email is never re-sent from the outbox (send a new link instead)", noLink.status === 400, JSON.stringify(noLink.body));
+
+  // Reject without the email.
+  const quiet = await freshApplicant(lab, "quiet");
+  await waitFor(`select count(*) from hr.staff_emails where profile_id = '${quiet.id}' and state = 'sent';`, "2");
+  const before = mailsTo(quiet.email).length;
+  const r2 = await staffAdminCall(lab, jwt, { action: "reject", profileId: quiet.id, note: "Not suitable", notify: false });
+  await new Promise((r) => setTimeout(r, 1000));
+  check("reject with the box unticked sends nothing", r2.status === 200 && mailsTo(quiet.email).length === before
+    && psql(`select count(*) from hr.staff_emails where profile_id = '${quiet.id}' and kind = 'rejected';`) === "0");
+  check("no message went anywhere but the mock (all sent rows have a mock message id)", psql("select count(*) from hr.staff_emails where state = 'sent' and provider_message_id is null;") === "0");
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -363,14 +524,18 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
+  if (["apply", "onboard", "emails"].includes(command)) await startMockPostmark();
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
+  else if (command === "emails") await emails();
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
+  await stopMockPostmark();
   process.exit(2);
 }
+await stopMockPostmark();
 if (failures) { console.log(`${failures} check(s) failed.`); process.exit(1); }

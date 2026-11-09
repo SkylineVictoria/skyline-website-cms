@@ -162,7 +162,7 @@ create table if not exists hr.staff_emails (
  id bigint generated always as identity primary key,
  profile_id uuid not null references hr.staff_profiles(id) on delete restrict,
  kind text not null check (kind in ('application_received','admin_new_application','document_invite','reupload_invite',
-  'admin_documents_submitted','offer','signed_offer','admin_offer_signed','rejected')),
+  'admin_documents_submitted','offer','signed_offer','admin_offer_signed','rejected','already_applied')),
  audience text not null check (audience in ('applicant','admin')),
  -- The applicant's address at the time; admin mail goes to EF_HR_ADMIN_NOTIFY_TO, resolved when sending.
  to_email text check (to_email is null or char_length(to_email) <= 254),
@@ -435,7 +435,14 @@ begin
  select * into p from hr.staff_profiles where email = v_email for update;
  if found then
   select * into a from hr.staff_applications where profile_id = p.id;
-  if not (p.status in ('rejected','inactive') or (p.status = 'applied' and a.resume_path is null)) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
+  if not (p.status in ('rejected','inactive') or (p.status = 'applied' and a.resume_path is null)) then
+   -- The address already has an open application: tell THAT address (never a different one), at most once an hour. The
+   -- caller's answer stays the same thank-you; staff-register's per-email rate limit applies before this is reached.
+   if not exists (select 1 from hr.staff_emails e where e.profile_id = p.id and e.kind = 'already_applied' and e.created_at > now() - interval '1 hour') then
+    perform hr.queue_email(p.id, 'already_applied', 'applicant');
+   end if;
+   return jsonb_build_object('ok', false, 'reason', 'exists');
+  end if;
  end if;
  if exists (select 1 from hr.staff_profiles s where s.phone_e164 = v_phone and s.id is distinct from p.id) then return jsonb_build_object('ok', false, 'reason', 'exists'); end if;
  perform set_config('hr.actor_kind', 'applicant', true); perform set_config('hr.note', 'Applied', true);
@@ -703,13 +710,15 @@ end $fn$;
 
 -- ------------------------------------------------------------------ email outbox (service role)
 -- Claims queued mail (and mail whose lease ran out), at most 3 attempts. Admin mail has to_email null.
-create or replace function public.hr_svc_email_claim(p_limit integer default 10, p_lease_seconds integer default 120) returns jsonb
+-- p_kinds limits the claim to the kinds the sender has templates for (null = every kind).
+drop function if exists public.hr_svc_email_claim(integer, integer);
+create or replace function public.hr_svc_email_claim(p_limit integer default 10, p_lease_seconds integer default 120, p_kinds text[] default null) returns jsonb
 language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
 declare v jsonb;
 begin
  with c as (
   select e.id from hr.staff_emails e
-  where (e.state = 'queued' or (e.state = 'sending' and e.lease_until < now())) and e.attempts < 3
+  where (e.state = 'queued' or (e.state = 'sending' and e.lease_until < now())) and e.attempts < 3 and (p_kinds is null or e.kind = any(p_kinds))
   order by e.id limit least(greatest(coalesce(p_limit, 10), 1), 50) for update skip locked),
  u as (
   update hr.staff_emails e set state = 'sending', attempts = e.attempts + 1, lease_until = now() + make_interval(secs => least(greatest(coalesce(p_lease_seconds, 120), 30), 900))
@@ -781,7 +790,7 @@ begin
   'public.hr_svc_document_set_expiry(text, uuid, date)', 'public.hr_svc_document_for_extraction(text, uuid)', 'public.hr_svc_onboarding_submit(text)',
   'public.hr_svc_upload_target(text, text, uuid)', 'public.hr_svc_document_path(text, uuid)',
   'public.hr_svc_offer_open(text)', 'public.hr_svc_offer_sign(text, uuid, text, text, text, text, text, text)',
-  'public.hr_svc_email_claim(integer, integer)', 'public.hr_svc_email_result(bigint, text, text, text)', 'public.hr_svc_email_log(uuid, text, text, text, text, jsonb)',
+  'public.hr_svc_email_claim(integer, integer, text[])', 'public.hr_svc_email_result(bigint, text, text, text)', 'public.hr_svc_email_log(uuid, text, text, text, text, jsonb)',
   'public.hr_svc_retention_due(integer, integer)', 'public.hr_svc_retention_mark(uuid, integer)'] loop
   execute format('revoke all on function %s from public, anon, authenticated', f);
   execute format('grant execute on function %s to service_role', f);
@@ -842,7 +851,8 @@ begin
    'hasResume', a.resume_path is not null, 'appliedAt', p.created_at, 'submittedAt', a.submitted_at, 'joiningDate', a.joining_date,
    'updatedAt', p.updated_at, 'docs', hr.staff_doc_summary(p.id),
    'inviteExpiresAt', (select i.expires_at from hr.staff_invites i where i.profile_id = p.id and i.revoked_at is null and i.superseded_at is null and i.used_at is null
-     order by i.created_at desc limit 1)) as r
+     order by i.created_at desc limit 1),
+   'emailFailed', hr.staff_email_failed(p.id)) as r
   from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
   where (v_statuses is null or p.status = any(v_statuses))
    and (v_search is null or concat_ws(' ', p.first_name, p.middle_name, p.last_name, p.email, p.phone_e164) ilike '%' || replace(replace(v_search, '%', ''), '_', '') || '%')
@@ -868,7 +878,9 @@ begin
   'invites', coalesce((select jsonb_agg(hr.invite_json(i) order by i.created_at desc) from hr.staff_invites i where i.profile_id = p.id), '[]'::jsonb),
   'offers', coalesce((select jsonb_agg(hr.offer_json(o) order by o.uploaded_at desc) from hr.staff_offers o where o.profile_id = p.id), '[]'::jsonb),
   'emails', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'kind', e.kind, 'audience', e.audience, 'state', e.state, 'createdAt', e.created_at,
-     'sentAt', e.sent_at, 'error', e.last_error) order by e.id desc) from hr.staff_emails e where e.profile_id = p.id), '[]'::jsonb),
+     'sentAt', e.sent_at, 'error', e.last_error, 'attempts', e.attempts,
+     'retryable', e.state = 'failed' and e.kind not in ('document_invite','reupload_invite','offer')) order by e.id desc) from hr.staff_emails e where e.profile_id = p.id), '[]'::jsonb),
+  'emailFailed', hr.staff_email_failed(p.id),
   'roles', coalesce((select jsonb_agg(jsonb_build_object('role', r.role, 'grantedAt', r.granted_at, 'revokedAt', r.revoked_at) order by r.granted_at) from hr.staff_roles r where r.profile_id = p.id), '[]'::jsonb),
   'events', coalesce((select jsonb_agg(jsonb_build_object('from', e.from_status, 'to', e.to_status, 'actorKind', e.actor_kind, 'note', e.note, 'at', e.created_at) order by e.id) from hr.staff_status_events e where e.profile_id = p.id), '[]'::jsonb),
   'hasCmsAccess', exists (select 1 from public.cms_users c where c.auth_user_id = p.auth_user_id and c.status = 'Active'));
@@ -959,6 +971,54 @@ begin
 end $fn$;
 revoke all on function public.hr_admin_staff_invite(uuid, text, text) from public, anon;
 grant execute on function public.hr_admin_staff_invite(uuid, text, text) to authenticated;
+
+-- True when an email to or about this person failed and no later email of the same kind went out.
+create or replace function hr.staff_email_failed(p_profile uuid) returns boolean
+language sql stable security definer set search_path = hr, pg_temp as $fn$
+ select exists (select 1 from hr.staff_emails e where e.profile_id = p_profile and e.state = 'failed'
+  and not exists (select 1 from hr.staff_emails l where l.profile_id = e.profile_id and l.kind = e.kind and l.state = 'sent' and l.id > e.id));
+$fn$;
+revoke all on function hr.staff_email_failed(uuid) from public, anon, authenticated;
+
+-- How many requests a rate-limit bucket holds in its current window, WITHOUT counting this one (staff-onboarding checks its
+-- invalid-link bucket before doing anything). Reads public.public_assistant_rate_limits, the store of
+-- public_assistant_take_rate_limit.
+create or replace function public.hr_svc_rate_count(p_bucket text, p_window_seconds integer) returns integer
+language sql stable security definer set search_path = public, pg_temp as $fn$
+ select coalesce((select r.request_count from public.public_assistant_rate_limits r where r.bucket = p_bucket
+  and r.window_started_at + make_interval(secs => p_window_seconds) > now()), 0);
+$fn$;
+revoke all on function public.hr_svc_rate_count(text, integer) from public, anon, authenticated;
+grant execute on function public.hr_svc_rate_count(text, integer) to service_role;
+
+-- A link email that could not be sent: staff-admin cancels THAT link at once, so a link nobody received never stays valid and a
+-- retry ("send again") makes exactly one new live link. Only a live link of this person can be cancelled.
+create or replace function public.hr_admin_staff_invite_cancel(p_id uuid, p_invite uuid) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin();
+begin
+ update hr.staff_invites set revoked_at = now(), revoked_by = v_admin
+  where id = p_invite and profile_id = p_id and revoked_at is null and superseded_at is null and used_at is null;
+ if not found then raise exception 'There is no live link to cancel.' using errcode = 'P0002'; end if;
+ return public.hr_admin_staff_detail(p_id);
+end $fn$;
+revoke all on function public.hr_admin_staff_invite_cancel(uuid, uuid) from public, anon;
+grant execute on function public.hr_admin_staff_invite_cancel(uuid, uuid) to authenticated;
+
+-- Puts a FAILED queued email (not a link email: those are sent again with a new link) back in the queue for another try.
+create or replace function public.hr_admin_staff_email_retry(p_email bigint) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin(); e hr.staff_emails;
+begin
+ select * into e from hr.staff_emails where id = p_email for update;
+ if not found then raise exception 'Email not found.' using errcode = 'P0002'; end if;
+ if e.kind in ('document_invite','reupload_invite','offer') then raise exception 'Send the link again instead: a new link replaces the old one.' using errcode = '23514'; end if;
+ if e.state <> 'failed' then raise exception 'Only a failed email can be sent again.' using errcode = '23514'; end if;
+ update hr.staff_emails set state = 'queued', attempts = 0, lease_until = null, last_error = null where id = e.id;
+ return public.hr_admin_staff_detail(e.profile_id);
+end $fn$;
+revoke all on function public.hr_admin_staff_email_retry(bigint) from public, anon;
+grant execute on function public.hr_admin_staff_email_retry(bigint) to authenticated;
 
 -- Revokes the live link of that kind ('documents' covers document and re-upload links). The status does not change; the admin
 -- can send a new link.

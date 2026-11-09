@@ -9,12 +9,15 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
 import { STAFF_READER_CATEGORY, runStaffExtraction } from "../staff-document-extract/core.ts";
 import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
+import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const providerConfig: Record<string, string> = { OPENAI_API_KEY: Deno.env.get("OPENAI_API_KEY") ?? "", OPENAI_DOCUMENT_MODEL: Deno.env.get("OPENAI_DOCUMENT_MODEL") ?? "" };
+const mailEnv: Record<string, string> = { SUPABASE_URL };
+for (const name of HR_MAIL_ENV) mailEnv[name] = Deno.env.get(name) ?? "";
 for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
 
 const headers = {
@@ -83,6 +86,10 @@ Deno.serve(async (req) => {
       const { data, error } = await admin.rpc("public_assistant_take_rate_limit", { p_bucket: b, p_limit: limit, p_window_seconds: windowSeconds });
       return !error && data === true; // a failed limiter fails closed
     },
+    rateCount: async (b, windowSeconds) => {
+      const { data, error } = await admin.rpc("hr_svc_rate_count", { p_bucket: b, p_window_seconds: windowSeconds });
+      return error ? Number.MAX_SAFE_INTEGER : Number(data ?? 0); // an unreadable counter fails closed
+    },
     rpc: async (name, args) => { const { data, error } = await admin.rpc(name, args); return { data, error: error ? { code: error.code, message: error.message } : null }; },
     upload: async (path, bytes, contentType) => { const { error } = await bucket.upload(path, bytes, { contentType, upsert: false }); return { error: error ? error.message : null }; },
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
@@ -91,5 +98,7 @@ Deno.serve(async (req) => {
     hash: sha256,
     newId: () => crypto.randomUUID(),
   });
+  // Submit queues "X has uploaded documents" for the admins: send it after the response.
+  if (action === "submit" && result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
   return json(result.body, result.status, result.headers ?? {});
 });

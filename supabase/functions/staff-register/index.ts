@@ -6,10 +6,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { selectCaptchaVerifier } from "../_shared/captcha.ts";
 import { MAX_REQUEST_BYTES, handleApply } from "./core.ts";
+import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
+
+declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const captcha = selectCaptchaVerifier({ EF_CAPTCHA_SECRET_KEY: Deno.env.get("EF_CAPTCHA_SECRET_KEY") ?? "", SUPABASE_URL });
+const mailEnv: Record<string, string> = { SUPABASE_URL };
+for (const name of HR_MAIL_ENV) mailEnv[name] = Deno.env.get(name) ?? "";
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -58,5 +63,7 @@ Deno.serve(async (req) => {
     hash: sha256,
     newId: () => crypto.randomUUID(),
   });
+  // "Application received", "new application" or "already applied" may have been queued: send after the response.
+  if (result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
   return json(result.body, result.status, result.headers ?? {});
 });

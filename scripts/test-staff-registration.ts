@@ -10,6 +10,7 @@ const load = createJiti(import.meta.url, { alias: { "@": path.resolve("src") } }
 const phone = await load.import<typeof import("../src/lib/staffPhone.ts")>("../src/lib/staffPhone.ts");
 const edgePhone = await load.import<typeof import("../supabase/functions/_shared/staff-phone.ts")>("../supabase/functions/_shared/staff-phone.ts");
 const status = await load.import<typeof import("../src/lib/staffStatus.ts")>("../src/lib/staffStatus.ts");
+const checklistLib = await load.import<typeof import("../src/lib/documentChecklist.ts")>("../src/lib/documentChecklist.ts");
 const routing = await load.import<typeof import("../src/lib/loginRouting.ts")>("../src/lib/loginRouting.ts");
 const core = await load.import<typeof import("../supabase/functions/staff-document-extract/core.ts")>("../supabase/functions/staff-document-extract/core.ts");
 const mock = await load.import<typeof import("../supabase/functions/_shared/document-extraction/mock.ts")>("../supabase/functions/_shared/document-extraction/mock.ts");
@@ -63,15 +64,22 @@ test("the TypeScript transition table matches the database function and the stat
 });
 
 test("admin actions follow the status", () => {
-  assert.deepEqual(status.adminActionsFor("submitted"), ["approve", "reject"]);
+  assert.deepEqual(status.adminActionsFor("submitted"), ["activate", "reject"]);
   assert.deepEqual(status.adminActionsFor("preboarding"), ["activate", "reject"]);
   assert.deepEqual(status.adminActionsFor("active"), ["deactivate"]);
+  assert.deepEqual(status.adminActionsFor("inactive"), ["reactivate"]);
   assert.deepEqual(status.adminActionsFor("rejected"), ["reopen"]);
   assert.deepEqual(status.adminActionsFor("draft"), []);
+  // Activate from submitted goes through preboarding inside hr_admin_staff_activate_account (approve, then activate).
+  const legal = (from: string, to: string) => status.canTransition(from as never, to as never) || (from === "submitted" && to === "active" && status.canTransition("submitted", "preboarding") && status.canTransition("preboarding", "active"));
   for (const s of status.STAFF_STATUSES) for (const action of status.adminActionsFor(s)) {
-    const to = { approve: "preboarding", reject: "rejected", activate: "active", deactivate: "inactive", reopen: "draft" }[action] as never;
-    assert.ok(status.canTransition(s, to), `${action} from ${s} is a legal move`);
+    const to = { approve: "preboarding", reject: "rejected", activate: "active", reactivate: "active", deactivate: "inactive", reopen: "draft" }[action];
+    assert.ok(legal(s, to), `${action} from ${s} is a legal move`);
   }
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
+  assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)) && fn.includes("public.hr_admin_staff_approve(") && fn.includes("public.hr_admin_staff_activate("), "one-step activation reuses approve and activate");
+  assert.ok(fn.indexOf("d.status <> 'approved'") > 0 && fn.indexOf("d.status <> 'approved'") < fn.indexOf("public.hr_admin_staff_approve("), "every required document is approved before any role is granted");
 });
 
 /* ------------------------------------------------------------------ duplicate checks */
@@ -94,20 +102,105 @@ test("the duplicate check covers staff, students, agents, portal users, invitati
   for (const table of ["hr.staff_profiles", "public.enrollment_students", "public.agents", "public.portal_profiles", "public.agency_invitations", "public.cms_users"]) assert.ok(fn.includes(table), `checks ${table}`);
   assert.ok(fn.includes("phone_e164(s.phone)") && fn.includes("phone_e164(g.phone)") && fn.includes("phone_e164(pp.phone)"), "phones are compared in E.164 form");
   const edge = read("supabase/functions/staff-register/index.ts");
-  assert.ok(edge.indexOf("hr_staff_precheck") < edge.indexOf("signInWithOtp"), "the check runs before the email code is requested");
+  assert.ok(edge.indexOf("hr_staff_precheck") > 0 && edge.indexOf("hr_staff_precheck") < edge.indexOf("auth.signUp("), "the check runs before the account is created");
   assert.ok(edge.includes("staff-register:caller:") && edge.includes("staff-register:email:"), "rate limits per IP and per email");
-  assert.ok(!/signInWithOtp\([^)]*phone/.test(edge) && !edge.includes('channel: "sms"'), "no SMS is ever sent");
+  assert.ok(!edge.includes("signInWithOtp") && !edge.includes('channel: "sms"'), "no email code and no SMS: sign-up is email + password");
+  assert.ok(edge.indexOf("passwordProblem(body.password") > 0 && edge.indexOf("passwordProblem(body.password") < edge.indexOf("admin.rpc(\"hr_staff_precheck\""), "the password and its confirmation are checked before anything else");
+  assert.ok(!/session/.test(edge.slice(edge.indexOf("auth.signUp("), edge.indexOf("auth.signUp(") + 600).replace(/\/\/.*$/gm, "")), "the function never hands a session back: the email must be confirmed first");
 });
 
-/* ------------------------------------------------------------------ submit rules */
+test("the staff-register password rules match the browser", () => {
+  const edge = read("supabase/functions/staff-register/index.ts");
+  const browser = read("src/lib/passwords.ts");
+  assert.equal(edge.match(/MIN_PASSWORD_LENGTH = (\d+)/)?.[1], browser.match(/MIN_PASSWORD_LENGTH = (\d+)/)?.[1]);
+  assert.ok(edge.includes('"The two passwords do not match."'), "the confirmation must match");
+});
 
-const complete = { firstName: "Tara", lastName: "Trainer", dateOfBirth: "1990-05-06", addressStreet: "1 Example St", addressCountry: "Australia", emergencyName: "Em", emergencyRelationship: "Sibling", emergencyPhone: "+61422333444", requestedRole: "trainer", hasPassport: true };
+/* ------------------------------------------------------------------ documents and submit rules */
 
-test("submit is blocked without a passport and lists what is missing", () => {
-  assert.deepEqual(status.submitProblems(complete), []);
-  assert.deepEqual(status.submitProblems({ ...complete, hasPassport: false }), ["Upload your passport."]);
-  assert.equal(status.submitProblems({ ...complete, requestedRole: null }).length, 1);
-  assert.ok(status.submitProblems({ firstName: "", lastName: "", dateOfBirth: null, addressStreet: "", addressCountry: "", emergencyName: "", emergencyRelationship: "", emergencyPhone: null, requestedRole: null, hasPassport: false }).length >= 6);
+const docs = (today: string) => [
+  { category: "Passport", expiryDate: "2031-01-01" }, { category: "Visa", expiryDate: "2030-01-01" }, { category: "English", expiryDate: null },
+  { category: "Academic", expiryDate: null }, { category: "Academic", expiryDate: null }, { category: "Health Insurance", expiryDate: today },
+];
+const complete = { firstName: "Tara", lastName: "Trainer", dateOfBirth: "1990-05-06", addressStreet: "1 Example St", addressCountry: "Australia", emergencyName: "Em", emergencyRelationship: "Sibling", emergencyPhone: "+61422333444", requestedRole: "trainer", isAustralianCitizen: false as boolean | null, documents: docs("2026-11-09") };
+
+test("submit needs citizenship, every required document and current expiry dates", () => {
+  const today = "2026-11-09";
+  const without = (category: string) => complete.documents.filter((d) => d.category !== category);
+  assert.deepEqual(status.submitProblems(complete, today), []);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Passport") }, today), ["Upload your passport."]);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Visa") }, today), ["Upload your visa."]);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: without("English") }, today), ["Upload your English test result."]);
+  assert.deepEqual(status.submitProblems({ ...complete, isAustralianCitizen: true, documents: without("Visa").filter((d) => d.category !== "English") }, today), [], "a citizen needs no visa and no English result");
+  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Academic") }, today), ["Upload your academic results."]);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Health Insurance") }, today), ["Upload your health insurance."]);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: docs("2026-11-08") }, today), ["Enter a current expiry date for your health insurance."]);
+  assert.deepEqual(status.submitProblems({ ...complete, documents: [...without("English"), { category: "English", expiryDate: "2026-01-01" }] }, today), ["Enter a current expiry date for your English test result."], "an English date is optional, but a past one blocks");
+  assert.deepEqual(status.submitProblems({ ...complete, documents: [...complete.documents, { category: "Driving Licence", expiryDate: "2020-01-01" }] }, today), [], "the optional licence never blocks submit");
+  assert.ok(status.submitProblems({ ...complete, isAustralianCitizen: null }, today).includes("Tell us whether you are an Australian citizen."));
+  assert.equal(status.submitProblems({ ...complete, requestedRole: null }, today).length, 1);
+  assert.ok(status.submitProblems({ firstName: "", lastName: "", dateOfBirth: null, addressStreet: "", addressCountry: "", emergencyName: "", emergencyRelationship: "", emergencyPhone: null, requestedRole: null, isAustralianCitizen: null, documents: [] }, today).length >= 10);
+});
+
+test("the document rules match the database", () => {
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  assert.deepEqual(status.requiredStaffCategories(true), ["Passport", "Academic", "Health Insurance"], "x/3 for citizens");
+  assert.deepEqual(status.requiredStaffCategories(false), ["Passport", "Visa", "English", "Academic", "Health Insurance"], "x/5 for non-citizens");
+  assert.deepEqual(status.requiredStaffCategories(null), status.requiredStaffCategories(false), "unanswered counts as a non-citizen");
+  assert.ok(sql.includes("array['Passport','Academic','Health Insurance'] else array['Passport','Visa','English','Academic','Health Insurance']"), "the SQL lists the same required types");
+  assert.ok(!status.requiredStaffCategories(false).includes("Driving Licence" as never), "the licence is never required");
+  assert.ok(sql.includes("check (category in ('Passport','Visa','English','Academic','Driving Licence','Health Insurance'))"), "the allowed list has the six types and no legacy PTE / English Certificate");
+  assert.deepEqual([...status.STAFF_DOC_CATEGORIES].sort(), ["Academic", "Driving Licence", "English", "Health Insurance", "Passport", "Visa"]);
+  assert.ok(sql.includes("p_category in ('Passport','Visa','Driving Licence','Health Insurance'); $fn$;"), "the SQL requires the same expiry dates");
+  assert.ok(sql.includes("p_category in ('Passport','Visa','English','Driving Licence','Health Insurance'); $fn$;"), "the SQL accepts the same expiry dates");
+  for (const c of status.STAFF_DOC_CATEGORIES) {
+    assert.equal(status.staffDocNeedsExpiry(c), ["Passport", "Visa", "Driving Licence", "Health Insurance"].includes(c), `needs expiry: ${c}`);
+    assert.equal(status.staffDocTakesExpiry(c), c !== "Academic", `takes expiry: ${c}`);
+  }
+  assert.equal(status.staffDocSlug("Health Insurance"), "health-insurance");
+  assert.equal(status.staffDocSlug("Driving Licence"), "driving-licence");
+  assert.ok(sql.includes("lower(replace(btrim(coalesce(p_category, '')), ' ', '-'))"), "the SQL builds the same folder slug");
+  assert.ok(sql.includes("where is_current and category <> 'Academic'"), "only academic results keep several current files");
+  assert.ok(sql.includes(`current_date + ${status.EXPIRING_SOON_DAYS}`), "the same expiring-soon window");
+  // Every staff type has a wizard screen.
+  const config = read("src/pages/agency/lib/wizardConfig.ts");
+  const steps = config.slice(config.indexOf("export const STAFF_WIZARD_STEPS"), config.indexOf("export const wizardStepsFor"));
+  assert.deepEqual([...steps.matchAll(/category: "([^"]+)"/g)].map((m) => m[1]), [...status.STAFF_DOC_CATEGORIES], "wizard screens in the same order");
+});
+
+test("expiry states, the shown document kinds and the checklist", () => {
+  const today = "2026-11-09";
+  assert.equal(status.expiryState(null, today), "none");
+  assert.equal(status.expiryState("2026-11-08", today), "expired");
+  assert.equal(status.expiryState("2026-11-09", today), "soon");
+  assert.equal(status.expiryState("2026-12-09", today), "soon");
+  assert.equal(status.expiryState("2026-12-10", today), "ok");
+  // Citizens see passport, academic, the optional licence and health insurance; a visa they uploaded anyway is shown as optional.
+  assert.deepEqual(status.staffDocKinds(true).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Academic:true", "Driving Licence:false", "Health Insurance:true"]);
+  assert.deepEqual(status.staffDocKinds(true, [{ category: "Visa" }]).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Visa:false", "Academic:true", "Driving Licence:false", "Health Insurance:true"]);
+  assert.deepEqual(status.staffDocKinds(false).map((k) => `${k.category}:${k.required}:${k.expiry}`),
+    ["Passport:true:required", "Visa:true:required", "English:true:optional", "Academic:true:none", "Driving Licence:false:required", "Health Insurance:true:required"]);
+  const list = status.staffChecklist([
+    { category: "Passport", status: "approved", expiryDate: "2026-11-20" },
+    { category: "Academic", status: "approved", expiryDate: null }, { category: "Academic", status: "rejected", expiryDate: null, reviewNote: "Unreadable" },
+    { category: "Driving Licence", status: "pending", expiryDate: "2027-01-01" },
+    { category: "Health Insurance", status: "pending", expiryDate: "2027-06-01" },
+  ], true, today);
+  assert.deepEqual(list.map((i) => [i.kind.category, i.state, i.files, i.expiry]), [["Passport", "approved", 1, "soon"], ["Academic", "rejected", 2, "none"], ["Driving Licence", "pending", 1, "ok"], ["Health Insurance", "pending", 1, "ok"]]);
+  assert.deepEqual(list[1].notes, ["Unreadable"]);
+  assert.deepEqual(checklistLib.approvedCount(list), { approved: 1, required: 3 }, "x/N counts required types only (the licence is not counted)");
+  assert.deepEqual(status.staffChecklist([], false, today).map((i) => i.state).join(","), "missing,missing,missing,missing,missing,missing");
+  assert.deepEqual(checklistLib.approvedCount(status.staffChecklist([], false, today)), { approved: 0, required: 5 });
+});
+
+test("an applicant can never write review fields or grant themselves access", () => {
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  assert.ok(/create policy staff_documents_admin_review on hr\.staff_documents for update to authenticated\s+using \(public\.cms_is_admin\(\) and not exists \(select 1 from hr\.staff_profiles p where p\.id = profile_id and p\.auth_user_id = auth\.uid\(\)\)\)/.test(sql), "only admins pass the review-field policy, never on their own documents");
+  const review = sql.slice(sql.indexOf("function public.hr_admin_staff_document_review"));
+  assert.ok(/v_admin uuid := hr\.require_admin\(\)/.test(review.slice(0, 300)), "document review checks for an administrator");
+  assert.ok(review.includes("'You cannot review your own documents.'"));
+  const reupload = sql.slice(sql.indexOf("create policy staff_documents_owner_reupload"), sql.indexOf("-- ------------------------------------------------------------------ applicant"));
+  assert.ok(reupload.includes("d.status = 'rejected'") && reupload.includes("(storage.foldername(name))[1] = auth.uid()::text"), "after submit only the folder of a rejected document of their own accepts uploads");
 });
 
 /* ------------------------------------------------------------------ roles */
@@ -183,8 +276,25 @@ test("an empty reading and the wrong kind of document fill nothing", async () =>
 });
 
 test("staff reading reuses the shared reader and leaves the student function byte-for-byte alone", () => {
-  assert.equal(core.STAFF_READER_CATEGORY["PTE"], "English Test");
-  assert.equal(core.STAFF_READER_CATEGORY["English Certificate"], "English Test");
+  assert.equal(core.STAFF_READER_CATEGORY["English"], "English Test");
+  assert.equal(core.STAFF_READER_CATEGORY["PTE"], undefined, "legacy PTE / English Certificate are gone");
   const index = read("supabase/functions/staff-document-extract/index.ts");
   assert.ok(index.includes("../_shared/document-extraction/select.ts") && !index.includes("portal_claim_document_extraction_job"), "shared adapters, no student queue");
+});
+
+test("the Employees tabs cover every reviewed status once and match the database filter", () => {
+  const tabs = status.EMPLOYEE_TABS;
+  assert.deepEqual(tabs.map((t) => t.id), ["applications", "active", "closed"]);
+  assert.deepEqual([...tabs[0].statuses], ["submitted", "preboarding"]);
+  assert.deepEqual([...tabs[2].statuses], ["inactive", "rejected"]);
+  const all = tabs.flatMap((t) => [...t.statuses]);
+  assert.equal(new Set(all).size, all.length, "no status is in two tabs");
+  assert.deepEqual(status.STAFF_STATUSES.filter((s) => !all.includes(s)), ["draft"], "only drafts are in no tab");
+  assert.deepEqual(tabs.filter((t) => t.countBadge).map((t) => t.id), ["applications"]);
+  assert.equal(status.employeeTab("bogus").id, "applications");
+  const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
+  const fn = sql.slice(sql.indexOf("create or replace function public.hr_admin_staff_list"));
+  assert.ok(fn.indexOf("perform hr.require_admin();") > 0 && fn.indexOf("perform hr.require_admin();") < fn.indexOf("select count(*)"), "the admin check runs before any read");
+  assert.ok(fn.includes("s is null or s not in ('draft','submitted','preboarding','active','rejected','inactive')"), "every p_statuses value is validated");
+  assert.ok(sql.includes("drop function if exists public.hr_admin_staff_list(text, text, integer, integer);"), "no ambiguous overload is left behind");
 });

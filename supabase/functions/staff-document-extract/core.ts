@@ -6,7 +6,7 @@ import { buildExtractionEnvelope, isSupportedDocument, type DocumentExtractionPr
 
 /** hr.staff_documents.category -> the reader's document category. */
 export const STAFF_READER_CATEGORY: Record<string, ExtractionCategory> = {
-  Passport: "Passport", Visa: "Visa", "Driving Licence": "Driving Licence", PTE: "English Test", "English Certificate": "English Test",
+  Passport: "Passport", Visa: "Visa", English: "English Test", "Driving Licence": "Driving Licence",
 };
 
 export const STAFF_MAX_BYTES = 10 * 1024 * 1024;

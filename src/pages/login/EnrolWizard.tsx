@@ -15,7 +15,7 @@ import {
   type AgentEnrolForm, type EnrolErrors, type EnrolKind, type StudentEnrolForm,
 } from "@/lib/enrolForm";
 import { enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
-import { requestStaffCode, verifyStaffCode } from "@/lib/staffApi";
+import { resendStaffConfirmation, signUpStaff } from "@/lib/staffApi";
 import { toE164 } from "@/lib/staffPhone";
 
 type Step = 1 | 2 | 3;
@@ -357,22 +357,25 @@ function DoneStep({ result, onSignIn }: { result: EnrolResult; onSignIn: () => v
 /* ----------------------------------------------------------------- step 2: staff */
 
 /**
- * Staff apply for an account ("Needs approval", like agents). Email and mobile first: the staff-register function checks them
- * against existing staff, students, agents and admins BEFORE it emails the code, and answers a clash with one neutral message.
- * The code (or the emailed link) verifies the email; /staff/apply then sets the password and starts the draft. No SMS is sent.
+ * Staff apply for an account ("Needs approval", like agents) with email, mobile and a password. The staff-register function
+ * checks the email and number against existing staff, students, agents and admins BEFORE it creates the login, and answers a
+ * clash with one neutral message. Supabase Auth then emails a confirmation link (email confirmation stays on); the link opens
+ * /staff/apply, which starts the "Pending" profile and continues to the workspace wizard. No SMS is sent and the role chosen
+ * later grants nothing until an administrator activates the account.
  */
 function StaffStep({ onBack }: { onBack: () => void }) {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [again, setAgain] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [website, setWebsite] = useState("");
   const [sent, setSent] = useState(false);
-  const [code, setCode] = useState("");
-  const [errors, setErrors] = useState<{ email?: string; phone?: string; agreed?: string; code?: string; form?: string }>({});
+  const [notice, setNotice] = useState("");
+  const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string; again?: string; agreed?: string; form?: string }>({});
   const [busy, setBusy] = useState(false);
-  const navigate = useNavigate();
 
-  const send = async (event: FormEvent<HTMLFormElement>) => {
+  const signUp = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
     const mobile = String(new FormData(event.currentTarget).get("staff-mobile") ?? "");
@@ -380,61 +383,64 @@ function StaffStep({ onBack }: { onBack: () => void }) {
     const next: typeof errors = {};
     if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(email.trim())) next.email = "Enter a valid email address.";
     if (!toE164(mobile)) next.phone = "Enter your mobile number with its country code.";
+    if (password.length < MIN_PASSWORD_LENGTH) next.password = `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
+    if (password !== again) next.again = "The two passwords do not match.";
     if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
     setErrors(next);
     if (Object.keys(next).length) return;
     setBusy(true);
-    try { await requestStaffCode(email.trim().toLowerCase(), toE164(mobile)!, agreed, website); setSent(true); }
-    catch (e) {
+    try {
+      await signUpStaff({ email: email.trim().toLowerCase(), phone: toE164(mobile)!, password, passwordConfirm: again, agreed, website });
+      setPassword(""); setAgain(""); setSent(true);
+    } catch (e) {
       const field = (e as { field?: string }).field;
-      const message = e instanceof Error ? e.message : "We could not send the email. Please try again.";
-      setErrors(field === "email" || field === "phone" ? { [field]: message } : { form: message });
-    }
-    finally { setBusy(false); }
+      const message = e instanceof Error ? e.message : "We could not create the account. Please try again.";
+      setErrors(field === "email" || field === "phone" || field === "password" ? { [field]: message } : { form: message });
+    } finally { setBusy(false); }
   };
 
-  const verify = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (busy) return;
-    if (!/^\d{6,8}$/.test(code.trim())) { setErrors({ code: "Enter the code from the email." }); return; }
-    setBusy(true);
-    try { await verifyStaffCode(email, code); navigate("/staff/apply", { replace: true }); }
-    catch (e) { setErrors({ code: e instanceof Error ? e.message : "That code is not right." }); }
-    finally { setBusy(false); }
+  const resend = () => {
+    setBusy(true); setNotice("");
+    void resendStaffConfirmation(email).then(() => setNotice("We sent the email again."), (e) => setNotice(e instanceof Error ? e.message : "We could not send the email.")).finally(() => setBusy(false));
   };
 
   if (sent) {
     return (
-      <form onSubmit={verify} noValidate>
-        <StepHeader step={3} kind="Staff" title="Check your email" onBack={() => { setSent(false); setCode(""); setErrors({}); }} />
+      <div>
+        <StepHeader step={3} kind="Staff" title="Confirm your email" onBack={() => { setSent(false); setErrors({}); setNotice(""); }} />
         <div className="mt-6 space-y-4">
-          <p className="text-sm text-foreground-700" role="status">We emailed <strong>{email.trim().toLowerCase()}</strong>. Open the link in that email, or type the code it shows. The link and the code work once and expire.</p>
-          <Field label="Code from the email"><TextInput inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" /><Problem text={errors.code} /></Field>
-          <Button type="submit" className="w-full" disabled={busy}>{busy ? "Checking…" : "Verify email"}</Button>
-          <button type="button" className="w-full cursor-pointer text-center text-sm font-semibold text-primary-700 hover:text-primary-800" disabled={busy}
-            onClick={() => { setBusy(true); void requestStaffCode(email.trim().toLowerCase(), toE164(phone)!, agreed).then(() => setErrors({}), (e) => setErrors({ code: e instanceof Error ? e.message : "We could not send the email." })).finally(() => setBusy(false)); }}>
-            Send a new code
+          <p className="text-sm text-foreground-700" role="status" data-testid="staff-confirm-sent">We sent a confirmation link to <strong>{email.trim().toLowerCase()}</strong>. Open it to confirm your address; you then continue with your personal details and documents. After that, sign in with your email and password.</p>
+          <p className="text-xs text-foreground-500">Your account stays pending until an administrator reviews your documents and activates it.</p>
+          {notice ? <p className="text-sm text-foreground-700" role="status">{notice}</p> : null}
+          <button type="button" className="w-full cursor-pointer text-center text-sm font-semibold text-primary-700 hover:text-primary-800" disabled={busy} onClick={resend}>
+            Send the email again
           </button>
         </div>
-      </form>
+      </div>
     );
   }
 
   return (
-    <form onSubmit={send} noValidate>
-      <StepHeader step={2} kind="Staff" title="Your details" onBack={onBack} />
+    <form onSubmit={signUp} noValidate>
+      <StepHeader step={2} kind="Staff" title="Create your account" onBack={onBack} />
       <div className="mt-6 space-y-4">
-        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
+        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" data-testid="staff-signup-email" /><Problem text={errors.email} /></Field>
         <div>
           <label htmlFor="staff-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="staff-mobile" name="staff-mobile" value={phone} required placeholder="041 234 5678" />
           <Problem text={errors.phone} />
         </div>
-        <p className="text-xs text-foreground-500">We email you a code to confirm your address. Your name, date of birth and documents come next.</p>
+        <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. You sign in with your email and this password.`}>
+          <TextInput type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" data-testid="staff-signup-password" /><Problem text={errors.password} />
+        </Field>
+        <Field label="Confirm password" required>
+          <TextInput type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" data-testid="staff-signup-password-confirm" /><Problem text={errors.again} />
+        </Field>
+        <p className="text-xs text-foreground-500">We email you a link to confirm your address. Your personal details and documents come next.</p>
         <div className="hidden" aria-hidden="true"><label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label></div>
         <Agree checked={agreed} onChange={setAgreed} error={errors.agreed} />
         <FormError text={errors.form} />
-        <Button type="submit" className="w-full" disabled={busy}>{busy ? "Checking…" : "Email me a code"}</Button>
+        <Button type="submit" className="w-full" disabled={busy} data-testid="staff-signup-submit">{busy ? "Creating your account…" : "Create account"}</Button>
       </div>
     </form>
   );

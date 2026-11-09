@@ -2,46 +2,55 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
-import WizardDocumentStep from "@/pages/agency/components/WizardDocumentStep";
-import { STAFF_WIZARD_STEPS, type PendingUpload, type WizardDoc, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
+import { DocumentChecklist, DocumentWizard, type DocumentAdapter, type WizardDocument } from "@/pages/agency/components/DocumentWizard";
+import WorkspaceShell from "@/pages/agency/components/WorkspaceShell";
+import { STAFF_WIZARD_STEPS, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import {
-  getMyStaffApplication, removeStaffDocument, requestStaffExtraction, saveStaffDraft, staffDocumentUrl, submitStaffApplication, uploadStaffDocument,
-  type StaffDocCategory, type StaffDocument, type StaffMe,
+  getMyStaffApplication, removeStaffDocument, requestStaffExtraction, saveStaffDraft, setStaffCitizenship, setStaffDocumentExpiry, staffDocumentUrl,
+  submitStaffApplication, uploadStaffDocument, type StaffDocument, type StaffMe,
 } from "@/lib/staffApi";
-import { STAFF_STATUS_LABEL, submitProblems, type StaffRole } from "@/lib/staffStatus";
+import { STAFF_STATUS_LABEL, staffDocKinds, submitProblems, type StaffDocCategory, type StaffRole } from "@/lib/staffStatus";
 
-/** Same shape as a student's wizard document, so the student's document screen is reused as it is. */
+/** Reading states in the shape the shared document screens use. */
 const EXTRACTION: Record<StaffDocument["extractionStatus"], WizardExtractionState> = { pending: "queued", processing: "processing", done: "done", no_fields: "empty", failed: "failed", unavailable: "empty" };
-const toWizardDoc = (d: StaffDocument): WizardDoc => ({ id: d.id, category: d.category, filename: d.filename, fileSize: d.fileSize, storagePath: d.storagePath, extraction: EXTRACTION[d.extractionStatus], error: d.extractionError ?? undefined, extracted: d.extracted });
 
-type Tab = "details" | "documents" | "role" | "review";
-const TABS: Array<{ id: Tab; label: string }> = [{ id: "details", label: "Personal details" }, { id: "documents", label: "Documents" }, { id: "role", label: "Requested role" }, { id: "review", label: "Review and submit" }];
+type Tab = "details" | "documents" | "review";
+const TABS: Array<{ id: Tab; label: string }> = [{ id: "details", label: "Personal details" }, { id: "documents", label: "Documents" }, { id: "review", label: "Review & submit" }];
 const ROLE_TEXT: Record<StaffRole, { title: string; text: string }> = {
   admin: { title: "Admin", text: "Manage the website, applications and people. An administrator must confirm this." },
   trainer: { title: "Trainer", text: "Deliver training. This does not give access to the admin console." },
 };
+const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 const DEBOUNCE_MS = 1000;
 
-function Frame({ email, children, onSignOut }: { email?: string; children: ReactNode; onSignOut: () => void }) {
+/** The staff workspace uses the same shell as the student portal. */
+function Frame({ me, children, onSignOut }: { me?: StaffMe | null; children: ReactNode; onSignOut: () => void }) {
+  const name = me ? [me.profile.first_name, me.profile.last_name].filter(Boolean).join(" ") : "";
+  const isActiveAdmin = me?.profile.status === "active" && me.role === "admin";
   return (
-    <div className="min-h-screen bg-background-100">
-      <header className="border-b border-background-200 bg-background-50">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-5 py-3">
-          <p className="font-heading text-sm font-bold text-foreground-950">Skyline staff application</p>
-          <div className="flex items-center gap-3 text-xs text-foreground-600">
-            {email ? <span className="hidden sm:inline">{email}</span> : null}
-            <button type="button" onClick={onSignOut} className="cursor-pointer font-semibold text-primary-700 hover:text-primary-800">Sign out</button>
-          </div>
-        </div>
-      </header>
-      <main className="mx-auto max-w-4xl px-5 py-8">{children}</main>
-    </div>
+    <WorkspaceShell
+      portalLabel="Staff Portal"
+      workspaceName={me?.profile.status === "active" ? "Staff workspace" : "My staff application"}
+      roleLabel={me?.role && me.profile.status === "active" ? ROLE_TEXT[me.role].title : "Applicant"}
+      nav={[{ to: "/staff", label: "My application", icon: "ri-file-user-line", end: true }]}
+      sidebarFooter={isActiveAdmin ? (
+        <Link to="/admin" className="flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-foreground-700 transition-colors hover:bg-background-100">
+          <i className="ri-shield-keyhole-line text-lg" aria-hidden="true" />
+          Website CMS
+        </Link>
+      ) : null}
+      displayName={name || me?.profile.email || "Staff"}
+      email={me?.profile.email}
+      onSignOut={onSignOut}
+    >
+      <div className="mx-auto max-w-4xl">{children}</div>
+    </WorkspaceShell>
   );
 }
 
-/** The applicant's workspace: draft saving, document upload, status and the administrator's notes. */
+/** The applicant's workspace: personal details, documents with expiry dates, review and submit; then the checklist and decisions. */
 export default function StaffWorkspacePage() {
   const navigate = useNavigate();
   const [me, setMe] = useState<StaffMe | null | undefined>(undefined);
@@ -61,7 +70,7 @@ export default function StaffWorkspacePage() {
 
   // While a document is still being read, look again every few seconds (at most two minutes).
   const polls = useRef(0);
-  const reading = me?.documents.some((d) => d.extractionStatus === "pending" || d.extractionStatus === "processing") ?? false;
+  const reading = me?.documents.some((d) => (d.extractionStatus === "pending" && ["Passport", "Visa", "English", "Driving Licence"].includes(d.category)) || d.extractionStatus === "processing") ?? false;
   useEffect(() => {
     if (!reading) { polls.current = 0; return; }
     if (polls.current >= 40) return;
@@ -72,17 +81,25 @@ export default function StaffWorkspacePage() {
   const signOut = () => { void supabase.auth.signOut().then(() => navigate("/login", { replace: true })); };
 
   if (signedOut) return <Navigate to="/login?next=%2Fstaff" replace />;
-  if (loadError) return <Frame onSignOut={signOut}><p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{loadError}</p></Frame>;
+  if (loadError) return <Frame onSignOut={signOut}><p role="alert" className={ALERT}>{loadError}</p></Frame>;
   if (me === undefined) return <Frame onSignOut={signOut}><p className="text-sm text-foreground-600" role="status">Loading your application…</p></Frame>;
   if (me === null) return <Navigate to="/staff/apply" replace />;
 
   return (
-    <Frame email={me.profile.email} onSignOut={signOut}>
+    <Frame me={me} onSignOut={signOut}>
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <h1 className="font-heading text-2xl font-bold text-foreground-950">{me.profile.first_name ? `Welcome, ${me.profile.first_name}` : "Your staff application"}</h1>
         <span data-testid="staff-status" className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-semibold text-foreground-900">{STAFF_STATUS_LABEL[me.profile.status]}</span>
       </div>
-      {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : <StatusPanel me={me} />}
+      {me.profile.status === "draft" ? <DraftWizard me={me} uid={uid} onChange={setMe} /> : (
+        <>
+          <StatusPanel me={me} />
+          <section className="mt-6 rounded-card border border-background-200 bg-background-50 p-5" aria-label="Document checklist">
+            <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Document checklist</h2>
+            <StaffChecklist me={me} uid={uid} onChange={setMe} canReupload={me.profile.status === "submitted" || me.profile.status === "preboarding"} />
+          </section>
+        </>
+      )}
       <Timeline me={me} />
     </Frame>
   );
@@ -91,7 +108,7 @@ export default function StaffWorkspacePage() {
 /* ----------------------------------------------------------------- after submit: status and messages */
 
 const STATUS_TEXT: Record<string, string> = {
-  submitted: "Your application is with an administrator. You will be able to sign in here to see the decision.",
+  submitted: "Your application is with an administrator. Your requested role gives no access until they activate your account.",
   preboarding: "Your application was approved. An administrator is finishing your onboarding and will activate your account.",
   active: "Your account is active.",
   rejected: "Your application was not approved.",
@@ -103,9 +120,10 @@ function StatusPanel({ me }: { me: StaffMe }) {
   return (
     <section className="rounded-card border border-background-200 bg-background-50 p-5" aria-label="Application status">
       <p className="text-sm text-foreground-800">{STATUS_TEXT[status]}</p>
-      {me.role ? <p className="mt-2 text-sm text-foreground-700">Role: <strong>{ROLE_TEXT[me.role].title}</strong>{me.role === "trainer" ? "" : status === "active" ? "" : " (effective once your account is active)"}</p> : null}
+      {me.role ? <p className="mt-2 text-sm text-foreground-700">Role: <strong>{ROLE_TEXT[me.role].title}</strong>{status === "active" ? "" : " (effective once your account is active)"}</p> : null}
       {status === "active" && me.role === "admin" ? <p className="mt-3"><Link to="/admin" className="font-semibold text-primary-700 hover:underline">Open the admin console</Link></p> : null}
       {status === "rejected" && me.application.review_note ? <p className="mt-2 rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-800"><strong>Note from the administrator:</strong> {me.application.review_note}</p> : null}
+      {me.summary.rejected > 0 && (status === "submitted" || status === "preboarding") ? <p className={`mt-3 ${ALERT}`} role="status">An administrator asked you to replace {me.summary.rejected === 1 ? "a document" : `${me.summary.rejected} documents`}. See the note below and upload a new file.</p> : null}
     </section>
   );
 }
@@ -129,6 +147,31 @@ function Timeline({ me }: { me: StaffMe }) {
   );
 }
 
+/* ----------------------------------------------------------------- documents: the shared DocumentWizard with a staff adapter */
+
+const toWizardDocument = (d: StaffDocument): WizardDocument => ({
+  id: d.id, category: d.category, filename: d.filename, fileSize: d.fileSize, storagePath: d.storagePath,
+  extraction: EXTRACTION[d.extractionStatus], error: d.extractionError ?? undefined, extracted: d.extracted,
+  expiryDate: d.expiryDate, status: d.status, reviewNote: d.reviewNote,
+});
+
+/** Where staff documents live: the private staff-documents bucket and the hr_* functions. Every call ends with fresh data. */
+function staffAdapter(uid: string, onChange: (m: StaffMe) => void): DocumentAdapter {
+  const reload = async () => { const next = await getMyStaffApplication(); if (next) onChange(next); };
+  return {
+    upload: async (kind, file, expiryDate, replaces) => { await uploadStaffDocument(uid, kind.category as StaffDocCategory, file, expiryDate, replaces); await reload(); },
+    remove: async (doc) => { await removeStaffDocument(doc.id); await reload(); },
+    signedUrl: (doc) => staffDocumentUrl(doc.storagePath),
+    setExpiry: async (doc, expiryDate) => { onChange(await setStaffDocumentExpiry(doc.id, expiryDate)); },
+    extract: async (doc) => { await requestStaffExtraction(doc.id); await reload(); },
+  };
+}
+
+function StaffChecklist({ me, uid, onChange, canReupload }: { me: StaffMe; uid: string; onChange: (m: StaffMe) => void; canReupload: boolean }) {
+  return <DocumentChecklist kinds={staffDocKinds(me.profile.is_australian_citizen, me.documents)} documents={me.documents.map(toWizardDocument)}
+    adapter={staffAdapter(uid, onChange)} canReupload={canReupload} testIdPrefix="staff" />;
+}
+
 /* ----------------------------------------------------------------- draft wizard */
 
 const FIELDS: Array<{ key: string; label: string; required?: boolean; type?: string; hint?: string }> = [
@@ -146,6 +189,15 @@ function valueOf(me: StaffMe, key: string): string {
   return p[key] ?? "";
 }
 
+function Choice({ selected, onClick, title, text, testId }: { selected: boolean; onClick: () => void; title: string; text?: string; testId: string }) {
+  return (
+    <button type="button" role="radio" aria-checked={selected} data-testid={testId} onClick={onClick}
+      className={`flex w-full cursor-pointer items-start gap-3 rounded-lg border p-3.5 text-left ${selected ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500" : "border-background-300 bg-background-50 hover:border-primary-300"}`}>
+      <span><span className="block font-heading text-sm font-bold text-foreground-950">{title}</span>{text ? <span className="block text-xs text-foreground-600">{text}</span> : null}</span>
+    </button>
+  );
+}
+
 function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange: (m: StaffMe) => void }) {
   const [tab, setTab] = useState<Tab>("details");
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(FIELDS.map((f) => [f.key, valueOf(me, f.key)])));
@@ -155,8 +207,6 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
   const [submitting, setSubmitting] = useState(false);
   const dirty = useRef<Record<string, string | null>>({});
   const timer = useRef<number | undefined>(undefined);
-  const meRef = useRef(me);
-  meRef.current = me;
 
   // Reading a document fills EMPTY details on the server: take those in without overwriting what the person is typing.
   const filled = FIELDS.map((f) => valueOf(me, f.key)).join("|");
@@ -187,11 +237,13 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const go = async (next: Tab) => { if (await flush()) setTab(next); };
+  const quick = (call: Promise<StaffMe>) => { void call.then(onChange, (e: unknown) => setSaveError(e instanceof Error ? e.message : "Could not save.")); };
 
+  const citizen = me.profile.is_australian_citizen;
   const problems = submitProblems({
     firstName: values.first_name ?? "", lastName: values.last_name ?? "", dateOfBirth: values.date_of_birth || null, addressStreet: values.address_street ?? "", addressCountry: values.address_country ?? "",
     emergencyName: values.emergency_name ?? "", emergencyRelationship: values.emergency_relationship ?? "", emergencyPhone: values.emergency_phone || null,
-    requestedRole: me.application.requested_role, hasPassport: me.documents.some((d) => d.category === "Passport"),
+    requestedRole: me.application.requested_role, isAustralianCitizen: citizen, documents: me.documents,
   });
 
   const submit = async () => {
@@ -203,6 +255,7 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
     finally { setSubmitting(false); }
   };
 
+  const index = TABS.findIndex((t) => t.id === tab);
   return (
     <div>
       <nav className="flex flex-wrap gap-2" aria-label="Application steps">
@@ -214,13 +267,13 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
         ))}
       </nav>
       <p className="mt-2 h-4 text-xs text-foreground-500" role="status" aria-live="polite">
-        {save === "saving" ? "Saving…" : save === "saved" ? "Draft saved" : save === "error" ? "" : "Changes save automatically while this is a draft."}
+        {save === "saving" ? "Saving…" : save === "saved" ? "Draft saved" : save === "error" ? "" : "Changes save automatically until you submit."}
       </p>
-      {saveError ? <p role="alert" className="mb-3 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{saveError}</p> : null}
+      {saveError ? <p role="alert" className={`mb-3 ${ALERT}`}>{saveError}</p> : null}
 
       <section className="mt-4 rounded-card border border-background-200 bg-background-50 p-5">
         {tab === "details" ? (
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Email (confirmed)"><TextInput value={me.profile.email} readOnly disabled /></Field>
               <Field label="Mobile"><TextInput value={me.profile.phone_e164} readOnly disabled /></Field>
@@ -231,76 +284,63 @@ function DraftWizard({ me, uid, onChange }: { me: StaffMe; uid: string; onChange
                 </Field>
               ))}
             </div>
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-foreground-800">Are you an Australian citizen? <span className="text-primary-600">*</span></p>
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Australian citizen">
+                <Choice selected={citizen === true} onClick={() => quick(setStaffCitizenship(true))} title="Yes" text="No visa needed." testId="staff-citizen-yes" />
+                <Choice selected={citizen === false} onClick={() => quick(setStaffCitizenship(false))} title="No" text="You will upload your visa." testId="staff-citizen-no" />
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-foreground-800">Role you are applying for <span className="text-primary-600">*</span></p>
+              <p className="mb-2 text-xs text-foreground-600">A request only: it gives no access until an administrator activates your account.</p>
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Requested role">
+                {(Object.keys(ROLE_TEXT) as StaffRole[]).map((role) => (
+                  <Choice key={role} selected={me.application.requested_role === role} onClick={() => quick(saveStaffDraft({ requested_role: role }))} title={ROLE_TEXT[role].title} text={ROLE_TEXT[role].text} testId={`staff-role-${role}`} />
+                ))}
+              </div>
+            </div>
             <p className="text-xs text-foreground-500">Upload your passport on the Documents step and we fill in blank details from it. You can change anything.</p>
           </div>
         ) : null}
         {tab === "documents" ? <DocumentsTab me={me} uid={uid} onChange={onChange} /> : null}
-        {tab === "role" ? (
-          <div className="space-y-3" role="radiogroup" aria-label="Requested role">
-            <p className="text-sm text-foreground-700">Choose the role you are applying for. This is a request only: nothing is granted until an administrator approves it.</p>
-            {(Object.keys(ROLE_TEXT) as StaffRole[]).map((role) => {
-              const selected = me.application.requested_role === role;
-              return (
-                <button key={role} type="button" role="radio" aria-checked={selected} data-testid={`staff-role-${role}`}
-                  onClick={() => { void saveStaffDraft({ requested_role: role }).then(onChange, (e: unknown) => setSaveError(e instanceof Error ? e.message : "Could not save.")); }}
-                  className={`flex w-full cursor-pointer items-start gap-3 rounded-lg border p-4 text-left ${selected ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500" : "border-background-300 bg-background-50 hover:border-primary-300"}`}>
-                  <span><span className="block font-heading text-sm font-bold text-foreground-950">{ROLE_TEXT[role].title}</span><span className="block text-xs text-foreground-600">{ROLE_TEXT[role].text}</span></span>
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
         {tab === "review" ? (
-          <div className="space-y-4">
+          <div className="space-y-5">
             <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
               {[["Name", [values.first_name, values.middle_name, values.last_name].filter(Boolean).join(" ")], ["Date of birth", values.date_of_birth], ["Email", me.profile.email], ["Mobile", me.profile.phone_e164],
                 ["Address", [values.address_street, values.address_line2, values.address_suburb, values.address_state, values.address_postcode, values.address_country].filter(Boolean).join(", ")],
                 ["Emergency contact", [values.emergency_name, values.emergency_relationship, values.emergency_phone].filter(Boolean).join(" · ")],
-                ["Requested role", me.application.requested_role ? ROLE_TEXT[me.application.requested_role].title : ""],
-                ["Documents", me.documents.map((d) => d.category).join(", ")]].map(([k, v]) => (
+                ["Australian citizen", citizen === null ? "" : citizen ? "Yes" : "No"],
+                ["Requested role", me.application.requested_role ? ROLE_TEXT[me.application.requested_role].title : ""]].map(([k, v]) => (
                 <div key={k}><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{k}</dt><dd className="text-foreground-900">{v || "—"}</dd></div>
               ))}
             </dl>
+            <div>
+              <h3 className="mb-2 font-heading text-sm font-bold text-foreground-950">Documents</h3>
+              <StaffChecklist me={me} uid={uid} onChange={onChange} canReupload={false} />
+            </div>
             {problems.length ? (
-              <ul className="list-disc space-y-1 rounded-md border border-primary-200 bg-primary-50 py-2.5 pl-8 pr-3 text-[13px] text-primary-900" data-testid="staff-problems">{problems.map((p) => <li key={p}>{p}</li>)}</ul>
+              <ul className={`list-disc space-y-1 py-2.5 pl-8 text-[13px] ${ALERT}`} data-testid="staff-problems">{problems.map((p) => <li key={p}>{p}</li>)}</ul>
             ) : null}
-            {submitError ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{submitError}</p> : null}
+            {submitError ? <p role="alert" className={ALERT}>{submitError}</p> : null}
             <Button type="button" onClick={() => void submit()} disabled={submitting} data-testid="staff-submit">{submitting ? "Submitting…" : "Submit application"}</Button>
-            <p className="text-xs text-foreground-500">After you submit, you cannot edit the application unless an administrator reopens it.</p>
+            <p className="text-xs text-foreground-500">After you submit, you cannot edit the application. If an administrator rejects a document, you can upload a new one here.</p>
           </div>
         ) : null}
       </section>
+      <div className="mt-4 flex justify-between">
+        {index > 0 ? <Button type="button" variant="outline" onClick={() => void go(TABS[index - 1].id)}>Back</Button> : <span />}
+        {index < TABS.length - 1 ? <Button type="button" onClick={() => void go(TABS[index + 1].id)} data-testid="staff-next">Continue</Button> : null}
+      </div>
     </div>
   );
 }
 
 function DocumentsTab({ me, uid, onChange }: { me: StaffMe; uid: string; onChange: (m: StaffMe) => void }) {
-  const [pending, setPending] = useState<PendingUpload[]>([]);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const reload = () => getMyStaffApplication().then((next) => { if (next) onChange(next); }, () => undefined);
-
-  const upload = async (category: StaffDocCategory, file: File, key = `${category}-${Date.now()}-${file.name}`) => {
-    setPending((list) => [...list.filter((p) => p.key !== key), { key, category, file }]);
-    try { await uploadStaffDocument(me, uid, category, file); setPending((list) => list.filter((p) => p.key !== key)); await reload(); }
-    catch (e) { setPending((list) => list.map((p) => (p.key === key ? { ...p, error: e instanceof Error ? e.message : "The upload failed." } : p))); }
-  };
-
-  return (
-    <div className="space-y-8">
-      {STAFF_WIZARD_STEPS.map((step) => (
-        <div key={step.category} data-testid={`staff-doc-${step.category.toLowerCase().replace(/\s+/g, "-")}`}>
-          <WizardDocumentStep step={step}
-            docs={me.documents.filter((d) => d.category === step.category).map(toWizardDoc)}
-            pending={pending.filter((p) => p.category === step.category)} dismissed={dismissed}
-            onPickFiles={(files) => { const file = files?.[0]; if (file) void upload(step.category as StaffDocCategory, file); }}
-            onRetryUpload={(item) => void upload(step.category as StaffDocCategory, item.file, item.key)}
-            onDropUpload={(item) => setPending((list) => list.filter((p) => p.key !== item.key))}
-            onRetryDoc={(doc) => { void requestStaffExtraction(doc.id).then(reload); }}
-            onDismissDoc={(doc) => setDismissed((s) => new Set(s).add(doc.id))}
-            onRemoveDoc={async (doc) => { await removeStaffDocument(doc.id); await reload(); }}
-            signedUrl={(doc) => staffDocumentUrl(doc.storagePath)} />
-        </div>
-      ))}
-    </div>
-  );
+  const steps = staffDocKinds(me.profile.is_australian_citizen, me.documents).flatMap((kind) => {
+    const step = STAFF_WIZARD_STEPS.find((s) => s.category === kind.category);
+    return step ? [{ kind, step }] : [];
+  });
+  return <DocumentWizard steps={steps} documents={me.documents.map(toWizardDocument)} adapter={staffAdapter(uid, onChange)} testIdPrefix="staff"
+    notice={me.profile.is_australian_citizen === null ? "Answer the Australian citizen question on Personal details first: it decides whether a visa and an English test result are needed." : undefined} />;
 }

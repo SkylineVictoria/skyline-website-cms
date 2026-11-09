@@ -1,7 +1,7 @@
 begin;
 -- Staff self-registration (hr schema): phone normalisation, duplicate checks, RLS, role and approval rules, status log.
 -- Fixtures only; rolled back. Run: npx supabase test db
-select plan(71);
+select plan(138);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -74,20 +74,49 @@ set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
 select lives_ok($$select public.hr_staff_start('0400 000 006')$$, 'trainer applicant starts');
 select lives_ok($$select public.hr_staff_save('{"first_name":"Tara","last_name":"Trainer","date_of_birth":"1990-05-06","address_street":"1 Example St","address_suburb":"Melbourne","address_state":"VIC","address_postcode":"3000","address_country":"Australia","emergency_name":"Em Contact","emergency_relationship":"Sibling","emergency_phone":"0422 333 444","requested_role":"trainer"}')$$, 'details save');
 select is((public.hr_staff_me()->'profile'->>'emergency_phone_e164'), '+61422333444', 'emergency phone stored as E.164');
+select throws_ok($$select public.hr_staff_submit()$$, '23514', 'Tell us whether you are an Australian citizen.', 'submit is blocked until citizenship is answered');
+select lives_ok($$select public.hr_staff_set_citizenship(false)$$, 'citizenship answered: not a citizen');
+select is((public.hr_staff_me()->'summary'->>'required'), '5', 'a non-citizen needs five document types (passport, visa, English, academic, health insurance)');
+select is(cardinality(hr.staff_required_categories(true)), 3, 'a citizen needs three (passport, academic, health insurance)');
+select ok(not ('Driving Licence' = any(hr.staff_required_categories(false))) and not ('Driving Licence' = any(hr.staff_required_categories(true))), 'the driving licence is never required');
 select throws_ok($$select public.hr_staff_submit()$$, '23514', 'A passport is required before you can submit.', 'submit is blocked without a passport');
 select throws_ok($$update hr.staff_profiles set status = 'active' where auth_user_id = auth.uid()$$, '42501', null, 'an applicant cannot write their own status');
 select throws_ok($$insert into hr.staff_roles(profile_id, role, granted_by) select id, 'admin', auth_user_id from hr.staff_profiles where auth_user_id = auth.uid()$$, '42501', null, 'an applicant cannot assign themselves a role');
-select throws_ok($$select public.hr_staff_document_register('Passport', 'a0000000-0000-0000-0000-000000000006/00000000-0000-0000-0000-000000000000/p.pdf', 'p.pdf', 'application/pdf', 10)$$, '22023', 'The document location is not valid.', 'a document path outside the own application is refused');
+select is(to_regprocedure('public.hr_staff_document_register(text, text, text, text, integer)')::text, null, 'the old upload function (no expiry, legacy categories) is dropped');
+select throws_ok($$select public.hr_staff_document_register('Passport', 'a0000000-0000-0000-0000-000000000006/passport/p.pdf', 'p.pdf', 'application/pdf', 10)$$, '42883', null, 'and cannot be called by a signed-in user');
 
 reset role;
-insert into storage.objects(bucket_id, name) select 'staff-documents', 'a0000000-0000-0000-0000-000000000006/' || a.id || '/passport.pdf'
- from hr.staff_applications a join hr.staff_profiles p on p.id = a.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006';
+insert into storage.objects(bucket_id, name) select 'staff-documents', 'a0000000-0000-0000-0000-000000000006/' || f
+ from unnest(array['passport/p.pdf','visa/v.pdf','english/e.pdf','academic/a1.pdf','academic/a2.pdf','driving-licence/l.pdf','health-insurance/h.pdf','pte/x.pdf']) f;
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
-select lives_ok($$select public.hr_staff_document_register('Passport', 'a0000000-0000-0000-0000-000000000006/' || (select id from hr.staff_applications limit 1) || '/passport.pdf', 'passport.pdf', 'application/pdf', 1234)$$, 'passport registered');
-select lives_ok($$select public.hr_staff_submit()$$, 'submit works with a passport');
+select throws_ok($$select public.hr_staff_document_add('Passport', 'a0000000-0000-0000-0000-000000000006/visa/v.pdf', 'p.pdf', 'application/pdf', 10, current_date + 400)$$, '22023', 'The document location is not valid.', 'a file outside the folder of its document type is refused');
+select throws_ok($$select public.hr_staff_document_add('Passport', 'a0000000-0000-0000-0000-000000000006/passport/p.pdf', 'p.pdf', 'application/pdf', 10)$$, '22023', 'Enter the expiry date of your passport.', 'a passport needs an expiry date');
+select throws_ok($$select public.hr_staff_document_add('Passport', 'a0000000-0000-0000-0000-000000000006/passport/p.pdf', 'p.pdf', 'application/pdf', 10, current_date - 1)$$, '22023', 'This passport has expired. Upload a current one.', 'an expired passport is refused');
+select lives_ok($$select public.hr_staff_document_add('Passport', 'a0000000-0000-0000-0000-000000000006/passport/p.pdf', 'passport.pdf', 'application/pdf', 1234, current_date + 20)$$, 'passport registered with its expiry');
+select throws_ok($$select public.hr_staff_submit()$$, '23514', 'Upload your visa.', 'a non-citizen must upload a visa');
+select lives_ok($$select public.hr_staff_document_add('Visa', 'a0000000-0000-0000-0000-000000000006/visa/v.pdf', 'visa.pdf', 'application/pdf', 100, current_date + 400)$$, 'visa registered');
+select throws_ok($$select public.hr_staff_submit()$$, '23514', 'Upload your English test result.', 'a non-citizen must upload an English test result');
+select throws_ok($$select public.hr_staff_document_add('English', 'a0000000-0000-0000-0000-000000000006/english/e.pdf', 'e.pdf', 'application/pdf', 100, current_date - 1)$$, '22023', 'This English test result has expired. Upload a current one.', 'a past English expiry date is refused');
+select lives_ok($$select public.hr_staff_document_add('English', 'a0000000-0000-0000-0000-000000000006/english/e.pdf', 'english.pdf', 'application/pdf', 100, null)$$, 'an English test result needs no expiry date');
+select throws_ok($$select public.hr_staff_document_add('PTE', 'a0000000-0000-0000-0000-000000000006/pte/x.pdf', 'x.pdf', 'application/pdf', 100, null)$$, '22023', 'Unknown document type.', 'the legacy PTE category is refused');
+select lives_ok($$select public.hr_staff_document_add('Academic', 'a0000000-0000-0000-0000-000000000006/academic/a1.pdf', 'a1.pdf', 'application/pdf', 100)$$, 'first academic file');
+select lives_ok($$select public.hr_staff_document_add('Academic', 'a0000000-0000-0000-0000-000000000006/academic/a2.pdf', 'a2.pdf', 'application/pdf', 100)$$, 'second academic file');
+select is((select count(*)::int from hr.staff_documents where category = 'Academic' and is_current), 2, 'academic results keep several current files');
+select throws_ok($$select public.hr_staff_submit()$$, '23514', 'Upload your health insurance.', 'health insurance is required');
+select lives_ok($$select public.hr_staff_document_add('Health Insurance', 'a0000000-0000-0000-0000-000000000006/health-insurance/h.pdf', 'h.pdf', 'application/pdf', 100, current_date + 200)$$, 'health insurance registered');
+select throws_ok($$select public.hr_staff_document_add('Driving Licence', 'a0000000-0000-0000-0000-000000000006/driving-licence/l.pdf', 'l.pdf', 'application/pdf', 100, null)$$, '22023', 'Enter the expiry date of your driving licence.', 'a driving licence needs its expiry date');
+select lives_ok($$select public.hr_staff_document_add('Driving Licence', 'a0000000-0000-0000-0000-000000000006/driving-licence/l.pdf', 'licence.pdf', 'application/pdf', 100, current_date + 700)$$, 'the optional driving licence is registered with its expiry');
+select is((public.hr_staff_me()->'summary'->>'uploaded') || '/' || (public.hr_staff_me()->'summary'->>'expiringSoon'), '5/true', 'checklist: five of five required uploaded (the licence is not counted), passport expiring soon');
+select lives_ok($$select public.hr_staff_submit()$$, 'submit works with every required document');
 select is(public.hr_staff_access(), 'submitted', 'status is submitted');
 select throws_ok($$select public.hr_staff_save('{"first_name":"Changed"}')$$, '23514', 'This application can no longer be edited.', 'a submitted application is read-only');
+select throws_ok($$select public.hr_staff_set_citizenship(true)$$, '23514', 'This application can no longer be edited.', 'citizenship cannot change after submit (it decides whether a visa is required)');
+select throws_ok($$insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status) select a.id, a.profile_id, 'Visa', 'a0000000-0000-0000-0000-000000000006/visa/forged.pdf', 'f.pdf', 'application/pdf', 1, 'approved' from hr.staff_applications a$$, '42501', null, 'a staff user cannot insert a document row directly');
+select throws_ok($$insert into hr.staff_profiles(auth_user_id, email, phone_e164) values (auth.uid(), 'forged@example.test', '+61400999999')$$, '42501', null, 'a staff user cannot insert a profile row directly');
+with u as (update hr.staff_profiles set first_name = 'Forged' returning 1) select is((select count(*)::int from u), 0, 'a staff user cannot update their submitted profile directly');
+select throws_ok($$select public.hr_staff_document_add('Visa', 'a0000000-0000-0000-0000-000000000006/visa/v.pdf', 'v.pdf', 'application/pdf', 10, current_date + 400)$$, '23514', 'Only a rejected document can be replaced.', 'after submit only a rejected document can be replaced');
+select throws_ok($$insert into storage.objects(bucket_id, name) values ('staff-documents', 'a0000000-0000-0000-0000-000000000006/visa/again.pdf')$$, '42501', null, 'no upload after submit while nothing is rejected');
 
 -- ---------------------------------------------------------------- RLS
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000002';
@@ -96,17 +125,74 @@ select is((select count(*)::int from hr.staff_documents), 0, 'an applicant canno
 select is((select count(*)::int from storage.objects where bucket_id = 'staff-documents'), 0, 'an applicant cannot read another applicant''s files');
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select ok((select count(*)::int from hr.staff_profiles) >= 4, 'an admin sees every profile');
-select is((select count(*)::int from storage.objects where bucket_id = 'staff-documents' and name like 'a0000000-%'), 1, 'an admin can read staff files');
+select is((select count(*)::int from storage.objects where bucket_id = 'staff-documents' and name like 'a0000000-%'), 8, 'an admin can read staff files');
+
+-- ---------------------------------------------------------------- per-document review, re-upload of a rejected document
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
+select throws_ok($$select public.hr_admin_staff_document_review((select id from hr.staff_documents where category = 'Visa' and is_current), 'approved')$$, '42501', 'Only an administrator can do this.', 'an applicant cannot review documents');
+with u as (update hr.staff_documents set status = 'approved' returning 1) select is((select count(*)::int from u), 0, 'an applicant cannot write a review field');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_staff_document_review((select d.id from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Visa' and d.is_current), 'rejected', ' ')$$, '22023', 'Add a note telling them what to fix.', 'a rejection needs a note');
+select lives_ok($$select public.hr_admin_staff_document_review((select d.id from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Visa' and d.is_current), 'rejected', 'Blurry scan')$$, 'admin rejects the visa with a note');
+select throws_ok($$select public.hr_admin_staff_activate_account((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'trainer')$$, '23514', 'Approve every required document first (passport).', 'activation needs every required document approved');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
+select is((select d->>'status' || '/' || (d->>'reviewNote') from jsonb_array_elements(public.hr_staff_me()->'documents') d where d->>'category' = 'Visa'), 'rejected/Blurry scan', 'the applicant sees the rejection and its note');
+select throws_ok($$select public.hr_staff_document_set_expiry((select id from hr.staff_documents where category = 'Passport' and is_current), current_date + 300)$$, '23514', 'Only a rejected document can be changed.', 'after submit only a rejected document''s date can change');
+select lives_ok($$select public.hr_staff_document_set_expiry((select id from hr.staff_documents where category = 'Visa' and is_current), current_date + 450)$$, 'the applicant corrects the expiry date of the rejected visa');
+select is((select d->>'status' || '/' || (d->>'reviewNote') || '/' || coalesce(d->>'reviewedAt', 'none') from jsonb_array_elements(public.hr_staff_me()->'documents') d where d->>'category' = 'Visa'), 'pending//none', 'a changed expiry date resets the review to pending');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_document_review((select d.id from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Visa' and d.is_current), 'rejected', 'Still blurry')$$, 'admin rejects the visa again');
+select lives_ok($$select public.hr_admin_staff_document_review((select d.id from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.storage_path like '%/academic/a1.pdf'), 'rejected', 'Wrong transcript')$$, 'admin rejects one academic file');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
+select lives_ok($$insert into storage.objects(bucket_id, name) values ('staff-documents', 'a0000000-0000-0000-0000-000000000006/academic/a3.pdf')$$, 'the applicant may upload into the academic folder');
+select lives_ok($$select public.hr_staff_document_add('Academic', 'a0000000-0000-0000-0000-000000000006/academic/a3.pdf', 'a3.pdf', 'application/pdf', 100, null, (select id from hr.staff_documents where storage_path like '%/academic/a1.pdf'))$$, 'the rejected academic file is replaced');
+select is((select string_agg(right(storage_path, 6) || ':' || status || ':' || is_current, ',' order by storage_path) from hr.staff_documents where category = 'Academic'), 'a1.pdf:rejected:false,a2.pdf:pending:true,a3.pdf:pending:true', 'the replacement is pending, the other file is untouched and the rejected one is kept');
+select lives_ok($$insert into storage.objects(bucket_id, name) values ('staff-documents', 'a0000000-0000-0000-0000-000000000006/visa/v2.pdf')$$, 'the applicant may upload into the folder of a rejected document');
+select throws_ok($$insert into storage.objects(bucket_id, name) values ('staff-documents', 'a0000000-0000-0000-0000-000000000006/passport/p2.pdf')$$, '42501', null, 'but not into the folder of a document that was not rejected');
+select lives_ok($$select public.hr_staff_document_add('Visa', 'a0000000-0000-0000-0000-000000000006/visa/v2.pdf', 'visa2.pdf', 'application/pdf', 100, current_date + 500)$$, 'a rejected visa is re-uploaded after submit');
+select is((select string_agg(status || ':' || is_current, ',' order by is_current) from hr.staff_documents where category = 'Visa'), 'rejected:false,pending:true', 'the new visa is pending and the rejected one is kept');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.is_current and d.category <> 'Driving Licence'$$, 'admin approves every current required document (the optional licence stays pending)');
+select is((select r->'docs'->>'approved' || '/' || (r->'docs'->>'required') from jsonb_array_elements(public.hr_admin_staff_list()->'rows') r where r->>'email' = 'trainer.person@example.test'), '5/5', 'the list shows five of five approved while the optional licence is still pending');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_staff_list(p_statuses => array['submitted','preboarding'])->'rows') r where r->>'email' = 'trainer.person@example.test'), 1, 'p_statuses: the Applications tab (submitted + preboarding) lists a submitted applicant');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_staff_list(p_statuses => array['inactive','rejected'])->'rows') r where r->>'email' = 'trainer.person@example.test'), 0, 'p_statuses: the Inactive/Rejected tab does not');
+select is((public.hr_admin_staff_list(p_statuses => array['submitted','preboarding'])->>'total')::int, (select count(*)::int from hr.staff_profiles where status in ('submitted','preboarding')), 'p_statuses: the total counts every matching status (the tab badge)');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_staff_list('submitted')->'rows') r where r->>'email' = 'trainer.person@example.test'), 1, 'p_status still works on its own');
+select is((public.hr_admin_staff_list(p_statuses => '{}'::text[])->>'total')::int, (select count(*)::int from hr.staff_profiles), 'an empty p_statuses means no filter');
+select throws_ok($$select public.hr_admin_staff_list(p_statuses => array['submitted','bogus'])$$, '22023', 'Unknown status.', 'every p_statuses value is validated');
+select throws_ok($$select public.hr_admin_staff_list(p_statuses => array['active', null])$$, '22023', 'Unknown status.', 'a null p_statuses value is refused');
+select throws_ok($$select public.hr_admin_staff_list('active', null, 50, 0, array['inactive'])$$, '22023', 'Use p_status or p_statuses, not both.', 'p_status and p_statuses cannot be combined');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000002';
+select throws_ok($$select public.hr_admin_staff_list(p_statuses => array['submitted'])$$, '42501', 'Only an administrator can do this.', 'p_statuses still requires an administrator');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((select count(*)::int from pg_proc where proname = 'hr_admin_staff_list' and pronamespace = 'public'::regnamespace), 1, 'one hr_admin_staff_list only (no ambiguous overload)');
+select ok(not has_function_privilege('anon', 'public.hr_admin_staff_list(text, text, integer, integer, text[])', 'execute') and has_function_privilege('authenticated', 'public.hr_admin_staff_list(text, text, integer, integer, text[])', 'execute'), 'the new signature is callable by signed-in users only');
+reset role;
+select is((select coalesce(parent_id, '-') || '/' || coalesce(route, '-') || '/' || label || '/' || permission_key || '/' || permission_scope || '/' || is_enabled from public.admin_menu_items where id = 'staff'), '-/-/Staff/cms.admin/current/true', 'menu: a top-level Staff group with the same admin-only permission');
+select is((select parent_id || '/' || label || '/' || route || '/' || is_enabled from public.admin_menu_items where id = 'agency_staff'), 'staff/Employees//admin/staff/employees/true', 'menu: agency_staff moved under Staff as Employees, same id');
+select is((select string_agg(id, ',' order by sort_order, id) from (select id, sort_order from public.admin_menu_items where parent_id is null and sort_order >= (select sort_order from public.admin_menu_items where id = 'agencies') order by sort_order, id limit 3) x), 'agencies,staff,website', 'menu: Staff comes right after Agencies');
+set local role authenticated;
+reset role;
+update hr.staff_documents d set expiry_date = d.expiry_date + 1 from hr.staff_profiles p where p.id = d.profile_id and p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Passport' and d.is_current;
+select is((select d.status || '/' || d.review_note || '/' || coalesce(d.reviewed_by::text, 'none') from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Passport' and d.is_current), 'pending//none', 'an expiry change made any other way also resets an approved document to pending');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((select r->'docs'->>'approved' || '/' || (r->'docs'->>'required') from jsonb_array_elements(public.hr_admin_staff_list()->'rows') r where r->>'email' = 'trainer.person@example.test'), '4/5', 'the list drops back to four of five approved');
+select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Passport' and d.is_current$$, 'admin approves the passport again');
 
 -- ---------------------------------------------------------------- approval: admin only, role rules, cms_users timing
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000002';
 select throws_ok($$select public.hr_admin_staff_approve((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'admin', null, true)$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot approve or assign a role');
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select throws_ok($$select public.hr_admin_staff_approve((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'admin')$$, '23514', 'Confirm that this person should become an Admin.', 'granting Admin needs the explicit confirm');
-select lives_ok($$select public.hr_admin_staff_approve((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'trainer', 'Welcome')$$, 'approve as trainer');
-select is((select status from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'preboarding', 'approval moves to preboarding');
-select is((select count(*)::int from public.cms_users where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 0, 'no CMS access at preboarding');
-select lives_ok($$select public.hr_admin_staff_activate((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'))$$, 'activate the trainer');
+select throws_ok($$select public.hr_admin_staff_activate_account((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'admin')$$, '23514', 'Confirm that this person should become an Admin.', 'one-step activation as Admin needs the explicit confirm');
+select lives_ok($$select public.hr_admin_staff_activate_account((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'trainer', 'Welcome')$$, 'activate as trainer in one step once every document is approved');
+select is((select status from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'active', 'the account is active');
+select is((select d.status from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.auth_user_id = 'a0000000-0000-0000-0000-000000000006' and d.category = 'Driving Licence' and d.is_current), 'pending', 'a pending optional licence did not block activation');
+reset role;
+select throws_ok($$insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size) select a.id, a.profile_id, 'English Certificate', 'x/legacy.pdf', 'l.pdf', 'application/pdf', 1 from hr.staff_applications a limit 1$$, '23514', null, 'the legacy English Certificate category is no longer allowed in the table');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is((select count(*)::int from public.cms_users where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 0, 'a trainer never gets a cms_users row');
 select lives_ok($$select public.hr_admin_staff_deactivate((select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006'), 'Left')$$, 'deactivate');
 select is((select string_agg(to_status, '>' order by id) from hr.staff_status_events where profile_id = (select id from hr.staff_profiles where auth_user_id = 'a0000000-0000-0000-0000-000000000006')),

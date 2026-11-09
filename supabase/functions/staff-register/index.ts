@@ -1,11 +1,12 @@
 // Public staff sign-up gate (verify_jwt = false): staff register themselves from the sign-in page ("Needs approval", like agents).
-// This function is the ONLY place the email code is requested for a staff sign-up. Before any email is sent it
+// This function is the ONLY place a staff account is created (email + password). Before any email is sent it
 //   1. rate-limits per caller IP and per email,
 //   2. normalises the phone number to E.164 and checks the email and number against existing staff, students, agents, portal
 //      users, waiting invitations and admin users (hr_staff_precheck, service role only),
 //   3. answers a conflict with one neutral message that never says which kind of account exists.
-// Only then does it ask Supabase Auth to email a one-time code / confirmation link (signInWithOtp). No SMS is ever sent: the phone
-// number is collected, normalised and stored, not verified. Nothing here grants access; the verified email session does, and
+// Only then does it create the login with Supabase Auth signUp (email confirmation stays on, so Auth emails a confirmation link
+// and nobody can sign in before confirming). No SMS is ever sent: the phone number is collected, normalised and stored, not
+// verified. Nothing here grants access: the profile starts as a draft ("Pending"), the requested role is a request only, and
 // hr_staff_start re-checks everything. An existing student/agent signs in and attaches the application to the same login instead.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -29,6 +30,14 @@ const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =
 
 const NEUTRAL_EMAIL = "This email can't be used. Sign in or contact the administrator.";
 const NEUTRAL_PHONE = "This number can't be used. Sign in or contact the administrator.";
+/** Same minimum as src/lib/passwords.ts (MIN_PASSWORD_LENGTH); bcrypt reads at most 72 bytes. */
+const MIN_PASSWORD_LENGTH = 10;
+function passwordProblem(value: unknown, again: unknown): string | null {
+  if (typeof value !== "string" || value.length < MIN_PASSWORD_LENGTH) return `Use a password of at least ${MIN_PASSWORD_LENGTH} characters.`;
+  if (new TextEncoder().encode(value).length > 72) return "Use a password of at most 72 characters.";
+  if (value !== again) return "The two passwords do not match.";
+  return null;
+}
 
 const hash = async (value: string) =>
   [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -60,7 +69,7 @@ Deno.serve(async (req) => {
   let body: Record<string, unknown> = {};
   try { body = (await req.json()) as Record<string, unknown>; } catch { body = {}; }
   const action = String(body.action ?? "");
-  if (action !== "check" && action !== "send_code") return json({ error: "Unknown action." }, 400);
+  if (action !== "check" && action !== "sign_up") return json({ error: "Unknown action." }, 400);
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   const callerKey = await hash(req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for") ?? "anonymous");
@@ -75,6 +84,10 @@ Deno.serve(async (req) => {
   const phone = toE164(body.phone);
   if (!phone) return json({ error: "Enter your mobile number with its country code." }, 400);
   if (body.agreed !== true) return json({ error: "Please agree to the terms and privacy policy." }, 400);
+  if (action === "sign_up") {
+    const problem = passwordProblem(body.password, body.passwordConfirm);
+    if (problem) return json({ error: problem, field: "password" }, 400);
+  }
   if (!(await withinLimit(admin, `staff-register:email:${action}:${await hash(email.value)}`, action === "check" ? 12 : 3, 3600))) {
     return json({ error: "Please wait a while before requesting another email for this address." }, 429, { "Retry-After": "3600" });
   }
@@ -89,13 +102,19 @@ Deno.serve(async (req) => {
   }
   if (action === "check") return json({ ok: true, phone });
 
-  // The code / link comes from Supabase Auth (custom SMTP), exactly like student sign-up mail; the phone number rides in the
-  // sign-up metadata so the link can be opened on another device. hr_staff_start reads and re-validates it.
+  // Supabase Auth (custom SMTP) emails the confirmation link, exactly like student sign-up mail. The phone number rides in the
+  // sign-up metadata so the link can be opened on another device; hr_staff_start reads and re-validates it. The session is
+  // never returned here: the person signs in only after confirming the email.
   const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { error } = await anon.auth.signInWithOtp({
+  const { error } = await anon.auth.signUp({
     email: email.value,
-    options: { shouldCreateUser: true, emailRedirectTo: safeRedirect(body.redirectTo), data: { staff_phone: phone, registrant: "staff" } },
+    password: String(body.password),
+    options: { emailRedirectTo: safeRedirect(body.redirectTo), data: { account_type: "staff", staff_phone: phone, registrant: "staff", staff_password_set: true } },
   });
-  if (error) return json({ error: "We could not send the email. Please try again shortly." }, 502);
+  if (error) {
+    // Auth's own password policy (strength, leaked-password check) is safe to show; anything else stays generic.
+    if (/password/i.test(error.message)) return json({ error: error.message, field: "password" }, 400);
+    return json({ error: "We could not create the account. Please try again shortly." }, 502);
+  }
   return json({ ok: true, phone });
 });

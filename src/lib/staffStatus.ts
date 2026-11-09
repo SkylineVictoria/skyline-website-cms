@@ -2,14 +2,17 @@
 // The database is the authority: hr.staff_transition_allowed() / the hr.staff_status_guard trigger enforce the same table, and
 // every change is logged in hr.staff_status_events. This copy only decides which buttons to offer.
 
+import { checklist, expiryState, todayIso, type ChecklistItem, type DocLike, type DocumentKind, type ExpiryRule, type ReviewState } from "@/lib/documentChecklist";
+
 export type StaffStatus = "draft" | "submitted" | "preboarding" | "active" | "rejected" | "inactive";
 export type StaffRole = "admin" | "trainer";
 
 export const STAFF_STATUSES: readonly StaffStatus[] = ["draft", "submitted", "preboarding", "active", "rejected", "inactive"];
 export const STAFF_ROLES: readonly StaffRole[] = ["admin", "trainer"];
 
+/** Until an Admin activates the account the person is "Pending": still filling in (draft) or waiting for review (submitted). */
 export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
-  draft: "Draft", submitted: "Submitted", preboarding: "Preboarding", active: "Active", rejected: "Rejected", inactive: "Inactive",
+  draft: "Pending", submitted: "Pending review", preboarding: "Approved", active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
 /** rejected -> draft is the Admin-only reopen; inactive -> active is an Admin reactivation. */
@@ -24,13 +27,14 @@ export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
 }
 
 /** The admin actions available for a status, in the order the buttons are shown. */
-export type StaffAdminAction = "approve" | "reject" | "activate" | "deactivate" | "reopen";
+export type StaffAdminAction = "approve" | "reject" | "activate" | "reactivate" | "deactivate" | "reopen";
 export function adminActionsFor(status: StaffStatus): StaffAdminAction[] {
   switch (status) {
-    case "submitted": return ["approve", "reject"];
+    // Activate records the role and goes submitted -> preboarding -> active in one step (hr_admin_staff_activate_account).
+    case "submitted": return ["activate", "reject"];
     case "preboarding": return ["activate", "reject"];
     case "active": return ["deactivate"];
-    case "inactive": return ["activate"];
+    case "inactive": return ["reactivate"];
     case "rejected": return ["reopen"];
     default: return [];
   }
@@ -54,19 +58,70 @@ export function conflictMessage(check: StaffPrecheck): { field: "email" | "phone
   return { field: "form", message: "Check your email address and mobile number." };
 }
 
+/* ------------------------------------------------------------------ documents (mirrors hr.staff_required_categories / hr_staff_submit) */
+
+export { EXPIRING_SOON_DAYS, daysUntil, expiryState, todayIso, type ExpiryState } from "@/lib/documentChecklist";
+
+export type StaffDocCategory = "Passport" | "Visa" | "English" | "Academic" | "Driving Licence" | "Health Insurance";
+export type StaffDocReview = ReviewState;
+/** Wizard order. */
+export const STAFF_DOC_CATEGORIES: readonly StaffDocCategory[] = ["Passport", "Visa", "English", "Academic", "Driving Licence", "Health Insurance"];
+export const STAFF_DOC_LABEL: Record<StaffDocCategory, string> = {
+  Passport: "Passport", Visa: "Visa", English: "English test result", Academic: "Academic results", "Driving Licence": "Driving licence", "Health Insurance": "Health insurance",
+};
+/** Expiry date per type (hr.staff_doc_needs_expiry / hr.staff_doc_takes_expiry). */
+export const STAFF_DOC_EXPIRY: Record<StaffDocCategory, ExpiryRule> = {
+  Passport: "required", Visa: "required", English: "optional", Academic: "none", "Driving Licence": "required", "Health Insurance": "required",
+};
+/** Folder under {uid}/ in the staff-documents bucket; the database checks the same slug (hr.staff_doc_slug). */
+export const staffDocSlug = (category: string): string => category.trim().toLowerCase().replace(/ /g, "-");
+export const staffDocNeedsExpiry = (category: string): boolean => STAFF_DOC_EXPIRY[category as StaffDocCategory] === "required";
+export const staffDocTakesExpiry = (category: string): boolean => (STAFF_DOC_EXPIRY[category as StaffDocCategory] ?? "none") !== "none";
+export const staffDocAllowsMany = (category: string): boolean => category === "Academic";
+/** REQUIRED types (x/N). Visa and English only for non-citizens (or while unanswered); Driving Licence is always optional. */
+export function requiredStaffCategories(isAustralianCitizen: boolean | null): StaffDocCategory[] {
+  return isAustralianCitizen === true ? ["Passport", "Academic", "Health Insurance"] : ["Passport", "Visa", "English", "Academic", "Health Insurance"];
+}
+
+/**
+ * The document kinds shown to a person, in wizard order: every required type, the optional Driving Licence, and any other type
+ * they already uploaded (e.g. a visa a citizen added before answering the citizenship question).
+ */
+export function staffDocKinds(isAustralianCitizen: boolean | null, uploaded: readonly { category: string }[] = []): DocumentKind[] {
+  const required = requiredStaffCategories(isAustralianCitizen);
+  return STAFF_DOC_CATEGORIES.filter((c) => required.includes(c) || c === "Driving Licence" || uploaded.some((d) => d.category === c))
+    .map((c) => ({ category: c, label: STAFF_DOC_LABEL[c], required: required.includes(c), expiry: STAFF_DOC_EXPIRY[c], multiple: staffDocAllowsMany(c) }));
+}
+
+export type { ChecklistItem } from "@/lib/documentChecklist";
+export function staffChecklist(docs: DocLike[], isAustralianCitizen: boolean | null, today = todayIso()): ChecklistItem[] {
+  return checklist(staffDocKinds(isAustralianCitizen, docs), docs, today);
+}
+
 /** Everything the applicant needs before Submit, in the order the wizard shows it. Mirrors hr_staff_submit. */
 export interface StaffSubmitInput {
   firstName: string; lastName: string; dateOfBirth: string | null; addressStreet: string; addressCountry: string;
-  emergencyName: string; emergencyRelationship: string; emergencyPhone: string | null; requestedRole: string | null; hasPassport: boolean;
+  emergencyName: string; emergencyRelationship: string; emergencyPhone: string | null; requestedRole: string | null;
+  isAustralianCitizen: boolean | null; documents: Array<{ category: string; expiryDate: string | null }>;
 }
-export function submitProblems(input: StaffSubmitInput): string[] {
+const MISSING: Partial<Record<StaffDocCategory, string>> = {
+  Passport: "Upload your passport.", Visa: "Upload your visa.", English: "Upload your English test result.", Academic: "Upload your academic results.", "Health Insurance": "Upload your health insurance.",
+};
+export function submitProblems(input: StaffSubmitInput, today = todayIso()): string[] {
   const problems: string[] = [];
-  if (!input.hasPassport) problems.push("Upload your passport.");
   if (!input.firstName.trim() || !input.lastName.trim()) problems.push("Enter your first and last name.");
   if (!input.dateOfBirth) problems.push("Enter your date of birth.");
   if (!input.addressStreet.trim() || !input.addressCountry.trim()) problems.push("Enter your address.");
   if (!input.emergencyName.trim() || !input.emergencyRelationship.trim() || !input.emergencyPhone) problems.push("Enter an emergency contact: name, relationship and phone.");
   if (!input.requestedRole) problems.push("Choose the role you are requesting.");
+  if (input.isAustralianCitizen === null) problems.push("Tell us whether you are an Australian citizen.");
+  for (const category of requiredStaffCategories(input.isAustralianCitizen)) {
+    const mine = input.documents.filter((d) => d.category === category);
+    if (!mine.length) problems.push(MISSING[category] ?? `Upload your ${STAFF_DOC_LABEL[category].toLowerCase()}.`);
+    else if (mine.some((d) => (!d.expiryDate && staffDocNeedsExpiry(category)) || expiryState(d.expiryDate, today) === "expired")) {
+      problems.push(`Enter a current expiry date for your ${category === "English" ? "English test result" : category.toLowerCase()}.`);
+    }
+  }
   return problems;
 }
 
@@ -74,3 +129,15 @@ export function submitProblems(input: StaffSubmitInput): string[] {
 export const STAFF_STATUS_TONE: Record<StaffStatus, "muted" | "warn" | "secondary" | "success" | "primary" | "accent"> = {
   draft: "muted", submitted: "warn", preboarding: "secondary", active: "success", rejected: "muted", inactive: "muted",
 };
+
+/* ------------------------------------------------------------------ admin Staff > Employees tabs (hr_admin_staff_list p_statuses) */
+
+export type EmployeeTabId = "applications" | "active" | "closed";
+export interface EmployeeTab { id: EmployeeTabId; label: string; statuses: readonly StaffStatus[]; countBadge: boolean }
+/** Drafts ("Pending", not yet submitted) are in no tab: there is nothing for an administrator to review yet. */
+export const EMPLOYEE_TABS: readonly EmployeeTab[] = [
+  { id: "applications", label: "Applications", statuses: ["submitted", "preboarding"], countBadge: true },
+  { id: "active", label: "Active", statuses: ["active"], countBadge: false },
+  { id: "closed", label: "Inactive/Rejected", statuses: ["inactive", "rejected"], countBadge: false },
+];
+export const employeeTab = (id: string | null | undefined): EmployeeTab => EMPLOYEE_TABS.find((t) => t.id === id) ?? EMPLOYEE_TABS[0];

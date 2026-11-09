@@ -205,3 +205,10 @@ Owner decisions (2026-10-27), recorded for P08-04 to P08-07:
   - Scope: exact artifact/config/migration checklist with measured evidence; future Node/VPS path documented separately.
   - Acceptance: reviewable release; no deployment or hosting migration without explicit approval.
   - Tests: final regression evidence and restore/rollback review.
+
+## HR follow-ups (outside the phase table)
+
+- HR-01 Move ApplicationWizard document steps onto DocumentWizard. status: TODO. Deps: staff enrolment rework (migration 20261109100000).
+  - Scope: replace the per-step WizardDocumentStep wiring in `src/pages/agency/components/ApplicationWizard.tsx` with `DocumentWizard` (`src/pages/agency/components/DocumentWizard.tsx`) through a student adapter: upload (`uploadApplicationDocument` + document job), remove, signed URL (`getDocumentSignedUrl`), extract (re-queue a reading); `setExpiry` only if student documents gain an expiry column. Needs a `logView` hook on the adapter (staff access is audited before a file opens), the wizard's skip buttons (`skipLabel`), the passport-first gating (`PASSPORT_STEP`), the outstanding-requirements list and the mismatch flag carried as adapter or config options; DocumentKind for WIZARD_STEPS (required, expiry "none", Academic multiple). Student documents have no per-document review status today: either add one or let DocumentChecklist hide review chips when the adapter has none.
+  - Acceptance: the agent and student document wizard behaves exactly as now (same steps, gating, skip, extraction states, audited views); no change to `portal-document-extract` or student storage paths.
+  - Tests: `e2e/regression.spec.ts`, `test:portal-application-access`, `test:document-extraction`, Playwright cover of the agent "Add New Form" wizard; `test:staff-registration` stays green.

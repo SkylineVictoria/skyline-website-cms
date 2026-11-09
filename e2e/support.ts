@@ -60,21 +60,47 @@ export async function createStudentLogin(label = "student") {
   return { email, local, id, agency, student };
 }
 
-/** A staff applicant taken to `submitted` through the same functions the browser calls. */
-export async function submittedApplicant(label: string, role: "admin" | "trainer") {
+/** YYYY-MM-DD `days` from today (UTC). */
+export const inDays = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+export type StaffCategory = "Passport" | "Visa" | "English" | "Academic" | "Driving Licence" | "Health Insurance";
+const SLUG: Record<StaffCategory, string> = { Passport: "passport", Visa: "visa", English: "english", Academic: "academic", "Driving Licence": "driving-licence", "Health Insurance": "health-insurance" };
+
+/** Uploads one file to {uid}/{doc slug}/ and registers it, exactly as the browser does. Returns the document id and path. */
+export async function addStaffDocument(client: SupabaseClient, uid: string, category: StaffCategory, expiry: string | null, replaces?: string): Promise<{ id: string; path: string }> {
+  const path = `${uid}/${SLUG[category]}/${category.toLowerCase().replace(/ /g, "-")}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`;
+  const up = await client.storage.from("staff-documents").upload(path, PDF, { contentType: "application/pdf" });
+  if (up.error) throw new Error(`upload ${category}: ${up.error.message}`);
+  const { data, error } = await client.rpc("hr_staff_document_add", { p_category: category, p_path: path, p_filename: `${SLUG[category]}.pdf`, p_mime: "application/pdf", p_size: PDF.length, p_expiry: expiry, p_replaces: replaces ?? null });
+  if (error) throw new Error(`hr_staff_document_add ${category}: ${error.message}`);
+  return { id: (data as { id: string }).id, path };
+}
+
+/** A staff applicant (not a citizen) taken to `submitted` through the same functions the browser calls, with all five required documents. */
+export async function submittedApplicant(label: string, role: "admin" | "trainer", options: { passportExpiry?: string } = {}) {
   const { email, phone } = person(label);
-  const id = await createAuthUser(email, PASSWORD, { registrant: "staff", staff_password_set: true });
+  const id = await createAuthUser(email, PASSWORD, { account_type: "staff", registrant: "staff", staff_password_set: true });
   const client = await signedInClient(email);
   const call = async (fn: string, args?: Record<string, unknown>) => { const { data, error } = await client.rpc(fn, args); if (error) throw new Error(`${fn}: ${error.message}`); return data; };
-  const me = await call("hr_staff_start", { p_phone: phone, p_requested_role: null }) as { application: { id: string } };
+  await call("hr_staff_start", { p_phone: phone, p_requested_role: null });
   await call("hr_staff_save", { p_patch: { first_name: label, last_name: "Applicant", date_of_birth: "1990-05-06", address_street: "1 Example St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000", address_country: "Australia", emergency_name: "Em Contact", emergency_relationship: "Sibling", emergency_phone: "+61422333444", requested_role: role } });
-  const path = `${id}/${me.application.id}/passport-${Date.now()}.pdf`;
-  const up = await client.storage.from("staff-documents").upload(path, PDF, { contentType: "application/pdf" });
-  if (up.error) throw new Error(`upload: ${up.error.message}`);
-  await call("hr_staff_document_register", { p_category: "Passport", p_path: path, p_filename: "passport.pdf", p_mime: "application/pdf", p_size: PDF.length });
+  await call("hr_staff_set_citizenship", { p_citizen: false });
+  const passport = await addStaffDocument(client, id, "Passport", options.passportExpiry ?? inDays(800));
+  const visa = await addStaffDocument(client, id, "Visa", inDays(400));
+  const english = await addStaffDocument(client, id, "English", null);
+  const academic = await addStaffDocument(client, id, "Academic", null);
+  const health = await addStaffDocument(client, id, "Health Insurance", inDays(300));
   await call("hr_staff_submit");
   const profileId = sql(`select id from hr.staff_profiles where auth_user_id = '${id}'`);
-  return { email, phone, id, client, profileId, path };
+  return { email, phone, id, client, profileId, path: passport.path, docs: { passport, visa, english, academic, health } };
+}
+
+/** Approves every current document of a profile as `adminClient` (the admin review function, as the detail page calls it). */
+export async function approveAllDocuments(adminClient: SupabaseClient, profileId: string): Promise<void> {
+  for (const docId of sql(`select id from hr.staff_documents where profile_id = '${profileId}' and is_current`).split("\n").filter(Boolean)) {
+    const { error } = await adminClient.rpc("hr_admin_staff_document_review", { p_doc: docId, p_decision: "approved", p_note: null });
+    if (error) throw new Error(`review ${docId}: ${error.message}`);
+  }
 }
 
 /* ------------------------------------------------------------------ mail (Mailpit) */
@@ -125,6 +151,21 @@ export async function expectStatusBadge(page: Page, label: string): Promise<void
 /** The staff-register rate-limit counters (per IP and per email) are cleared so one test's calls never count against the next. */
 export function resetRateLimits(): void {
   sql(`delete from public.public_assistant_rate_limits where bucket like 'staff-register:%' or bucket like 'self-register:%'`);
+}
+
+/** The newest email to `address` as raw HTML with its verify link and, when the template shows one, the code. */
+export async function latestConfirmation(address: string, notBefore = 0): Promise<{ html: string; link: string; code: string | null; at: number }> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const list = await (await fetch(`${E2E_MAIL_URL}/api/v1/search?query=${encodeURIComponent(`to:${address}`)}`)).json() as { messages?: Array<{ ID: string; Created: string }> };
+    const newest = [...(list.messages ?? [])].sort((a, b) => Date.parse(b.Created) - Date.parse(a.Created))[0];
+    if (newest && Date.parse(newest.Created) > notBefore) {
+      const message = await (await fetch(`${E2E_MAIL_URL}/api/v1/message/${newest.ID}`)).json() as { HTML: string };
+      const link = message.HTML.match(/href="([^"]*\/auth\/v1\/verify[^"]*)"/)?.[1];
+      if (link) return { html: message.HTML, link: link.replace(/&amp;/g, "&"), code: message.HTML.match(/code:?\s*(?:<[^>]+>)?\s*(\d{6})/)?.[1] ?? null, at: Date.parse(newest.Created) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`No confirmation email arrived for ${address}`);
 }
 
 /** The first link in the newest email to `address` (the invitation or confirmation link Auth sent). */

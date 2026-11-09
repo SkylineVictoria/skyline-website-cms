@@ -66,6 +66,7 @@ import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
+import { LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import StaffApplyPage from "@/pages/staff/StaffApplyPage";
 import StaffWorkspacePage from "@/pages/staff/StaffWorkspacePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
@@ -178,8 +179,12 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
-          { path: "staff", element: <RequireAdmin><StaffPage /></RequireAdmin> },
-          { path: "staff/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
+          // Staff group > Employees. The old Agencies > Staff addresses redirect here (the menu row may still point at /admin/staff
+          // until migration 20261109100000 moves it).
+          { path: "staff", element: <Navigate to="/admin/staff/employees" replace /> },
+          { path: "staff/employees", element: <RequireAdmin><StaffPage /></RequireAdmin> },
+          { path: "staff/employees/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
+          { path: "staff/:id", element: <LegacyStaffDetailRedirect /> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },

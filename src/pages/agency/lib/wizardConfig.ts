@@ -7,7 +7,8 @@ import type { ScanType } from "@/lib/docScan";
  * empty fields of the draft; everything else is entered in the full form.
  */
 
-export type WizardStepId = ScanType;
+/** "health" is a staff-only screen (health insurance); it is never read automatically. */
+export type WizardStepId = ScanType | "health";
 
 export interface WizardStep {
   id: WizardStepId;
@@ -173,15 +174,17 @@ export function formatBytes(bytes: number): string {
 export type Registrant = "student" | "staff";
 
 /**
- * Staff document screens (staff self-registration). Only the passport is required; the rest are optional. `category` is the
- * hr.staff_documents category; PTE and English certificates share the "english" reader but are kept as separate documents.
+ * Staff document screens (staff self-registration), in wizard order. `category` is the hr.staff_documents category; which are
+ * required and which take an expiry date comes from src/lib/staffStatus.ts (staffDocKinds), mirroring the database. Visa and
+ * English are required only for non-citizens; Driving Licence is optional; Academic takes several files.
  */
 export const STAFF_WIZARD_STEPS: WizardStep[] = [
-  { id: "passport", title: "Passport", short: "Passport", subtitle: "Required. Upload the biodata page (PDF, JPG or PNG). We read it to fill in your name and date of birth.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
-  { id: "visa", title: "Visa", short: "Visa", subtitle: "Optional. Upload your visa grant notice or VEVO record.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "" },
-  { id: "licence", title: "Driver licence", short: "Driver licence", subtitle: "Optional. Upload your driver licence; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
-  { id: "english", title: "PTE result", short: "PTE", subtitle: "Optional. Upload your PTE score report.", icon: "ri-translate-2", category: "PTE", noun: "PTE result", skipLabel: "" },
-  { id: "english", title: "English certificate", short: "English certificate", subtitle: "Optional. Upload another English language certificate (IELTS, TOEFL or similar).", icon: "ri-award-line", category: "English Certificate", noun: "English certificate", skipLabel: "" },
+  { id: "passport", title: "Passport", short: "Passport", subtitle: "Required. Upload the biodata page (PDF, JPG or PNG) and enter its expiry date. We read it to fill in your name and date of birth.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
+  { id: "visa", title: "Visa", short: "Visa", subtitle: "Required unless you are an Australian citizen. Upload your visa grant notice or VEVO record and enter its expiry date.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "", required: true },
+  { id: "english", title: "English test result", short: "English", subtitle: "Required unless you are an Australian citizen. Upload your IELTS, PTE, TOEFL or similar result. The expiry date is optional.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
+  { id: "academic", title: "Academic results", short: "Academic", subtitle: "Required. Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
+  { id: "licence", title: "Driving licence", short: "Driving licence", subtitle: "Optional. Upload your driving licence and enter its expiry date; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
+  { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Required. Upload your health insurance certificate or policy and enter its expiry date.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "", required: true },
 ];
 
 export const wizardStepsFor = (registrant: Registrant): WizardStep[] => (registrant === "staff" ? STAFF_WIZARD_STEPS : WIZARD_STEPS);

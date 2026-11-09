@@ -95,11 +95,21 @@ export async function staffAccessState(): Promise<StaffStatus | "none"> {
 
 export interface StaffListRow {
   id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null;
-  submittedAt: string | null; updatedAt: string; docs: StaffDocSummary;
+  submittedAt: string | null; updatedAt: string; docs: StaffDocSummary; hasResume?: boolean; inviteExpiresAt?: string | null; emailFailed?: boolean;
+}
+export interface StaffInvite { id: string; purpose: "documents" | "reupload" | "offer"; createdAt: string; expiresAt: string; usedAt: string | null; lastSeenAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" }
+export interface StaffOffer {
+  id: string; filename: string; fileSize: number; storagePath: string; sha256: string; uploadedAt: string; sentAt: string | null; withdrawnAt: string | null;
+  signedAt: string | null; signerName: string | null; signedPath: string | null; signedSha256: string | null;
+}
+export interface StaffEmail { id: number; kind: string; audience: "applicant" | "admin"; state: "queued" | "sending" | "sent" | "failed" | "skipped"; createdAt: string; sentAt: string | null; error: string | null; attempts: number; retryable: boolean }
+export interface StaffApplicationDetail extends StaffApplicationRow {
+  resume_path: string | null; resume_filename: string | null; resume_mime: string | null; resume_size: number | null; joining_date: string | null; account_invited_at: string | null;
 }
 export interface StaffDetail {
-  profile: StaffProfile; application: StaffApplicationRow; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
-  roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean;
+  profile: StaffProfile; application: StaffApplicationDetail; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
+  roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; hasAccount: boolean;
+  invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean;
 }
 
 /** One or more statuses (p_statuses); an empty list means every status. */
@@ -121,22 +131,55 @@ export async function adminReviewStaffDocument(documentId: string, decision: "ap
   return data as StaffDetail;
 }
 
-export type StaffDecision =
-  | { action: "approve"; role: StaffRole; note: string; confirmAdmin: boolean }
-  | { action: "activate"; role: StaffRole; note: string; confirmAdmin: boolean }
-  | { action: "reject"; note: string }
-  | { action: "reactivate"; note: string }
-  | { action: "deactivate"; note: string }
-  | { action: "reopen"; note: string };
+/* ------------------------------------------------------------------ admin actions (HR-02g) */
 
-export async function adminDecideStaff(id: string, decision: StaffDecision): Promise<StaffDetail> {
-  const call = decision.action === "approve" ? supabase.rpc("hr_admin_staff_approve", { p_id: id, p_role: decision.role, p_note: decision.note || null, p_confirm_admin: decision.confirmAdmin })
-    : decision.action === "activate" ? supabase.rpc("hr_admin_staff_activate_account", { p_id: id, p_role: decision.role, p_note: decision.note || null, p_confirm_admin: decision.confirmAdmin })
-    : decision.action === "reject" ? supabase.rpc("hr_admin_staff_reject", { p_id: id, p_note: decision.note })
-    : decision.action === "reactivate" ? supabase.rpc("hr_admin_staff_activate", { p_id: id, p_note: decision.note || null })
-    : decision.action === "deactivate" ? supabase.rpc("hr_admin_staff_deactivate", { p_id: id, p_note: decision.note || null })
-    : supabase.rpc("hr_staff_reopen", { p_id: id, p_note: decision.note });
-  const { data, error } = await call;
-  if (error) fail(error, "That could not be done.");
+/** What staff-admin answers. A link email that could not be sent cancels that link (emailSent false, linkCancelled true); with
+ *  email switched off the link is returned ONCE (link) for the admin to pass on. */
+export interface StaffAdminResult {
+  detail?: StaffDetail | null; emailSent?: boolean; linkCancelled?: boolean; link?: string; note?: string; expiresAt?: string;
+  inviteSent?: boolean; activated?: boolean; existingLogin?: boolean; resent?: boolean; offer?: StaffOffer; pages?: number;
+}
+export class StaffAdminError extends Error {
+  readonly status: number;
+  readonly result: StaffAdminResult;
+  constructor(message: string, status: number, result: StaffAdminResult) { super(message); this.status = status; this.result = result; }
+}
+
+async function staffAdmin(body: Record<string, unknown> | FormData): Promise<StaffAdminResult> {
+  const { data, error } = await supabase.functions.invoke("staff-admin", { body });
+  if (error) {
+    let message = error.message, status = 500, result: StaffAdminResult = {};
+    const context = (error as { context?: unknown }).context;
+    if (context instanceof Response) {
+      status = context.status;
+      try { const parsed = (await context.clone().json()) as StaffAdminResult & { error?: string }; result = parsed; if (parsed?.error) message = parsed.error; } catch { /* keep the generic message */ }
+    }
+    throw new StaffAdminError(message || "That could not be done.", status, result);
+  }
+  return (data ?? {}) as StaffAdminResult;
+}
+
+export const staffAdminActions = {
+  sendLink: (profileId: string, purpose: "documents" | "reupload") => staffAdmin({ action: "send_invite", profileId, purpose }),
+  revokeLink: (profileId: string) => staffAdmin({ action: "revoke_invite", profileId }),
+  reject: (profileId: string, note: string, notify: boolean) => staffAdmin({ action: "reject", profileId, note, notify }),
+  uploadOffer: (profileId: string, file: File) => {
+    const form = new FormData();
+    form.set("action", "offer_upload"); form.set("profileId", profileId); form.set("file", file, file.name);
+    return staffAdmin(form);
+  },
+  sendOffer: (profileId: string) => staffAdmin({ action: "offer_send", profileId }),
+  withdrawOffer: (profileId: string, note: string) => staffAdmin({ action: "offer_withdraw", profileId, note }),
+  activate: (profileId: string, role: StaffRole, joiningDate: string, confirmAdmin: boolean) => staffAdmin({ action: "activate", profileId, role, joiningDate, confirmAdmin }),
+  resendActivation: (profileId: string) => staffAdmin({ action: "resend_activation", profileId }),
+  retryEmail: (emailId: number) => staffAdmin({ action: "retry_email", emailId }),
+};
+
+async function adminRpc(name: string, args: Record<string, unknown>, fallback: string): Promise<StaffDetail> {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) fail(error, fallback);
   return data as StaffDetail;
 }
+export const adminDeactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_deactivate", { p_id: id, p_note: note || null }, "That could not be done.");
+export const adminReactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_activate", { p_id: id, p_note: note || null }, "That could not be done.");
+export const adminReopenStaff = (id: string, note: string) => adminRpc("hr_staff_reopen", { p_id: id, p_note: note }, "That could not be done.");

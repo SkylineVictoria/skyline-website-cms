@@ -11,6 +11,7 @@ const load = createJiti(import.meta.url, { alias: { "@": path.resolve("src") } }
 const phone = await load.import<typeof import("../src/lib/staffPhone.ts")>("../src/lib/staffPhone.ts");
 const edgePhone = await load.import<typeof import("../supabase/functions/_shared/staff-phone.ts")>("../supabase/functions/_shared/staff-phone.ts");
 const status = await load.import<typeof import("../src/lib/staffStatus.ts")>("../src/lib/staffStatus.ts");
+const staffStatusLib = status;
 const checklistLib = await load.import<typeof import("../src/lib/documentChecklist.ts")>("../src/lib/documentChecklist.ts");
 const routing = await load.import<typeof import("../src/lib/loginRouting.ts")>("../src/lib/loginRouting.ts");
 const core = await load.import<typeof import("../supabase/functions/staff-onboarding/reader.ts")>("../supabase/functions/staff-onboarding/reader.ts");
@@ -77,15 +78,40 @@ test("the TypeScript transition table matches the database function and the stat
   assert.deepEqual(list, [...status.STAFF_STATUSES]);
 });
 
-test("admin actions follow the status", () => {
-  for (const s of ["applied", "invited", "documents_submitted", "offer_sent", "offer_signed"] as const) assert.deepEqual(status.adminActionsFor(s), ["reject"]);
-  assert.deepEqual(status.adminActionsFor("active"), ["deactivate"]);
-  assert.deepEqual(status.adminActionsFor("inactive"), ["reactivate"]);
-  assert.deepEqual(status.adminActionsFor("rejected"), ["reopen"]);
-  for (const s of status.STAFF_STATUSES) for (const action of status.adminActionsFor(s)) {
-    const to = { approve: "", reject: "rejected", activate: "active", reactivate: "active", deactivate: "inactive", reopen: "applied" }[action];
-    assert.ok(status.canTransition(s, to as never), `${action} from ${s} is a legal move`);
+test("Employees actions follow the status and what exists; each one is a legal move with a confirmation", () => {
+  const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
+  const acts = (status: string, extra: Record<string, unknown> = {}) => status && staffStatusLib.employeeActions({ ...base, ...extra, status } as never);
+  assert.deepEqual(acts("applied"), ["send_documents_link", "reject"]);
+  assert.deepEqual(acts("invited"), ["resend_documents_link", "reject"], "no live link: nothing to revoke");
+  assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["resend_documents_link", "revoke_link", "reject"]);
+  assert.deepEqual(acts("documents_submitted"), ["reject"], "nothing to offer before every document is approved");
+  assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1 }), ["send_reupload_link", "reject"]);
+  assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["upload_offer", "reject"]);
+  assert.deepEqual(acts("documents_submitted", { allApproved: true, offer: { sent: false } }), ["upload_offer", "send_offer", "reject"]);
+  assert.deepEqual(acts("offer_sent"), ["resend_offer", "withdraw_offer", "reject"]);
+  assert.deepEqual(acts("offer_signed"), ["activate", "reject"]);
+  assert.deepEqual(acts("offer_signed", { activationInvited: true }), ["resend_activation", "reject"]);
+  assert.deepEqual(acts("active"), ["deactivate"]);
+  assert.deepEqual(acts("inactive"), ["reactivate"]);
+  assert.deepEqual(acts("rejected"), ["reopen"]);
+  for (const st of status.STAFF_STATUSES) {
+    for (const extra of [{}, { liveDocumentLink: true, rejectedDocuments: 2, allApproved: true, offer: { sent: false }, activationInvited: true }]) {
+      for (const action of staffStatusLib.employeeActions({ ...base, ...extra, status: st } as never)) {
+        const to = staffStatusLib.EMPLOYEE_ACTION_TARGET[action];
+        assert.ok(to === null || status.canTransition(st, to), `${action} from ${st} is a legal move`);
+        const spec = staffStatusLib.EMPLOYEE_ACTION[action];
+        assert.ok(spec.label && spec.confirm && spec.explain, `${action} has a confirmation dialog`);
+      }
+    }
   }
+  for (const action of ["reject", "withdraw_offer", "reopen"] as const) assert.equal(staffStatusLib.EMPLOYEE_ACTION[action].note, "required", `${action} needs a note`);
+  for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "rejected", "access_ready"]) {
+    assert.ok(staffStatusLib.EMAIL_KIND_LABEL[kind], `email kind ${kind} has a label for the admin`);
+  }
+  const detailPage = read("src/pages/admin/StaffDetailPage.tsx");
+  assert.ok(detailPage.includes("staffDocumentUrl(path, 120)"), "files open through 2-minute signed URLs");
+  assert.ok(!/getPublicUrl|\.download\(/.test(detailPage), "no public URLs or raw downloads");
+  assert.ok(detailPage.includes("fresh.profile.status !== detail.profile.status"), "the dialog re-checks the status before acting");
   const sql = read("supabase/migrations/20261109100000_hr_staff_documents_review.sql");
   const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
   assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)), "activation checks for an administrator first");

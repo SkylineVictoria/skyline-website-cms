@@ -30,18 +30,73 @@ export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
   return MOVES.some(([a, b]) => a === from && b === to);
 }
 
-/** The admin actions available for a status, in the order the buttons are shown. Link, offer and activation actions arrive with the
- *  staff-admin function (HR-02c..g); until then "approve" / "activate" are never offered. */
-export type StaffAdminAction = "approve" | "reject" | "activate" | "reactivate" | "deactivate" | "reopen";
-export function adminActionsFor(status: StaffStatus): StaffAdminAction[] {
-  switch (status) {
-    case "applied": case "invited": case "documents_submitted": case "offer_sent": case "offer_signed": return ["reject"];
+/**
+ * Staff > Employees actions (HR-02g). Which ones are offered depends on the status AND on what exists (a live link, a rejected
+ * document, an uploaded or sent offer, a pending activation invite). The database re-checks every one of them; this only decides
+ * which buttons are shown, in order. Each has a confirmation dialog (EMPLOYEE_ACTION).
+ */
+export type EmployeeAction =
+  | "send_documents_link" | "resend_documents_link" | "revoke_link" | "send_reupload_link"
+  | "upload_offer" | "send_offer" | "resend_offer" | "withdraw_offer"
+  | "activate" | "resend_activation" | "reject" | "deactivate" | "reactivate" | "reopen";
+export interface EmployeeContext {
+  status: StaffStatus;
+  liveDocumentLink: boolean;
+  rejectedDocuments: number;
+  allApproved: boolean;
+  /** The open (not withdrawn, not signed) offer: uploaded only, or sent. */
+  offer: { sent: boolean } | null;
+  activationInvited: boolean;
+}
+export function employeeActions(c: EmployeeContext): EmployeeAction[] {
+  switch (c.status) {
+    case "applied": return ["send_documents_link", "reject"];
+    case "invited": return [...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
+    case "documents_submitted": {
+      const out: EmployeeAction[] = [];
+      if (c.rejectedDocuments > 0) out.push("send_reupload_link");
+      if (c.allApproved) out.push("upload_offer");
+      if (c.allApproved && c.offer && !c.offer.sent) out.push("send_offer");
+      return [...out, "reject"];
+    }
+    case "offer_sent": return ["resend_offer", "withdraw_offer", "reject"];
+    case "offer_signed": return [c.activationInvited ? "resend_activation" : "activate", "reject"];
     case "active": return ["deactivate"];
     case "inactive": return ["reactivate"];
     case "rejected": return ["reopen"];
     default: return [];
   }
 }
+/** The status an action leads to (null = the status does not change). */
+export const EMPLOYEE_ACTION_TARGET: Record<EmployeeAction, StaffStatus | null> = {
+  send_documents_link: "invited", resend_documents_link: null, revoke_link: null, send_reupload_link: "invited",
+  upload_offer: null, send_offer: "offer_sent", resend_offer: null, withdraw_offer: "documents_submitted",
+  activate: "active", resend_activation: null, reject: "rejected", deactivate: "inactive", reactivate: "active", reopen: "applied",
+};
+export interface EmployeeActionSpec { label: string; confirm: string; danger?: boolean; note?: "required" | "optional"; explain: string }
+export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
+  send_documents_link: { label: "Send document link", confirm: "Send the link", explain: "Emails a private link (valid 14 days) to add personal details and documents. No account is needed." },
+  resend_documents_link: { label: "Send the link again", confirm: "Send a new link", explain: "Emails a new private link. The earlier link stops working at once." },
+  revoke_link: { label: "Revoke link", confirm: "Revoke the link", danger: true, explain: "The current link stops working. The status does not change; you can send a new link later." },
+  send_reupload_link: { label: "Ask for documents again", confirm: "Send the re-upload link", explain: "Emails a link to replace only the rejected documents (with your notes). The application goes back to Invited until they send them." },
+  upload_offer: { label: "Upload offer letter", confirm: "Upload", explain: "PDF, 7 MB or smaller, not password-protected. It is checked before it is stored. An unsent offer is replaced." },
+  send_offer: { label: "Send offer", confirm: "Send the offer", explain: "Emails a private link (valid 30 days) to read and sign the offer letter on the page." },
+  resend_offer: { label: "Send the offer link again", confirm: "Send a new link", explain: "Emails a new offer link. The earlier link stops working at once." },
+  withdraw_offer: { label: "Withdraw offer", confirm: "Withdraw the offer", danger: true, note: "required", explain: "The offer link stops working and the application goes back to Documents submitted." },
+  activate: { label: "Activate account", confirm: "Activate", explain: "Grants the role from the joining date. A person who already has a confirmed login is active at once (and emailed); everyone else gets an email to set a password." },
+  resend_activation: { label: "Resend activation email", confirm: "Send it again", explain: "Sends a new set-a-password email (for example when the link expired), with the role and joining date already recorded." },
+  reject: { label: "Reject", confirm: "Reject", danger: true, note: "required", explain: "Ends this application. Any link stops working and an unsigned offer is withdrawn. The note is for the record; it is not sent." },
+  deactivate: { label: "Deactivate", confirm: "Deactivate", danger: true, note: "optional", explain: "Switches off their admin console access (if any) and marks them Inactive. My HR closes for them." },
+  reactivate: { label: "Reactivate", confirm: "Reactivate", note: "optional", explain: "Gives back the role they had and marks them Active." },
+  reopen: { label: "Reopen", confirm: "Reopen", note: "required", explain: "Moves the application back to Applications so you can send a new document link." },
+};
+
+/** Outbox and link emails as the admin sees them. */
+export const EMAIL_KIND_LABEL: Record<string, string> = {
+  application_received: "Application received", already_applied: "Already applied", admin_new_application: "New application (to HR)",
+  document_invite: "Document link", reupload_invite: "Re-upload link", admin_documents_submitted: "Documents uploaded (to HR)",
+  offer: "Offer link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
+};
 
 export const isStaffStatus = (value: unknown): value is StaffStatus => typeof value === "string" && (STAFF_STATUSES as readonly string[]).includes(value);
 

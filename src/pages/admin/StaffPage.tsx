@@ -32,7 +32,7 @@ export default function StaffPage() {
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Employees" description="People who applied for a staff account, and current staff. Open one to preview and approve or reject each document, then activate the account with a role or reject it with a note. Expiring soon means a passport, visa or health insurance expires within 30 days." />
+      <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff. Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent." />
       <div role="tablist" aria-label="Employees by status" className="mb-4 flex flex-wrap gap-1 border-b border-background-200">
         {EMPLOYEE_TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={t.id === tab.id} data-testid={`employees-tab-${t.id}`}
@@ -48,7 +48,7 @@ export default function StaffPage() {
         {data ? <p className="text-xs text-foreground-500" role="status">{data.total} {data.total === 1 ? "person" : "people"}</p> : null}
       </div>
       {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
-      {data && data.rows.length === 0 ? <EmptyState icon="ri-user-line" title={tab.id === "applications" ? "No applications waiting" : tab.id === "active" ? "No active staff" : "No inactive or rejected staff"} description="Staff applications appear under Applications once someone applies from Enroll now > Staff and submits." /> : null}
+      {data && data.rows.length === 0 ? <EmptyState icon="ri-user-line" title={tab.id === "applications" ? "No applications waiting" : tab.id === "active" ? "No active staff" : "No inactive or rejected staff"} description="Staff applications appear under Applications once someone applies from Enroll now > Staff." /> : null}
       {data && data.rows.length ? (
         <Card className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm" data-testid="staff-table">
@@ -60,7 +60,7 @@ export default function StaffPage() {
                 <tr key={row.id} className="border-b border-background-100 last:border-0 hover:bg-background-100">
                   <td className="px-4 py-3 font-medium"><Link to={staffEmployeePath(row.id)} className="text-primary-700 hover:underline">{row.name || "(no name yet)"}</Link><span className="block text-xs font-normal text-foreground-500">{row.email}</span></td>
                   <td className="px-4 py-3 capitalize text-foreground-700">{row.role ?? row.requestedRole ?? "—"}{!row.role && row.requestedRole ? <span className="block text-xs normal-case text-foreground-500">requested</span> : null}</td>
-                  <td className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[row.status]}>{STAFF_STATUS_LABEL[row.status]}</Badge></td>
+                  <td className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[row.status]}>{STAFF_STATUS_LABEL[row.status]}</Badge>{row.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
                   <td className="px-4 py-3 text-foreground-700" data-testid="staff-docs-count" title={`${row.docs.uploaded} of ${row.docs.required} uploaded${row.docs.rejected ? `, ${row.docs.rejected} rejected` : ""}`}>
                     {row.docs.approved}/{row.docs.required}{row.docs.rejected ? <span className="ml-1.5 text-xs text-primary-800">({row.docs.rejected} rejected)</span> : null}
                   </td>

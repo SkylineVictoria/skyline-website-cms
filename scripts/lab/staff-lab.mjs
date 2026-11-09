@@ -764,6 +764,29 @@ async function activate() {
   check("existing confirmed login: active at once on that login, no invite email", a.status === 200 && a.body.activated === true && a.body.inviteSent === false && status(existing.id) === "active"
     && psql(`select auth_user_id from hr.staff_profiles where id = '${existing.id}';`) === loginId && (await authMailsTo(lab, existing.email)).length === mailsBefore, JSON.stringify(a.body).slice(0, 200));
   check("the Admin role writes an active CMS Admin for that login", psql(`select role || '/' || status from public.cms_users where auth_user_id = '${loginId}';`) === "Admin/Active");
+  await waitFor(`select state from hr.staff_emails where profile_id = '${existing.id}' and kind = 'access_ready';`, "sent");
+  const ready = mailsTo(existing.email).find((m) => m.subject === "Your Skyline staff access is ready");
+  check("...and HR emails that address 'your staff access is ready' (sign in with the existing login, no link)", !!ready && /an Admin/.test(ready.text) && /password you already use/.test(ready.text) && !/https?:\/\//.test(ready.text));
+
+  // The Auth invite link expired: the admin resends it; the old link stays dead, the new one works.
+  const late = await signedPerson(lab, jwt, "resend");
+  const first = await staffAdminCall(lab, jwt, { action: "activate", profileId: late.id, role: "trainer", joiningDate: `${year}-12-01` });
+  const linkOf = (m) => String(m?.HTML ?? m?.Text ?? "").match(/https?:\/\/[^"'\s<>]+\/auth\/v1\/verify\?[^"'\s<>]+/)?.[0]?.replace(/&amp;/g, "&") ?? "";
+  let firstMail = null;
+  for (let i = 0; i < 20 && !firstMail; i++) { firstMail = (await authMailsTo(lab, late.email))[0] ?? null; if (!firstMail) await new Promise((res) => setTimeout(res, 500)); }
+  const oldLink = linkOf(firstMail);
+  psql(`update auth.users set confirmation_sent_at = now() - interval '3 days', invited_at = now() - interval '3 days' where lower(email) = '${late.email}';`);
+  const expired = await fetch(oldLink.replace(/^https?:\/\/[^/]+/, lab.apiUrl), { redirect: "manual" });
+  check("an expired Auth invite link no longer signs in", first.status === 200 && !(expired.headers.get("location") ?? "").includes("access_token="), (expired.headers.get("location") ?? "").slice(0, 120));
+  const resent = await staffAdminCall(lab, jwt, { action: "resend_activation", profileId: late.id });
+  let newMail = null;
+  for (let i = 0; i < 20 && !newMail; i++) { const all = await authMailsTo(lab, late.email); newMail = all.length > 1 ? all.find((m) => linkOf(m) !== oldLink) ?? null : null; if (!newMail) await new Promise((res) => setTimeout(res, 500)); }
+  const fresh = await fetch(linkOf(newMail).replace(/^https?:\/\/[^/]+/, lab.apiUrl), { redirect: "manual" });
+  const freshLanding = fresh.headers.get("location") ?? "";
+  check("the admin resends the activation invite: a new Auth email whose link signs in to /staff/welcome", resent.status === 200 && resent.body.resent === true && !!newMail
+    && freshLanding.startsWith(`${SITE}/staff/welcome`) && freshLanding.includes("access_token=") && psql(`select status from hr.staff_profiles where id = '${late.id}';`) === "offer_signed", JSON.stringify(resent.body).slice(0, 160));
+  const usedLogin = await staffAdminCall(lab, jwt, { action: "resend_activation", profileId: person.id });
+  check("resend is refused once the person is active", usedLogin.status === 400, JSON.stringify(usedLogin.body));
 }
 
 function sqlSuites() {

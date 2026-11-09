@@ -162,7 +162,7 @@ create table if not exists hr.staff_emails (
  id bigint generated always as identity primary key,
  profile_id uuid not null references hr.staff_profiles(id) on delete restrict,
  kind text not null check (kind in ('application_received','admin_new_application','document_invite','reupload_invite',
-  'admin_documents_submitted','offer','signed_offer','admin_offer_signed','rejected','already_applied')),
+  'admin_documents_submitted','offer','signed_offer','admin_offer_signed','rejected','already_applied','access_ready')),
  audience text not null check (audience in ('applicant','admin')),
  -- The applicant's address at the time; admin mail goes to EF_HR_ADMIN_NOTIFY_TO, resolved when sending.
  to_email text check (to_email is null or char_length(to_email) <= 254),
@@ -1205,6 +1205,8 @@ begin
  end if;
  if u.email_confirmed_at is not null then
   perform hr.staff_grant_access(p.id, v_admin, 'admin', 'Activated as ' || p_role || ' on the existing login');
+  -- No Auth invite on this path: HR tells the person their staff access is ready on the login they already have.
+  perform hr.queue_email(p.id, 'access_ready', 'applicant', jsonb_build_object('role', p_role));
   return jsonb_build_object('ok', true, 'activated', true, 'detail', public.hr_admin_staff_detail(p.id));
  end if;
  return jsonb_build_object('ok', true, 'activated', false, 'detail', public.hr_admin_staff_detail(p.id));

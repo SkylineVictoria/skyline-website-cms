@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(230);
+select plan(232);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -246,6 +246,7 @@ select is(public.hr_staff_me()->'signedOffer'->>'signedPath', pg_temp.v('t1') ||
 select is(public.hr_staff_access(), 'active', 'access state is active');
 reset role;
 select is((select count(*)::int from public.cms_users where auth_user_id = 'a0000000-0000-0000-0000-000000000005'), 0, 'a trainer gets no CMS access');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('t1') and kind = 'access_ready'), 0, 'the Auth invite path sends no access-ready email (the invite is the email)');
 
 -- ---------------------------------------------------------------- activation: an existing student login as Admin
 do $w$ begin perform pg_temp.to_signed('s1', 'Sam', 'student.login@example.test', '0400 000 501'); end $w$;
@@ -260,6 +261,7 @@ select is((select status from hr.staff_profiles where id = pg_temp.v('s1')), 'ac
 select is((select auth_user_id from hr.staff_profiles where id = pg_temp.v('s1')), 'a0000000-0000-0000-0000-000000000003'::uuid, 'the role is granted to the same login');
 select is((select role || '/' || status from public.cms_users where auth_user_id = 'a0000000-0000-0000-0000-000000000003'), 'Admin/Active', 'an Admin gets CMS access');
 select is((select count(*)::int from auth.users where lower(email) = 'student.login@example.test'), 1, 'still one login');
+select is((select string_agg(kind || ':' || audience || ':' || (payload->>'role'), ',') from hr.staff_emails where profile_id = pg_temp.v('s1') and kind = 'access_ready'), 'access_ready:applicant:admin', 'the existing login is told by HR that staff access is ready');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select lives_ok($$select public.hr_admin_staff_deactivate(pg_temp.v('s1'), 'Left')$$, 'deactivate');

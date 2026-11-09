@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
       return { login: u ? { id: u.id, confirmed: Boolean(u.email_confirmed_at), invited: Boolean(u.invited_at), signedIn: Boolean(u.last_sign_in_at) } : null, error: null };
     },
     inviteLogin: async (email, name, redirectTo) => {
-      const { data, error } = await service.auth.admin.inviteUserByEmail(email, { data: { name }, redirectTo });
+      const { data, error } = await service.auth.admin.inviteUserByEmail(email, { data: { name, account_type: "staff" }, redirectTo });
       return { userId: data?.user?.id ?? null, error: error ? error.message : null };
     },
   });

@@ -15,9 +15,9 @@ import { POSTMARK_API, selectEmailProvider, type EmailProvider, type SendOutcome
 import { isLocalSupabaseUrl } from "./captcha.ts";
 
 export type HrEmailKind = "application_received" | "already_applied" | "admin_new_application" | "document_invite" | "reupload_invite"
-  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected";
+  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected" | "access_ready";
 /** Outbox kinds this module sends. The two signed-offer kinds carry the signed PDF (DrainPort.attachment). */
-export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed"];
+export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed", "access_ready"];
 export const ATTACHMENT_KINDS: readonly HrEmailKind[] = ["signed_offer", "admin_offer_signed"];
 const EMAIL = /^[^@\s<>",]+@[^@\s<>",]+\.[^@\s<>",]+$/;
 
@@ -84,6 +84,11 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
     case "rejected":
       return { subject: "Your staff application",
         text: `Hello ${name},\n\nThank you for your interest in working with us. After reviewing your application we will not be continuing with it at this time.\n\nWe wish you all the best.${SIGN_OFF}` };
+    case "access_ready": {
+      const role = payload.role === "admin" ? "an Admin" : payload.role === "trainer" ? "a Trainer" : "a staff member";
+      return { subject: "Your Skyline staff access is ready",
+        text: `Hello ${name},\n\nYour staff access is ready. You have been set up as ${role}.\n\nSign in on the Skyline website with the email address and password you already use (${oneLine(payload.email, 254)}). You do not need a new account. Your staff details, documents and signed offer are under My HR.${SIGN_OFF}` };
+    }
     case "signed_offer":
       return { subject: "Your signed offer letter",
         text: `Hello ${name},\n\nThank you for signing your offer letter. A copy of the signed letter is attached for your records.\n\nWe will be in touch about your start and your staff account.${SIGN_OFF}` };

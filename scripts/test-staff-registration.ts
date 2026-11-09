@@ -959,3 +959,31 @@ test("staff-admin activate: role, date and admin rights are checked before any l
   assert.equal((await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps)).status, 403);
   assert.deepEqual(run.names(), ["admin:hr_admin_staff_activate_account"], "no Auth lookup or invite for a non-admin");
 });
+
+test("activation follow-ups: existing login gets HR's 'access ready' email (no link), the invite is marked staff, an expired invite can be resent", async () => {
+  const db = { hr_admin_staff_activate_account: { data: { email: "ann@example.test", name: "Ann", existingLogin: true, activated: true, detail: {} } } };
+  let run = adminDeps({ db, login: { id: "student-login", confirmed: true, invited: false, signedIn: true } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps)).status, 200);
+  assert.equal(run.drains(), 1, "the queued access-ready email is sent right away");
+  const mail = hrMail.renderHrEmail("access_ready", { name: "Ann", email: "ann@example.test", role: "admin" }, { siteUrl: "https://x.example" });
+  assert.equal(mail?.subject, "Your Skyline staff access is ready");
+  assert.match(mail?.text ?? "", /set up as an Admin/);
+  assert.match(mail?.text ?? "", /password you already use \(ann@example\.test\)/);
+  assert.ok(!/https?:\/\//.test(mail?.text ?? ""), "no link in it: the person signs in the usual way");
+  assert.ok(hrMail.DRAINABLE_KINDS.includes("access_ready"));
+  assert.match(read("supabase/functions/staff-admin/index.ts"), /inviteUserByEmail\(email, \{ data: \{ name, account_type: "staff" \}, redirectTo \}\)/, "the shared Invite user template can tell staff apart");
+
+  const waiting = { hr_admin_staff_detail: { data: { profile: { status: "offer_signed" }, application: { joining_date: "2026-12-01", account_invited_at: "2026-11-09T00:00:00Z" }, roles: [{ role: "trainer", revokedAt: null }] } },
+    hr_admin_staff_activate_account: { data: { email: "ann@example.test", name: "Ann", existingLogin: false, activated: false, detail: {} } } };
+  run = adminDeps({ db: waiting, login: { id: "invited-login", confirmed: false, invited: true, signedIn: false } });
+  const r = await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps);
+  assert.deepEqual([r.status, r.body.inviteSent, r.body.resent], [200, true, true]);
+  assert.deepEqual(run.calls.find(([n]) => n === "invite")![1], { email: "ann@example.test", name: "Ann", redirectTo: "https://x.example/staff/welcome" });
+  assert.deepEqual([(run.calls[1][1] as Record<string, unknown>).p_role, (run.calls[1][1] as Record<string, unknown>).p_joining_date], ["trainer", "2026-12-01"], "the recorded role and date are reused");
+  run = adminDeps({ db: waiting, login: { id: "invited-login", confirmed: false, invited: true, signedIn: true } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps)).status, 400, "a login that was already used is never re-invited");
+  assert.ok(!run.names().includes("invite"));
+  run = adminDeps({ db: { hr_admin_staff_detail: { data: { profile: { status: "active" }, application: { joining_date: "2026-12-01", account_invited_at: "x" }, roles: [{ role: "trainer", revokedAt: null }] } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "resend_activation", profileId: PROFILE }, run.deps)).status, 400, "nothing waiting: nothing sent");
+  assert.ok(!run.names().includes("invite"));
+});

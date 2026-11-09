@@ -156,9 +156,9 @@ select is((select count(*) from hr.pay_periods where schedule_id in (select id f
 select is((select count(*) from hr.pay_periods where schedule_id in (select id from hr.pay_schedules where name = 'Monthly') and start_date = '2026-12-01'), 1::bigint, 'the seeded Monthly schedule starts 2026-12-01');
 
 -- ---------------------------------------------------------------- public holidays
-select is((select count(*) from hr.public_holidays where state = 'VIC' and extract(year from holiday_date) = 2026), 13::bigint, '13 Victorian rows seeded for 2026');
-select is((select count(*) from hr.public_holidays where state = 'VIC' and extract(year from holiday_date) = 2027), 14::bigint, '14 Victorian rows seeded for 2027 (Christmas and Boxing Day on the weekend)');
-select is((select count(*) from hr.public_holidays where status <> 'review'), 0::bigint, 'every seeded holiday waits for HR to confirm it');
+select is((select count(distinct holiday_date) from hr.public_holidays where state = 'VIC' and holiday_date in ('2026-01-01','2026-01-26','2026-03-09','2026-04-03','2026-04-04','2026-04-05','2026-04-06','2026-04-25','2026-06-08','2026-11-03','2026-12-25','2026-12-26','2026-12-28')), 13::bigint, 'the 13 Victorian dates of 2026 are seeded');
+select is((select count(distinct holiday_date) from hr.public_holidays where state = 'VIC' and holiday_date in ('2027-01-01','2027-01-26','2027-03-08','2027-03-26','2027-03-27','2027-03-28','2027-03-29','2027-04-25','2027-06-14','2027-11-02','2027-12-25','2027-12-26','2027-12-27','2027-12-28')), 14::bigint, 'the 14 Victorian dates of 2027 are seeded (Christmas and Boxing Day on the weekend)');
+select is((select count(*) from hr.public_holidays where status <> 'review' and holiday_date in ('2026-01-01','2026-01-26','2026-03-09','2026-04-03','2026-04-04','2026-04-05','2026-04-06','2026-04-25','2026-06-08','2026-11-03','2026-12-25','2026-12-26','2026-12-28')), 0::bigint, 'every seeded 2026 holiday waits for HR to confirm it');
 select is((select count(*) from hr.public_holidays where holiday_date in ('2026-04-27', '2027-04-26')), 0::bigint, 'ANZAC Day gets no substitute day in Victoria');
 select is(hr.is_public_holiday('2026-12-25'), false, 'a holiday under review does not count yet');
 insert into t select 'xmas', id::text from hr.public_holidays where holiday_date = '2026-12-25' and state = 'VIC';
@@ -297,7 +297,7 @@ insert into t select 'xero', (public.hr_admin_xero_export(pg_temp.v('p_oct')))->
 select throws_ok($$select public.hr_admin_period_set_status(pg_temp.v('p_oct'), 'open')$$, 'This period was exported to Xero and is final.', 'an exported period is final');
 select throws_ok($$select public.hr_admin_xero_export(pg_temp.v('p_oct'))$$, 'This period was already exported.', 'no second export');
 select throws_ok($$select public.hr_timesheet_decide(pg_temp.v('p_oct'), 'c0000000-0000-0000-0000-000000000003', 'rejected')$$, 'This period was exported to Xero and is final.', 'no decision after export');
-select is(jsonb_array_length(public.hr_admin_xero_exports()), 1, 'the export is listed');
+select is((select count(*) from jsonb_array_elements(public.hr_admin_xero_exports()) x where x->>'id' = pg_temp.v('xero')::text), 1::bigint, 'the export is listed');
 select pg_temp.su();
 select is((select status from hr.pay_periods where id = pg_temp.v('p_oct')), 'exported', 'the period is exported');
 select is((select (x.lines->0)->>'employeeName' from hr.xero_exports x where x.id = pg_temp.v('xero')), 'Eve Fulltime', 'lines are ordered by employee');

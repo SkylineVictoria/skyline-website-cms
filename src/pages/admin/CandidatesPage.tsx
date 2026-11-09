@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
 import { HrFields, HrHistory, HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
 import { adminListJobs, type AdminJob } from "@/lib/jobsApi";
 import { JOB_APPLICATION_STATUS_LABEL, JOB_FILE_ACCEPT, jobFileProblem } from "@/lib/jobs";
 import {
-  HR_PAGE_SIZE, hrName, hrDate, emptyPerson, getCandidate, hireCandidate, listCandidates, progressCandidate, saveCandidate, stages, uploadCandidateFile,
+  HR_PAGE_SIZE, hrName, hrDate, emptyPerson, getCandidate, hireCandidate, listCandidates, listCandidatesByJob, progressCandidate, saveCandidate, stages, uploadCandidateFile,
   type Candidate, type CandidateAction, type CandidateRow, type Page,
 } from "@/lib/recruitmentApi";
 import { StaffAdminError, staffDocumentUrl, type StaffAdminResult } from "@/lib/staffApi";
@@ -34,6 +35,9 @@ function CandidateBadge({ row }: { row: CandidateRow }) {
 export default function CandidatesPage() {
   const [params, setParams] = useSearchParams();
   const job = params.get("job") ?? "";
+  const treeView = params.get("view") === "tree";
+  const [byJob, setByJob] = useState<Map<string, CandidateRow[]> | null>(null);
+  const [jobsLoaded, setJobsLoaded] = useState(false);
   const [jobs, setJobs] = useState<AdminJob[]>([]);
   const [jobsError, setJobsError] = useState("");
   const [state, setState] = useState("");
@@ -46,11 +50,27 @@ export default function CandidatesPage() {
 
   useEffect(() => {
     let current = true;
-    void adminListJobs().then((data) => { if (current) setJobs(data); }, (e: Error) => { if (current) setJobsError(e.message); });
+    void adminListJobs().then((data) => { if (current) { setJobs(data); setJobsLoaded(true); } }, (e: Error) => { if (current) setJobsError(e.message); });
     return () => { current = false; };
   }, []);
 
+  // Tree view: the candidates of each job (or of the chosen job), with the same status and search filters as the list.
+  const treeJobs = job ? jobs.filter((j) => j.id === job) : jobs;
   useEffect(() => {
+    if (!treeView || !jobsLoaded) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      setByJob(null); setError("");
+      void listCandidatesByJob(job ? [job] : jobs.map((j) => j.id), state, search).then(
+        (m) => { if (current) setByJob(m); }, (e: Error) => { if (current) setError(e.message); },
+      );
+    }, 150);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [treeView, jobsLoaded, jobs, job, state, search]);
+  const setView = (view: string) => setParams(() => { const next = new URLSearchParams(params); if (view === "tree") next.set("view", "tree"); else next.delete("view"); return next; });
+
+  useEffect(() => {
+    if (treeView) return;
     let current = true;
     const timer = window.setTimeout(() => {
       setResult(null); setError("");
@@ -59,14 +79,15 @@ export default function CandidatesPage() {
       );
     }, 150);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [job, state, search, offset]);
+  }, [treeView, job, state, search, offset]);
 
   return <div>
     <PageHeader breadcrumb="Staff" title="Candidates" description="Careers applications and candidates entered by hand, in one pipeline: screening, shortlist, interview, selected, then hire (the document link) or decline."
       actions={<Button disabled={!jobs.length} onClick={() => setAdding(true)} icon="ri-add-line" data-testid="candidate-add">Add candidate</Button>} />
+    <SectionTabs tabs={[{ id: "list", label: "List", icon: "ri-list-check" }, { id: "tree", label: "Tree", icon: "ri-node-tree" }]} active={treeView ? "tree" : "list"} onChange={setView} />
     <div className="mb-4 grid gap-2 sm:grid-cols-3">
       <TextInput aria-label="Search candidates" placeholder="Search name, email, phone or ID" value={search} onChange={(e) => { setSearch(e.target.value); setOffset(0); }} />
-      <Select aria-label="Filter by job" value={job} onChange={(e) => { setParams(e.target.value ? { job: e.target.value } : {}); setOffset(0); }}>
+      <Select aria-label="Filter by job" value={job} onChange={(e) => { setParams({ ...(e.target.value ? { job: e.target.value } : {}), ...(treeView ? { view: "tree" } : {}) }); setOffset(0); }}>
         <option value="">All jobs</option>{jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
       </Select>
       <Select aria-label="Filter by recruitment status" value={state} onChange={(e) => { setState(e.target.value); setOffset(0); }}>
@@ -74,9 +95,14 @@ export default function CandidatesPage() {
       </Select>
     </div>
     <HrNotice error>{error || jobsError}</HrNotice>
-    {!result && !error ? <p role="status">Loading candidates…</p> : null}
-    {result && !result.rows.length ? <EmptyState icon="ri-user-search-line" title="No matching candidates" description="Careers applications appear here as people apply; or add a candidate by hand." /> : null}
-    {result?.rows.length ? <Card className="data-table-frame">
+    {treeView && !byJob && !error && !jobsError ? <p role="status">Loading candidates…</p> : null}
+    {treeView && byJob ? <RecruitmentTree byJob={byJob}
+      // With a status or search filter only the jobs that have matching candidates are shown.
+      jobs={state || search.trim() ? treeJobs.filter((j) => byJob.get(j.id)?.length) : treeJobs}
+      emptyText={{ title: "No matching candidates", description: "Careers applications appear here as people apply; or add a candidate by hand." }} /> : null}
+    {!treeView && !result && !error ? <p role="status">Loading candidates…</p> : null}
+    {!treeView && result && !result.rows.length ? <EmptyState icon="ri-user-search-line" title="No matching candidates" description="Careers applications appear here as people apply; or add a candidate by hand." /> : null}
+    {!treeView && result?.rows.length ? <Card className="data-table-frame">
       <table className="data-table w-full text-left text-sm" data-testid="candidates-table">
         <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
           {["Candidate", "Applied job", "Application date", "Source", "Status"].map((label) => <th key={label} className="px-4 py-3">{label}</th>)}
@@ -88,7 +114,7 @@ export default function CandidatesPage() {
         </tr>)}</tbody>
       </table>
     </Card> : null}
-    {result ? <HrPager total={result.total} offset={offset} onChange={setOffset} /> : null}
+    {!treeView && result ? <HrPager total={result.total} offset={offset} onChange={setOffset} /> : null}
     {adding ? <CandidateForm jobs={jobs} job={job} onClose={() => setAdding(false)} onSaved={(id) => navigate(staffCandidatePath(id), { state: { message: "Candidate added. Upload their resume below, then move them through the stages." } })} /> : null}
   </div>;
 }

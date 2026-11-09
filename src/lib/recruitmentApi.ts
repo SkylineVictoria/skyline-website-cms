@@ -63,3 +63,20 @@ export function progressCandidate(id: string, action: Stage | "declined" | "with
 export const hireCandidate = (id: string) => staffAdminActions.hire(id);
 /** A manual candidate's resume or cover letter file: checked by content and stored by staff-admin, never uploaded from the browser. */
 export const uploadCandidateFile = (id: string, which: "resume" | "cover_letter", file: File) => staffAdminActions.candidateFile(id, which, file);
+
+/**
+ * Every candidate of each job (Jobs / Candidates tree view), keyed by job id: hr_admin_candidates per job, 100 a page (its maximum),
+ * with the same state and search filters as the list.
+ */
+export async function listCandidatesByJob(jobIds: string[], state = "", search = ""): Promise<Map<string, CandidateRow[]>> {
+  const entries = await Promise.all(jobIds.map(async (id) => {
+    const rows: CandidateRow[] = [];
+    for (let offset = 0; ; offset += 100) {
+      const page = await listCandidates(id, state, search, 100, offset);
+      rows.push(...(page.rows ?? []));
+      if (!page.rows?.length || rows.length >= page.total) break;
+    }
+    return [id, rows] as const;
+  }));
+  return new Map(entries);
+}

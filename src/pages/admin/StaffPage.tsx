@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Badge, Card, EmptyState, PageHeader, TextInput } from "@/pages/admin/components/ui";
-import { adminListStaff, type StaffListRow } from "@/lib/staffApi";
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, TextInput } from "@/pages/admin/components/ui";
+import { adminListStaff, staffAdminActions, type StaffListRow } from "@/lib/staffApi";
+import { toE164 } from "@/lib/staffPhone";
+import { useNavigate } from "react-router-dom";
 import { EMPLOYEE_TABS, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeTab, expiryState } from "@/lib/staffStatus";
 import { staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
 
@@ -16,6 +18,7 @@ export default function StaffPage() {
   const [query, setQuery] = useState("");
   const [data, setData] = useState<{ total: number; rows: StaffListRow[] } | null>(null);
   const [error, setError] = useState("");
+  const [adding, setAdding] = useState(false);
 
   // Searching waits for a pause in typing.
   useEffect(() => { const t = window.setTimeout(() => setQuery(search.trim()), 300); return () => window.clearTimeout(t); }, [search]);
@@ -32,7 +35,9 @@ export default function StaffPage() {
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff. Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent." />
+      <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff. Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent."
+        actions={<Button onClick={() => setAdding(true)} data-testid="staff-add"><i className="ri-user-add-line" aria-hidden="true" /> Add staff member</Button>} />
+      {adding ? <AddStaffDialog onClose={() => setAdding(false)} /> : null}
       <div role="tablist" aria-label="Employees by status" className="mb-4 flex flex-wrap gap-1 border-b border-background-200">
         {EMPLOYEE_TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={t.id === tab.id} data-testid={`employees-tab-${t.id}`}
@@ -58,7 +63,7 @@ export default function StaffPage() {
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.id} className="border-b border-background-100 last:border-0 hover:bg-background-100">
-                  <td className="px-4 py-3 font-medium"><Link to={staffEmployeePath(row.id)} className="text-primary-700 hover:underline">{row.name || "(no name yet)"}</Link><span className="block text-xs font-normal text-foreground-500">{row.email}</span></td>
+                  <td className="px-4 py-3 font-medium"><Link to={staffEmployeePath(row.id)} className="text-primary-700 hover:underline">{row.name || "(no name yet)"}</Link><span className="block text-xs font-normal text-foreground-500">{row.email}</span>{row.jobTitle ? <span className="block text-xs font-normal text-foreground-600" data-testid="staff-job-title">Job: {row.jobTitle}</span> : null}</td>
                   <td className="px-4 py-3 capitalize text-foreground-700">{row.role ?? row.requestedRole ?? "—"}{!row.role && row.requestedRole ? <span className="block text-xs normal-case text-foreground-500">requested</span> : null}</td>
                   <td className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[row.status]}>{STAFF_STATUS_LABEL[row.status]}</Badge>{row.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
                   <td className="px-4 py-3 text-foreground-700" data-testid="staff-docs-count" title={`${row.docs.uploaded} of ${row.docs.required} uploaded${row.docs.rejected ? `, ${row.docs.rejected} rejected` : ""}`}>
@@ -73,5 +78,46 @@ export default function StaffPage() {
         </Card>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * HR-02i "Add staff member": an application on the person's behalf (no resume), then the document link is emailed at once. A failed
+ * email leaves the record Applied with the reason on its page (send the link again there); with email off the link is shown there once.
+ */
+function AddStaffDialog({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "" });
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const patch = (p: Partial<typeof form>) => setForm((f) => ({ ...f, ...p }));
+  const save = async () => {
+    if (!form.firstName.trim() || !form.lastName.trim()) { setError("Enter the first and last name."); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) { setError("Enter a valid email address."); return; }
+    if (!toE164(form.phone)) { setError("Enter a valid mobile number."); return; }
+    setBusy(true); setError("");
+    try {
+      const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: toE164(form.phone)! });
+      navigate(staffEmployeePath(result.profileId!));
+    } catch (e) {
+      const profileId = (e as { result?: { profileId?: string } }).result?.profileId;
+      if (profileId) { navigate(staffEmployeePath(profileId)); return; } // created; the email failed: the page shows why
+      setError(e instanceof Error ? e.message : "The staff member could not be added.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <Modal open title="Add staff member" onClose={onClose}
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => void save()} disabled={busy} data-testid="staff-add-confirm">{busy ? "Adding…" : "Add and send the document link"}</Button></>}>
+      <div className="space-y-3" data-testid="staff-add-dialog">
+        <p className="text-sm text-foreground-700">Creates their application and emails them a private link (valid 14 days) to add their details and documents. No account is created until you activate them.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="First name" required><TextInput value={form.firstName} onChange={(e) => patch({ firstName: e.target.value })} maxLength={100} data-testid="staff-add-first" /></Field>
+          <Field label="Last name" required><TextInput value={form.lastName} onChange={(e) => patch({ lastName: e.target.value })} maxLength={100} data-testid="staff-add-last" /></Field>
+        </div>
+        <Field label="Email" required><TextInput type="email" value={form.email} onChange={(e) => patch({ email: e.target.value })} data-testid="staff-add-email" /></Field>
+        <Field label="Mobile" required><TextInput type="tel" value={form.phone} onChange={(e) => patch({ phone: e.target.value })} placeholder="0412 345 678" data-testid="staff-add-phone" /></Field>
+        {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900" data-testid="staff-add-error">{error}</p> : null}
+      </div>
+    </Modal>
   );
 }

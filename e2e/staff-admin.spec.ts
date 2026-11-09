@@ -106,3 +106,26 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
   await expect(page.getByTestId("staff-action-revoke_link")).toHaveCount(0);
   await expectStatus(page, "Invited");
 });
+
+test("Add staff member: the record is created and the document link emailed; the same email cannot be added twice", async ({ page }) => {
+  const admin = await createAdmin("add-admin");
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/staff/employees");
+  const email = `added.${Date.now()}@example.test`;
+  const fill = async () => {
+    await page.getByTestId("staff-add").click();
+    await page.getByTestId("staff-add-first").fill("Ada");
+    await page.getByTestId("staff-add-last").fill("Added");
+    await page.getByTestId("staff-add-email").fill(email);
+    await page.getByTestId("staff-add-phone").fill(`04${String(Date.now()).slice(-8)}`);
+    await page.getByTestId("staff-add-confirm").click();
+  };
+  await fill();
+  await expect(page).toHaveURL(/\/admin\/staff\/employees\/[0-9a-f-]{36}$/);
+  await expectStatus(page, "Invited");
+  await waitForHrMail(email, /details and documents/i);
+  await expect(page.getByTestId("staff-history")).toContainText("Added by an administrator");
+  await page.goto("/admin/staff/employees");
+  await fill();
+  await expect(page.getByTestId("staff-add-error")).toContainText("already has a staff record");
+});

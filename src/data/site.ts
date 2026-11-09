@@ -133,6 +133,7 @@ export const navigation: NavItem[] = [
       { label: "Forms & Policies", to: "/forms-policies" },
     ],
   },
+  { label: "Careers", to: "/careers" },
   { label: "Contact Us", to: "/contact" },
 ];
 
@@ -142,6 +143,7 @@ export const footerLinks: NavChild[] = [
   { label: "Courses", to: "/our-courses" },
   { label: "Registered Agents", to: "/agents" },
   { label: "Become an Agent", to: "/become-an-agent" },
+  { label: "Careers", to: "/careers" },
   { label: "Contact Us", to: "/contact" },
 ];
 

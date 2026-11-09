@@ -147,18 +147,24 @@ Deno.serve(async (req) => {
     }
 
     // A brand-new student who chose a password gets a ready account (no email round trip) and goes straight into their
-    // application. An email that is already on a student record or has a sign-in never gets a password here: that
-    // record may hold someone's applications, so its owner proves the email through the emailed link instead.
+    // application. An email already on a student record (added by an agent or SLIT) is claimed instead: the database
+    // checks the mobile matches that record, then a one-time code goes to the email and the page sets the password once
+    // the code is right. An email with a sign-in but no student record never gets a password here: that sign-in may be
+    // someone else's, so its owner proves the email through the emailed link instead.
     const password = kind === "student" && typeof parsed.password === "string" ? parsed.password : "";
     let accountId = "";
     let passwordRefused = false;
+    let claim = false;
+    let hasSignIn = false;
     if (password) {
       if (password.length < 10 || password.length > 72) return json({ error: "Choose a password of 10 to 72 characters." }, 400);
       if (/skyline|slit/i.test(password)) return json({ error: "Please avoid using the organisation name in your password." }, 400);
       const { data: onRecord, error: recordError } = await admin.from("enrollment_students").select("id").ilike("email", email.value.replace(/[\\%_]/g, "\\$&")).limit(1);
       const existing = await findAuthUserByEmail(admin, email.value);
       if (recordError || existing.error) return json({ error: "We could not complete your enrolment. Please try again shortly." }, 503);
-      if ((onRecord ?? []).length || existing.user) passwordRefused = true;
+      hasSignIn = Boolean(existing.user);
+      if ((onRecord ?? []).length) claim = true;
+      else if (existing.user) passwordRefused = true;
       else {
         const { data: created, error: createErr } = await admin.auth.admin.createUser({ email: email.value, password, email_confirm: true, user_metadata: { name: displayName } });
         if (createErr || !created?.user) {
@@ -176,6 +182,22 @@ Deno.serve(async (req) => {
     }
     // The pending invitation is accepted when they sign in (portal_resolve_access), which the page does at once.
     if (accountId) return json({ ok: true, kind, signIn: true, emailSent: false, existingIdentity: false, businessName: null, direct: data?.direct ?? null, warning: null });
+
+    if (claim) {
+      // The mobile matched the record (portal_self_register refuses otherwise). The code lands on a sign-in for this
+      // email, made here without a password when there is none yet; the page sets the password once the code is right.
+      if (!hasSignIn) {
+        const { error: createErr } = await admin.auth.admin.createUser({ email: email.value, email_confirm: true, user_metadata: { name: String(data?.name ?? displayName) } });
+        if (createErr) return json({ error: "We could not prepare your account. Please try again shortly." }, 503);
+      }
+      const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+      const { error: codeErr } = await anon.auth.signInWithOtp({ email: email.value, options: { shouldCreateUser: false } });
+      if (codeErr) console.error("portal-self-register code email failed", codeErr.message);
+      return json({
+        ok: true, kind, claim: true, emailSent: !codeErr, existingIdentity: false, businessName: null, direct: data?.direct ?? null,
+        warning: codeErr ? "We could not email your code right now. Use \"Send the code again\" in a moment." : null,
+      });
+    }
 
     // The record and its invitation exist; the mail is best effort (a resend is one click away for SLIT staff).
     const anon = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });

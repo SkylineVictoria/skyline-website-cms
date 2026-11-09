@@ -70,14 +70,17 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
   const adminLink = ctx.siteUrl && ctx.profileId ? `\n\nOpen the application: ${ctx.siteUrl}/admin/staff/employees/${ctx.profileId}` : "";
   const until = ctx.expiresAt ? new Date(ctx.expiresAt).toUTCString().replace(/ \d\d:\d\d:\d\d GMT$/, "") : "";
   switch (kind) {
-    case "application_received":
-      return { subject: "We received your staff application",
-        text: `Hello ${name},\n\nThank you for applying to work with us. We have received your application and resume, and an administrator will review it.\n\nIf we would like to continue, we will email you a private link to add your personal details and documents. You do not need to create an account.${SIGN_OFF}` };
+    case "application_received": {
+      const job = oneLine(payload.jobTitle, 150);
+      return { subject: job ? oneLine(`We received your application: ${job}`) : "We received your staff application",
+        text: `Hello ${name},\n\nThank you for applying to work with us${job ? ` as ${job}` : ""}. We have received your application and resume, and an administrator will review it.\n\nIf we would like to continue, we will email you a private link to add your personal details and documents. You do not need to create an account.${SIGN_OFF}` };
+    }
     case "already_applied":
       return { subject: "We already have your staff application",
         text: `Hello,\n\nSomeone, probably you, tried to apply for a staff position again with this email address. We already have your application, so nothing was changed and you do not need to apply again.\n\nIf this was not you, you can ignore this email.${SIGN_OFF}` };
     case "admin_new_application":
-      return { subject: oneLine(`New staff application: ${name}`), text: `A new staff application was received.\n\nName: ${name}\nEmail: ${oneLine(payload.email, 254)}${adminLink}` };
+      return { subject: oneLine(payload.jobTitle ? `New job application (${oneLine(payload.jobTitle, 150)}): ${name}` : `New staff application: ${name}`),
+        text: `A new ${payload.jobTitle ? "job" : "staff"} application was received.\n\nName: ${name}\nEmail: ${oneLine(payload.email, 254)}${payload.jobTitle ? `\nJob: ${oneLine(payload.jobTitle, 150)}` : ""}${adminLink}` };
     case "admin_documents_submitted":
       return { subject: oneLine(`${name} has uploaded documents${payload.reupload ? " again" : ""}`),
         text: `${name} (${oneLine(payload.email, 254)}) has ${payload.reupload ? "uploaded the documents you asked for again" : "sent their personal details and documents"}. They are ready for review.${adminLink}` };

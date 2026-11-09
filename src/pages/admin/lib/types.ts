@@ -230,6 +230,8 @@ export interface AdminSettings {
   carouselIntervalSeconds?: number;
   carouselPauseOnHover?: boolean;
   mapEmbedSrc?: string;
+  /** Calendly scheduling link (cms_settings.calendly_url); "" hides the Book a call card on the Contact page. */
+  calendlyUrl?: string;
   name: string;
   shortName: string;
   logo: string;

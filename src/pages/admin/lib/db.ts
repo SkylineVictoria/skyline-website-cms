@@ -57,6 +57,7 @@ function settingsRow(s: AdminSettings): Row {
     body_font: s.bodyFont ?? "Arial",
     theme_configured: s.themeConfigured ?? false,
     map_embed_src: s.mapEmbedSrc ?? "",
+    ...(s.calendlyUrl !== undefined ? { calendly_url: s.calendlyUrl.trim() } : {}),
     ...(s.carouselAutoSlide !== undefined || s.carouselIntervalSeconds !== undefined || s.carouselPauseOnHover !== undefined || s.carouselMotion !== undefined || s.carouselDriftSpeed !== undefined ? { courses_carousel_motion: s.carouselMotion ?? "drift", courses_carousel_drift_speed: s.carouselDriftSpeed ?? "slow", courses_carousel_auto: s.carouselAutoSlide ?? true, courses_carousel_interval_seconds: s.carouselIntervalSeconds ?? 5, courses_carousel_pause_on_hover: s.carouselPauseOnHover ?? true } : {}),
     ...(s.accentColor !== undefined || s.loaderStyle !== undefined ? { accent_color: s.accentColor ? s.accentColor : null, loader_style: s.loaderStyle || "ring" } : {}),
   };
@@ -493,6 +494,7 @@ export async function loadAdminData(): Promise<LoadResult> {
         carouselIntervalSeconds: settingsRow.courses_carousel_interval_seconds === undefined ? undefined : Number(settingsRow.courses_carousel_interval_seconds),
         carouselPauseOnHover: settingsRow.courses_carousel_pause_on_hover === undefined ? undefined : bool(settingsRow.courses_carousel_pause_on_hover),
         mapEmbedSrc: str(settingsRow.map_embed_src),
+        calendlyUrl: settingsRow.calendly_url === undefined ? undefined : str(settingsRow.calendly_url),
         shortName: str(settingsRow.short_name),
         logo: str(settingsRow.logo),
         favicon: str(settingsRow.favicon),

@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(244);
+select plan(269);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -347,7 +347,7 @@ declare k text; n int := 0;
 begin
  foreach k in array array['d1','d2','d3','d4'] loop
   n := n + 1;
-  insert into pg_temp.t select 'k' || k, public.hr_svc_apply('Purge', k, 'purge.' || k || '@example.test', '0400 000 9' || lpad(n::text, 2, '0'))->>'profileId';
+  insert into pg_temp.t select 'k' || k, public.hr_svc_apply('Purge', k, 'purge.' || k || '@example.test', '0400 000 96' || n::text)->>'profileId';
   update hr.staff_profiles set auth_user_id = ('a0000000-0000-0000-0000-0000000000' || k)::uuid where id = pg_temp.v('k' || k);
   perform set_config('hr.actor_kind', 'system', true);
   update hr.staff_profiles set status = 'rejected' where id = pg_temp.v('k' || k);
@@ -429,10 +429,61 @@ insert into hr.staff_documents(application_id, profile_id, category, storage_pat
 select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1')), 'done', '{"first_name":"Asha","last_name":"Overwritten","dob":"1999-04-05","passport_number":"X1234567"}')$$, 'a passport reading is recorded');
 select is((select first_name || '/' || last_name || '/' || date_of_birth from hr.staff_profiles where id = pg_temp.v('x1')), 'Asha/Keep/1999-04-05', 'empty details are filled and typed ones are never overwritten');
 
+-- ---------------------------------------------------------------- Careers on the no-login flow (HR-02i)
+insert into hr.jobs(title, description, employment_type, location, status) values ('Trainer (Commercial Cookery)', 'Teach.', 'full_time', 'Melbourne', 'open'), ('Closed role', 'Old.', 'part_time', 'Sydney', 'closed');
+insert into t select 'jjob1', id::text from hr.jobs where title = 'Trainer (Commercial Cookery)';
+insert into t select 'jjob0', id::text from hr.jobs where title = 'Closed role';
+select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob0'), null)->>'reason', 'job_closed', 'a closed job cannot be applied for');
+select is((select count(*)::int from hr.staff_profiles where email = 'cara.careers@example.test'), 0, '...and nothing is recorded');
+insert into t select 'jc1', public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob1'), 'I love teaching.')->>'profileId';
+select is((select p.status || '/' || j.status || '/' || j.cover_letter from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = pg_temp.v('jc1')),
+ 'applied/applied/I love teaching.', 'a Careers application is a staff application (applied) with the job and the cover letter');
+-- (the public form stores the resume next; an application WITH its resume is complete, so a second apply only adds a job)
+update hr.staff_applications set resume_path = pg_temp.v('jc1') || '/resume/first.pdf', resume_filename = 'first.pdf', resume_mime = 'application/pdf', resume_size = 10 where profile_id = pg_temp.v('jc1');
+select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob1'), null)->>'reason', 'exists', 'applying again for the same job: the same answer');
+select is((select count(*)::int from hr.job_applications where profile_id = pg_temp.v('jc1')), 1, '...and still one job application');
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('jc1') || '/cover-letter/c.pdf'), ('staff-documents', pg_temp.v('jc1') || '/resume/c.pdf');
+select throws_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, (select id from hr.job_applications where profile_id = pg_temp.v('jc1')), pg_temp.v('jc1') || '/resume/c.pdf'),
+ '22023', 'The cover letter location is not valid.', 'the cover letter file must be in its own folder');
+select lives_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, (select id from hr.job_applications where profile_id = pg_temp.v('jc1')), pg_temp.v('jc1') || '/cover-letter/c.pdf'),
+ 'the cover letter file is recorded on the job application');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((public.hr_admin_job_applications(pg_temp.v('jjob1'))->0->>'coverLetter'), 'I love teaching.', 'the Applicants tab shows the cover letter');
+select is((public.hr_admin_job_applications(pg_temp.v('jjob1'))->0->'coverLetterFile'->>'filename'), 'c.pdf', '...and the cover letter file');
+select is(public.hr_admin_staff_detail(pg_temp.v('jc1'))->'jobApplications'->0->>'jobTitle', 'Trainer (Commercial Cookery)', 'the Employees detail shows the job');
+select is((public.hr_admin_staff_list(null, 'cara.careers', 5, 0, null)->'rows'->0->>'jobTitle'), 'Trainer (Commercial Cookery)', 'the Employees list shows the job');
+select lives_ok($$select public.hr_admin_staff_invite(pg_temp.v('jc1'), 'documents', pg_temp.h('job-link'))$$, 'Send document link (the old Hire)');
+reset role;
+select is((select status from hr.job_applications where profile_id = pg_temp.v('jc1')), 'hired', 'the job application follows: hired');
+insert into t select 'jc2', public.hr_svc_apply('Dan', 'Declined', 'dan.declined@example.test', '0400 000 812', pg_temp.v('jjob1'), null)->>'profileId';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_staff_reject(pg_temp.v('jc2'), 'Not this time', false)$$, 'reject uses the same action');
+-- Add staff member (HR-02i).
+select is(public.hr_admin_staff_add('Ada', 'Added', 'ada.added@example.test', '0400 000 813')->>'ok', 'true', 'an administrator adds a staff member');
+select throws_ok($$select public.hr_admin_staff_add('Ada', 'Again', 'ada.added@example.test', '0400 000 814')$$, '23505', 'This email or mobile already has a staff record. Open it from Employees.', 'the same email cannot be added twice');
+select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'not-an-email', '0400 000 815')$$, '22023', 'Enter a valid email address.', 'the address is checked');
+reset role;
+select is((select status from hr.job_applications where profile_id = pg_temp.v('jc2')), 'declined', 'the job application follows: declined');
+select is((select p.status || '/' || e.actor_kind || '/' || e.note from hr.staff_profiles p join hr.staff_status_events e on e.profile_id = p.id where p.email = 'ada.added@example.test'),
+ 'applied/admin/Added by an administrator', 'an added person is Applied, logged as added by an administrator');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000003';
+select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'x.y@example.test', '0400 000 816')$$, '42501', null, 'only an administrator can add staff');
+select throws_ok($$select public.hr_admin_job_applications(null)$$, '42501', null, 'only an administrator sees applicants');
+reset role;
+select is(public.jobs_open(null)->0->>'title' is not null and not (public.jobs_open(null)::text like '%Closed role%'), true, 'the website lists open jobs only');
+select is((select count(*)::int from pg_proc where proname in ('hr_job_apply','hr_admin_job_decide','hr_admin_staff_create') and pronamespace = 'public'::regnamespace), 0,
+ 'the login-based job apply, decide and admin-create functions are gone');
+select throws_ok($$update hr.staff_profiles set status = 'job_applied' where id = pg_temp.v('jc1')$$, '23514', null, 'job_applied is no longer a status');
+select is((select count(*)::int from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name in ('resume_document_id','cover_letter_document_id')), 0,
+ 'job applications no longer point at staff documents');
+
 -- ---------------------------------------------------------------- privileges
 select is(has_function_privilege('anon', 'public.hr_svc_onboarding_open(text)', 'execute'), false, 'anon cannot call the link functions');
 select is(has_function_privilege('authenticated', 'public.hr_svc_document_add(text, text, text, text, text, integer, date, uuid)', 'execute'), false, 'a signed-in user cannot call the link functions');
-select is(has_function_privilege('authenticated', 'public.hr_svc_apply(text, text, text, text)', 'execute'), false, 'the browser cannot apply around the CAPTCHA');
+select is(has_function_privilege('authenticated', 'public.hr_svc_apply(text, text, text, text, uuid, text)', 'execute'), false, 'the browser cannot apply around the CAPTCHA');
 select is(has_function_privilege('service_role', 'public.hr_svc_offer_sign(text, uuid, text, text, text, text, text, text)', 'execute'), true, 'the service role can');
 select is(has_function_privilege('anon', 'public.hr_svc_offer_file(text)', 'execute'), false, 'anon cannot read the offer file');
 select is(has_function_privilege('authenticated', 'public.hr_svc_offer_signed_file(uuid)', 'execute'), false, 'a signed-in user cannot read the signed file record');

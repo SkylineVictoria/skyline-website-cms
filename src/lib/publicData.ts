@@ -1,3 +1,4 @@
+import { CAREERS_LINK, withCareersLink } from "@/lib/jobs";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite, type TenantSite } from "@/lib/tenantSite";
 import type { SiteTheme } from "@/lib/tenantTheme";
@@ -103,6 +104,8 @@ export interface PublicSettings {
   homeAboutImage: string;
   logoAlt: string;
   mapEmbedSrc: string;
+  /** The Calendly scheduling link saved in the CMS; "" hides booking on the Contact page. */
+  calendlyUrl: string;
   acknowledgement: string;
   footerIntro: string;
   copyright: string;
@@ -214,7 +217,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
       admissionsEmail: str(row.admissions_email), admissionsHref: `mailto:${str(row.admissions_email)}`,
       address: str(row.address), rto, cricos, legal: [rto && `RTO ${rto}`, cricos && `CRICOS ${cricos}`].filter(Boolean).join(" "),
       signInUrl: str(row.sign_in_url), homeHeroImages: heroImages, homeAboutImage: str(row.home_about_image),
-      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), acknowledgement: "", footerIntro: "", copyright: "", social, coursesCarousel: carouselOf(row),
+      logoAlt: str(row.name), mapEmbedSrc: str(row.map_embed_src), calendlyUrl: str(row.calendly_url), acknowledgement: "", footerIntro: "", copyright: "", social, coursesCarousel: carouselOf(row),
     };
   }
 
@@ -239,6 +242,7 @@ function buildSettings(rows: Row[], socialRows: Row[], tenant = false): PublicSe
     homeAboutImage: str(row.home_about_image) || DEFAULT_HOME_ABOUT,
     logoAlt: str(row.name) || staticSite.logoAlt,
     mapEmbedSrc: staticSite.mapEmbedSrc,
+    calendlyUrl: str(row.calendly_url),
     acknowledgement: staticSite.acknowledgement,
     footerIntro: staticSite.footerIntro,
     copyright: staticSite.copyright,
@@ -543,9 +547,9 @@ export async function loadPublicSiteData(): Promise<PublicSiteData> {
     theme: tenantSite || settingsRows[0]?.theme_configured ? { primaryColor: str(settingsRows[0]?.primary_color), accentColor: str(settingsRows[0]?.accent_color) || undefined, loaderStyle: loaderStyleOf(settingsRows[0]?.loader_style), headingFont: str(settingsRows[0]?.heading_font), bodyFont: str(settingsRows[0]?.body_font) } : undefined,
     seo: (snapshot?.cms_seo ?? []).map((s: Row) => ({ path: str(s.path), title: str(s.title), description: str(s.description), keywords: str(s.keywords) })),
     settings,
-    navigation: buildNavigation(navRows, courseColumns),
+    navigation: tenantSite ? buildNavigation(navRows, courseColumns) : withCareersLink(buildNavigation(navRows, courseColumns), { ...CAREERS_LINK }),
     footer: buildFooter(footerRows, !!tenantSite),
-    footerLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.quick_links ?? []) : staticFooterLinks),
+    footerLinks: tenantSite ? footerLinks(footerRows[0]?.quick_links ?? []) : withCareersLink(footerLinks(footerRows[0]?.links_configured ? (footerRows[0]?.quick_links ?? []) : staticFooterLinks), { ...CAREERS_LINK }),
     studentLinks: footerLinks(tenantSite || footerRows[0]?.links_configured ? (footerRows[0]?.student_links ?? []) : staticStudentLinks),
     courses,
     featuredCourses: featured.length ? featured : courses.slice(0, 6),

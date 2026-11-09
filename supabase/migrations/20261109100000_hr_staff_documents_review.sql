@@ -41,6 +41,11 @@ begin
    raise exception 'Current staff documents with the legacy categories PTE / English Certificate exist; move them to English first. Nothing was changed.';
   end if;
  end if;
+ -- 20261106120000 (Jobs, run by hand on hosted) allowed Resume / Cover Letter documents; HR-02i keeps the resume on the application and
+ -- the cover letter on the job application. None exist on hosted (checked 2026-11-09); any would need moving first.
+ if exists (select 1 from hr.staff_documents where category in ('Resume','Cover Letter')) then
+  raise exception 'Staff documents of the job categories Resume / Cover Letter exist; move them first. Nothing was changed.';
+ end if;
 end $legacy$;
 alter table hr.staff_documents drop constraint if exists staff_documents_category_check;
 alter table hr.staff_documents add constraint staff_documents_category_check
@@ -62,22 +67,169 @@ alter table hr.staff_applications
  add column if not exists account_invited_at timestamptz,
  add column if not exists files_purged_at timestamptz;
 
+-- ------------------------------------------------------------------ jobs on the no-login flow (HR-02i)
+-- 20261106120000 / 20261106130000 created hr.jobs and hr.job_applications on hosted by hand (2 open jobs, 0 applications on 2026-11-09).
+-- The jobs stay as they are. A job application now belongs to the staff application made through the public form: the resume is the
+-- application's, the cover letter is text and/or a file on the job application; the login-based apply, decide and admin-create functions
+-- go (staff-register, staff-admin and hr_svc_* replace them). Creates both tables on a stack that never ran 20261106120000.
+create table if not exists hr.jobs (
+ id uuid primary key default gen_random_uuid(),
+ title text not null check (char_length(btrim(title)) between 2 and 150),
+ description text not null check (char_length(description) between 1 and 10000),
+ employment_type text not null check (employment_type in ('full_time','part_time')),
+ salary text not null default '' check (char_length(salary) <= 120),
+ location text not null check (char_length(btrim(location)) between 1 and 150),
+ status text not null default 'open' check (status in ('open','closed')),
+ created_by uuid,
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now()
+);
+create table if not exists hr.job_applications (
+ id uuid primary key default gen_random_uuid(),
+ job_id uuid not null references hr.jobs(id) on delete restrict,
+ profile_id uuid not null references hr.staff_profiles(id) on delete restrict,
+ cover_letter text not null default '' check (char_length(cover_letter) <= 5000),
+ status text not null default 'applied' check (status in ('applied','hired','declined')),
+ decided_by uuid,
+ decided_at timestamptz,
+ decision_note text not null default '' check (char_length(decision_note) <= 2000),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ unique (job_id, profile_id)
+);
+alter table hr.jobs enable row level security;
+alter table hr.job_applications enable row level security;
+do $jobs$
+begin
+ if exists (select 1 from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name = 'resume_document_id')
+    and exists (select 1 from hr.job_applications) then
+  raise exception 'Job applications of the login-based Jobs flow exist; move them first. Nothing was changed.';
+ end if;
+end $jobs$;
+alter table hr.job_applications drop column if exists resume_document_id, drop column if exists cover_letter_document_id;
+alter table hr.job_applications
+ add column if not exists cover_letter_path text unique check (cover_letter_path is null or char_length(cover_letter_path) <= 400),
+ add column if not exists cover_letter_filename text check (cover_letter_filename is null or char_length(cover_letter_filename) between 1 and 255),
+ add column if not exists cover_letter_mime text check (cover_letter_mime is null or cover_letter_mime in ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
+ add column if not exists cover_letter_size integer check (cover_letter_size is null or cover_letter_size between 1 and 5242880);
+create index if not exists jobs_status_idx on hr.jobs(status, created_at desc);
+create index if not exists job_applications_profile_idx on hr.job_applications(profile_id);
+create index if not exists job_applications_job_idx on hr.job_applications(job_id, created_at desc);
+-- Applicants have no login: their old read policy goes. Job posts stay readable through jobs_open() only.
+drop policy if exists job_applications_read on hr.job_applications;
+revoke all on hr.jobs, hr.job_applications from public, anon, authenticated;
+drop function if exists public.hr_job_apply(uuid, text, uuid, uuid);
+drop function if exists public.hr_admin_job_decide(uuid, text, text);
+drop function if exists public.hr_admin_staff_create(uuid, text, text, text, text, text, uuid);
+drop function if exists hr.job_applications_json(uuid);
+
+create or replace function hr.latest_job_title(p_profile uuid) returns text
+language sql stable security definer set search_path = hr, pg_temp as $fn$
+ select j.title from hr.job_applications a join hr.jobs j on j.id = a.job_id where a.profile_id = p_profile order by a.created_at desc limit 1;
+$fn$;
+revoke all on function hr.latest_job_title(uuid) from public, anon, authenticated;
+
+-- The person's job applications, for the Employees detail page.
+create or replace function hr.job_applications_json(p_profile uuid) returns jsonb
+language sql stable security definer set search_path = hr, pg_temp as $fn$
+ select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'jobId', j.id, 'jobTitle', j.title, 'jobStatus', j.status, 'status', a.status,
+   'appliedAt', a.created_at, 'decidedAt', a.decided_at, 'coverLetter', a.cover_letter,
+   'coverLetterFile', case when a.cover_letter_path is null then null else jsonb_build_object('filename', a.cover_letter_filename, 'storagePath', a.cover_letter_path, 'mimeType', a.cover_letter_mime) end)
+   order by a.created_at desc), '[]'::jsonb)
+ from hr.job_applications a join hr.jobs j on j.id = a.job_id where a.profile_id = p_profile;
+$fn$;
+revoke all on function hr.job_applications_json(uuid) from public, anon, authenticated;
+
+-- A job application follows the person: sending the document link moves it on (hired), a rejection declines it.
+create or replace function hr.staff_job_applications_follow() returns trigger
+language plpgsql security definer set search_path = hr, pg_temp as $fn$
+begin
+ if new.status = 'invited' and old.status = 'applied' then
+  update hr.job_applications set status = 'hired', decided_at = now(), decided_by = nullif(current_setting('hr.actor', true), '')::uuid where profile_id = new.id and status = 'applied';
+ elsif new.status = 'rejected' and old.status is distinct from 'rejected' then
+  update hr.job_applications set status = 'declined', decided_at = now(), decided_by = nullif(current_setting('hr.actor', true), '')::uuid,
+   decision_note = left(coalesce(current_setting('hr.note', true), ''), 2000) where profile_id = new.id and status in ('applied','hired');
+ end if;
+ return null;
+end $fn$;
+drop trigger if exists staff_job_applications_follow on hr.staff_profiles;
+create trigger staff_job_applications_follow after update of status on hr.staff_profiles for each row execute function hr.staff_job_applications_follow();
+
+-- Open jobs for the website (or one job by id, open or closed), and the admin functions of 20261106120000 restated for a fresh stack.
+create or replace function hr.job_json(j hr.jobs) returns jsonb
+language sql stable set search_path = pg_catalog, pg_temp as $fn$
+ select jsonb_build_object('id', j.id, 'title', j.title, 'description', j.description, 'employmentType', j.employment_type, 'salary', j.salary,
+  'location', j.location, 'status', j.status, 'postedAt', j.created_at, 'updatedAt', j.updated_at);
+$fn$;
+create or replace function public.jobs_open(p_id uuid default null) returns jsonb
+language sql stable security definer set search_path = public, hr, pg_temp as $fn$
+ select coalesce(jsonb_agg(hr.job_json(j) order by j.created_at desc), '[]'::jsonb) from hr.jobs j
+ where (p_id is null and j.status = 'open') or j.id = p_id;
+$fn$;
+revoke all on function public.jobs_open(uuid) from public;
+grant execute on function public.jobs_open(uuid) to anon, authenticated;
+create or replace function public.hr_admin_job_list() returns jsonb
+language plpgsql stable security definer set search_path = public, hr, pg_temp as $fn$
+begin
+ perform hr.require_admin();
+ return coalesce((select jsonb_agg(hr.job_json(j) || jsonb_build_object(
+   'applied', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'applied'),
+   'hired', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'hired'),
+   'declined', (select count(*) from hr.job_applications a where a.job_id = j.id and a.status = 'declined')) order by j.created_at desc) from hr.jobs j), '[]'::jsonb);
+end $fn$;
+revoke all on function public.hr_admin_job_list() from public, anon;
+grant execute on function public.hr_admin_job_list() to authenticated;
+create or replace function public.hr_admin_job_save(p_id uuid, p_job jsonb) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin(); j hr.jobs;
+begin
+ if p_id is null then
+  insert into hr.jobs(title, description, employment_type, salary, location, status, created_by)
+   values (btrim(p_job->>'title'), btrim(p_job->>'description'), p_job->>'employmentType', btrim(coalesce(p_job->>'salary', '')), btrim(p_job->>'location'), coalesce(p_job->>'status', 'open'), v_admin)
+   returning * into j;
+ else
+  update hr.jobs set title = btrim(p_job->>'title'), description = btrim(p_job->>'description'), employment_type = p_job->>'employmentType',
+   salary = btrim(coalesce(p_job->>'salary', '')), location = btrim(p_job->>'location'), status = coalesce(p_job->>'status', status), updated_at = now()
+   where id = p_id returning * into j;
+  if not found then raise exception 'Job not found.' using errcode = 'P0002'; end if;
+ end if;
+ return hr.job_json(j);
+end $fn$;
+revoke all on function public.hr_admin_job_save(uuid, jsonb) from public, anon;
+grant execute on function public.hr_admin_job_save(uuid, jsonb) to authenticated;
+drop function if exists public.hr_admin_job_applications(uuid);
+create or replace function public.hr_admin_job_applications(p_job uuid default null) returns jsonb
+language plpgsql stable security definer set search_path = public, hr, pg_temp as $fn$
+begin
+ perform hr.require_admin();
+ return coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'jobId', j.id, 'jobTitle', j.title, 'employmentType', j.employment_type, 'location', j.location,
+   'profileId', p.id, 'name', btrim(concat_ws(' ', p.first_name, p.last_name)), 'email', p.email, 'phone', p.phone_e164, 'staffStatus', p.status,
+   'status', a.status, 'appliedAt', a.created_at, 'decidedAt', a.decided_at, 'decisionNote', a.decision_note, 'coverLetter', a.cover_letter,
+   'coverLetterFile', case when a.cover_letter_path is null then null else jsonb_build_object('filename', a.cover_letter_filename, 'storagePath', a.cover_letter_path, 'mimeType', a.cover_letter_mime) end,
+   'resume', case when s.resume_path is null then null else jsonb_build_object('filename', s.resume_filename, 'storagePath', s.resume_path, 'mimeType', s.resume_mime) end)
+   order by a.created_at desc)
+  from hr.job_applications a join hr.jobs j on j.id = a.job_id join hr.staff_profiles p on p.id = a.profile_id join hr.staff_applications s on s.profile_id = p.id
+  where p_job is null or a.job_id = p_job), '[]'::jsonb);
+end $fn$;
+revoke all on function public.hr_admin_job_applications(uuid) from public, anon;
+grant execute on function public.hr_admin_job_applications(uuid) to authenticated;
+
 -- ------------------------------------------------------------------ status machine
 alter table hr.staff_profiles drop constraint if exists staff_profiles_status_check;
 alter table hr.staff_status_events drop constraint if exists staff_status_events_from_status_check;
 alter table hr.staff_status_events drop constraint if exists staff_status_events_to_status_check;
 -- The log keeps the legacy values of rows written before this migration (it is append-only).
 alter table hr.staff_status_events add constraint staff_status_events_from_status_check check (from_status is null or from_status in
- ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive','draft','submitted','preboarding'));
+ ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive','draft','submitted','preboarding','job_applied'));
 alter table hr.staff_status_events add constraint staff_status_events_to_status_check check (to_status in
- ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive','draft','submitted','preboarding'));
+ ('applied','invited','documents_submitted','offer_sent','offer_signed','active','rejected','inactive','draft','submitted','preboarding','job_applied'));
 
 do $map$
 begin
  perform set_config('hr.actor_kind', 'system', true);
  perform set_config('hr.note', 'Moved to the new staff enrolment flow', true);
  alter table hr.staff_profiles disable trigger staff_status_guard;
- update hr.staff_profiles set status = 'applied', status_changed_at = now() where status = 'draft';
+ update hr.staff_profiles set status = 'applied', status_changed_at = now() where status in ('draft','job_applied');
  update hr.staff_profiles set status = 'documents_submitted', status_changed_at = now() where status in ('submitted','preboarding');
  alter table hr.staff_profiles enable trigger staff_status_guard;
  perform set_config('hr.actor_kind', '', true);
@@ -424,11 +576,16 @@ revoke all on function hr.staff_applicant_view(hr.staff_invites) from public, an
 -- (rejected or inactive) with the same email is reused for the new application (rejected/inactive > applied; any live role
 -- is revoked), as is an application still waiting for its resume. A duplicate answers {ok:false, reason:'exists'}. The mobile
 -- number is unique across all profiles, so a number held by ANOTHER person's profile (open or closed) also answers 'exists'. Existing students, agents and portal users MAY apply (they keep their login; activation grants the role to it).
-create or replace function public.hr_svc_apply(p_first_name text, p_last_name text, p_email text, p_phone text) returns jsonb
+-- p_job / p_cover_letter (HR-02i): a Careers application. The job must be open; the job application is recorded on the person's
+-- record (a new one, a re-application, or an OPEN application, which then just gets this job added).
+drop function if exists public.hr_svc_apply(text, text, text, text);
+create or replace function public.hr_svc_apply(p_first_name text, p_last_name text, p_email text, p_phone text, p_job uuid default null, p_cover_letter text default null) returns jsonb
 language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
 declare v_email text := hr.email_key(p_email); v_phone text := hr.phone_e164(p_phone); p hr.staff_profiles; a hr.staff_applications;
- v_first text := btrim(coalesce(p_first_name, '')); v_last text := btrim(coalesce(p_last_name, ''));
+ v_first text := btrim(coalesce(p_first_name, '')); v_last text := btrim(coalesce(p_last_name, '')); v_letter text := btrim(coalesce(p_cover_letter, '')); v_job_app uuid;
 begin
+ if p_job is not null and not exists (select 1 from hr.jobs j where j.id = p_job and j.status = 'open') then return jsonb_build_object('ok', false, 'reason', 'job_closed'); end if;
+ if char_length(v_letter) > 5000 then return jsonb_build_object('ok', false, 'reason', 'invalid_cover_letter'); end if;
  if v_email is null or v_email !~ '^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$' or char_length(v_email) > 254 then return jsonb_build_object('ok', false, 'reason', 'invalid_email'); end if;
  if v_phone is null then return jsonb_build_object('ok', false, 'reason', 'invalid_phone'); end if;
  if v_first = '' or v_last = '' or char_length(v_first) > 100 or char_length(v_last) > 100 or (v_first || v_last) ~ '[[:cntrl:]<>]' then
@@ -441,7 +598,10 @@ begin
   if not (p.status in ('rejected','inactive') or (p.status = 'applied' and a.resume_path is null)) then
    -- The address already has an open application: tell THAT address (never a different one), at most once an hour. The
    -- caller's answer stays the same thank-you; staff-register's per-email rate limit applies before this is reached.
-   if not exists (select 1 from hr.staff_emails e where e.profile_id = p.id and e.kind = 'already_applied' and e.created_at > now() - interval '1 hour') then
+   if p_job is not null then
+    -- An open application applying for (another) job: the job is added to it; no email (nothing else changed).
+    insert into hr.job_applications(job_id, profile_id, cover_letter) values (p_job, p.id, v_letter) on conflict (job_id, profile_id) do nothing;
+   elsif not exists (select 1 from hr.staff_emails e where e.profile_id = p.id and e.kind = 'already_applied' and e.created_at > now() - interval '1 hour') then
     perform hr.queue_email(p.id, 'already_applied', 'applicant');
    end if;
    return jsonb_build_object('ok', false, 'reason', 'exists');
@@ -459,10 +619,36 @@ begin
   update hr.staff_documents set is_current = false where profile_id = p.id and is_current;
   update hr.staff_roles set revoked_at = now() where profile_id = p.id and revoked_at is null;
  end if;
- return jsonb_build_object('ok', true, 'profileId', p.id);
+ if p_job is not null then
+  insert into hr.job_applications(job_id, profile_id, cover_letter) values (p_job, p.id, v_letter)
+   on conflict (job_id, profile_id) do update set status = 'applied', cover_letter = excluded.cover_letter, cover_letter_path = null, cover_letter_filename = null,
+    cover_letter_mime = null, cover_letter_size = null, decided_by = null, decided_at = null, decision_note = ''
+   returning id into v_job_app;
+ end if;
+ return jsonb_build_object('ok', true, 'profileId', p.id, 'jobApplicationId', v_job_app);
 end $fn$;
-revoke all on function public.hr_svc_apply(text, text, text, text) from public, anon, authenticated;
-grant execute on function public.hr_svc_apply(text, text, text, text) to service_role;
+revoke all on function public.hr_svc_apply(text, text, text, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.hr_svc_apply(text, text, text, text, uuid, text) to service_role;
+
+-- The cover letter FILE of a Careers application (optional; PDF or Word .docx, 5 MB), uploaded by staff-register to
+-- {profile}/cover-letter/{file} before this records it. Only while the job application is new (applied, no file yet).
+create or replace function public.hr_svc_job_cover_letter(p_application uuid, p_path text, p_filename text, p_mime text, p_size integer) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare j hr.job_applications;
+begin
+ select * into j from hr.job_applications where id = p_application for update;
+ if not found then raise exception 'Application not found.' using errcode = 'P0002'; end if;
+ if j.status <> 'applied' or j.cover_letter_path is not null then raise exception 'The cover letter is already recorded.' using errcode = '23514'; end if;
+ if not hr.staff_path_ok(p_path, j.profile_id, 'cover-letter') then raise exception 'The cover letter location is not valid.' using errcode = '22023'; end if;
+ if p_mime not in ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document') then raise exception 'Upload a PDF or Word (.docx) file.' using errcode = '22023'; end if;
+ if p_size is null or p_size < 1 or p_size > 5242880 then raise exception 'The cover letter must be 5 MB or smaller.' using errcode = '22023'; end if;
+ if not hr.staff_object_exists(p_path) then raise exception 'The uploaded file was not found.' using errcode = 'P0002'; end if;
+ update hr.job_applications set cover_letter_path = p_path, cover_letter_filename = left(btrim(coalesce(p_filename, 'cover-letter')), 255),
+  cover_letter_mime = p_mime, cover_letter_size = p_size where id = j.id;
+ return jsonb_build_object('ok', true);
+end $fn$;
+revoke all on function public.hr_svc_job_cover_letter(uuid, text, text, text, integer) from public, anon, authenticated;
+grant execute on function public.hr_svc_job_cover_letter(uuid, text, text, text, integer) to service_role;
 
 -- Step 2: the resume the function uploaded to {profile}/resume/{file}. Queues "application received" and "new application".
 create or replace function public.hr_svc_apply_resume(p_profile uuid, p_path text, p_filename text, p_mime text, p_size integer) returns jsonb
@@ -479,8 +665,8 @@ begin
  if not hr.staff_object_exists(p_path) then raise exception 'The uploaded file was not found.' using errcode = 'P0002'; end if;
  update hr.staff_applications set resume_path = p_path, resume_filename = left(btrim(coalesce(p_filename, 'resume')), 255), resume_mime = p_mime,
   resume_size = p_size, resume_uploaded_at = now() where id = a.id;
- perform hr.queue_email(p.id, 'application_received', 'applicant');
- perform hr.queue_email(p.id, 'admin_new_application', 'admin');
+ perform hr.queue_email(p.id, 'application_received', 'applicant', jsonb_build_object('jobTitle', hr.latest_job_title(p.id)));
+ perform hr.queue_email(p.id, 'admin_new_application', 'admin', jsonb_build_object('jobTitle', hr.latest_job_title(p.id)));
  return jsonb_build_object('ok', true, 'profileId', p.id);
 end $fn$;
 revoke all on function public.hr_svc_apply_resume(uuid, text, text, text, integer) from public, anon, authenticated;
@@ -814,7 +1000,8 @@ begin
   select p.id, p.status_changed_at, to_jsonb(array_remove(array[a.resume_path], null)
     || coalesce((select array_agg(d.storage_path) from hr.staff_documents d where d.profile_id = p.id), '{}')
     || coalesce((select array_agg(o.storage_path) from hr.staff_offers o where o.profile_id = p.id), '{}')
-    || coalesce((select array_agg(o.signed_path) from hr.staff_offers o where o.profile_id = p.id and o.signed_path is not null), '{}')) as paths
+    || coalesce((select array_agg(o.signed_path) from hr.staff_offers o where o.profile_id = p.id and o.signed_path is not null), '{}')
+    || coalesce((select array_agg(j.cover_letter_path) from hr.job_applications j where j.profile_id = p.id and j.cover_letter_path is not null), '{}')) as paths
   from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
   where p.status = 'rejected' and a.files_purged_at is null and p.status_changed_at < now() - make_interval(months => p_months)
   order by p.status_changed_at limit least(greatest(coalesce(p_limit, 50), 1), 200)) q), '[]'::jsonb);
@@ -855,6 +1042,7 @@ begin
  update hr.staff_offers set filename = 'removed.pdf', signer_name = case when signer_name is null then null else 'removed' end,
   signer_ip = null, signer_user_agent = null where profile_id = p_profile;
  update hr.staff_emails set to_email = case when audience = 'applicant' then 'removed' else null end, payload = '{}'::jsonb, last_error = null where profile_id = p_profile;
+ update hr.job_applications set cover_letter = '', cover_letter_path = null, cover_letter_filename = null, decision_note = '' where profile_id = p_profile;
 end $fn$;
 revoke all on function hr.staff_anonymise(uuid) from public, anon, authenticated;
 
@@ -941,7 +1129,7 @@ begin
    'updatedAt', p.updated_at, 'docs', hr.staff_doc_summary(p.id),
    'inviteExpiresAt', (select i.expires_at from hr.staff_invites i where i.profile_id = p.id and i.revoked_at is null and i.superseded_at is null and i.used_at is null
      order by i.created_at desc limit 1),
-   'emailFailed', hr.staff_email_failed(p.id)) as r
+   'emailFailed', hr.staff_email_failed(p.id), 'jobTitle', hr.latest_job_title(p.id)) as r
   from hr.staff_profiles p join hr.staff_applications a on a.profile_id = p.id
   where (v_statuses is null or p.status = any(v_statuses))
    and (v_search is null or concat_ws(' ', p.first_name, p.middle_name, p.last_name, p.email, p.phone_e164) ilike '%' || replace(replace(v_search, '%', ''), '_', '') || '%')
@@ -972,7 +1160,8 @@ begin
   'emailFailed', hr.staff_email_failed(p.id),
   'roles', coalesce((select jsonb_agg(jsonb_build_object('role', r.role, 'grantedAt', r.granted_at, 'revokedAt', r.revoked_at) order by r.granted_at) from hr.staff_roles r where r.profile_id = p.id), '[]'::jsonb),
   'events', coalesce((select jsonb_agg(jsonb_build_object('from', e.from_status, 'to', e.to_status, 'actorKind', e.actor_kind, 'note', e.note, 'at', e.created_at) order by e.id) from hr.staff_status_events e where e.profile_id = p.id), '[]'::jsonb),
-  'hasCmsAccess', exists (select 1 from public.cms_users c where c.auth_user_id = p.auth_user_id and c.status = 'Active'));
+  'hasCmsAccess', exists (select 1 from public.cms_users c where c.auth_user_id = p.auth_user_id and c.status = 'Active'),
+  'jobApplications', hr.job_applications_json(p.id));
 end $fn$;
 
 -- Documents are reviewed once they were submitted at least once.
@@ -1062,6 +1251,25 @@ begin
 end $fn$;
 revoke all on function public.hr_admin_staff_invite(uuid, text, text) from public, anon;
 grant execute on function public.hr_admin_staff_invite(uuid, text, text) to authenticated;
+
+-- HR-02i: "Add staff member" on the Employees page. A new record only: an open, rejected or inactive person is handled from their own page.
+create or replace function public.hr_admin_staff_add(p_first_name text, p_last_name text, p_email text, p_phone text) returns jsonb
+language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
+declare v_admin uuid := hr.require_admin(); v_email text := hr.email_key(p_email); v_phone text := hr.phone_e164(p_phone);
+ v_first text := btrim(coalesce(p_first_name, '')); v_last text := btrim(coalesce(p_last_name, '')); p hr.staff_profiles;
+begin
+ if v_email is null or v_email !~ '^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$' or char_length(v_email) > 254 then raise exception 'Enter a valid email address.' using errcode = '22023'; end if;
+ if v_phone is null then raise exception 'Enter a valid mobile number.' using errcode = '22023'; end if;
+ if v_first = '' or v_last = '' or char_length(v_first) > 100 or char_length(v_last) > 100 or (v_first || v_last) ~ '[[:cntrl:]<>]' then raise exception 'Enter the first and last name.' using errcode = '22023'; end if;
+ if exists (select 1 from hr.staff_profiles s where s.email = v_email or s.phone_e164 = v_phone) then
+  raise exception 'This email or mobile already has a staff record. Open it from Employees.' using errcode = '23505'; end if;
+ perform set_config('hr.actor', v_admin::text, true); perform set_config('hr.actor_kind', 'admin', true); perform set_config('hr.note', 'Added by an administrator', true);
+ insert into hr.staff_profiles(first_name, last_name, email, phone_e164) values (v_first, v_last, v_email, v_phone) returning * into p;
+ insert into hr.staff_applications(profile_id) values (p.id);
+ return jsonb_build_object('ok', true, 'profileId', p.id);
+end $fn$;
+revoke all on function public.hr_admin_staff_add(text, text, text, text) from public, anon;
+grant execute on function public.hr_admin_staff_add(text, text, text, text) to authenticated;
 
 -- True when an email to or about this person failed and no later email of the same kind went out.
 create or replace function hr.staff_email_failed(p_profile uuid) returns boolean

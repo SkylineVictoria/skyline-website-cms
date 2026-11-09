@@ -66,6 +66,11 @@ export function mobileProblem(e164: string): string {
 }
 
 /** The date-of-birth limits, as YYYY-MM-DD, for the date picker's min and max. */
+/** The one-time code emailed when a student claims a record their agent or SLIT created: 6 digits (up to 10 if SLIT lengthens it). */
+export function codeProblem(raw: string): string {
+  return /^\d{6,10}$/.test(raw.replace(/\s/g, "")) ? "" : "Enter the 6-digit code from the email.";
+}
+
 export function dateOfBirthRange(today: Date = new Date()): { min: string; max: string } {
   const iso = (years: number) => new Date(Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate())).toISOString().slice(0, 10);
   return { min: iso(100), max: iso(10) };

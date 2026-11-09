@@ -67,6 +67,19 @@ begin
  end loop;
 end $$;
 `,
+  // LAB FIXTURE (HR-02i): one person left at the Jobs status job_applied by 20261106120000, so the replay proves that 20261109100000 maps
+  // it to applied (hosted has none). Runs between 20261106130000 and 20261109100000.
+  "20261108000000_lab_fixture_job_applied.sql": `do $$
+declare v_user uuid := '1ab00000-0000-4000-8000-00000000f001'; v_profile uuid;
+begin
+ insert into auth.users(id, email, aud, role, email_confirmed_at) values (v_user, 'lab.jobapplied@example.test', 'authenticated', 'authenticated', now()) on conflict (id) do nothing;
+ alter table hr.staff_profiles disable trigger staff_status_guard;
+ insert into hr.staff_profiles(auth_user_id, first_name, last_name, email, phone_e164, status) values (v_user, 'Lab', 'JobApplied', 'lab.jobapplied@example.test', '+61400000999', 'job_applied')
+  returning id into v_profile;
+ alter table hr.staff_profiles enable trigger staff_status_guard;
+ insert into hr.staff_applications(profile_id) values (v_profile);
+end $$;
+`,
 };
 
 const isWin = process.platform === "win32";
@@ -224,6 +237,36 @@ async function apply() {
     if (r.status === 429) limited = r;
   }
   check("the per-caller rate limit answers 429 with Retry-After", limited !== null && limited.headers.get("retry-after") === "600");
+
+  // HR-02i: the Jobs status job_applied left by 20261106120000 (lab fixture) is mapped to applied by 20261109100000.
+  check("a person at the old Jobs status job_applied is mapped to applied, and the move is logged",
+    psql("select status from hr.staff_profiles where email = 'lab.jobapplied@example.test';") === "applied"
+    && psql("select count(*) from hr.staff_status_events e join hr.staff_profiles p on p.id = e.profile_id where p.email = 'lab.jobapplied@example.test' and e.from_status = 'job_applied' and e.to_status = 'applied';") === "1");
+
+  // HR-02i Careers: the same no-login form with a job, a cover letter text and a cover letter file.
+  const jobId = psql("insert into hr.jobs(title, description, employment_type, location) values ('Lab Trainer', 'Teach.', 'full_time', 'Melbourne') returning id;").split("\n")[0];
+  const closed = psql("insert into hr.jobs(title, description, employment_type, location, status) values ('Lab Closed', 'Old.', 'full_time', 'Sydney', 'closed') returning id;").split("\n")[0];
+  const cs = Date.now();
+  const careers = { firstName: "Lab", lastName: "Careers", email: `lab.careers.${cs}@example.test`, phone: `+6148${String(cs).slice(-7)}`, agreed: "true", captchaToken: "mock-ok", website: "", __ip: `198.51.77.${cs % 250}` };
+  const pdfFile = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const closedTry = await postApply(lab, { ...careers, jobId: closed }, pdfFile("cv.pdf"));
+  check("Careers: a closed job is refused, nothing recorded", closedTry.status === 400 && psql(`select count(*) from hr.staff_profiles where email = '${careers.email}';`) === "0", JSON.stringify(closedTry.body));
+  const form = new FormData();
+  form.set("action", "apply");
+  for (const [k, v] of Object.entries({ ...careers, jobId, coverLetter: "I would love to teach here." })) if (k !== "__ip") form.set(k, v);
+  form.set("resume", new Blob([PDF], { type: "application/pdf" }), "cv.pdf");
+  form.set("coverLetterFile", new Blob([PDF], { type: "application/pdf" }), "letter.pdf");
+  const res = await fetch(`${lab.apiUrl}/functions/v1/staff-register`, { method: "POST", body: form, headers: { apikey: lab.anonKey, "x-forwarded-for": careers.__ip } });
+  const jobRow = psql(`select p.status || '|' || j.status || '|' || j.cover_letter || '|' || coalesce(j.cover_letter_path, '-') || '|' || coalesce(a.resume_path, '-') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id join hr.staff_applications a on a.profile_id = p.id where p.email = '${careers.email}';`).split("|");
+  check("Careers apply: the same no-login form records the application with the job, the cover letter text and file (own folder)", res.status === 200 && jobRow[0] === "applied" && jobRow[1] === "applied"
+    && jobRow[2] === "I would love to teach here." && /\/cover-letter\/[^/]+\.pdf$/.test(jobRow[3]) && /\/resume\//.test(jobRow[4])
+    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name = '${jobRow[3]}';`) === "1", jobRow.join("|"));
+  await waitFor(`select count(*) from hr.staff_emails e join hr.staff_profiles p on p.id = e.profile_id where p.email = '${careers.email}' and e.state = 'sent';`, "2");
+  check("...the emails name the job (applicant and HR)", mailsTo(careers.email).some((m) => m.subject === "We received your application: Lab Trainer")
+    && postmark.messages.some((m) => m.subject === "New job application (Lab Trainer): Lab Careers"));
+  const jobAgain = await postApply(lab, { ...careers, jobId }, pdfFile("cv2.pdf"));
+  check("...applying again for the same job: the same thank-you, still one job application", jobAgain.status === 200
+    && psql(`select count(*) from hr.job_applications j join hr.staff_profiles p on p.id = j.profile_id where p.email = '${careers.email}';`) === "1");
 }
 
 /* ------------------------------------------------------------------ mock Postmark (runs inside the check commands) */

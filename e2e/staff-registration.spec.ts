@@ -141,3 +141,43 @@ test("an unknown or used onboarding link shows 'This link cannot be used'", asyn
   await expect(page.getByTestId("staff-link-invalid")).toBeVisible();
   expect((await onboard({ action: "open", t: "y".repeat(43) })).status).toBe(403);
 });
+
+test("Careers: apply for a job with the same no-login form, then Jobs > Applicants sends the document link", async ({ browser }) => {
+  const job = sql(`insert into hr.jobs(title, description, employment_type, location) values ('E2E Trainer ${Date.now()}', 'Teach our students.', 'full_time', 'Melbourne') returning id || '|' || title`).split("\n")[0].split("|");
+  const who = person("careers");
+  const visitor = await (await browser.newContext()).newPage();
+  await visitor.goto("/careers");
+  await visitor.getByRole("link", { name: job[1] }).click();
+  await visitor.getByRole("link", { name: /Apply/ }).first().click();
+  await expect(visitor).toHaveURL(new RegExp(`/careers/${job[0]}/apply$`));
+  await visitor.getByTestId("job-apply-first-name").fill("Cam");
+  await visitor.getByTestId("job-apply-last-name").fill("Careers");
+  await visitor.getByTestId("job-apply-email").fill(who.email);
+  await visitor.locator("#job-mobile").fill(who.local);
+  await visitor.getByTestId("job-apply-resume").setInputFiles({ name: "cv.pdf", mimeType: "application/pdf", buffer: PDF });
+  await visitor.getByTestId("job-apply-cover-letter").fill("I would love to teach here.");
+  await visitor.getByTestId("job-apply-cover-file").setInputFiles({ name: "letter.pdf", mimeType: "application/pdf", buffer: PDF });
+  await visitor.getByTestId("job-apply-agree").check();
+  await visitor.getByTestId("staff-captcha-mock").check();
+  await visitor.getByTestId("job-apply-submit").click();
+  await expect(visitor.getByTestId("job-apply-thanks")).toBeVisible();
+  const profileId = sql(`select id from hr.staff_profiles where email = '${who.email}'`);
+  expect(sql(`select p.status || '/' || j.status || '/' || (j.cover_letter_path is not null) || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("applied/applied/true/0");
+  await waitForHrMail(who.email, new RegExp(`We received your application: ${job[1]}`));
+
+  const admin = await createAdmin("careers-admin");
+  const office = await (await browser.newContext()).newPage();
+  await signInAsAdmin(office, admin.email);
+  await office.goto(`/admin/jobs?tab=applicants&job=${job[0]}`);
+  await expect(office.getByTestId("applicants-table")).toContainText(who.email);
+  const appId = sql(`select id from hr.job_applications where profile_id = '${profileId}'`);
+  await office.getByTestId(`applicant-send-${appId}`).click();
+  await expect(office.getByTestId("applicant-dialog")).toContainText("Hired");
+  await office.getByTestId("applicant-confirm").click();
+  await expect(office.getByTestId("applicants-notice")).toContainText("document link was emailed");
+  expect(sql(`select p.status || '/' || j.status from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("invited/hired");
+  await waitForHrMail(who.email, /details and documents/i);
+  await office.goto(`/admin/staff/employees/${profileId}`);
+  await expect(office.getByTestId("staff-job-applications")).toContainText(job[1]);
+  await expect(office.getByTestId("staff-job-cover-letter")).toHaveText("I would love to teach here.");
+});

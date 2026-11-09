@@ -11,6 +11,9 @@ import EnrollPage from "@/pages/enroll/page";
 import BecomeAnAgentPage from "@/pages/become-an-agent/page";
 import AgentsPage from "@/pages/agents/page";
 import FormsPoliciesPage from "@/pages/forms-policies/page";
+import CareersPage from "@/pages/careers/page";
+import CareerDetailPage from "@/pages/careers/detail/page";
+import CareerApplyPage from "@/pages/careers/apply/page";
 import CmsFormPage from "@/pages/form/page";
 import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
@@ -71,6 +74,7 @@ import StaffHomePage from "@/pages/staff/StaffHomePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
+import JobsPage from "@/pages/admin/JobsPage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 
@@ -90,6 +94,9 @@ const routes: RouteObject[] = [
       { path: "forms/:id", element: <CmsFormPage /> },
       { path: "agents", element: <AgentsPage /> },
       { path: "become-an-agent", element: <BecomeAnAgentPage /> },
+      { path: "careers", element: <CareersPage /> },
+      { path: "careers/:id", element: <CareerDetailPage /> },
+      { path: "careers/:id/apply", element: <CareerApplyPage /> },
       { path: "contact", element: <ContactPage /> },
       { path: "enroll-now", element: <EnrollPage /> },
       { path: "*", element: <CmsPageRoute /> },
@@ -190,6 +197,8 @@ const routes: RouteObject[] = [
           { path: "staff", element: <Navigate to="/admin/staff/employees" replace /> },
           { path: "staff/employees", element: <RequireAdmin><StaffPage /></RequireAdmin> },
           { path: "staff/employees/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
+          { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
+          { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "staff/:id", element: <LegacyStaffDetailRedirect /> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },

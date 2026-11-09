@@ -30,7 +30,11 @@ function fail(error: { message?: string } | null, fallback: string): never {
   throw new Error(error?.message || fallback);
 }
 
-export interface StaffApplyInput { firstName: string; lastName: string; email: string; phone: string; resume: File; agreed: boolean; captchaToken: string; website?: string }
+export interface StaffApplyInput {
+  firstName: string; lastName: string; email: string; phone: string; resume: File; agreed: boolean; captchaToken: string; website?: string;
+  /** Careers (HR-02i): the open job applied for, an optional cover letter text and/or file. */
+  jobId?: string; coverLetter?: string; coverLetterFile?: File | null;
+}
 
 /**
  * Sends the public staff application (multipart: details, resume, CAPTCHA token) to the staff-register function. No login is
@@ -47,6 +51,9 @@ export async function applyAsStaff(input: StaffApplyInput): Promise<void> {
   body.set("captchaToken", input.captchaToken);
   body.set("website", input.website ?? "");
   body.set("resume", input.resume, input.resume.name);
+  if (input.jobId) body.set("jobId", input.jobId);
+  if (input.coverLetter?.trim()) body.set("coverLetter", input.coverLetter);
+  if (input.coverLetterFile) body.set("coverLetterFile", input.coverLetterFile, input.coverLetterFile.name);
   const { data, error } = await supabase.functions.invoke("staff-register", { body });
   if (error) {
     let message = error.message;
@@ -95,7 +102,12 @@ export async function staffAccessState(): Promise<StaffStatus | "none"> {
 
 export interface StaffListRow {
   id: string; name: string; email: string; phone: string; status: StaffStatus; requestedRole: StaffRole | null; role: StaffRole | null;
-  submittedAt: string | null; updatedAt: string; docs: StaffDocSummary; hasResume?: boolean; inviteExpiresAt?: string | null; emailFailed?: boolean;
+  submittedAt: string | null; updatedAt: string; docs: StaffDocSummary; hasResume?: boolean; inviteExpiresAt?: string | null; emailFailed?: boolean; jobTitle?: string | null;
+}
+/** A Careers application on the person's record (HR-02i). */
+export interface StaffJobApplication {
+  id: string; jobId: string; jobTitle: string; jobStatus: "open" | "closed"; status: "applied" | "hired" | "declined"; appliedAt: string; decidedAt: string | null;
+  coverLetter: string; coverLetterFile: { filename: string; storagePath: string; mimeType: string | null } | null;
 }
 export interface StaffInvite { id: string; purpose: "documents" | "reupload" | "offer"; createdAt: string; expiresAt: string; usedAt: string | null; lastSeenAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" }
 export interface StaffOffer {
@@ -109,7 +121,7 @@ export interface StaffApplicationDetail extends StaffApplicationRow {
 export interface StaffDetail {
   profile: StaffProfile; application: StaffApplicationDetail; documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
   roles: Array<{ role: StaffRole; grantedAt: string; revokedAt: string | null }>; events: StaffEvent[]; hasCmsAccess: boolean; hasAccount: boolean;
-  invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean;
+  invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean; jobApplications: StaffJobApplication[];
 }
 
 /** One or more statuses (p_statuses); an empty list means every status. */
@@ -137,7 +149,7 @@ export async function adminReviewStaffDocument(documentId: string, decision: "ap
  *  email switched off the link is returned ONCE (link) for the admin to pass on. */
 export interface StaffAdminResult {
   detail?: StaffDetail | null; emailSent?: boolean; linkCancelled?: boolean; link?: string; note?: string; expiresAt?: string;
-  inviteSent?: boolean; activated?: boolean; existingLogin?: boolean; resent?: boolean; offer?: StaffOffer; pages?: number;
+  inviteSent?: boolean; activated?: boolean; existingLogin?: boolean; resent?: boolean; offer?: StaffOffer; pages?: number; profileId?: string;
 }
 export class StaffAdminError extends Error {
   readonly status: number;
@@ -173,6 +185,8 @@ export const staffAdminActions = {
   activate: (profileId: string, role: StaffRole, joiningDate: string, confirmAdmin: boolean) => staffAdmin({ action: "activate", profileId, role, joiningDate, confirmAdmin }),
   resendActivation: (profileId: string) => staffAdmin({ action: "resend_activation", profileId }),
   retryEmail: (emailId: number) => staffAdmin({ action: "retry_email", emailId }),
+  /** HR-02i: an application on the person's behalf, then the document link at once. */
+  add: (person: { firstName: string; lastName: string; email: string; phone: string }) => staffAdmin({ action: "add", ...person }),
 };
 
 async function adminRpc(name: string, args: Record<string, unknown>, fallback: string): Promise<StaffDetail> {

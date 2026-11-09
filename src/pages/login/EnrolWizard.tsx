@@ -8,13 +8,13 @@ import { PhoneInput } from "@/components/feature/applicationInputs";
 import QuickSignIn from "@/pages/login/QuickSignIn";
 import AgentBusinessStep, { type ChosenBusiness } from "@/pages/login/AgentBusinessStep";
 import ContactConflictPopup from "@/pages/login/ContactConflictPopup";
-import { isContactConflict } from "@/lib/enrolForm";
+import { codeProblem, isContactConflict } from "@/lib/enrolForm";
 import { rememberSignUpBusiness } from "@/lib/authProviders";
 import {
   EMPTY_AGENT_ENROL, EMPTY_STUDENT_ENROL, abnProblem, formatAbn, validateAgentEnrol, validateStudentEnrol,
   type AgentEnrolForm, type EnrolErrors, type EnrolKind, type StudentEnrolForm,
 } from "@/lib/enrolForm";
-import { enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
+import { claimStudentAccount, enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
 import { applyAsStaff } from "@/lib/staffApi";
 import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
 import { toE164 } from "@/lib/staffPhone";
@@ -162,6 +162,9 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
   const [busy, setBusy] = useState(false);
   const [website, setWebsite] = useState("");
   const [readyUser, setReadyUser] = useState("");
+  // The email is already on a student record (added by an agent or SLIT) and the mobile matched it: a code went to the email.
+  const [claim, setClaim] = useState<{ email: string; sent: boolean } | null>(null);
+  const [code, setCode] = useState("");
   const navigate = useNavigate();
   const patch = (next: Partial<StudentEnrolForm>) => setForm((prev) => ({ ...prev, ...next }));
 
@@ -177,6 +180,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     setBusy(true);
     try {
       const result = await enrolStudent(current, website);
+      if (result.claim) { setClaim({ email: current.email.trim().toLowerCase(), sent: result.emailSent }); setErrors(result.warning ? { form: result.warning } : {}); return; }
       if (!result.signIn) { onDone(result); return; }
       // A new student: their account is ready, so sign them in and go on to "Do you want to apply at SLIT?".
       const { data, error } = await supabase.auth.signInWithPassword({ email: current.email.trim().toLowerCase(), password: current.password });
@@ -189,8 +193,55 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     finally { setBusy(false); }
   };
 
+  // The code proves the email; then the password from the form is set and the student is signed in.
+  const verify = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy || !claim) return;
+    const problem = codeProblem(code);
+    if (problem) { setErrors({ form: problem }); return; }
+    setBusy(true);
+    setErrors({});
+    try { setReadyUser(await claimStudentAccount(claim.email, code, form.password)); }
+    catch (e) { setErrors({ form: e instanceof Error ? e.message : "That code did not work. Please try again." }); }
+    finally { setBusy(false); }
+  };
+
+  const resend = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErrors({});
+    try {
+      const result = await enrolStudent(form, website);
+      setClaim({ email: form.email.trim().toLowerCase(), sent: result.emailSent });
+      setErrors(result.warning ? { form: result.warning } : {});
+    }
+    catch (e) { setErrors({ form: e instanceof Error ? e.message : "We could not send a new code. Please try again." }); }
+    finally { setBusy(false); }
+  };
+
   if (readyUser) {
     return <ApplyQuestion onAnswer={(apply) => { if (apply) navigate("/agency/applications/new", { replace: true }); else onSignedIn(readyUser); }} />;
+  }
+
+  if (claim) {
+    return (
+      <form onSubmit={verify} noValidate>
+        <StepHeader step={2} kind="Student" title="Confirm it's you" onBack={() => { setClaim(null); setCode(""); setErrors({}); }} />
+        <p className="mt-4 text-sm leading-relaxed text-foreground-700">
+          {claim.sent
+            ? <>Your email <b className="font-semibold text-foreground-900">{claim.email}</b> is already on a student record at SLIT, so we emailed you a 6-digit code. Enter it to confirm this is you; your password is then set and you can start your application.</>
+            : <>Your email <b className="font-semibold text-foreground-900">{claim.email}</b> is already on a student record at SLIT, but the code could not be emailed just now. Use "Send the code again" in a moment.</>}
+        </p>
+        <div className="mt-5 space-y-4">
+          <Field label="Code from the email" required>
+            <TextInput inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="123456" />
+          </Field>
+          <FormError text={errors.form} />
+          <Button type="submit" className="w-full" disabled={busy || code.length < 6}>{busy ? "Checking…" : "Confirm and continue"}</Button>
+          <button type="button" onClick={() => void resend()} disabled={busy} className="w-full cursor-pointer text-center text-sm font-medium text-primary-700 hover:text-primary-800 disabled:opacity-60">Send the code again</button>
+        </div>
+      </form>
+    );
   }
 
   return (

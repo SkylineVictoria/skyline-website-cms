@@ -1,5 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
-import { useMemo, useState, useEffect, type ReactNode } from "react";
+import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import { Link } from "react-router-dom";
 import { queryApplications, type ApplicationListRow } from "@/pages/agency/lib/portalApplications";
@@ -41,6 +41,8 @@ interface ApplicationsTableProps {
   emptyTitle?: string;
   emptyMessage?: string;
   emptyAction?: ReactNode;
+  /** Remote mode: called with the total after each load. */
+  onTotal?: (total: number) => void;
 }
 
 const SELECT_CLASS =
@@ -89,6 +91,7 @@ export default function ApplicationsTable({
   emptyTitle = "No applications yet",
   emptyMessage = "When a student application is created it will appear here.",
   emptyAction,
+  onTotal,
 }: ApplicationsTableProps) {
   const paths = useApplicationPaths();
   const [search, setSearch] = useState("");
@@ -111,6 +114,8 @@ export default function ApplicationsTable({
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [retry, setRetry] = useState(0);
   const rows = remote ? remoteRows : providedRows;
+  const onTotalRef = useRef(onTotal);
+  useEffect(() => { onTotalRef.current = onTotal; }, [onTotal]);
   // Rows of the previous agency are dropped at once, never shown under the next one while it loads.
   useEffect(() => { setRemoteRows([]); }, [fixedAgencyId]);
   useEffect(() => {
@@ -118,7 +123,7 @@ export default function ApplicationsTable({
     let active = true;
     setRemoteLoading(true); setRemoteError("");
     const timer = window.setTimeout(() => { void queryApplications({search,status,agencyId,agentId,courseCode,intake,sort,direction:dir,limit:pageSize,offset:(page-1)*pageSize}).then(result => {
-      if (active) { setRemoteRows(result.rows); setRemoteTotal(result.total); }
+      if (active) { setRemoteRows(result.rows); setRemoteTotal(result.total); onTotalRef.current?.(result.total); }
     }).catch(e => { if (active) setRemoteError(e.message); }).finally(() => { if (active) setRemoteLoading(false); }); }, 180);
     return () => { active = false; window.clearTimeout(timer); };
   }, [remote, search, status, agencyId, agentId, courseCode, intake, sort, dir, page, pageSize, retry]);

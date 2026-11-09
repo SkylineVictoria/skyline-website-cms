@@ -170,7 +170,7 @@ test("apply: a complete application stores the resume in the person's own folder
   assert.deepEqual(names(), ["limit", "limit", "hr_svc_apply", "upload", "hr_svc_apply_resume"], "IP limit, email limit, apply, upload, record");
   assert.deepEqual(calls[0][1], "staff-register:caller:apply:h(203.0.113.9)");
   assert.deepEqual(calls[1][1], "staff-register:email:apply:h(ann@example.test)", "the email limit uses the normalised address");
-  assert.deepEqual(calls[2][1], { p_first_name: "Ann", p_last_name: "Applicant", p_email: "ann@example.test", p_phone: "+61412345678" });
+  assert.deepEqual(calls[2][1], { p_first_name: "Ann", p_last_name: "Applicant", p_email: "ann@example.test", p_phone: "+61412345678", p_job: null, p_cover_letter: null });
   assert.deepEqual(calls[3][1], { p: "p-1/resume/rnd.pdf", size: PDF_BYTES.length, type: "application/pdf" });
   assert.deepEqual(calls[4][1], { p_profile: "p-1", p_path: "p-1/resume/rnd.pdf", p_filename: "cv.pdf", p_mime: "application/pdf", p_size: PDF_BYTES.length });
 });
@@ -1036,4 +1036,61 @@ test("retention purge: only the scheduled job may run it; files are deleted befo
   assert.ok(sql.includes("cron.schedule('hr-retention-purge', '15 3 * * *', 'select public.hr_retention_dispatch();')") && sql.includes("perform cron.alter_job(v_job, active := false)"), "a daily job, created inactive");
   assert.ok(!/eyJ[A-Za-z0-9_-]{10,}/.test(sql), "no key in the migration (Vault only)");
   assert.match(read("supabase/functions/staff-admin/index.ts"), /isWorker: body\.action === "purge" && \(await authorizeWorker\(/);
+});
+
+/* ------------------------------------------------------------------ HR-02i Careers on the no-login form, Add staff member */
+
+const JOB = "0b7b1c1e-0000-4000-8000-0000000000bb";
+test("Careers apply: the job and the cover letter go with the same checks; a cover letter file is checked by content and stored in its own folder", async () => {
+  let run = applyDeps({ apply: { ok: true, profileId: "p-1", jobApplicationId: "ja-1" } });
+  const cover = new File([PDF_BYTES], "letter.pdf", { type: "application/pdf" });
+  let r = await apply.handleApply(applyForm({ jobId: JOB, coverLetter: "I teach.\r\nThanks", coverLetterFile: cover }), { ip: "203.0.113.5" }, run.deps);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const applyArgs = run.calls.find(([n]) => n === "hr_svc_apply")![1] as Record<string, unknown>;
+  assert.deepEqual([applyArgs.p_job, applyArgs.p_cover_letter], [JOB, "I teach.\nThanks"]);
+  const names = run.calls.map(([n]) => n).filter((n) => n !== "limit");
+  assert.deepEqual(names, ["hr_svc_apply", "upload", "hr_svc_apply_resume", "upload", "hr_svc_job_cover_letter"], "resume first, then the cover letter");
+  assert.equal((run.calls.filter(([n]) => n === "upload")[1][1] as { p: string }).p, "p-1/cover-letter/rnd.pdf");
+  assert.equal((run.calls.find(([n]) => n === "hr_svc_job_cover_letter")![1] as Record<string, unknown>).p_application, "ja-1");
+
+  for (const [overrides, field] of [
+    [{ jobId: "not-a-uuid" }, "jobId"],
+    [{ coverLetter: "no job" }, "coverLetter"],
+    [{ jobId: JOB, coverLetter: "x".repeat(5001) }, "coverLetter"],
+    [{ jobId: JOB, coverLetterFile: new File([new Uint8Array([0x4d, 0x5a, 0, 0])], "letter.pdf") }, "coverLetterFile"],
+    [{ coverLetterFile: cover }, "coverLetterFile"],
+  ] as const) {
+    run = applyDeps();
+    r = await apply.handleApply(applyForm(overrides as Record<string, string | File>), { ip: "203.0.113.5" }, run.deps);
+    assert.deepEqual([r.status, r.body.field], [400, field], JSON.stringify(overrides).slice(0, 80));
+    assert.ok(!run.calls.some(([n]) => n === "hr_svc_apply"), "nothing is recorded");
+  }
+  run = applyDeps({ apply: { ok: false, reason: "job_closed" } });
+  r = await apply.handleApply(applyForm({ jobId: JOB }), { ip: "203.0.113.5" }, run.deps);
+  assert.deepEqual([r.status, r.body.error], [400, "This job is no longer open."]);
+  run = applyDeps({ apply: { ok: false, reason: "exists" } });
+  r = await apply.handleApply(applyForm({ jobId: JOB, coverLetterFile: cover }), { ip: "203.0.113.5" }, run.deps);
+  assert.equal(r.status, 200, "an existing application: the same thank-you");
+  assert.ok(!run.calls.some(([n]) => n === "upload"), "...and nothing is stored");
+  assert.equal(apply.MAX_REQUEST_BYTES, 2 * apply.MAX_RESUME_BYTES + 64 * 1024, "room for a resume and a cover letter");
+});
+
+test("Add staff member: the record first, then the document link to the new record; refusals pass through", async () => {
+  const db = { hr_admin_staff_add: { data: { ok: true, profileId: PROFILE } }, hr_admin_staff_invite: { data: { invite: { id: "inv-a", expiresAt: "2026-11-23T00:00:00Z" }, email: "ada@example.test", name: "Ada" } } };
+  let run = adminDeps({ db });
+  let r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.profileId], [200, true, PROFILE]);
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_add", "admin:hr_admin_staff_invite", "svc:hr_svc_email_log"]);
+  assert.deepEqual(run.calls[1][1], { p_id: PROFILE, p_purpose: "documents", p_token_hash: "h".repeat(64) });
+  run = adminDeps({ db, send: "failed" });
+  r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
+  assert.deepEqual([r.status, r.body.profileId], [502, PROFILE], "the record stays; the page shows the failed email");
+  assert.deepEqual(run.calls.at(-1), ["admin:hr_admin_staff_invite_cancel", { p_id: PROFILE, p_invite: "inv-a" }]);
+  run = adminDeps({ db: { hr_admin_staff_add: { error: { code: "23505", message: "This email or mobile already has a staff record. Open it from Employees." } } } });
+  r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
+  assert.deepEqual([r.status, run.names()], [400, ["admin:hr_admin_staff_add"]]);
+  const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
+  assert.deepEqual(jobs.applyProblems({ hasResume: false, coverLetter: "" }), ["Attach your resume."]);
+  assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "" }), [], "the cover letter is optional");
+  assert.equal(jobs.jobFileProblem({ name: "old.doc", type: "application/msword", size: 10 }), "Upload a PDF or Word (.docx) file.");
 });

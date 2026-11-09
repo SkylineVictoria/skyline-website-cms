@@ -14,7 +14,7 @@ import type { HrMailConfig } from "../_shared/hr-mail.ts";
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,11 +73,11 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
   const action = String(body.action ?? "");
   if (!(ACTIONS as readonly string[]).includes(action)) return { status: 400, body: { error: "Unknown action." } };
   const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
-  if (action !== "drain" && action !== "retry_email" && action !== "purge" && !profileId) return { status: 400, body: { error: "Choose an application." } };
+  if (action !== "drain" && action !== "retry_email" && action !== "purge" && action !== "add" && !profileId) return { status: 400, body: { error: "Choose an application." } };
 
   // Makes a link (only its hash reaches the database through `rpc`), emails it inline, logs the outcome without the token, and
   // cancels that link at once when the email failed. Shared by document, re-upload and offer links.
-  const sendLinkFlow = async (purpose: LinkPurpose, rpc: string, args: Record<string, unknown>): Promise<AdminResult> => {
+  const sendLinkFlow = async (purpose: LinkPurpose, rpc: string, args: Record<string, unknown>, pid: string | null = profileId): Promise<AdminResult> => {
     if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
     const link = await deps.newLink();
     const made = await deps.adminRpc(rpc, { ...args, p_token_hash: link.hash });
@@ -87,10 +87,10 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
     const url = deps.linkUrl(purpose, link.token);
     const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
     // The log never holds the token or the link: only which invite it was and what happened.
-    await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+    await deps.serviceRpc("hr_svc_email_log", { p_profile: pid, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
       p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
     if (sent.state === "failed") {
-      const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: invite.invite.id });
+      const cancelled = await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: pid, p_invite: invite.invite.id });
       return { status: 502, body: { emailSent: false, linkCancelled: !cancelled.error, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Send again.`, detail: cancelled.data ?? null } };
     }
     if (sent.state === "skipped") {
@@ -209,6 +209,15 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (r.error) return fromDb(r.error);
       await deps.drain().catch(() => undefined);
       return { status: 200, body: { detail: r.data } };
+    }
+    case "add": {
+      // HR-02i "Add staff member": an application on the person's behalf (no resume), then the document link at once. A failed email
+      // leaves the record (Applied) with the cancelled link visible on its page, where the admin sends it again.
+      const made = await deps.adminRpc("hr_admin_staff_add", { p_first_name: String(body.firstName ?? ""), p_last_name: String(body.lastName ?? ""), p_email: String(body.email ?? ""), p_phone: String(body.phone ?? "") });
+      if (made.error) return fromDb(made.error);
+      const newId = (made.data as { profileId: string }).profileId;
+      const sent = await sendLinkFlow("documents", "hr_admin_staff_invite", { p_id: newId, p_purpose: "documents" }, newId);
+      return { status: sent.status, body: { ...sent.body, profileId: newId } };
     }
     case "purge": {
       // Retention (HR-02h): files of applications rejected more than EF_HR_RETENTION_MONTHS ago are deleted from storage, then the

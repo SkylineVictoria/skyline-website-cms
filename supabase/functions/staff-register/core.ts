@@ -5,13 +5,20 @@
 // staff-documents/{profile id}/resume/{random}.{pdf|docx} and recorded by hr_svc_apply_resume, which queues the
 // "application received" and "new application" emails. An email or number that already has an application gets the same
 // thank-you answer and nothing is stored or sent, so the form never reveals who has applied.
+// Careers (HR-02i): the same form with jobId (an open job), an optional cover letter text (<= 5000) and an optional cover letter file
+// (PDF or Word .docx, 5 MB, checked by content like the resume), stored at {profile id}/cover-letter/ and recorded by
+// hr_svc_job_cover_letter. An open application applying for another job gets that job added and the same thank-you.
 import type { CaptchaVerifier } from "../_shared/captcha.ts";
 import { cleanEmail } from "../_shared/user-input.ts";
 import { toE164 } from "../_shared/staff-phone.ts";
 
 export const MAX_RESUME_BYTES = 5 * 1024 * 1024;
 /** The whole request (resume + fields) may not be larger than this; index.ts refuses bigger bodies before reading them. */
-export const MAX_REQUEST_BYTES = MAX_RESUME_BYTES + 64 * 1024;
+export const MAX_REQUEST_BYTES = 2 * MAX_RESUME_BYTES + 64 * 1024;
+export const MAX_COVER_LETTER_CHARS = 5000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// eslint-disable-next-line no-control-regex -- a cover letter keeps line breaks and tabs, nothing else below space
+const LETTER_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 export const RESUME_TYPES = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -91,6 +98,22 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
   const kind = detectResume(resume.name, bytes);
   if (!kind) return fieldError("resume", "Attach your resume as a PDF or Word (.docx) file.");
 
+  const jobRaw = String(form.get("jobId") ?? "").trim();
+  if (jobRaw && !UUID.test(jobRaw)) return fieldError("jobId", "This job is no longer open.");
+  const coverText = String(form.get("coverLetter") ?? "").replace(/\r\n/g, "\n").trim();
+  if (coverText && !jobRaw) return fieldError("coverLetter", "A cover letter goes with a job application.");
+  if (coverText.length > MAX_COVER_LETTER_CHARS || LETTER_CONTROL.test(coverText)) return fieldError("coverLetter", `Keep the cover letter under ${MAX_COVER_LETTER_CHARS} characters.`);
+  const coverFile = form.get("coverLetterFile");
+  let cover: { bytes: Uint8Array; kind: "pdf" | "docx"; name: string } | null = null;
+  if (coverFile && typeof coverFile !== "string" && coverFile.size > 0) {
+    if (!jobRaw) return fieldError("coverLetterFile", "A cover letter goes with a job application.");
+    if (coverFile.size > MAX_RESUME_BYTES) return fieldError("coverLetterFile", "The cover letter must be 5 MB or smaller.");
+    const coverBytes = new Uint8Array(await coverFile.arrayBuffer());
+    const coverKind = detectResume(coverFile.name, coverBytes);
+    if (!coverKind) return fieldError("coverLetterFile", "Attach the cover letter as a PDF or Word (.docx) file.");
+    cover = { bytes: coverBytes, kind: coverKind, name: coverFile.name };
+  }
+
   const captcha = await deps.captcha.verify(form.get("captchaToken"), meta.ip);
   if (!captcha.ok) {
     return captcha.reason === "unavailable"
@@ -101,13 +124,16 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
     return { status: 429, body: { error: "Please wait a while before applying again with this email." }, headers: { "Retry-After": "3600" } };
   }
 
-  const { data, error } = await deps.rpc("hr_svc_apply", { p_first_name: first.value, p_last_name: last.value, p_email: email.value, p_phone: phone });
-  const applied = data as { ok?: boolean; reason?: string; profileId?: string } | null;
+  const { data, error } = await deps.rpc("hr_svc_apply", { p_first_name: first.value, p_last_name: last.value, p_email: email.value, p_phone: phone,
+    p_job: jobRaw || null, p_cover_letter: coverText || null });
+  const applied = data as { ok?: boolean; reason?: string; profileId?: string; jobApplicationId?: string | null } | null;
   if (error || !applied) return { status: 503, body: { error: "We could not save your application right now. Please try again shortly." } };
   if (applied.ok !== true) {
     if (applied.reason === "invalid_email") return fieldError("email", "Enter a valid email address.");
     if (applied.reason === "invalid_phone") return fieldError("phone", "Enter your mobile number with its country code.");
     if (applied.reason === "invalid_name") return fieldError("firstName", "Check your name.");
+    if (applied.reason === "job_closed") return fieldError("jobId", "This job is no longer open.");
+    if (applied.reason === "invalid_cover_letter") return fieldError("coverLetter", `Keep the cover letter under ${MAX_COVER_LETTER_CHARS} characters.`);
     return THANKS; // 'exists': same answer as success, nothing stored, nothing sent.
   }
 
@@ -120,6 +146,17 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
   if (recorded.error) {
     await deps.remove(path);
     return { status: 503, body: { error: "We could not save your application right now. Please try again shortly." } };
+  }
+  if (cover && applied.jobApplicationId) {
+    // The application stands either way; a cover letter file that cannot be stored is removed again.
+    const coverPath = `${applied.profileId}/cover-letter/${deps.newId()}.${cover.kind}`;
+    const coverStored = await deps.upload(coverPath, cover.bytes, RESUME_TYPES[cover.kind]);
+    if (!coverStored.error) {
+      const coverRecorded = await deps.rpc("hr_svc_job_cover_letter", {
+        p_application: applied.jobApplicationId, p_path: coverPath, p_filename: safeFilename(cover.name, cover.kind), p_mime: RESUME_TYPES[cover.kind], p_size: cover.bytes.length,
+      });
+      if (coverRecorded.error) await deps.remove(coverPath);
+    }
   }
   return THANKS;
 }

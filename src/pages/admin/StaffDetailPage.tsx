@@ -259,6 +259,27 @@ export default function StaffDetailPage() {
         </Card>
       </div>
 
+      {detail.jobApplications.length ? (
+        <Card className="mt-6 p-5"><div data-testid="staff-job-applications">
+          <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Job applications</h2>
+          <ul className="space-y-3 text-sm">
+            {detail.jobApplications.map((j) => (
+              <li key={j.id} className="rounded-md border border-background-200 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span><span className="font-semibold text-foreground-900">{j.jobTitle}</span>{j.jobStatus === "closed" ? <span className="ml-1 text-xs text-foreground-500">(closed)</span> : null}
+                    <span className="block text-xs text-foreground-600">Applied {when(j.appliedAt)}{j.decidedAt ? ` · ${j.status === "hired" ? "document link sent" : "declined"} ${when(j.decidedAt)}` : ""}</span></span>
+                  <span className="flex items-center gap-2">
+                    <Badge tone={j.status === "hired" ? "success" : j.status === "declined" ? "muted" : "warn"}>{j.status === "hired" ? "Hired" : j.status === "declined" ? "Declined" : "Applied"}</Badge>
+                    {j.coverLetterFile && !application.files_purged_at ? <Button size="sm" variant="outline" onClick={() => void view(`Cover letter: ${j.coverLetterFile!.filename}`, j.coverLetterFile!.storagePath, j.coverLetterFile!.mimeType)}>Cover letter</Button> : null}
+                  </span>
+                </div>
+                {j.coverLetter ? <p className="mt-2 whitespace-pre-wrap text-foreground-800" data-testid="staff-job-cover-letter">{j.coverLetter}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </div></Card>
+      ) : null}
+
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Card className="p-5"><div data-testid="staff-offer-card">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Offer</h2>

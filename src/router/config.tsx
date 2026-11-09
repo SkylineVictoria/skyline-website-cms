@@ -70,6 +70,7 @@ import { LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
+import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 
@@ -110,6 +111,7 @@ const routes: RouteObject[] = [
   { path: "/staff/apply", element: <Navigate to="/login?mode=enroll&as=staff" replace /> },
   { path: "/staff/onboard", element: <StaffOnboardingPage /> },
   { path: "/staff/offer", element: <StaffOfferPage /> },
+  { path: "/staff/welcome", element: <StaffWelcomePage /> },
   { path: "/staff", element: <StaffHomePage /> },
   {
     path: "/agency",

@@ -8,6 +8,7 @@
 //   node scripts/lab/staff-lab.mjs onboard  end-to-end checks of onboarding by link (HR-02c)
 //   node scripts/lab/staff-lab.mjs emails   end-to-end checks of HR email: outbox, invite links, failures, retry (HR-02d)
 //   node scripts/lab/staff-lab.mjs offer    end-to-end checks of the offer: upload checks, send, view, sign, signed PDF emailed (HR-02e)
+//   node scripts/lab/staff-lab.mjs activate end-to-end checks of activation: Auth invite, password, claim, My HR, existing login (HR-02f)
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -688,6 +689,83 @@ async function offer() {
     && psql(`select status from hr.staff_profiles where id = '${second.id}';`) === "documents_submitted" && (await onboardCall(lab, { action: "offer_open", t: secondToken })).status === 403);
 }
 
+/* ------------------------------------------------------------------ activation + My HR (HR-02f) */
+
+/** Auth mail (the Supabase "Invite user" email) goes to the stack's local Mailpit inbox. */
+async function authMailsTo(lab, address) {
+  const list = await (await fetch(`${lab.mailUrl}/api/v1/search?query=${encodeURIComponent(`to:"${address}"`)}`)).json();
+  const out = [];
+  for (const m of list.messages ?? []) out.push(await (await fetch(`${lab.mailUrl}/api/v1/message/${m.ID}`)).json());
+  return out;
+}
+const restRpc = async (lab, jwt, name, args = {}) => {
+  const res = await fetch(`${lab.apiUrl}/rest/v1/rpc/${name}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: JSON.stringify(args) });
+  return { status: res.status, body: await res.json().catch(() => null) };
+};
+const ownFile = async (lab, jwt, objectPath) => (await fetch(`${lab.apiUrl}/storage/v1/object/authenticated/staff-documents/${objectPath}`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}` } })).status;
+/** Through the real functions to offer_signed: documents, approval, uploaded offer, offer link (made here, hash only), signature. */
+async function signedPerson(lab, jwt, label) {
+  const person = await readyForOffer(lab, label);
+  const up = await uploadOffer(lab, jwt, person.id, await realPdf(1), "offer.pdf");
+  if (up.status !== 200) throw new Error(`offer upload failed: ${JSON.stringify(up.body)}`);
+  const link = await newLink();
+  asAdmin(`select public.hr_admin_staff_offer_send('${person.id}', '${link.hash}');`);
+  const signed = await onboardCall(lab, { action: "offer_sign", t: link.token, name: `Lab ${label}`, consent: true });
+  if (signed.status !== 200) throw new Error(`sign failed: ${JSON.stringify(signed.body)}`);
+  return person;
+}
+
+async function activate() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  const status = (id) => psql(`select status from hr.staff_profiles where id = '${id}';`);
+
+  // A new person: Auth invite to /staff/welcome, password, claim, My HR.
+  const person = await signedPerson(lab, jwt, "trainer");
+  const year = new Date().getFullYear();
+  const bad = await staffAdminCall(lab, jwt, { action: "activate", profileId: person.id, role: "admin", joiningDate: `${year}-12-01` });
+  check("Admin needs the explicit confirmation (nothing sent)", bad.status === 400 && (await authMailsTo(lab, person.email)).length === 0, JSON.stringify(bad.body));
+  const r = await staffAdminCall(lab, jwt, { action: "activate", profileId: person.id, role: "trainer", joiningDate: `${year}-12-01` });
+  check("activate (no login yet): the Auth invite is sent, the login recorded, still offer_signed until the password is set", r.status === 200 && r.body.inviteSent === true && r.body.activated === false
+    && status(person.id) === "offer_signed" && psql(`select count(*) from hr.staff_profiles p join auth.users u on u.id = p.auth_user_id where p.id = '${person.id}' and u.invited_at is not null;`) === "1", JSON.stringify(r.body).slice(0, 200));
+  let invite = null;
+  for (let i = 0; i < 20 && !invite; i++) { invite = (await authMailsTo(lab, person.email))[0] ?? null; if (!invite) await new Promise((res) => setTimeout(res, 500)); }
+  const verifyUrl = String(invite?.HTML ?? invite?.Text ?? "").match(/https?:\/\/[^"'\s<>]+\/auth\/v1\/verify\?[^"'\s<>]+/)?.[0]?.replace(/&amp;/g, "&") ?? "";
+  check("the invite email links to /auth/v1/verify and back to /staff/welcome", !!verifyUrl && /redirect_to=[^&]*%2Fstaff%2Fwelcome|redirect_to=[^&]*\/staff\/welcome/.test(verifyUrl), verifyUrl.slice(0, 160));
+  const hop = await fetch(verifyUrl.replace(/^https?:\/\/[^/]+/, lab.apiUrl), { redirect: "manual" });
+  const landing = hop.headers.get("location") ?? "";
+  const fragment = new URLSearchParams(landing.split("#")[1] ?? "");
+  const access = fragment.get("access_token") ?? "";
+  check("following it lands on /staff/welcome with a session (type invite)", landing.startsWith(`${SITE}/staff/welcome`) && fragment.get("type") === "invite" && !!access, landing.slice(0, 120));
+  const before = await restRpc(lab, access, "hr_staff_me");
+  const signedPath = psql(`select signed_path from hr.staff_offers where profile_id = '${person.id}' and signed_at is not null;`);
+  check("before the claim: no documents or files for the login", before.body?.status === "offer_signed" && (before.body?.documents ?? []).length === 0 && (await ownFile(lab, access, signedPath)) >= 400);
+  const pw = await fetch(`${lab.apiUrl}/auth/v1/user`, { method: "PUT", headers: { apikey: lab.anonKey, Authorization: `Bearer ${access}`, "content-type": "application/json" }, body: JSON.stringify({ password: "Lab-staff-password-1" }) });
+  const claimed = await restRpc(lab, access, "hr_staff_claim_account");
+  check("password set, then the claim: active", pw.status === 200 && claimed.status === 200 && claimed.body?.status === "active" && status(person.id) === "active", JSON.stringify(claimed.body).slice(0, 160));
+  const login = await (await fetch(`${lab.apiUrl}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: lab.anonKey, "content-type": "application/json" }, body: JSON.stringify({ email: person.email, password: "Lab-staff-password-1" }) })).json();
+  const me = await restRpc(lab, login.access_token, "hr_staff_me");
+  check("the person signs in with the new password; My HR has role, joining date, documents with expiry and the signed offer", !!login.access_token && me.body?.role === "trainer" && me.body?.joiningDate === `${year}-12-01`
+    && (me.body?.documents ?? []).length === 5 && (me.body?.documents ?? []).some((d) => d.expiryDate) && me.body?.signedOffer?.signedPath === signedPath, JSON.stringify(me.body ?? {}).slice(0, 200));
+  const other = await signedPerson(lab, jwt, "otherfile");
+  const otherPath = psql(`select signed_path from hr.staff_offers where profile_id = '${other.id}' and signed_at is not null;`);
+  check("an active person reads their own signed offer, never another person's file", (await ownFile(lab, login.access_token, signedPath)) === 200 && (await ownFile(lab, login.access_token, otherPath)) >= 400);
+  check("a trainer gets no CMS access", psql(`select count(*) from public.cms_users c join hr.staff_profiles p on p.auth_user_id = c.auth_user_id where p.id = '${person.id}';`) === "0");
+  check("activating again is refused", (await staffAdminCall(lab, jwt, { action: "activate", profileId: person.id, role: "trainer", joiningDate: `${year}-12-01` })).status === 400);
+
+  // An email that already has a confirmed login (an existing student or agent): linked and active at once, no invite email.
+  const existing = await signedPerson(lab, jwt, "existing");
+  const created = await fetch(`${lab.apiUrl}/auth/v1/admin/users`, { method: "POST", headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ email: existing.email, password: "Lab-student-password-1", email_confirm: true }) });
+  const loginId = (await created.json()).id;
+  const mailsBefore = (await authMailsTo(lab, existing.email)).length;
+  const a = await staffAdminCall(lab, jwt, { action: "activate", profileId: existing.id, role: "admin", joiningDate: `${year}-12-01`, confirmAdmin: true });
+  check("existing confirmed login: active at once on that login, no invite email", a.status === 200 && a.body.activated === true && a.body.inviteSent === false && status(existing.id) === "active"
+    && psql(`select auth_user_id from hr.staff_profiles where id = '${existing.id}';`) === loginId && (await authMailsTo(lab, existing.email)).length === mailsBefore, JSON.stringify(a.body).slice(0, 200));
+  check("the Admin role writes an active CMS Admin for that login", psql(`select role || '/' || status from public.cms_users where auth_user_id = '${loginId}';`) === "Admin/Active");
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -705,15 +783,16 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
-  if (["apply", "onboard", "emails", "offer"].includes(command)) { await startMockPostmark(); await startMockReader(); }
+  if (["apply", "onboard", "emails", "offer", "activate"].includes(command)) { await startMockPostmark(); await startMockReader(); }
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
   else if (command === "emails") await emails();
   else if (command === "offer") await offer();
+  else if (command === "activate") await activate();
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
   await stopMockPostmark(); await stopMockReader();

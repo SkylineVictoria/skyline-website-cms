@@ -64,6 +64,13 @@ export async function applyAsStaff(input: StaffApplyInput): Promise<void> {
   if (data?.error) throw new Error(String(data.error));
 }
 
+/** After the Auth invite: offer_signed > active for the signed-in person (idempotent; returns My HR). */
+export async function claimStaffAccount(): Promise<MyStaff | null> {
+  const { data, error } = await supabase.rpc("hr_staff_claim_account");
+  if (error) fail(error, "We could not finish setting up your staff account.");
+  return (data ?? null) as MyStaff | null;
+}
+
 export async function getMyStaff(): Promise<MyStaff | null> {
   const { data, error } = await supabase.rpc("hr_staff_me");
   if (error) fail(error, "We could not load your staff record.");

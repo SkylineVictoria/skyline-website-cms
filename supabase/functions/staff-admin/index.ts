@@ -1,5 +1,6 @@
 // Staff administration (verify_jwt = true): link emails (document / re-upload invites), reject with the optional email, retry
-// a failed email, drain the HR outbox; offers: upload (multipart, PDF checked with pdf-lib), send, withdraw. hr_admin_* run with the caller's JWT (hr.require_admin decides); the service role is used
+// a failed email, drain the HR outbox; offers: upload (multipart, PDF checked with pdf-lib), send, withdraw; activate (Auth invite
+// to /staff/welcome, or the existing confirmed login). hr_admin_* run with the caller's JWT (hr.require_admin decides); the service role is used
 // only to log email outcomes and to send queued mail. Rules and order live in core.ts.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -7,6 +8,7 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail } from "../_shared/hr-mail.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
+import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import * as PdfLib from "npm:pdf-lib@1.17.1";
 import { MAX_OFFER_BYTES, inspectOfferPdf } from "../_shared/offer-pdf.ts";
 
@@ -74,6 +76,16 @@ Deno.serve(async (req) => {
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
     sha256: async (bytes) => hex(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
     newId: () => crypto.randomUUID(),
+    findLogin: async (email) => {
+      const found = await findAuthUserByEmail(service, email.toLowerCase());
+      if (found.error) return { login: null, error: found.error };
+      const u = found.user as { id: string; email_confirmed_at?: string | null; invited_at?: string | null; last_sign_in_at?: string | null } | null;
+      return { login: u ? { id: u.id, confirmed: Boolean(u.email_confirmed_at), invited: Boolean(u.invited_at), signedIn: Boolean(u.last_sign_in_at) } : null, error: null };
+    },
+    inviteLogin: async (email, name, redirectTo) => {
+      const { data, error } = await service.auth.admin.inviteUserByEmail(email, { data: { name }, redirectTo });
+      return { userId: data?.user?.id ?? null, error: error ? error.message : null };
+    },
   });
   return json(result.body, result.status);
 });

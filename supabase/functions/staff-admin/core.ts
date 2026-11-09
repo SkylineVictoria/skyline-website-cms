@@ -14,10 +14,11 @@ import type { HrMailConfig } from "../_shared/hr-mail.ts";
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export interface LoginInfo { id: string; confirmed: boolean; invited: boolean; signedIn: boolean }
 type LinkKind = "document_invite" | "reupload_invite" | "offer";
 type LinkPurpose = "documents" | "reupload" | "offer";
 export interface AdminResult { status: number; body: Record<string, unknown> }
@@ -32,6 +33,10 @@ export interface AdminDeps {
   sendLink(mail: { kind: LinkKind; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
     Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
   linkUrl(purpose: LinkPurpose, token: string): string;
+  /** Auth (service role): the single login for an email, or null. */
+  findLogin(email: string): Promise<{ login: LoginInfo | null; error: string | null }>;
+  /** Auth invite (Supabase "Invite user" template) with the password-setup link to redirectTo; returns the new or re-invited login. */
+  inviteLogin(email: string, name: string, redirectTo: string): Promise<{ userId: string | null; error: string | null }>;
   /** The uploaded file (multipart offer_upload), or null. */
   file?: { name: string; bytes: Uint8Array } | null;
   /** pdf-lib check of an offer (load and modify in memory). */
@@ -103,6 +108,38 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (!note || note.length > 2000) return { status: 400, body: { error: "Add a note explaining why the offer is withdrawn." } };
       const r = await deps.adminRpc("hr_admin_staff_offer_withdraw", { p_id: profileId, p_note: note });
       return r.error ? fromDb(r.error) : { status: 200, body: { detail: r.data } };
+    }
+    case "activate": {
+      // offer_signed > active. The database checks first (role, joining date, Admin confirmation, status) and says whether a
+      // CONFIRMED login already uses the email. That login (a student or agent) is linked and active at once, no email. Otherwise
+      // the person gets the Supabase Auth invite to /staff/welcome; the login is recorded, and they become active when they set a
+      // password there (hr_staff_claim_account). A failed invite changes nothing; a retry re-invites the same, never-used login.
+      const role = body.role === "admin" || body.role === "trainer" ? body.role : null;
+      const joiningDate = typeof body.joiningDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.joiningDate) ? body.joiningDate : null;
+      if (!role) return { status: 400, body: { error: "Choose Admin or Trainer." } };
+      if (!joiningDate) return { status: 400, body: { error: "Enter the joining date." } };
+      const args = { p_id: profileId, p_role: role, p_joining_date: joiningDate, p_confirm_admin: body.confirmAdmin === true };
+      const checked = await deps.adminRpc("hr_admin_staff_activate_account", { ...args, p_auth_user_id: null });
+      if (checked.error) return fromDb(checked.error);
+      const { email, name, existingLogin } = checked.data as { email: string; name: string; existingLogin: boolean };
+      const found = await deps.findLogin(email);
+      if (found.error) return { status: 503, body: { error: "The login could not be checked. Please try again shortly." } };
+      if (existingLogin) {
+        if (!found.login?.confirmed) return { status: 409, body: { error: "The login for this email changed. Please try again." } };
+        const done = await deps.adminRpc("hr_admin_staff_activate_account", { ...args, p_auth_user_id: found.login.id });
+        return done.error ? fromDb(done.error) : { status: 200, body: { activated: true, inviteSent: false, existingLogin: true, detail: (done.data as { detail?: unknown }).detail } };
+      }
+      if (found.login && !(found.login.invited && !found.login.signedIn)) {
+        return { status: 400, body: { error: "A login for this email exists but has not confirmed its email. Ask the person to confirm it (or remove that login), then activate again." } };
+      }
+      if (!deps.config.siteUrl) return { status: 503, body: { error: "The invitation cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+      const invited = await deps.inviteLogin(email, name, `${deps.config.siteUrl}/staff/welcome`);
+      if (invited.error || !invited.userId) {
+        return { status: 502, body: { inviteSent: false, error: `The invitation email could not be sent (${invited.error ?? "error"}). Nothing was changed; try again.` } };
+      }
+      const recorded = await deps.adminRpc("hr_admin_staff_activate_account", { ...args, p_auth_user_id: invited.userId });
+      if (recorded.error) return fromDb(recorded.error);
+      return { status: 200, body: { activated: false, inviteSent: true, existingLogin: false, detail: (recorded.data as { detail?: unknown }).detail } };
     }
     case "offer_upload": {
       const file = deps.file;

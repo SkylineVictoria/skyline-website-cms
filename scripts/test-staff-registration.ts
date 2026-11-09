@@ -463,7 +463,7 @@ test("HR outbox drain: sends, requeues provider hiccups, fails visibly, never re
   assert.deepEqual(noAdmins.results[0].slice(1, 2).concat(noAdmins.results[0][3]!), ["failed", "EF_HR_ADMIN_NOTIFY_TO is not set"], "a missing admin list is a visible failure");
 });
 
-function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; siteUrl?: string | null; file?: { name: string; bytes: Uint8Array } | null; inspect?: { ok: boolean; pages?: number; error?: string } } = {}) {
+function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<string, { data?: unknown; error?: { code?: string; message?: string } }>; siteUrl?: string | null; file?: { name: string; bytes: Uint8Array } | null; inspect?: { ok: boolean; pages?: number; error?: string }; login?: { id: string; confirmed: boolean; invited: boolean; signedIn: boolean } | null; inviteError?: string } = {}) {
   const calls: Array<[string, unknown]> = [];
   const mails: Array<Record<string, unknown>> = [];
   let drains = 0;
@@ -487,6 +487,8 @@ function adminDeps(options: { send?: "sent" | "failed" | "skipped"; db?: Record<
     remove: async (paths: string[]) => { calls.push(["remove", paths]); },
     sha256: async (bytes: Uint8Array) => "f".repeat(64),
     newId: () => "rnd",
+    findLogin: async (email: string) => { calls.push(["findLogin", email]); return { login: options.login ?? null, error: null }; },
+    inviteLogin: async (email: string, name: string, redirectTo: string) => { calls.push(["invite", { email, name, redirectTo }]); return options.inviteError ? { userId: null, error: options.inviteError } : { userId: "new-login", error: null }; },
   };
   return { deps, calls, mails, drains: () => drains, names: () => calls.map(([n]) => n) };
 }
@@ -907,4 +909,53 @@ test("HR outbox: signed-offer emails go out only with the signed PDF attached, t
   assert.equal(provider.sent[1].to, "a@example.test, b@example.test", "HR gets the signed copy");
   assert.match(out.results[2][3] ?? "", /could not be attached/, "no PDF: not sent, failed for the admin to see");
   assert.equal(drainLib.signedName("Offer Letter.pdf"), "Offer Letter-signed.pdf");
+});
+
+/* ------------------------------------------------------------------ HR-02f activation */
+
+test("staff-admin activate: an existing confirmed login is linked and active at once, no invite", async () => {
+  const run = adminDeps({ login: { id: "student-login", confirmed: true, invited: false, signedIn: true },
+    db: { hr_admin_staff_activate_account: { data: { email: "ann@example.test", name: "Ann", existingLogin: true, activated: true, detail: { d: 1 } } } } });
+  const r = await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps);
+  assert.deepEqual([r.status, r.body.activated, r.body.inviteSent], [200, true, false]);
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_activate_account", "findLogin", "admin:hr_admin_staff_activate_account"], "check, look up, record: no invite");
+  assert.deepEqual(run.calls[0][1], { p_id: PROFILE, p_role: "trainer", p_joining_date: "2026-12-01", p_confirm_admin: false, p_auth_user_id: null }, "the first call only checks");
+  assert.equal((run.calls[2][1] as Record<string, unknown>).p_auth_user_id, "student-login");
+});
+
+test("staff-admin activate: no login gets the Auth invite to /staff/welcome, then the new login is recorded (active after the claim)", async () => {
+  const db = { hr_admin_staff_activate_account: { data: { email: "ann@example.test", name: "Ann", existingLogin: false, activated: false, detail: { d: 2 } } } };
+  let run = adminDeps({ db });
+  let r = await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "admin", joiningDate: "2026-12-01", confirmAdmin: true }, run.deps);
+  assert.deepEqual([r.status, r.body.activated, r.body.inviteSent], [200, false, true]);
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_activate_account", "findLogin", "invite", "admin:hr_admin_staff_activate_account"]);
+  assert.deepEqual(run.calls[2][1], { email: "ann@example.test", name: "Ann", redirectTo: "https://x.example/staff/welcome" });
+  assert.deepEqual([(run.calls[3][1] as Record<string, unknown>).p_auth_user_id, (run.calls[3][1] as Record<string, unknown>).p_confirm_admin], ["new-login", true]);
+
+  run = adminDeps({ db, inviteError: "Error sending invite email" });
+  r = await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps);
+  assert.equal(r.status, 502);
+  assert.match(String(r.body.error), /Nothing was changed; try again/);
+  assert.equal(run.names().filter((n) => n === "admin:hr_admin_staff_activate_account").length, 1, "a failed invite records nothing");
+
+  run = adminDeps({ db, login: { id: "invited-login", confirmed: false, invited: true, signedIn: false } });
+  r = await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps);
+  assert.equal(r.status, 200, "a just-invited, never-used login is invited again (resend)");
+  assert.ok(run.names().includes("invite"));
+
+  run = adminDeps({ db, login: { id: "half-signed-up", confirmed: false, invited: false, signedIn: false } });
+  r = await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps);
+  assert.equal(r.status, 400, "an unconfirmed login someone else created is never taken over");
+  assert.ok(!run.names().includes("invite"));
+});
+
+test("staff-admin activate: role, date and admin rights are checked before any login is touched", async () => {
+  for (const body of [{ role: "boss", joiningDate: "2026-12-01" }, { role: "trainer", joiningDate: "01/12/2026" }]) {
+    const run = adminDeps();
+    assert.equal((await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, ...body }, run.deps)).status, 400);
+    assert.deepEqual(run.names(), []);
+  }
+  const run = adminDeps({ db: { hr_admin_staff_activate_account: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "activate", profileId: PROFILE, role: "trainer", joiningDate: "2026-12-01" }, run.deps)).status, 403);
+  assert.deepEqual(run.names(), ["admin:hr_admin_staff_activate_account"], "no Auth lookup or invite for a non-admin");
 });

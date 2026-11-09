@@ -76,6 +76,12 @@ import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
 import JobsPage from "@/pages/admin/JobsPage";
+import TimesheetsPage from "@/pages/admin/TimesheetsPage";
+import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
+import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
+import PublicHolidaysPage from "@/pages/admin/PublicHolidaysPage";
+import XeroExportPage from "@/pages/admin/XeroExportPage";
+import { TeamLeavePage, TeamTimesheetsPage } from "@/pages/staff/TeamPage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
 
@@ -121,6 +127,10 @@ const routes: RouteObject[] = [
   { path: "/staff/offer", element: <StaffOfferPage /> },
   { path: "/staff/welcome", element: <StaffWelcomePage /> },
   { path: "/staff", element: <StaffHomePage /> },
+  // HRMS: a manager's view of their reports (outside the admin shell).
+  { path: "/staff/team/timesheets", element: <TeamTimesheetsPage /> },
+  { path: "/staff/team/leave", element: <TeamLeavePage /> },
+  { path: "/staff/team", element: <Navigate to="/staff/team/timesheets" replace /> },
   {
     path: "/agency",
     element: <PortalProviders />,
@@ -201,6 +211,12 @@ const routes: RouteObject[] = [
           { path: "staff/candidates", element: <RequireAdmin><CandidatesPage /></RequireAdmin> },
           { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
+          // HRMS (time & attendance, leave, pay schedules, public holidays, Xero export).
+          { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
+          { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },
+          { path: "staff/pay-schedules", element: <RequireAdmin><PaySchedulesPage /></RequireAdmin> },
+          { path: "staff/holidays", element: <RequireAdmin><PublicHolidaysPage /></RequireAdmin> },
+          { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "candidates", element: <Navigate to="/admin/staff/candidates" replace /> },
           { path: "candidates/:id", element: <LegacyCandidateRedirect /> },

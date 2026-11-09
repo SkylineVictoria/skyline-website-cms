@@ -7,6 +7,7 @@ import {
   type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow,
 } from "@/lib/staffApi";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
+import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import {
   EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist,
   type EmployeeAction, type StaffDocCategory, type StaffRole,
@@ -289,6 +290,8 @@ export default function StaffDetailPage() {
           </dl>
         ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the joining date is set at activation.</p>}
       </div></Card>
+
+      {profile.status === "active" || profile.status === "inactive" ? <PaySetupCard profileId={profile.id} hasEmployment={Boolean(employment)} /> : null}
 
       {detail.jobApplications.length ? (
         <Card className="mt-6 p-5"><div data-testid="staff-job-applications">

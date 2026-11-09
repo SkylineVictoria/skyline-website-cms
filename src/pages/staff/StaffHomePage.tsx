@@ -1,9 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button } from "@/pages/admin/components/ui";
 import { claimStaffAccount, getMyStaff, staffDocumentUrl, type MyStaff, type StaffDocument } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL } from "@/lib/staffStatus";
+import { myTeam, type MyTeam } from "@/lib/hrmsApi";
+import PunchCard from "./components/PunchCard";
+import MyTimesheet from "./components/MyTimesheet";
+import MyLeave from "./components/MyLeave";
+import HolidaysList from "./components/HolidaysList";
 
 /**
  * /staff: "My HR" for a signed-in staff member (HR-02f): profile, role and joining date, current documents with their expiry,
@@ -46,6 +51,8 @@ export default function StaffHomePage() {
   const [me, setMe] = useState<MyStaff | null | undefined>(undefined);
   const [signedOut, setSignedOut] = useState(false);
   const [error, setError] = useState("");
+  const [team, setTeam] = useState<MyTeam | null>(null);
+  const [punches, setPunches] = useState(0); // bumped after each punch so My timesheet re-reads
 
   useEffect(() => {
     void supabase.auth.getUser().then(async ({ data }) => {
@@ -54,6 +61,7 @@ export default function StaffHomePage() {
         let mine = await getMyStaff();
         if (mine?.status === "offer_signed") mine = await claimStaffAccount().catch(() => mine);
         setMe(mine);
+        if (mine?.status === "active") myTeam().then(setTeam, () => setTeam(null));
       } catch (e) { setError(e instanceof Error ? e.message : "We could not load your staff record."); }
     });
   }, []);
@@ -90,6 +98,16 @@ export default function StaffHomePage() {
         ) : null}
         {me && me.status === "active" && p ? (
           <>
+            {team && (team.isManager || team.isAdmin) ? (
+              <p className="mt-4 flex flex-wrap gap-3 text-sm" data-testid="my-hr-team-links">
+                <Link to="/staff/team/timesheets" className="font-semibold text-primary-700 hover:underline">Team timesheets</Link>
+                <Link to="/staff/team/leave" className="font-semibold text-primary-700 hover:underline">Leave approvals{team.pendingLeave ? ` (${team.pendingLeave} pending)` : ""}</Link>
+              </p>
+            ) : null}
+            <Section title="Punch card"><PunchCard onChange={() => setPunches((n) => n + 1)} /></Section>
+            <Section title="My timesheet"><MyTimesheet refreshKey={punches} /></Section>
+            <Section title="Leave"><MyLeave /></Section>
+            <Section title="Public holidays (Victoria)"><HolidaysList /></Section>
             <Section title="Your role" testId="my-hr-role">
               <dl>
                 <Row label="Name" value={name} />

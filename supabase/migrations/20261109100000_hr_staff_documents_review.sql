@@ -20,6 +20,9 @@
 -- ------------------------------------------------------------------ documents: review columns and categories
 alter table hr.staff_profiles add column if not exists is_australian_citizen boolean;
 alter table hr.staff_profiles alter column auth_user_id drop not null;
+-- Retention (HR-02h): a purged application keeps status and dates only, so email and mobile can be cleared (unique indexes allow many nulls).
+alter table hr.staff_profiles alter column email drop not null;
+alter table hr.staff_profiles alter column phone_e164 drop not null;
 
 alter table hr.staff_documents
  add column if not exists expiry_date date check (expiry_date is null or expiry_date between date '1990-01-01' and date '2100-12-31'),
@@ -817,6 +820,25 @@ begin
   order by p.status_changed_at limit least(greatest(coalesce(p_limit, 50), 1), 200)) q), '[]'::jsonb);
 end $fn$;
 
+-- Called by staff-admin after the files are deleted: records the purge AND removes the personal data, keeping status and dates only
+-- (ids, statuses, timestamps, expiry dates, review states, the status log). Names, email, mobile, date of birth, address, emergency
+-- contact, file names, values read from documents, notes, signer details and email addresses/payloads are cleared.
+create or replace function hr.staff_anonymise(p_profile uuid) returns void
+language plpgsql security definer set search_path = hr, pg_temp as $fn$
+begin
+ update hr.staff_profiles set first_name = '', middle_name = '', last_name = '', date_of_birth = null, email = null, phone_e164 = null,
+  address_street = '', address_line2 = '', address_suburb = '', address_state = '', address_postcode = '', address_country = '',
+  emergency_name = '', emergency_relationship = '', emergency_phone_e164 = null, is_australian_citizen = null
+  where id = p_profile;
+ update hr.staff_applications set resume_path = null, resume_filename = null, review_note = '' where profile_id = p_profile;
+ update hr.staff_documents set filename = 'removed', extracted = '{}'::jsonb, extraction_error = null,
+  review_note = case when status = 'rejected' then 'removed' else '' end where profile_id = p_profile;
+ update hr.staff_offers set filename = 'removed.pdf', signer_name = case when signer_name is null then null else 'removed' end,
+  signer_ip = null, signer_user_agent = null where profile_id = p_profile;
+ update hr.staff_emails set to_email = case when audience = 'applicant' then 'removed' else null end, payload = '{}'::jsonb, last_error = null where profile_id = p_profile;
+end $fn$;
+revoke all on function hr.staff_anonymise(uuid) from public, anon, authenticated;
+
 create or replace function public.hr_svc_retention_mark(p_profile uuid, p_months integer) returns boolean
 language plpgsql security definer set search_path = public, hr, pg_temp as $fn$
 begin
@@ -824,7 +846,9 @@ begin
  update hr.staff_applications a set files_purged_at = now() from hr.staff_profiles p
   where a.profile_id = p.id and p.id = p_profile and p.status = 'rejected' and a.files_purged_at is null
    and p.status_changed_at < now() - make_interval(months => p_months);
- return found;
+ if not found then return false; end if;
+ perform hr.staff_anonymise(p_profile);
+ return true;
 end $fn$;
 
 do $grants$
@@ -983,6 +1007,8 @@ begin
  select * into p from hr.staff_profiles where id = p_id for update;
  if not found then raise exception 'Staff application not found.' using errcode = 'P0002'; end if;
  if p.status <> 'rejected' then raise exception 'Only a rejected application can be reopened.' using errcode = '23514'; end if;
+ if exists (select 1 from hr.staff_applications a where a.profile_id = p.id and a.files_purged_at is not null) then
+  raise exception 'This application''s personal data was removed under the retention rule; the person can apply again.' using errcode = '23514'; end if;
  perform hr.staff_move(p.id, 'applied', btrim(p_note), v_admin, false);
  update hr.staff_applications set submitted_at = null where profile_id = p.id;
  return public.hr_admin_staff_detail(p.id);

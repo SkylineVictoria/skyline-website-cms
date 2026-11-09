@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(235);
+select plan(241);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -327,6 +327,13 @@ update hr.staff_profiles set status_changed_at = now() - interval '7 months' whe
 select is(public.hr_svc_retention_due(6)->0->'paths'->>0, pg_temp.v('w1') || '/resume/w.pdf', 'a rejection older than the retention period lists its files');
 select is(public.hr_svc_retention_mark(pg_temp.v('r1'), 6), false, 'a recent or reopened application is never marked');
 select is(public.hr_svc_retention_mark(pg_temp.v('w1'), 6), true, 'the purge is recorded');
+select is((select concat_ws('|', first_name, last_name, coalesce(email, 'null'), coalesce(phone_e164, 'null'), coalesce(date_of_birth::text, 'null'), address_street, address_country, emergency_name, coalesce(emergency_phone_e164, 'null'))
+  from hr.staff_profiles where id = pg_temp.v('w1')), '||null|null|null||||null', 'the purge clears name, email, mobile, date of birth, address and emergency contact');
+select is((select status || '/' || (status_changed_at is not null) || '/' || (created_at is not null) from hr.staff_profiles where id = pg_temp.v('w1')), 'rejected/true/true', 'status and dates stay');
+select is((select count(*)::int from hr.staff_status_events where profile_id = pg_temp.v('w1')) > 0, true, 'the status history stays');
+select is((select coalesce(resume_path, 'null') || '/' || coalesce(resume_filename, 'null') from hr.staff_applications where profile_id = pg_temp.v('w1')), 'null/null', 'the resume reference is cleared');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('w1') and (to_email not in ('removed') or payload <> '{}'::jsonb) and audience = 'applicant'), 0, 'email addresses and payloads are cleared');
+select throws_ok($$select public.hr_staff_reopen(pg_temp.v('w1'), 'again')$$, '23514', null, 'a purged application cannot be reopened');
 select is((select active::text || '/' || schedule || '/' || command from cron.job where jobname = 'hr-retention-purge'), 'false/15 3 * * */select public.hr_retention_dispatch();', 'the daily retention job exists and is inactive until the owner turns it on');
 select is(public.hr_retention_dispatch(), null::bigint, 'without the Vault secrets the dispatcher makes no call');
 select is(has_function_privilege('authenticated', 'public.hr_retention_dispatch()', 'execute'), false, 'nobody but postgres runs the dispatcher');

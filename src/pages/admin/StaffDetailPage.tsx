@@ -172,7 +172,7 @@ export default function StaffDetailPage() {
   // A failure stops counting once an email of the same kind was sent later (same rule as hr.staff_email_failed and the list badge).
   const resolved = (e: StaffEmail) => detail.emails.some((l) => l.kind === e.kind && l.state === "sent" && l.id > e.id);
   const failedEmails = detail.emails.filter((e) => e.state === "failed" && !resolved(e));
-  const name = [profile.first_name, profile.middle_name, profile.last_name].filter(Boolean).join(" ") || profile.email;
+  const name = [profile.first_name, profile.middle_name, profile.last_name].filter(Boolean).join(" ") || profile.email || "Personal data removed (retention)";
   const spec = action ? EMPLOYEE_ACTION[action] : null;
   const target = action ? EMPLOYEE_ACTION_TARGET[action] : null;
 

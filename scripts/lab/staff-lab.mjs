@@ -837,6 +837,9 @@ async function retention() {
     && psql(`select count(*) from hr.staff_documents where profile_id = '${old.id}';`) === "5" && psql(`select status from hr.staff_profiles where id = '${old.id}';`) === "rejected");
   const objectGone = await fetch(`${lab.apiUrl}/storage/v1/object/staff-documents/${psql(`select resume_path from hr.staff_applications where profile_id = '${old.id}';`)}`, { headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}` } });
   check("...the resume really is gone (storage answers not found)", objectGone.status === 400 || objectGone.status === 404, String(objectGone.status));
+  check("...and the personal data is removed: name, email, mobile, date of birth, address, emergency contact (status and dates stay)",
+    psql(`select concat_ws('|', first_name, last_name, coalesce(email, '-'), coalesce(phone_e164, '-'), coalesce(date_of_birth::text, '-'), address_street, emergency_name, status) from hr.staff_profiles where id = '${old.id}';`) === "||-|-|-|||rejected"
+    && psql(`select count(*) from hr.staff_documents where profile_id = '${old.id}' and (filename <> 'removed' or extracted <> '{}'::jsonb);`) === "0");
   check("the recently rejected application keeps every file", files(recent.id) === "6" && psql(`select (files_purged_at is null)::text from hr.staff_applications where profile_id = '${recent.id}';`) === "true");
   check("the job is back to daily and inactive", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-retention-purge';") === "false/15 3 * * *");
 }

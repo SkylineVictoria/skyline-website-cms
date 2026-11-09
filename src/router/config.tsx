@@ -70,6 +70,7 @@ import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
+import StaffOrgChartPage from "@/pages/admin/StaffOrgChartPage";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
@@ -207,6 +208,7 @@ const routes: RouteObject[] = [
           // 20261109153953 (/admin/candidates, /admin/employees) redirect here.
           { path: "staff", element: <Navigate to="/admin/staff/employees" replace /> },
           { path: "staff/employees", element: <RequireAdmin><StaffPage /></RequireAdmin> },
+          { path: "staff/employees/org-chart", element: <RequireAdmin><StaffOrgChartPage /></RequireAdmin> },
           { path: "staff/employees/:id", element: <RequireAdmin><StaffDetailPage /></RequireAdmin> },
           { path: "staff/candidates", element: <RequireAdmin><CandidatesPage /></RequireAdmin> },
           { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },

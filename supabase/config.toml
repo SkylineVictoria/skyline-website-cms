@@ -29,11 +29,6 @@ verify_jwt = true
 # type/size checks, then hr_svc_apply / hr_svc_apply_resume. All data access is service-role only inside the function.
 verify_jwt = false
 
-[functions.staff-document-extract]
-# Signed-in applicants only: the platform verifies the JWT, and the function reads the document through an ownership check that
-# runs as the caller (hr_staff_document_for_extraction). The student function portal-document-extract is untouched.
-verify_jwt = true
-
 [functions.staff-onboarding]
 # Staff onboarding by emailed link (no login): the link token is the credential and is re-checked by the database on every call
 # (hr_svc_*, service role only). Personal details, documents (checked by content), reading, submit. no-store, no-referrer.

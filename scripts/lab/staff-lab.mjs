@@ -15,6 +15,8 @@
 // Secrets: only the local stack's own demo keys are used; supabase/functions/.env is never copied.
 // Email: the functions send through the Postmark adapter, redirected (local only, EF_POSTMARK_API_URL) to a mock Postmark server
 // that this script runs on port 57390 while a check command runs; nothing reaches Postmark.
+// Document reading: staff-onboarding's reader calls OpenAI, redirected (local only, EF_OPENAI_API_URL) to a mock on port 57391
+// that answers a fixed passport (name, middle name, date of birth); nothing reaches OpenAI.
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -29,6 +31,7 @@ const DB_CONTAINER = `supabase_db_${PROJECT}`;
 const PORTS = { shadow: 57320, api: 57321, db: 57322, studio: 57323, mail: 57324, analytics: 57327, pooler: 57329, inspector: 57383 };
 const SITE = "http://127.0.0.1:57330";
 const MOCK_POSTMARK_PORT = 57390;
+const MOCK_OPENAI_PORT = 57391;
 const LAB_SECRETS = {
   EF_CAPTCHA_SECRET_KEY: "local-mock",
   EF_NOTIFICATION_EMAIL_ENABLED: "true",
@@ -37,7 +40,12 @@ const LAB_SECRETS = {
   EF_HR_EMAIL_FROM: "Skyline HR <hr@lab.example.test>",
   EF_HR_ADMIN_NOTIFY_TO: "hr.one@lab.example.test, hr.two@lab.example.test",
   EF_HR_PUBLIC_SITE_URL: "http://127.0.0.1:57330",
+  OPENAI_API_KEY: "lab-openai-key",
+  OPENAI_DOCUMENT_MODEL: "lab-reader",
+  EF_OPENAI_API_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}`,
 };
+/** What the mock reader "reads" from every passport. */
+const MOCK_PASSPORT = { first_name: "PASSPORT", middle_name: "Mock", last_name: "READER", dob: "1985-02-03", passport_number: "PA1234567", passport_expiry: "2033-01-01" };
 const EXCLUDE = "studio,imgproxy,logflare,vector,supavisor,realtime,postgres-meta";
 
 // LAB ONLY stand-ins for hosted state the repo cannot replay (file name = position in the migration order). Never shipped.
@@ -239,6 +247,43 @@ function startMockPostmark() {
   });
 }
 const stopMockPostmark = () => new Promise((r) => (postmark.server ? postmark.server.close(() => r()) : r()));
+
+/* ------------------------------------------------------------------ mock OpenAI reader (runs inside the check commands) */
+// Answers the Responses API shape the shared adapter parses. The field list comes from the request's own JSON schema, so it
+// follows the adapter. A passport gets MOCK_PASSPORT; any other category answers with no fields.
+const reader = { calls: 0, server: null };
+function startMockReader() {
+  return new Promise((resolve, reject) => {
+    reader.server = http.createServer((req, res) => {
+      const parts = [];
+      req.on("data", (c) => parts.push(c));
+      req.on("end", () => {
+        let body = {};
+        try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
+        if (req.url !== "/v1/responses" || req.headers.authorization !== `Bearer ${LAB_SECRETS.OPENAI_API_KEY}`) { res.writeHead(401); return res.end("{}"); }
+        reader.calls++;
+        const names = body.text?.format?.schema?.properties?.fields?.required ?? [];
+        const category = (String(body.instructions ?? "").match(/in this (.+?) document\./) ?? [])[1] ?? "Other";
+        const fields = Object.fromEntries(names.map((n) => [n, category === "Passport" ? (MOCK_PASSPORT[n] ?? null) : null]));
+        const result = { document_type: category, category_mismatch: false, fields, evidence: [] };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, output_text: JSON.stringify(result), usage: {} }));
+      });
+    });
+    reader.server.on("error", reject);
+    reader.server.listen(MOCK_OPENAI_PORT, "0.0.0.0", () => resolve());
+  });
+}
+const stopMockReader = () => new Promise((r) => (reader.server ? reader.server.close(() => r()) : r()));
+/** Waits until the document's reading has finished and returns its status. */
+async function readingDone(docId) {
+  let status = "";
+  for (let i = 0; i < 30 && !["unavailable", "failed", "done", "no_fields"].includes(status); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    status = psql(`select extraction_status from hr.staff_documents where id = '${docId}';`);
+  }
+  return status;
+}
 const mailsTo = (address) => postmark.messages.filter((m) => String(m.to ?? "").split(",").map((a) => a.trim()).includes(address));
 /** Waits (up to ~10 s) until the SQL answers the expected value: mail is sent after the HTTP response. */
 async function waitFor(sql, expected) {
@@ -357,13 +402,32 @@ async function onboard() {
   const foreign = await onboardCall(lab, { action: "view_url", t: link.token, id: otherId });
   check("another person's file cannot be opened with this link", otherId.length === 36 && foreign.status === 400 && !foreign.body.url, JSON.stringify(foreign.body));
 
-  // The reader runs after the response; without provider settings it records "unavailable" (manual entry continues).
-  let reading = "";
-  for (let i = 0; i < 20 && !["unavailable", "failed", "done", "no_fields"].includes(reading); i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    reading = psql(`select extraction_status from hr.staff_documents where id = '${passportId}';`);
-  }
-  check("the passport reading ran after the upload (no provider in the lab: 'unavailable')", reading === "unavailable", reading);
+  // The reader runs after the response (mock OpenAI). Details were typed first here, so the reading must not overwrite them.
+  const reading = await readingDone(passportId);
+  check("the passport reading ran after the upload, and never overwrote the typed name or date of birth", reading === "done"
+    && psql(`select first_name || '|' || last_name || '|' || date_of_birth from hr.staff_profiles where id = '${person.id}';`) === "Lab|Onboard|1990-05-06", reading);
+
+  // Prefill: a fresh person uploads the passport BEFORE typing anything; the reading fills the empty date of birth and middle
+  // name (the first/last name came from the application form and are kept), and the read name is offered on the document.
+  const pre = await freshApplicant(lab, "prefill");
+  const preLink = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${pre.id}', 'documents', '${preLink.hash}');`);
+  const before = reader.calls;
+  const prePassport = await onboardCall(lab, { action: "upload", t: preLink.token, category: "Passport", expiryDate: future(6) }, pdf("my-passport.pdf"));
+  const preDoc = psql(`select id from hr.staff_documents where profile_id = '${pre.id}' and category = 'Passport' and is_current;`);
+  const preReading = await readingDone(preDoc);
+  const preView = await onboardCall(lab, { action: "open", t: preLink.token });
+  const readDoc = preView.body.view?.documents?.find((d) => d.id === preDoc);
+  check("prefill through the link: the passport fills date of birth and middle name", prePassport.status === 200 && preReading === "done" && reader.calls > before
+    && psql(`select date_of_birth || '|' || middle_name from hr.staff_profiles where id = '${pre.id}';`) === "1985-02-03|Mock", `${preReading} ${psql(`select date_of_birth || '|' || middle_name from hr.staff_profiles where id = '${pre.id}';`)}`);
+  check("...the read first/last name and date of birth reach the onboarding page, and the applied name is kept", readDoc?.extracted?.first_name === "PASSPORT" && readDoc?.extracted?.last_name === "READER"
+    && readDoc?.extracted?.dob === "1985-02-03" && psql(`select first_name || '|' || last_name from hr.staff_profiles where id = '${pre.id}';`) === "Lab|prefill", JSON.stringify(readDoc?.extracted ?? {}).slice(0, 200));
+  const callsBefore = reader.calls;
+  const foreignRead = await onboardCall(lab, { action: "extract", t: preLink.token, id: otherId });
+  check("another person's document cannot be read with this link (nothing sent to the reader)", foreignRead.status >= 400 && foreignRead.status < 500 && reader.calls === callsBefore, JSON.stringify(foreignRead.body));
+  asAdmin(`select public.hr_admin_staff_invite_revoke('${pre.id}', 'documents');`);
+  const revokedRead = await onboardCall(lab, { action: "extract", t: preLink.token, id: preDoc });
+  check("a revoked link cannot start a reading", revokedRead.status === 403 && reader.calls === callsBefore, JSON.stringify(revokedRead.body));
 
   const academic = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Academic' and filename = 'transcript.pdf' and is_current;`);
   const removed = await onboardCall(lab, { action: "remove", t: link.token, id: academic });
@@ -524,7 +588,7 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
-  if (["apply", "onboard", "emails"].includes(command)) await startMockPostmark();
+  if (["apply", "onboard", "emails"].includes(command)) { await startMockPostmark(); await startMockReader(); }
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
@@ -534,8 +598,8 @@ try {
   else throw new Error(`unknown command ${command} (up | apply | onboard | emails | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
-  await stopMockPostmark();
+  await stopMockPostmark(); await stopMockReader();
   process.exit(2);
 }
-await stopMockPostmark();
+await stopMockPostmark(); await stopMockReader();
 if (failures) { console.log(`${failures} check(s) failed.`); process.exit(1); }

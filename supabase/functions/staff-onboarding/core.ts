@@ -4,7 +4,7 @@
 // call (hr_svc_* functions, service role only): unknown, expired, revoked or replaced links all get one neutral answer, and a
 // link that was used (submitted) is read-only. Files pass through this function: type and size are checked by content before
 // anything is stored, and the database says whether this link may upload that document type BEFORE the file is written.
-import { STAFF_READER_CATEGORY } from "../staff-document-extract/core.ts";
+import { STAFF_READER_CATEGORY } from "./reader.ts";
 
 export const LINK_INVALID = "This link is not valid any more. Ask us for a new one.";
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;

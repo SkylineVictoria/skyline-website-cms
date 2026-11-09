@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createJiti } from "jiti";
 
 // Offline unit tests for staff self-registration: phone normalisation (three twins kept in step), status transitions (kept in step with
@@ -12,7 +12,7 @@ const edgePhone = await load.import<typeof import("../supabase/functions/_shared
 const status = await load.import<typeof import("../src/lib/staffStatus.ts")>("../src/lib/staffStatus.ts");
 const checklistLib = await load.import<typeof import("../src/lib/documentChecklist.ts")>("../src/lib/documentChecklist.ts");
 const routing = await load.import<typeof import("../src/lib/loginRouting.ts")>("../src/lib/loginRouting.ts");
-const core = await load.import<typeof import("../supabase/functions/staff-document-extract/core.ts")>("../supabase/functions/staff-document-extract/core.ts");
+const core = await load.import<typeof import("../supabase/functions/staff-onboarding/reader.ts")>("../supabase/functions/staff-onboarding/reader.ts");
 const mock = await load.import<typeof import("../supabase/functions/_shared/document-extraction/mock.ts")>("../supabase/functions/_shared/document-extraction/mock.ts");
 const apply = await load.import<typeof import("../supabase/functions/staff-register/core.ts")>("../supabase/functions/staff-register/core.ts");
 const captchaLib = await load.import<typeof import("../supabase/functions/_shared/captcha.ts")>("../supabase/functions/_shared/captcha.ts");
@@ -507,6 +507,20 @@ test("staff-admin invite: sending off hands the link to the admin once; missing 
   const r = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
   assert.deepEqual([r.status, r.body.emailSent, r.body.link], [200, false, `https://x.example/staff/onboard#t=${"T".repeat(43)}`]);
   assert.ok(!run.names().includes("admin:hr_admin_staff_invite_cancel"), "the link stays valid: the admin passes it on");
+  // Shown once, never stored or logged: the token reaches no database call (only its hash does), the email log row says
+  // "skipped" without the link, and neither staff-admin nor the mail module writes to the console.
+  const token = "T".repeat(43);
+  assert.ok(run.calls.every(([, args]) => !JSON.stringify(args).includes(token) && !JSON.stringify(args).includes("#t=")), "no database call carries the token or link");
+  assert.deepEqual(run.calls.find(([n]) => n === "admin:hr_admin_staff_invite")?.[1], { p_id: PROFILE, p_purpose: "documents", p_token_hash: "h".repeat(64) });
+  assert.equal((run.calls.find(([n]) => n === "svc:hr_svc_email_log")?.[1] as Record<string, unknown>).p_state, "skipped");
+  for (const file of ["supabase/functions/staff-admin/core.ts", "supabase/functions/staff-admin/index.ts", "supabase/functions/_shared/hr-mail.ts", "supabase/functions/_shared/hr-mail-drain.ts"]) {
+    assert.ok(!/console\.|localStorage|sessionStorage/.test(read(file)), `${file} never logs or keeps the link`);
+  }
+  assert.match(read("supabase/functions/staff-admin/index.ts"), /"Cache-Control": "no-store"/, "the answer holding the link is never cached");
+  // Asking again makes a NEW link and replaces the shown one (the database supersedes it): it is never shown a second time.
+  const again = await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps);
+  assert.equal(again.status, 200);
+  assert.equal(run.names().filter((n) => n === "admin:hr_admin_staff_invite").length, 2, "each display is its own new link");
   run = adminDeps({ siteUrl: null });
   assert.equal((await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "documents" }, run.deps)).status, 503);
   assert.deepEqual(run.names(), [], "no link is made when it could not be addressed");
@@ -707,11 +721,20 @@ test("an empty reading and the wrong kind of document fill nothing", async () =>
   assert.match(wrong.calls.at(-1)!.error ?? "", /does not look like/);
 });
 
-test("staff reading reuses the shared reader and leaves the student function byte-for-byte alone", () => {
+test("staff reading reuses the shared reader, runs only through the onboarding link, and leaves the student function alone", async () => {
   assert.equal(core.STAFF_READER_CATEGORY["English"], "English Test");
   assert.equal(core.STAFF_READER_CATEGORY["PTE"], undefined, "legacy PTE / English Certificate are gone");
-  const index = read("supabase/functions/staff-document-extract/index.ts");
+  const index = read("supabase/functions/staff-onboarding/index.ts");
   assert.ok(index.includes("../_shared/document-extraction/select.ts") && !index.includes("portal_claim_document_extraction_job"), "shared adapters, no student queue");
+  assert.ok(!existsSync("supabase/functions/staff-document-extract"), "the standalone staff-document-extract function is deleted (HR-02d2)");
+  assert.ok(!read("supabase/config.toml").includes("staff-document-extract"));
+  // The lab-only OpenAI redirect works only against a local Supabase URL.
+  const seen: string[] = [];
+  const spy = (async (u: string | URL | Request) => { seen.push(String(u)); return new Response("{}"); }) as typeof fetch;
+  await core.readerFetch({ SUPABASE_URL: "http://kong:8000", EF_OPENAI_API_URL: "http://host.docker.internal:1/" }, spy)("https://api.openai.com/v1/responses");
+  await core.readerFetch({ SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co", EF_OPENAI_API_URL: "http://host.docker.internal:1" }, spy)("https://api.openai.com/v1/responses");
+  await core.readerFetch({ SUPABASE_URL: "http://kong:8000" }, spy)("https://api.openai.com/v1/responses");
+  assert.deepEqual(seen, ["http://host.docker.internal:1/v1/responses", "https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses"]);
 });
 
 test("the Employees tabs cover every reviewed status once and match the database filter", () => {

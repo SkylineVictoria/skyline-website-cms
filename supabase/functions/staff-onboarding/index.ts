@@ -1,13 +1,13 @@
 // Staff onboarding by emailed link (verify_jwt = false; the link token is the only credential). JSON actions, or
 // multipart/form-data for `upload`. The rules and their order live in core.ts; every database call is service-role only and
 // re-checks the link (hr_svc_*). Document reading (Passport, Visa, English, Driving Licence) runs after the response with the
-// shared reader (staff-document-extract/core.ts) and fills only EMPTY details; without provider settings it records
+// shared reader (reader.ts) and fills only EMPTY details; without provider settings it records
 // "unavailable" and the person types their details. Responses are never cached and send no referrer.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
-import { STAFF_READER_CATEGORY, runStaffExtraction } from "../staff-document-extract/core.ts";
+import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
 import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 
@@ -18,6 +18,7 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const providerConfig: Record<string, string> = { OPENAI_API_KEY: Deno.env.get("OPENAI_API_KEY") ?? "", OPENAI_DOCUMENT_MODEL: Deno.env.get("OPENAI_DOCUMENT_MODEL") ?? "" };
 const mailEnv: Record<string, string> = { SUPABASE_URL };
 for (const name of HR_MAIL_ENV) mailEnv[name] = Deno.env.get(name) ?? "";
+const fetchForReader = readerFetch({ SUPABASE_URL, EF_OPENAI_API_URL: Deno.env.get("EF_OPENAI_API_URL") ?? "" });
 for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
 
 const headers = {
@@ -65,7 +66,7 @@ Deno.serve(async (req) => {
   const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
   const scheduleExtraction = (doc: DocumentToRead) => {
-    const selection = createDocumentExtractionProvider(providerConfig, { category: STAFF_READER_CATEGORY[doc.category] });
+    const selection = createDocumentExtractionProvider(providerConfig, { category: STAFF_READER_CATEGORY[doc.category], fetch: fetchForReader });
     const port = {
       apply: async (status: string, extracted: Record<string, string>, message?: string) => {
         const { error } = await admin.rpc("hr_staff_document_apply_extraction", { p_doc: doc.id, p_status: status, p_extracted: extracted, p_error: message ?? null });

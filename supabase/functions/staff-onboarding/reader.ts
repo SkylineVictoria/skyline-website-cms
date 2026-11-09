@@ -1,8 +1,22 @@
-// Reads one staff document and records the result. Runtime-neutral (no Deno globals) so the offline tests run it with the shared
-// deterministic mock provider. It reuses the student flow's provider adapters and envelope (supabase/functions/_shared/
-// document-extraction) but none of its job queue: a staff document is read once, in-process, and the outcome goes to
+// The staff document reader (moved here from the deleted staff-document-extract function, HR-02d2; it only runs through the
+// onboarding link). Reads one staff document and records the result. Runtime-neutral (no Deno globals) so the offline tests run
+// it with the shared deterministic mock provider. It reuses the student flow's provider adapters and envelope (supabase/functions/
+// _shared/document-extraction) but none of its job queue: a staff document is read once, in-process, and the outcome goes to
 // hr.staff_documents through a port. portal-document-extract and its lease fencing are not involved.
 import { buildExtractionEnvelope, isSupportedDocument, type DocumentExtractionProvider, type ExtractionCategory } from "../_shared/document-extraction/contract.ts";
+import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
+
+const OPENAI_ORIGIN = "https://api.openai.com";
+
+/** LAB ONLY: EF_OPENAI_API_URL sends the reader's OpenAI calls to a mock, and only when SUPABASE_URL is local; otherwise plain fetch. */
+export function readerFetch(env: Record<string, string | undefined>, doFetch: typeof fetch = fetch): typeof fetch {
+  const base = (env.EF_OPENAI_API_URL ?? "").trim().replace(/\/+$/, "");
+  if (!base || !isLocalSupabaseUrl(env.SUPABASE_URL ?? "")) return doFetch;
+  return ((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    return doFetch(url.startsWith(`${OPENAI_ORIGIN}/`) ? base + url.slice(OPENAI_ORIGIN.length) : url, init);
+  }) as typeof fetch;
+}
 
 /** hr.staff_documents.category -> the reader's document category. */
 export const STAFF_READER_CATEGORY: Record<string, ExtractionCategory> = {

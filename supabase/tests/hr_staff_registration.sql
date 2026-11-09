@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(306);
+select plan(319);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -554,6 +554,30 @@ select is((select count(*)::int from information_schema.columns where table_sche
  'job applications no longer point at staff documents');
 select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled), 'staff_candidates,agency_staff,agency_jobs', 'the Staff group holds Candidates, Employees and Jobs');
 select is((select count(*)::int from public.admin_menu_items where id in ('agency_candidates', 'agency_employees') and is_enabled), 0, 'the Master Data copies of Candidates and Employees are disabled');
+
+-- ---------------------------------------------------------------- org chart (20261110100000)
+select pg_temp.to_signed('oc1', 'Omar', 'omar.chart@example.test', '0400 000 920');
+select pg_temp.to_signed('oc2', 'Olga', 'olga.chart@example.test', '0400 000 921');
+update hr.staff_profiles set status = 'active' where id in (pg_temp.v('oc1'), pg_temp.v('oc2'));
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_org_chart()) e where e->>'status' = 'active'), (select count(*)::int from hr.staff_profiles where status = 'active'), 'every active employee is on the org chart');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_org_chart()) e where e->>'status' in ('rejected','inactive','applied','invited')), 0, 'nobody else is, until they have a manager');
+select lives_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc2'), pg_temp.v('oc1'))$$, 'an active employee is put under another (a missing employment record is created)');
+select lives_ok($$select public.hr_admin_staff_manager_set((select id from hr.staff_profiles where email = 'ada.added@example.test'), pg_temp.v('oc2'))$$, 'someone being onboarded is added to a team');
+select is((select e->>'managerId' from jsonb_array_elements(public.hr_admin_org_chart()) e where e->>'email' = 'ada.added@example.test'), pg_temp.v('oc2')::text, 'and appears on the chart under their manager');
+select throws_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc1'), pg_temp.v('oc2'))$$, '23514', null, 'a manager cannot report to someone in their own team (no cycles)');
+select throws_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc1'), pg_temp.v('oc1'))$$, '23514', 'A person cannot be their own manager.', 'nobody manages themselves');
+select throws_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc1'), (select id from hr.staff_profiles where email = 'ada.added@example.test'))$$, '22023', 'Choose an active employee as the manager.', 'the manager is an active employee');
+select is(public.hr_admin_staff_employment_save(pg_temp.v('oc2'), '{"jobTitle":"Head of Department","department":"Hospitality"}')->'employment'->>'managerId', null, 'the full employment save still owns the manager (an empty manager clears it)');
+select lives_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc2'), null)$$, 'top of the chart');
+reset role;
+select is((select job_title from hr.employment where profile_id = pg_temp.v('oc2')), 'Head of Department', 'changing the manager keeps the other employment details');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000003';
+select throws_ok($$select public.hr_admin_org_chart()$$, '42501', null, 'only an administrator sees the org chart');
+select throws_ok($$select public.hr_admin_staff_manager_set(pg_temp.v('oc2'), null)$$, '42501', null, 'only an administrator changes a manager');
+reset role;
 
 -- ---------------------------------------------------------------- privileges
 select is(has_function_privilege('anon', 'public.hr_svc_onboarding_open(text)', 'execute'), false, 'anon cannot call the link functions');

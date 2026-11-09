@@ -1143,3 +1143,31 @@ test("candidate_file: an open manual candidate only, checked by content, stored 
   assert.equal((await staffAdmin.handleAdmin({ action: "candidate_file", applicationId: APP, which: "photo" }, run.deps)).status, 400, "resume or cover letter only");
   assert.equal(staffAdmin.ACTIONS.includes("hire" as never) && staffAdmin.ACTIONS.includes("candidate_file" as never), true);
 });
+
+test("org chart: the tree, cycles, who can manage whom and search", async () => {
+  const org = await load.import<typeof import("../src/lib/staffOrg.ts")>("../src/lib/staffOrg.ts");
+  type P = import("../src/lib/staffOrg.ts").OrgPerson;
+  const p = (id: string, name: string, managerId: string | null, jobTitle = "", status: P["status"] = "active"): P =>
+    ({ id, name, email: `${id}@example.test`, status, role: null, jobTitle, department: "", employmentType: null, workLocation: "", managerId });
+  const people = [p("ceo", "Ann CEO", null, "Chief Executive Officer"), p("hod", "Bob Head", "ceo", "Head of Department"), p("t2", "Zed Trainer", "hod", "Trainer"),
+    p("t1", "Amy Trainer", "hod", "Trainer"), p("adm", "Cat Admin", "ceo"), p("new", "Nia New", "hod", "", "invited"), p("lost", "Lost Person", "gone")];
+  const tree = org.buildOrgTree(people);
+  assert.deepEqual(tree.map((n) => n.person.id), ["ceo", "lost"], "a manager who is not on the chart puts the person at the top");
+  assert.equal(tree[0].teamSize, 5, "the team size counts everyone below");
+  assert.deepEqual(tree[0].children.find((c) => c.person.id === "hod")!.children.map((c) => c.person.name), ["Amy Trainer", "Nia New", "Zed Trainer"], "children sorted by name");
+  const loop = org.buildOrgTree([p("a", "A", "b"), p("b", "B", "a")]);
+  assert.equal(loop.reduce((n, x) => n + 1 + x.teamSize, 0), 2, "nobody disappears in a cycle");
+  assert.deepEqual([...org.teamOf(people, "hod")].sort(), ["hod", "new", "t1", "t2"]);
+  assert.equal(org.placeProblem(people, "hod", "t1"), "That person already reports to them. Move them first, or choose someone else.");
+  assert.equal(org.placeProblem(people, "hod", "hod"), "A person cannot be their own manager.");
+  assert.equal(org.placeProblem(people, "t1", "new"), "Choose an active employee as the manager.", "the same rule as the database");
+  assert.equal(org.placeProblem(people, "t1", "adm"), null);
+  assert.equal(org.placeProblem(people, "t1", null), null, "top of the chart is always allowed");
+  assert.deepEqual(org.managerChain(people, "t1").map((x) => x.id), ["ceo", "hod"]);
+  assert.deepEqual(org.nodesWithTeams(tree), ["ceo", "hod"]);
+  assert.equal(org.orgMatches(tree[0], "amy"), true, "a match below keeps the branch");
+  assert.equal(org.orgMatches(tree[0].children.find((c) => c.person.id === "adm")!, "trainer"), false);
+  const sql = read("supabase/migrations/20261110100000_staff_org_chart.sql");
+  assert.ok(sql.includes("with recursive chain") && sql.includes("cannot be their own manager") && sql.includes("Choose an active employee as the manager."), "the database refuses cycles, self-management and inactive managers");
+  assert.ok(read("src/router/config.tsx").includes('path: "staff/employees/org-chart"'), "the org chart is routed under Employees");
+});

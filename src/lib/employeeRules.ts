@@ -99,3 +99,28 @@ export function guessDocCategory(filename: string, used: readonly string[] = [])
 export function duplicateCategories(categories: readonly string[]): string[] {
   return [...new Set(categories.filter((c, i) => categories.indexOf(c) !== i))];
 }
+
+/* bank details (20261110220000 hr.employee_bank): Australian account for pay. The database checks the same rules. */
+
+export interface EmployeeBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt?: string }
+export const EMPTY_BANK: EmployeeBank = { accountName: "", bsb: "", accountNumber: "", bankName: "" };
+const digits = (v: string) => v.replace(/[\s-]/g, "");
+
+/** True when nothing was typed (the bank details are optional). */
+export const bankIsEmpty = (b: EmployeeBank) => !b.accountName.trim() && !digits(b.bsb) && !digits(b.accountNumber) && !b.bankName.trim();
+
+/** Field problems of the bank details; empty when they can be saved (or are all blank). */
+export function bankProblems(b: EmployeeBank): Partial<Record<keyof EmployeeBank, string>> {
+  if (bankIsEmpty(b)) return {};
+  const out: Partial<Record<keyof EmployeeBank, string>> = {};
+  const name = b.accountName.trim();
+  if (!name) out.accountName = "Enter the account name.";
+  else if (name.length > 100) out.accountName = "The account name must be 100 characters or fewer.";
+  if (!/^\d{6}$/.test(digits(b.bsb))) out.bsb = "The BSB must be 6 digits, for example 062-000.";
+  if (!/^\d{4,10}$/.test(digits(b.accountNumber))) out.accountNumber = "The account number must be 4 to 10 digits.";
+  if (b.bankName.trim().length > 100) out.bankName = "The bank name must be 100 characters or fewer.";
+  return out;
+}
+
+/** 062000 → 062-000 (as printed on Australian bank statements). */
+export const formatBsb = (v: string) => { const d = digits(v); return /^\d{6}$/.test(d) ? `${d.slice(0, 3)}-${d.slice(3)}` : v; };

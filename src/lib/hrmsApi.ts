@@ -27,6 +27,9 @@ export const listHolidays = (from?: string, to?: string) => rpc<Holiday[]>("hr_p
 export const saveHoliday = (id: string | null, holiday: Partial<Pick<Holiday, "date" | "name" | "isOptional" | "state" | "status" | "note">>) =>
   rpc<Holiday>("hr_admin_holiday_save", { p_id: id, p_holiday: holiday }, "The holiday could not be saved.");
 export const deleteHoliday = (id: string) => rpc<Holiday>("hr_admin_holiday_delete", { p_id: id }, "The holiday could not be deleted.");
+/** Many holidays at once (20261110220000): all or nothing; the same date + name + state updates the existing row. */
+export const importHolidays = (rows: Array<{ date: string; name: string; isOptional: boolean; state?: string; note?: string }>, status: "review" | "confirmed") =>
+  rpc<{ inserted: number; updated: number }>("hr_admin_holidays_import", { p_rows: rows, p_status: status }, "The holidays could not be imported.");
 
 /* ------------------------------------------------------------------ time & attendance */
 export type PunchKind = "punch_in" | "break_start" | "break_end" | "punch_out";

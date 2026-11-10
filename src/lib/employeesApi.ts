@@ -1,5 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { employeeDocPath, employeeFileProblem, type EmployeeDetail, type EmployeeDocCategory, type EmployeeForm, type Employee, type EmployeeStatus } from "@/lib/employeeRules";
+import { bankIsEmpty, employeeDocPath, employeeFileProblem, type EmployeeBank, type EmployeeDetail, type EmployeeDocCategory, type EmployeeForm, type Employee, type EmployeeStatus } from "@/lib/employeeRules";
 
 export * from "@/lib/employeeRules";
 
@@ -25,6 +25,14 @@ export const saveEmployee = (id: string | null, form: EmployeeForm) =>
   rpc<string>("hr_admin_emp_save", { p_id: id, p_person: { firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: form.phone.trim() } }, "The employee could not be saved.");
 export const setEmployeeStatus = (id: string, status: EmployeeStatus) =>
   rpc<void>("hr_admin_emp_set_status", { p_id: id, p_status: status }, "The status could not be changed.");
+
+/** Bank details for pay (20261110220000; Admin only). null when none are saved. */
+export const getEmployeeBank = (id: string) => rpc<EmployeeBank | null>("hr_admin_emp_bank_get", { p_id: id }, "The bank details could not be loaded.");
+/** Saves the bank details; all fields blank removes them. */
+export const saveEmployeeBank = (id: string, bank: EmployeeBank) =>
+  rpc<EmployeeBank | null>("hr_admin_emp_bank_save", { p_id: id, p_bank: bankIsEmpty(bank) ? {} : {
+    accountName: bank.accountName.trim(), bsb: bank.bsb.replace(/[\s-]/g, ""), accountNumber: bank.accountNumber.replace(/[\s-]/g, ""), bankName: bank.bankName.trim() } },
+  "The bank details could not be saved.");
 
 /** Uploads the file to the employee's folder, then records it (a failed record removes the file again). */
 export async function uploadEmployeeDocument(employeeId: string, category: EmployeeDocCategory, file: File): Promise<void> {

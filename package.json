@@ -21,7 +21,8 @@
     "test:public-assistant": "node scripts/test-public-assistant.mjs",
     "test:public-assistant:local-acceptance": "node scripts/test-public-assistant-local-acceptance.mjs",
     "test:public-assistant:integration": "npx supabase test db supabase/tests/public_assistant_integration.sql",
-    "test:document-extraction:integration": "npx supabase test db supabase/tests/document_extraction_integration.sql"
+    "test:document-extraction:integration": "npx supabase test db supabase/tests/document_extraction_integration.sql",
+    "test:holiday-import": "jiti scripts/test-holiday-import.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.57.4",
@@ -32,7 +33,9 @@
     "react": "^19.1.2",
     "react-dom": "^19.1.2",
     "react-i18next": "^15.6.0",
-    "react-router-dom": "^7.6.3"
+    "react-router-dom": "^7.6.3",
+    "read-excel-file": "9.3.12",
+    "write-excel-file": "4.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",

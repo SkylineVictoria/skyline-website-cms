@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
+import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
+import StaffOnboardingDetail from "@/pages/admin/StaffOnboardingDetail";
 import EmployeeDocumentsUpload from "@/pages/admin/components/EmployeeDocumentsUpload";
 import {
   EMPLOYEE_STATUS_LABEL, employeeDocumentUrl, formatMobile, getEmployee, removeEmployeeDocument, setEmployeeStatus, type EmployeeDetail,
@@ -13,8 +15,20 @@ const fullName = (e: EmployeeDetail) => [e.firstName, e.lastName].filter(Boolean
 const size = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 const date = (value: string) => new Date(value).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 
-/** Staff > Employees > one employee: their details, Active / Inactive, and the documents an Admin uploads for them. */
+/**
+ * HRMS > Employees > one person. Someone still in onboarding (applied, document link sent, documents submitted, offer sent or signed)
+ * gets the onboarding page: document link, document review, offer letter, activation. Active / Inactive employees get this page
+ * (details, documents, bank, pay); "Onboarding and offer" opens their onboarding page too (?view=onboarding).
+ */
 export default function StaffDetailPage() {
+  const [params] = useSearchParams();
+  const [status, setStatus] = useState<string | null>(null);
+  if (params.get("view") === "onboarding" || (status !== null && status !== "active" && status !== "inactive")) return <StaffOnboardingDetail />;
+  return <SimpleEmployeePage onStatus={setStatus} />;
+}
+
+/** Staff > Employees > one employee: their details, Active / Inactive, and the documents an Admin uploads for them. */
+function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }) {
   const { id = "" } = useParams();
   const location = useLocation();
   const [employee, setEmployee] = useState<EmployeeDetail | null>(null);
@@ -23,11 +37,12 @@ export default function StaffDetailPage() {
   const [editing, setEditing] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [bankVersion, setBankVersion] = useState(0);
 
   const load = useCallback(async () => {
-    try { setEmployee(await getEmployee(id)); setError(""); }
+    try { const next = await getEmployee(id); onStatus(next.status); setEmployee(next); setError(""); }
     catch (e) { setError(e instanceof Error ? e.message : "The employee could not be loaded."); }
-  }, [id]);
+  }, [id, onStatus]);
   useEffect(() => { void load(); }, [load]);
 
   const act = async (work: () => Promise<unknown>, done: string) => {
@@ -57,6 +72,8 @@ export default function StaffDetailPage() {
       <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)}
         actions={<>
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>
+          <Link to="?view=onboarding" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-3 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100" data-testid="employee-onboarding">
+            <i className="ri-file-paper-2-line" aria-hidden="true" /> Onboarding and offer</Link>
           <Button variant="outline" onClick={() => setConfirmStatus(true)} data-testid="employee-status">{active ? "Make inactive" : "Make active"}</Button>
         </>} />
       <p className="mb-4"><Link to={STAFF_EMPLOYEES_PATH} className="text-sm font-medium text-primary-700 hover:underline">← All employees</Link></p>
@@ -93,10 +110,11 @@ export default function StaffDetailPage() {
         <p className="mt-2 text-xs text-foreground-500">Uploading a new file of the same type replaces the current one.</p>
       </Card>
 
+      <BankDetailsCard key={`bank-${employee.id}-${bankVersion}`} profileId={employee.id} />
       <PaySetupCard profileId={employee.id} hasEmployment />
 
       {editing ? <EmployeeFormDialog id={employee.id} initial={{ firstName: employee.firstName, lastName: employee.lastName, email: employee.email, phone: employee.phone }}
-        onClose={() => setEditing(false)} onSaved={() => { setEditing(false); setNotice("Details saved."); void load(); }} /> : null}
+        onClose={() => setEditing(false)} onSaved={() => { setEditing(false); setNotice("Details saved."); setBankVersion((v) => v + 1); void load(); }} /> : null}
       {confirmStatus ? (
         <Modal open title={active ? "Make inactive" : "Make active"} onClose={() => { if (!busy) setConfirmStatus(false); }}
           footer={<><Button variant="outline" disabled={busy} onClick={() => setConfirmStatus(false)}>Cancel</Button>

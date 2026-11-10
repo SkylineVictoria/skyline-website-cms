@@ -56,14 +56,14 @@ test.beforeAll(async () => {
   await rpc(adminClient, "hr_admin_leave_adjust", { p_profile: employee.id, p_type: sql("select id from hr.leave_types where code = 'annual'"), p_hours: 38, p_reason: "E2E opening balance", p_kind: "opening" });
 });
 
-test("the admin sidebar's Staff group lists Timesheets, Leave, Pay Schedules, Public Holidays and Xero Export, and each page loads", async ({ page }) => {
+test("the admin sidebar's HRMS group lists Timesheets, Leave, Pay Schedules, Public Holidays and Xero Export, and each page loads", async ({ page }) => {
   await signInAsAdmin(page, admin.email);
   await page.goto("/admin/staff/timesheets");
-  const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "Staff" }) }).first();
+  const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "HRMS" }) }).first();
   for (const [href, label] of [["/admin/staff/timesheets", "Timesheets"], ["/admin/staff/leave", "Leave"], ["/admin/staff/pay-schedules", "Pay Schedules"], ["/admin/staff/holidays", "Public Holidays"], ["/admin/staff/xero-export", "Xero Export"]]) {
     await expect(sidebar.locator(`a[href="${href}"]`)).toHaveText(label);
   }
-  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("staff_candidates,agency_staff,agency_jobs,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("staff_candidates,agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero");
   await expect(page.getByTestId("timesheet-table")).toBeVisible();
   await page.goto("/admin/staff/leave");
   await expect(page.getByTestId("leave-approvals")).toBeVisible();

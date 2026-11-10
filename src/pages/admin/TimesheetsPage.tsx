@@ -15,7 +15,7 @@ export default function TimesheetsPage() {
   useEffect(() => { void load(); }, [load]);
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Timesheets" description="Hours worked, breaks, leave and public holidays per pay period. The manager or HR approves each timesheet; HR locks the period, which accrues leave, and exports it to Xero." />
+      <PageHeader breadcrumb="HRMS" title="Timesheets" description="Hours worked, breaks, leave and public holidays per pay period. The manager or HR approves each timesheet; HR locks the period, which accrues leave, and exports it to Xero." />
       {error ? <AdminError message={error} onRetry={() => void load()} /> : !team ? <AdminLoading label="Loading timesheets…" /> : <TimesheetTable team={team} admin initialPeriodId={params.get("period") ?? undefined} />}
     </div>
   );

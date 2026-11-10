@@ -78,7 +78,7 @@ export default function JobsPage() {
   const pageOffset = Math.min(offset, Math.max(0, Math.ceil(rows.length / HR_PAGE_SIZE) - 1) * HR_PAGE_SIZE);
   const label = (j: AdminJob) => j.status === "open" ? "Close" : j.status === "draft" ? "Publish" : "Reopen";
   return <div>
-    <PageHeader breadcrumb="Staff" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates (Staff > Candidates)."
+    <PageHeader breadcrumb="Website" title="Jobs" description="Manage vacancies, publish openings to Careers and review their candidates (HRMS > Candidates)."
       actions={<Button onClick={() => open()} icon="ri-add-line" data-testid="job-new">Add Job</Button>} />
     <SectionTabs tabs={[{ id: "list", label: "List", icon: "ri-list-check" }, { id: "tree", label: "Tree", icon: "ri-node-tree" }]}
       active={treeView ? "tree" : "list"} onChange={(id) => setParams(id === "tree" ? { view: "tree" } : {})} />

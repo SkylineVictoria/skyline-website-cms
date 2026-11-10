@@ -1,3 +1,4 @@
+import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteApplicationDocument,
@@ -93,6 +94,7 @@ const STEP_CHECKS: Record<string, { what: string; keys: readonly string[] }> = {
   Academic: { what: "an academic transcript, certificate or degree", keys: [] },
 };
 const isWrongDocument = (doc: WizardDoc) => {
+  if (hasValidatedDocumentPath(doc.storagePath)) return false;
   const check = STEP_CHECKS[doc.category];
   if (!check) return false;
   // An academic file with nothing to read (a marksheet page, say) is kept; only one read as another kind is wrong.

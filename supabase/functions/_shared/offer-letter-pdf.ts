@@ -38,7 +38,16 @@ function paraOf(block: TemplateBlock): Para {
  * rules, bold / underline / strike, links (underlined, with the address after the text when it differs) and left / centre / right alignment.
  * Italic text is set in the regular face (the embedded Noto Sans has no italic). Throws when the letter is empty or longer than MAX_LETTER_PAGES.
  */
-export async function buildLetterPdf(input: { title: string; html: string; footer?: string; letterhead?: Letterhead | null; date?: string | null }): Promise<{ bytes: Uint8Array; pages: number }> {
+/**
+ * The texts the embedded font cannot set as typed (a character that would be folded or printed as "?"), or null when every one prints as
+ * it is. For callers that must refuse rather than alter (document signing: the signer's typed name, a template's text).
+ */
+export async function unsupportedText(texts: string[]): Promise<string | null> {
+  const writer = await PdfWriter.create("check", paletteOf(null));
+  return texts.find((t) => writer.clean(t) !== t || writer.clean(t, true) !== t) ?? null;
+}
+
+export async function buildLetterPdf(input: { title: string; html: string; footer?: string; letterhead?: Letterhead | null; date?: string | null; kind?: string }): Promise<{ bytes: Uint8Array; pages: number }> {
   const blocks = templateBlocks(input.html);
   if (!blocks.some((b) => b.runs.length > 0)) throw new Error("The letter is empty.");
   const institution = input.letterhead?.institution?.trim() || input.footer?.trim() || DEFAULT_INSTITUTION;
@@ -46,7 +55,7 @@ export async function buildLetterPdf(input: { title: string; html: string; foote
   let logo = input.letterhead?.logo ?? null;
   if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
   const date = formatDateOnly(input.date ?? new Date().toISOString().slice(0, 10));
-  writer.header({ institution, logo, title: input.title, meta: ["Offer letter", date] });
+  writer.header({ institution, logo, title: input.title, meta: [input.kind ?? "Offer letter", date] });
 
   // Blocks flow in runs between horizontal rules, so a rule is drawn where the letter puts it.
   let run: Para[] = [];

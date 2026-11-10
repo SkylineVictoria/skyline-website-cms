@@ -7,6 +7,13 @@
   ],
   "headers": [
     {
+      "source": "/sign",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, max-age=0" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    },
+    {
       "source": "/reset-password",
       "headers": [
         { "key": "Cache-Control", "value": "no-store, max-age=0" },

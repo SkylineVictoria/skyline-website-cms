@@ -32,6 +32,33 @@ const employeeRulesLib = await load.import<typeof import("../src/lib/employeeRul
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
+const signing = await load.import<typeof import("../supabase/functions/_shared/signing.ts")>("../supabase/functions/_shared/signing.ts");
+test("signing templates require all variables, reject malformed tokens and substitute once", () => {
+  assert.deepEqual(signing.signingVariables("{{full_name}} {{ course }} {{full_name}}"), ["full_name", "course"]);
+  assert.equal(signing.fillSigningTemplate("Dear {{full_name}}", { full_name: "{{salary}}" }), "Dear {{salary}}");
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", {}), /course/);
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", { course: " " }), /course/);
+  assert.throws(() => signing.signingVariables("{{Course Name}}"), /variables/);
+  assert.throws(() => signing.fillSigningTemplate("{{constructor}}", {}), /constructor/);
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", { course: "x".repeat(2001) }), /2,000/);
+});
+test("signing values are plain text and cannot introduce HTML", () => {
+  const text = signing.fillSigningTemplate("Hello {{full_name}}", { full_name: '<script>alert(1)</script>' });
+  assert.equal(signing.signingHtml(text), '<p>Hello &lt;script&gt;alert(1)&lt;/script&gt;</p>');
+  assert.equal(signing.signingNameValid("\n"), false);
+  assert.equal(signing.signingNameValid("Asha\nPatel"), false);
+  assert.equal(signing.signingNameValid("Asha Patel"), true);
+});
+test("signed PDF preserves original pages and appends a readable signature record", async () => {
+  const original = await PdfLib.PDFDocument.create(); original.addPage(); original.addPage();
+  const bytes = await signing.signingReceipt(await original.save(), { id: "synthetic-request", title: "Student agreement", recipientEmail: "student@example.test",
+    signerName: "Asha Patel", signedAt: "2026-11-10T12:00:00Z", sourceHash: "a".repeat(64), consent: signing.SIGNING_CONSENT });
+  const signed = await PdfLib.PDFDocument.load(bytes);
+  assert.ok(signed.getPageCount() > 2);
+  assert.equal(signed.getPage(0).getWidth(), original.getPage(0).getWidth());
+  assert.equal(Math.round(signed.getPage(2).getWidth()), 595, "the signature record is an A4 page of the shared layout");
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [
@@ -294,6 +321,8 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
     upload: async (p: string, bytes: Uint8Array, type: string) => { calls.push(["upload", { p, type, size: bytes.length }]); return { error: options.uploadError ?? null }; },
     remove: async (paths: string[]) => { calls.push(["remove", paths]); },
     signedUrl: async (p: string, seconds: number) => `signed:${p}:${seconds}`,
+    checkCategory: async () => null,
+    recordCategory: async () => true,
     scheduleExtraction: (doc: { category: string }) => { scheduled.push(doc.category); },
     hash: async (v: string) => `h(${v})`,
     newId: () => "rnd",
@@ -355,9 +384,9 @@ test("onboarding: a file is checked by content, the database approves the type B
   const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(r.status, 200);
   assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
-  assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
+  assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/validated-rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
   const added = run.calls.find(([n]) => n === "hr_svc_document_add")![1] as Record<string, unknown>;
-  assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
+  assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/validated-rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
   assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/old.pdf"]], "the replaced file is deleted");
   assert.deepEqual(run.scheduled, ["Passport"], "a passport is read");
 
@@ -380,10 +409,32 @@ test("onboarding: a file is checked by content, the database approves the type B
   run = linkDeps({ db: { hr_svc_document_add: { error: { code: "22023", message: "The document location is not valid." } } } });
   const noExpiry = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(noExpiry.status, 400);
-  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/rnd.pdf"]], "an unrecorded file is deleted");
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/validated-rnd.pdf"]], "an unrecorded file is deleted");
 
   run = linkDeps();
   assert.equal((await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "next year" }, new File([PDF_BYTES], "p.pdf")), run.deps)).body.field, "expiryDate");
+});
+
+test("onboarding: a rejected category leaves the current file and checklist untouched", async () => {
+  const run = linkDeps();
+  const result = await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" },
+    new File([PDF_BYTES], "passport.pdf", { type: "application/pdf" })), {
+    ...run.deps, checkCategory: async () => ({ status: 422, error: "Upload an academic record." }),
+  });
+  assert.deepEqual(result, { status: 422, body: { error: "Upload an academic record.", field: "file" } });
+  assert.deepEqual(run.names().filter((name) => name !== "limit"), ["hr_svc_upload_target"]);
+  assert.deepEqual(run.scheduled, []);
+});
+
+test("onboarding: a missing category receipt removes only the new object", async () => {
+  const run = linkDeps();
+  const result = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" },
+    new File([PDF_BYTES], "passport.pdf", { type: "application/pdf" })), {
+    ...run.deps, recordCategory: async () => false,
+  });
+  assert.equal(result.status, 503);
+  assert.ok(!run.names().includes("hr_svc_document_add"));
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/validated-rnd.pdf"]]);
 });
 
 test("onboarding: open a file, remove, expiry, re-read and submit go through the link", async () => {
@@ -1414,6 +1465,8 @@ test("offer letter PDF: made from the filled-in template, loadable, signable, an
   await assert.rejects(letterLib.buildLetterPdf({ title: "Empty", html: "<p> </p>" }), /empty/);
   await assert.rejects(letterLib.buildLetterPdf({ title: "Endless", html: "<p>Line</p>".repeat(3000) }), /longer than/);
   assert.equal(letterLib.letterFileName("Offer: Trainer/Chef", "Asha Patel"), "Offer Trainer Chef - Asha Patel.pdf");
+  assert.equal(await letterLib.unsupportedText(["Asha Patel", "Offer of employment"]), null, "Latin text prints as typed");
+  assert.equal(await letterLib.unsupportedText(["Asha Patel", "नमस्ते"]), "नमस्ते", "text the font cannot set is reported, not altered");
 });
 
 /** adminDeps plus what the onboarding-flow actions use; `calls` records every call so a test can prove what did NOT happen. */
@@ -2035,4 +2088,17 @@ test("onboarding address_search: the student form's Geoscape lookup through the 
   assert.equal(read("supabase/functions/_shared/validation/address.ts"), read("recovered/live-edge-functions-2026-11-02/_shared/validation/address.ts"), "the helper is the one the live address-search function runs");
   for (const file of ["src/pages/agency/components/ApplicationWorkspace.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) assert.ok(read(file).includes("@/components/shared/wizard/AddressSearch"), `${file} uses the shared address search`);
   assert.ok(!/console\.(log|info|warn|error)\([^)]*\b(q|query)\b/.test(read("supabase/functions/staff-onboarding/core.ts") + index), "the search text is never logged");
+});
+
+test("Employees > Onboarding table: Send link for Applied, Resend link for Invited, nothing for other stages", () => {
+  assert.equal(status.linkActionFor("applied"), "send");
+  assert.equal(status.linkActionFor("invited"), "resend");
+  for (const s of ["documents_submitted", "offer_sent", "offer_signed", "active", "inactive", "rejected"] as const) assert.equal(status.linkActionFor(s), null, s);
+  // The same actions as the person's page: Applied sends the first link, Invited a new one that stops the earlier link.
+  assert.equal(status.employeeActions({ status: "applied" } as never).includes("send_documents_link"), true);
+  assert.equal(status.employeeActions({ status: "invited" } as never).includes("resend_documents_link"), true);
+  const button = read("src/pages/admin/components/ResendLinkButton.tsx");
+  assert.ok(button.includes("staffAdminActions.sendDocuments(row.id)") && button.includes('staffAdminActions.sendLink(row.id, "documents")'), "the row button uses the same staff-admin actions");
+  assert.ok(button.includes("result.link") && button.includes("linkCancelled"), "email off: the link is shown once; a failed email cancels the link and says so");
+  assert.ok(read("src/pages/admin/StaffPage.tsx").includes("<ResendLinkButton row={r}"), "the Onboarding table has the button");
 });

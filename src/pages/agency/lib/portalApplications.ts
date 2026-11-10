@@ -1,3 +1,5 @@
+import { checkedDocumentCategory, hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
+import { uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
 import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
@@ -757,23 +759,35 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   const contentSha256 = await sha256(file);
   // A retry after a lost response must return the original document, rather than
   // creating another private object and another qualification.
-  const { data: duplicate, error: duplicateError } = await supabase
-    .from("enrollment_application_documents")
+  const protectedCategory = checkedDocumentCategory(category);
+  const { data: duplicate, error: duplicateError } = await supabase.from("enrollment_application_documents")
     .select("id, storage_path, category, filename")
     .eq("application_id", applicationId)
     .eq("category", category)
+    .eq("is_current", true)
     .eq("metadata->>contentSha256", contentSha256)
     .maybeSingle();
   if (duplicateError) throw new Error(duplicateError.message);
-  if (duplicate) return { id: String(duplicate.id), path: String(duplicate.storage_path), category: String(duplicate.category), filename: String(duplicate.filename) };
+  if (duplicate) {
+    const id = String(duplicate.id);
+    const path = String(duplicate.storage_path);
+    if (protectedCategory && !hasValidatedDocumentPath(path)) {
+      // A retry for an older file checks the existing bytes before returning it.
+      await uploadValidatedDocument("enrollment", applicationId, category, file, id);
+    }
+    return { id, path, category: String(duplicate.category), filename: String(duplicate.filename) };
+  }
 
-  const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
-  const path = `${applicationId}/${crypto.randomUUID()}-${safeName}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from("enrollment-documents")
-    .upload(path, file, { upsert: false, contentType: file.type || undefined });
-  if (uploadError) throw new Error(uploadError.message);
+  const bucket = supabase.storage.from("enrollment-documents");
+  let path: string;
+  if (protectedCategory) {
+    path = await uploadValidatedDocument("enrollment", applicationId, category, file);
+  } else {
+    const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+    path = `${applicationId}/${crypto.randomUUID()}-${safeName}`;
+    const { error } = await bucket.upload(path, file, { upsert: false, contentType: file.type || undefined });
+    if (error) throw new Error(error.message);
+  }
 
   const { data, error: metaError } = await supabase
     .from("enrollment_application_documents")

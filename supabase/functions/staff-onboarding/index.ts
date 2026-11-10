@@ -6,6 +6,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
+import { createDocumentCategoryCheck } from "../_shared/document-extraction/classify.ts";
+import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
 import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
 import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
@@ -25,6 +27,7 @@ const providerConfig: Record<string, string> = { OPENAI_API_KEY: Deno.env.get("O
 const mailEnv: Record<string, string> = { SUPABASE_URL };
 for (const name of HR_MAIL_ENV) mailEnv[name] = Deno.env.get(name) ?? "";
 const fetchForReader = readerFetch({ SUPABASE_URL, EF_OPENAI_API_URL: Deno.env.get("EF_OPENAI_API_URL") ?? "" });
+const checkCategory = createDocumentCategoryCheck({ apiKey: providerConfig.OPENAI_API_KEY, model: providerConfig.OPENAI_DOCUMENT_MODEL, fetch: fetchForReader });
 for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
 
 // The address search uses the SAME key and helper as the address-search function (the student form's): the key stays on the server.
@@ -117,6 +120,8 @@ Deno.serve(async (req) => {
     upload: async (path, bytes, contentType) => { const { error } = await bucket.upload(path, bytes, { contentType, upsert: false }); return { error: error ? error.message : null }; },
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
     signedUrl: async (path, seconds) => { const { data } = await bucket.createSignedUrl(path, seconds); return data?.signedUrl ?? null; },
+    checkCategory,
+    recordCategory: (path, category) => recordDocumentCategory(admin, "staff-documents", path, category),
     scheduleExtraction,
     hash: sha256,
     newId: () => crypto.randomUUID(),

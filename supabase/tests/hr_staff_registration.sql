@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(573);
+select plan(589);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -1053,5 +1053,27 @@ select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":
 select hr.staff_anonymise(pg_temp.v('w1p'));
 select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select passport_number || nationality || visa_subclass || tax_residency || super_choice || super_fund_abn || super_member_number from hr.staff_profiles where id = pg_temp.v('w1p')), '0/', 'retention removes the bank details, the identity fields and the tax and super answers');
 
+-- General document signing: deterministic fixtures, no email or Storage calls.
+reset role;
+select ok(not has_function_privilege('anon','public.signing_admin(text,uuid,jsonb)','execute'), 'signing admin denied to anon');
+select ok(not has_function_privilege('authenticated','public.signing_service(text,text,uuid,jsonb)','execute'), 'signing service denied to browsers');
+select ok(not has_table_privilege('authenticated','hr.sign_requests','select'), 'request tables are private');
+select set_config('request.jwt.claim.sub','a0000000-0000-0000-0000-000000000004',true);
+select set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-000000000004","role":"authenticated"}',true);
+select lives_ok($select public.signing_admin('create','d0000000-0000-0000-0000-000000000001',jsonb_build_object('title','Fixture','recipient_name','Asha Patel','recipient_email','asha@example.test','original_hash',repeat('a',64)))$, 'admin creates draft');
+select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'draft','new request is draft');
+select lives_ok($select public.signing_admin('send','d0000000-0000-0000-0000-000000000001',jsonb_build_object('token_hash',repeat('b',64),'delivery_id','d0000000-0000-0000-0000-000000000002'))$,'send claims request');
+select throws_ok($select public.signing_admin('send','d0000000-0000-0000-0000-000000000001','{}')$,'P0001','An email is already being sent','concurrent send refused');
+select is(public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000099","state":"sent"}')->>'stale','true','stale delivery fenced');
+select public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000002","state":"sent"}');
+select is(public.signing_service('open',repeat('b',64))->>'state','viewed','first open records viewed');
+select throws_ok($select public.signing_service('open',repeat('c',64))$,'P0001','This signing link is invalid or expired','unknown token refused');
+select throws_ok($select public.signing_service('sign',repeat('b',64),null,'{}')$,'P0001','Your full name and agreement are required','missing consent refused');
+select public.signing_service('sign',repeat('b',64),null,jsonb_build_object('signer_name','Asha Patel','signed_at',now(),'signed_path','d0000000-0000-0000-0000-000000000001/signed-fixture.pdf','signed_hash',repeat('d',64),'original_hash',repeat('a',64),'consent','I have read this document and agree to its contents. I consent to use my typed full name as my electronic signature.'));
+select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'signed','signature committed');
+select throws_ok($select public.signing_service('sign',repeat('b',64),null,'{}')$,'P0001','This document is already signed','replay refused');
+select throws_ok($select public.signing_admin('void','d0000000-0000-0000-0000-000000000001')$,'P0001','This request is closed','signed document cannot be voided');
+select is(public.signing_service('path_referenced',null,null,'{"path":"d0000000-0000-0000-0000-000000000001/signed-fixture.pdf"}'),'true'::jsonb,'committed PDF protected from cleanup');
+select is((select count(*)::int from hr.sign_events where request_id='d0000000-0000-0000-0000-000000000001' and event='signed'),1,'one signature audit event');
 select * from finish();
 rollback;

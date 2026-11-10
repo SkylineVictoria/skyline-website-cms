@@ -37,39 +37,39 @@ export default function Home() {
         path="/"
         image={defaultOgImage}
       />
-      <section className="bg-accent-950 text-white">
-        <div className="site-container grid items-center gap-9 py-12 md:py-16 lg:grid-cols-2 lg:gap-14">
+      <section className="bg-[#f5f5f7] text-[#1d1d1f]">
+        <div className="mx-auto max-w-[1440px] px-5 pt-14 text-center md:px-12 md:pt-20">
           <div>
-            <p className="text-sm font-semibold text-primary-300">Skyline Institute of Technology · Melbourne</p>
-            <h1 className="mt-4 max-w-xl font-heading text-4xl font-bold leading-tight tracking-tight md:text-5xl xl:text-6xl">
-              Practical training for your next career step
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground-500">Skyline Institute of Technology · Melbourne</p>
+            <h1 className="mx-auto mt-5 max-w-5xl font-heading text-[48px] font-semibold leading-[1.02] tracking-[-0.055em] md:text-[84px] lg:text-[104px]">
+              Your future.<br /><span className="text-primary-600">Starts here.</span>
             </h1>
-            <p className="mt-5 max-w-md text-base leading-relaxed text-background-200 md:text-lg">
+            <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-foreground-600 md:text-2xl">
               Build hands-on skills through vocational courses in Melbourne.
             </p>
-            <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
-              <Link to="/our-courses" className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-5 py-3 text-sm font-semibold text-white hover:bg-primary-700">
+            <div className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-3">
+              <Link to="/our-courses" className="inline-flex items-center gap-2 rounded-full bg-primary-600 px-7 py-3.5 text-sm font-semibold text-white hover:bg-primary-700">
                 Explore courses <i className="ri-arrow-right-line" aria-hidden="true" />
               </Link>
-              <Link to="/contact" className="py-3 text-sm font-semibold text-white underline underline-offset-4 hover:text-primary-300">
+              <Link to="/contact" className="py-3 text-base font-medium text-primary-700 hover:underline underline-offset-4">
                 Book a call
               </Link>
             </div>
           </div>
           <div>
-            <div className="overflow-hidden rounded-2xl bg-accent-900">
+            <div className="mt-12 overflow-hidden rounded-t-[28px] bg-white md:mt-16 md:rounded-t-[40px]">
               <img
                 src={heroImages[slide] ?? heroImages[0]}
                 alt=""
-                className="aspect-[4/3] w-full object-cover object-center"
+                className="h-[300px] w-full object-cover object-center md:h-[460px]"
                 fetchPriority="high"
               />
             </div>
             {heroImages.length > 1 ? (
-              <div className="mt-2 flex justify-center gap-1" aria-label="Homepage photos" role="group">
+              <div className="flex justify-center gap-1 py-3" aria-label="Homepage photos" role="group">
                 {heroImages.map((_, index) => (
-                  <button key={index} type="button" onClick={() => setSlide(index)} aria-label={`Show photo ${index + 1}`} aria-pressed={index === slide} className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/10">
-                    <span className={`h-2 w-2 rounded-full ${index === slide ? "bg-primary-300" : "bg-white/50"}`} />
+                  <button key={index} type="button" onClick={() => setSlide(index)} aria-label={`Show photo ${index + 1}`} aria-pressed={index === slide} className="grid h-8 w-8 place-items-center rounded-full hover:bg-black/5">
+                    <span className={`h-2 w-2 rounded-full ${index === slide ? "bg-primary-600" : "bg-black/20"}`} />
                   </button>
                 ))}
               </div>
@@ -79,15 +79,15 @@ export default function Home() {
       </section>
 
       {coursesLoading || homeCourses.length > 0 ? (
-      <section className="bg-background-100 py-16 md:py-24">
+      <section className="bg-white py-20 md:py-28">
         <div className="site-container">
           <Reveal className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
             <div>
-              <h2 className="mt-3 font-heading text-3xl font-bold text-foreground-950 md:text-4xl">Explore our courses</h2>
+              <h2 className="mt-3 font-heading text-4xl font-semibold tracking-[-0.04em] text-foreground-950 md:text-6xl">Find your next chapter.</h2>
             </div>
             <Link
               to="/our-courses"
-              className="inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-5 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
+              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-background-300 bg-white px-5 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
             >
               View all courses
               <i className="ri-arrow-right-line" aria-hidden="true" />
@@ -102,10 +102,10 @@ export default function Home() {
 
       ) : null}
 
-      <section className="bg-background-50 py-16 md:py-24">
+      <section className="mx-3 rounded-[28px] bg-[#f5f5f7] py-20 md:mx-6 md:rounded-[40px] md:py-28">
         <div className="site-container grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
           <Reveal>
-            <div className="relative overflow-hidden rounded-card border border-background-200 bg-background-100">
+            <div className="relative overflow-hidden rounded-3xl bg-white">
               <img
                 src={aboutImage}
                 alt="Skyline Institute of Technology campus and students"
@@ -118,15 +118,15 @@ export default function Home() {
               <i className="ri-graduation-cap-line text-base" aria-hidden="true" />
               About Our Institute
             </span>
-            <h2 className="mt-4 font-heading text-3xl font-bold leading-tight text-foreground-950 md:text-4xl">
-              Learn by doing
+            <h2 className="mt-4 font-heading text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-foreground-950 md:text-6xl">
+              Real skills.<br />New possibilities.
             </h2>
             <p className="mt-5 text-base leading-relaxed text-foreground-700">
               We help students from diverse backgrounds develop practical skills for starting or advancing a career.
             </p>
             <Link
               to="/about-us"
-              className="mt-7 inline-flex items-center gap-2 whitespace-nowrap rounded-md bg-secondary-900 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-secondary-800"
+              className="mt-7 inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-secondary-900 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-secondary-800"
             >
               About Skyline
               <i className="ri-arrow-right-line" aria-hidden="true" />
@@ -135,41 +135,11 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="bg-accent-950 py-14 md:py-16">
-        <div className="site-container flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-center">
-          <div>
-            <h2 className="font-heading text-2xl font-bold text-background-50 md:text-3xl">Get In Touch</h2>
-            <div className="mt-5 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-background-200">
-              <a href={settings.phoneHref} className="flex items-center gap-2 transition-colors hover:text-primary-300">
-                <i className="ri-phone-line text-base text-primary-300" aria-hidden="true" />
-                {settings.phone}
-              </a>
-              <a href={settings.emailHref} className="flex items-center gap-2 transition-colors hover:text-primary-300">
-                <i className="ri-mail-line text-base text-primary-300" aria-hidden="true" />
-                {settings.email}
-              </a>
-              <span className="flex items-center gap-2">
-                <i className="ri-map-pin-line text-base text-primary-300" aria-hidden="true" />
-                {settings.address}
-              </span>
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <Link
-              to="/enroll-now"
-              className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"
-            >
-              Enroll Now
-              <i className="ri-arrow-right-line" aria-hidden="true" />
-            </Link>
-            <Link
-              to="/contact"
-              className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-50/40 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-background-50/10"
-            >
-              Contact Us
-            </Link>
-          </div>
-        </div>
+      <section className="mx-3 my-3 rounded-[28px] bg-[#1d1d1f] px-6 py-20 text-center text-white md:mx-6 md:my-6 md:rounded-[40px] md:py-28">
+        <p className="text-sm font-medium text-white/60">Your next step</p>
+        <h2 className="mx-auto mt-4 max-w-3xl font-heading text-4xl font-semibold leading-tight tracking-[-0.04em] md:text-6xl">Big plans?<br />Let’s talk.</h2>
+        <p className="mx-auto mt-5 max-w-md text-lg text-white/70">Explore your study options with the Skyline team.</p>
+        <Link to="/contact" className="mt-8 inline-flex rounded-full bg-white px-7 py-3.5 text-base font-medium text-[#1d1d1f] hover:bg-background-200">Book a call</Link>
       </section>
 
       <LatestNews />

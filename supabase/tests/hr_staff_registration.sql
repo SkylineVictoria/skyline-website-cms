@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(319);
+select plan(471);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -29,6 +29,38 @@ grant select, insert on t to public;
 create function pg_temp.v(text) returns uuid language sql stable as $$ select v::uuid from t where k = $1 $$;
 create function pg_temp.h(text) returns text language sql immutable as $$ select encode(sha256(convert_to($1, 'UTF8')), 'hex') $$;
 create function pg_temp.obj(text) returns void language sql as $$ insert into storage.objects(bucket_id, name) values ('staff-documents', $1) $$;
+-- Onboarding flow (20261111090000): the pay details an offer needs. pg_temp.pay() is the form with defaults (p_over replaces fields);
+-- pg_temp.set_pay() stores what hr_admin_onboarding_pay_save stores, for fixtures that are not about the form.
+insert into t select 'sched', id::text from hr.pay_schedules where is_active order by name limit 1;
+create function pg_temp.sched_name() returns text language sql stable security definer as $$ select name from hr.pay_schedules where id = (select v::uuid from t where k = 'sched') $$;
+create function pg_temp.pay(p_over jsonb) returns jsonb language sql stable as $$
+ select jsonb_build_object('jobTitle', 'Trainer', 'employmentType', 'full_time', 'startDate', (current_date + 30)::text, 'payBasis', 'hourly', 'rate', '42.50',
+  'payScheduleId', (select v from t where k = 'sched'), 'hoursPerWeek', '38') || p_over $$;
+create function pg_temp.set_pay(p_id uuid) returns void language plpgsql as $$
+begin
+ insert into hr.employment(profile_id, job_title, employment_type, joining_date, pay_details_at) values (p_id, 'Trainer', 'full_time', current_date + 30, now())
+  on conflict (profile_id) do update set job_title = case when hr.employment.job_title = '' then 'Trainer' else hr.employment.job_title end,
+   employment_type = coalesce(hr.employment.employment_type, 'full_time'), joining_date = current_date + 30, pay_details_at = now();
+ insert into hr.employee_pay(profile_id, pay_schedule_id, pay_basis, rate, ordinary_hours_week) values (p_id, (select v::uuid from t where k = 'sched'), 'hourly', 42.5, 38)
+  on conflict (profile_id) do update set pay_schedule_id = excluded.pay_schedule_id, pay_basis = 'hourly', rate = 42.5, ordinary_hours_week = 38;
+end $$;
+-- A direct applicant with approved documents, pay details and an unsent offer: ready for "Send offer letter".
+create function pg_temp.to_ready(p_key text, p_first text, p_email text, p_phone text) returns uuid language plpgsql as $$
+declare v_id uuid;
+begin
+ v_id := (public.hr_svc_apply(p_first, 'Ready', p_email, p_phone)->>'profileId')::uuid;
+ insert into t values (p_key, v_id);
+ update hr.staff_profiles set status = 'invited' where id = v_id;
+ update hr.staff_profiles set status = 'documents_submitted', is_australian_citizen = true where id = v_id;
+ update hr.staff_applications set submitted_at = now() where profile_id = v_id;
+ insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/passport/p.pdf'), ('staff-documents', v_id || '/academic/a.pdf'), ('staff-documents', v_id || '/health-insurance/h.pdf'), ('staff-documents', v_id || '/offer/o.pdf');
+ insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, reviewed_at, expiry_date)
+  select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', now(), case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
+  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
+ perform pg_temp.set_pay(v_id);
+ insert into hr.staff_offers(profile_id, storage_path, filename, file_size, sha256, uploaded_by) values (v_id, v_id || '/offer/o.pdf', 'o.pdf', 10, repeat('a', 64), 'a0000000-0000-0000-0000-000000000004');
+ return v_id;
+end $$;
 -- Walks a fresh application to offer_signed with direct writes (the guard still checks every move).
 create function pg_temp.to_signed(p_key text, p_first text, p_email text, p_phone text) returns uuid language plpgsql as $$
 declare v_id uuid;
@@ -47,6 +79,7 @@ begin
  insert into hr.staff_offers(profile_id, storage_path, filename, file_size, sha256, uploaded_by, sent_at, sent_by, signed_at, signer_name, consent_text, signed_path, signed_sha256)
   values (v_id, v_id || '/offer/o.pdf', 'o.pdf', 10, repeat('a', 64), 'a0000000-0000-0000-0000-000000000004', now(), 'a0000000-0000-0000-0000-000000000004', now(),
    p_first, 'I agree', v_id || '/offer/s.pdf', repeat('b', 64));
+ perform pg_temp.set_pay(v_id);
  update hr.staff_profiles set status = 'offer_sent' where id = v_id;
  update hr.staff_profiles set status = 'offer_signed' where id = v_id;
  return v_id;
@@ -57,7 +90,7 @@ select is(hr.staff_transition_allowed('applied','invited'), true, 'applied -> in
 select is(hr.staff_transition_allowed('documents_submitted','invited'), true, 're-upload goes back to invited');
 select is(hr.staff_transition_allowed('offer_sent','documents_submitted'), true, 'a withdrawn offer goes back to documents_submitted');
 select is(hr.staff_transition_allowed('rejected','applied'), true, 'rejected -> applied (re-application or reopen)');
-select is(hr.staff_transition_allowed('applied','active'), false, 'nobody skips to active');
+select is(hr.staff_transition_allowed('applied','active') and hr.staff_transition_allowed('invited','inactive'), true, 'an Admin may make anyone Active or Inactive (Employees, 20261110170000 / 20261110220000)');
 select is(hr.staff_transition_allowed('invited','offer_sent'), false, 'no offer before the documents are submitted');
 select is(hr.staff_transition_allowed('draft','submitted'), false, 'the old statuses are gone');
 select throws_ok($$insert into hr.staff_profiles(email, phone_e164, status) values ('x@example.test', '+61400000999', 'invited')$$, '23514', 'A staff profile starts as an application.', 'a profile starts as applied');
@@ -190,6 +223,10 @@ select throws_ok($$select public.hr_admin_staff_offer_send(pg_temp.v('a1'), pg_t
 select lives_ok($$select public.hr_admin_staff_offer_add(pg_temp.v('a1'), pg_temp.v('a1') || '/offer/offer.pdf', 'offer.pdf', 1000, repeat('c', 64))$$, 'the offer PDF is recorded');
 select throws_ok($$select public.hr_admin_staff_offer_send(pg_temp.v('a1'), pg_temp.h('off-1'))$$, '23514', 'Approve every required document first (passport).', 'every required document must be approved first');
 select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d where d.profile_id = pg_temp.v('a1') and d.is_current$$, 'approve every document');
+-- pay details come before the offer (20261111090000): the status guard refuses the move on every path
+select throws_ok($$select public.hr_admin_staff_offer_send(pg_temp.v('a1'), pg_temp.h('off-1'))$$, '23514', 'An offer cannot be sent yet. Add the pay details first.', 'blocked: no offer before the pay details');
+select is(public.hr_admin_onboarding(pg_temp.v('a1'))->>'stage', 'documents_approved', 'documents approved, no pay details yet: the stage is Documents approved');
+select is(public.hr_admin_onboarding_pay_save(pg_temp.v('a1'), pg_temp.pay('{}'))->>'stage', 'pay_details', 'the pay details are added: the stage is Pay details added');
 select is(public.hr_admin_staff_offer_send(pg_temp.v('a1'), pg_temp.h('off-1'))->'invite'->>'purpose', 'offer', 'the offer is sent with its own link');
 reset role;
 select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'offer_sent', 'offer_sent');
@@ -216,6 +253,7 @@ select is(public.hr_svc_offer_signed_file((select id from hr.staff_offers where 
 insert into t select 'w1', public.hr_svc_apply('Wes', 'Withdrawn', 'wes@example.test', '0400 000 301')->>'profileId';
 update hr.staff_profiles set status = 'invited' where id = pg_temp.v('w1');
 update hr.staff_profiles set status = 'documents_submitted' where id = pg_temp.v('w1');
+select pg_temp.set_pay(pg_temp.v('w1')); -- pay details before an offer (20261111090000)
 update hr.staff_profiles set status = 'offer_sent' where id = pg_temp.v('w1');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
@@ -328,6 +366,11 @@ select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '040
 select is(public.hr_svc_apply('Wes', 'Again', 'wes@example.test', '0400 000 301')->>'profileId', pg_temp.v('w1')::text, 'a rejected application is reopened by applying again');
 update hr.staff_profiles set status = 'rejected' where id = pg_temp.v('w1');
 select is(public.hr_svc_apply('Sam', 'Student', 'student.login@example.test', '0400 000 501')->>'reason', 'exists', 'an active staff member is a duplicate');
+-- ...also for a Careers job (20261110230000): nothing is recorded
+insert into hr.jobs(title, description, employment_type, location, status, department) values ('Second open role', 'Other.', 'full_time', 'Melbourne', 'open', 'Training');
+select is(public.hr_svc_apply('Sam', 'Student', 'student.login@example.test', '0400 000 501', (select id from hr.jobs where title = 'Second open role'), null)->>'reason', 'exists', 'an active employee cannot apply for a job');
+select is((select count(*)::int from hr.job_applications where job_id = (select id from hr.jobs where title = 'Second open role')), 0, '...and nothing is recorded on that job');
+delete from hr.jobs where title = 'Second open role';
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select lives_ok($$select public.hr_admin_staff_deactivate(pg_temp.v('s1'), 'Left again')$$, 'deactivate before re-applying');
@@ -460,6 +503,12 @@ select is((select p.status || '/' || j.status || '/' || j.stage || '/' || j.sour
 update hr.staff_applications set resume_path = pg_temp.v('jc1') || '/resume/first.pdf', resume_filename = 'first.pdf', resume_mime = 'application/pdf', resume_size = 10 where profile_id = pg_temp.v('jc1');
 select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', pg_temp.v('jjob1'), null)->>'reason', 'exists', 'applying again for the same job: the same answer');
 select is((select count(*)::int from hr.job_applications where profile_id = pg_temp.v('jc1')), 1, '...and still one open job application');
+-- no second application (20261110230000): an open application or an active employee applying for ANOTHER job records nothing
+insert into hr.jobs(title, description, employment_type, location, status, department) values ('Second open role', 'Other.', 'full_time', 'Melbourne', 'open', 'Training');
+select is(public.hr_svc_apply('Cara', 'Careers', 'cara.careers@example.test', '0400 000 811', (select id from hr.jobs where title = 'Second open role'), 'Me again.')->>'reason', 'exists', 'an open application cannot apply for another job');
+select is((select count(*)::int from hr.job_applications where profile_id = pg_temp.v('jc1')), 1, '...and no second job application is recorded');
+select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('jc1') and kind = 'already_applied'), 1, '...and the address is told once that it already applied');
+delete from hr.jobs where title = 'Second open role';
 insert into t select 'japp1', id::text from hr.job_applications where profile_id = pg_temp.v('jc1');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('jc1') || '/cover-letter/c.pdf'), ('staff-documents', pg_temp.v('jc1') || '/resume/c.pdf');
 select throws_ok(format($$select public.hr_svc_job_cover_letter(%L, %L, 'c.pdf', 'application/pdf', 10)$$, pg_temp.v('japp1'), pg_temp.v('jc1') || '/resume/c.pdf'),
@@ -552,7 +601,10 @@ select is((select count(*)::int from pg_trigger where tgname in ('employment_on_
 select throws_ok($$update hr.staff_profiles set status = 'job_applied' where id = pg_temp.v('jc1')$$, '23514', null, 'job_applied is no longer a status');
 select is((select count(*)::int from information_schema.columns where table_schema = 'hr' and table_name = 'job_applications' and column_name in ('resume_document_id','cover_letter_document_id')), 0,
  'job applications no longer point at staff documents');
-select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled), 'staff_candidates,agency_staff,agency_jobs,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero', 'the Staff group holds Candidates, Employees, Jobs and the HRMS pages');
+select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled) || ' | '
+  || (select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'website' and id in ('agency_jobs', 'staff_candidates') and is_enabled),
+ 'agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero,staff_templates | agency_jobs,staff_candidates',
+ 'HRMS holds Employees, the HRMS pages and Templates; Jobs and Candidates are under Website (20261110200000 / 210000, 20261111100000)');
 select is((select count(*)::int from public.admin_menu_items where id in ('agency_candidates', 'agency_employees') and is_enabled), 0, 'the Master Data copies of Candidates and Employees are disabled');
 
 -- ---------------------------------------------------------------- org chart (20261110100000)
@@ -599,8 +651,259 @@ select is((public.hr_admin_staff_list(null, null, 50, 0, array['offer_signed','a
 reset role;
 
 -- ---------------------------------------------------------------- guard and append-only
-select throws_ok($$update hr.staff_profiles set status = 'active' where id = pg_temp.v('x1')$$, '23514', null, 'invited -> active is not an allowed transition');
+select throws_ok($$update hr.staff_profiles set status = 'offer_sent' where id = pg_temp.v('x1')$$, '23514', 'A staff record cannot move from invited to offer_sent.', 'invited -> offer_sent is not an allowed transition (the guard still refuses skipped steps)');
 select throws_ok($$update hr.staff_status_events set note = 'edited'$$, '23514', 'The staff status log is append-only.', 'the log cannot be edited');
 select ok((select count(*) from hr.staff_status_events where profile_id = pg_temp.v('a1')) >= 7, 'every move of the application is logged');
+-- ================================================================ onboarding flow (20261111090000 / 100000 / 110000)
+-- Stages, pay details before the offer, templates, the offer with a login, the audit trail and who may do what.
+insert into auth.users(id, email, email_confirmed_at, invited_at, raw_user_meta_data, aud, role) values
+ ('a0000000-0000-0000-0000-00000000f001', 'flow.one@example.test', null, null, '{}', 'authenticated', 'authenticated'),
+ ('a0000000-0000-0000-0000-00000000f002', 'flow.two@example.test', null, null, '{}', 'authenticated', 'authenticated');
+insert into hr.jobs(title, description, employment_type, location, status, department) values ('Flow Trainer', 'Teach.', 'part_time', 'Melbourne', 'open', 'Training');
+insert into t select 'fjob', id::text from hr.jobs where title = 'Flow Trainer';
+-- hr.templates is closed to every role but the functions: these read it for the assertions.
+create function pg_temp.tpl(p_name text) returns uuid language sql stable security definer as $$ select id from hr.templates where name = p_name $$;
+create function pg_temp.tpl_defaults(p_type text) returns integer language sql stable security definer as $$ select count(*)::int from hr.templates where type = p_type and is_default $$;
+
+-- ---- Applied > Shortlisted (a Careers applicant)
+insert into t select 'f1', public.hr_svc_apply('Flo', 'One', 'flow.one@example.test', '0400 000 951', pg_temp.v('fjob'), null)->>'profileId';
+update hr.staff_applications set resume_path = pg_temp.v('f1') || '/resume/r.pdf', resume_filename = 'r.pdf', resume_mime = 'application/pdf', resume_size = 10 where profile_id = pg_temp.v('f1');
+insert into t select 'fapp', id::text from hr.job_applications where profile_id = pg_temp.v('f1');
+select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'applied', 'a new application is at Applied');
+select is((hr.onboarding_stage(pg_temp.v('f1'))->'steps'->0->>'state') || '/' || (hr.onboarding_stage(pg_temp.v('f1'))->'steps'->1->>'state'), 'current/todo', 'Applied is the current step, the rest are not started');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
+select throws_ok($$select public.hr_admin_onboarding(pg_temp.v('f1'))$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot read the onboarding progress');
+select throws_ok($$select public.hr_admin_onboarding_documents_invite(pg_temp.v('f1'), pg_temp.h('flow-doc-x'))$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot send the document link');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), '{}')$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot save pay details');
+select throws_ok($$select public.hr_admin_templates()$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot read the templates');
+select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-00000000f001', pg_temp.h('x'))$$, '42501', 'Only an administrator can do this.', 'a non-admin cannot send an offer');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_candidate_progress(pg_temp.v('fapp'), 'shortlisted', null, null, null, false)$$, 'the candidate is shortlisted');
+select is(public.hr_admin_onboarding(pg_temp.v('f1'))->>'stage', 'shortlisted', 'a shortlisted job application: the stage is Shortlisted');
+select ok((public.hr_admin_onboarding(pg_temp.v('f1'))->'steps'->1->>'at') is not null, '...with the date it was shortlisted');
+
+-- ---- Documents requested: the employee page sends the link and hires the open job application
+select is(public.hr_admin_onboarding_documents_invite(pg_temp.v('f1'), pg_temp.h('flow-doc-1'))->>'jobTitle', 'Flow Trainer', 'Send document link hires the open job application (same as Candidates > Hire)');
+reset role;
+select is((select status || '/' || stage from hr.job_applications where id = pg_temp.v('fapp')), 'hired/selected', 'the job application is hired');
+select is((select job_title || '/' || employment_type from hr.employment where profile_id = pg_temp.v('f1')), 'Flow Trainer/part_time', 'the employment record comes from the job');
+select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'documents_requested', 'the stage is Documents requested');
+select ok((select max(i.created_at) from hr.staff_invites i where i.profile_id = pg_temp.v('f1') and i.purpose = 'documents') is not null, 'the link date is recorded (Resend link shows it)');
+select throws_ok($$update hr.staff_profiles set status = 'offer_sent' where id = pg_temp.v('f1')$$, '23514', null, 'blocked: no offer while the documents are only requested');
+
+-- ---- Documents submitted > approved
+update hr.staff_profiles set is_australian_citizen = true where id = pg_temp.v('f1');
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('f1') || '/passport/p.pdf'), ('staff-documents', pg_temp.v('f1') || '/academic/a.pdf'), ('staff-documents', pg_temp.v('f1') || '/health-insurance/h.pdf');
+insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date)
+ select a.id, a.profile_id, c.category, a.profile_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
+ from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = pg_temp.v('f1');
+update hr.staff_profiles set status = 'documents_submitted' where id = pg_temp.v('f1');
+update hr.staff_applications set submitted_at = now() where profile_id = pg_temp.v('f1');
+select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'documents_submitted', 'documents in, not all approved: the stage is Documents submitted');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{}'))$$, '23514', 'Approve every required document first (passport).', 'blocked: no pay details before the documents are approved');
+select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'rejected', 'Photo page cut off') from hr.staff_documents d where d.profile_id = pg_temp.v('f1') and d.category = 'Passport' and d.is_current$$, 'a document is rejected with a reason');
+select is((public.hr_admin_onboarding(pg_temp.v('f1'))->>'stage') || '/' || (public.hr_admin_staff_detail(pg_temp.v('f1'))->'summary'->>'rejected'), 'documents_submitted/1', 'a rejected document keeps the stage at Documents submitted');
+select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d where d.profile_id = pg_temp.v('f1') and d.is_current$$, 'every document is approved');
+select is(public.hr_admin_onboarding(pg_temp.v('f1'))->>'stage', 'documents_approved', 'all approved, no pay details: the stage is Documents approved');
+select is(public.hr_admin_onboarding(pg_temp.v('f1'))->>'payProblem', 'Add the pay details first.', '...and it says what is missing');
+
+-- ---- Pay details: every field is checked
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"jobTitle":"  "}'))$$, '22023', 'Enter the position (job title).', 'pay details: the position is required');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"contract"}'))$$, '22023', 'Choose the employment type.', 'pay details: an unknown employment type is refused');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"startDate":"2027-02-31"}'))$$, '22023', 'Enter a valid start date.', 'pay details: an impossible date is refused');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"startDate":"2001-01-01"}'))$$, '22023', 'The start date must be within the last year or the next two years.', 'pay details: a start date far away is refused');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"payBasis":"weekly"}'))$$, '22023', 'Choose the pay basis (hourly or annual).', 'pay details: the basis is hourly or annual');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"rate":"abc"}'))$$, '22023', 'Enter the pay rate as a number, for example 38.50.', 'pay details: the rate is a number');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"rate":"0"}'))$$, '22023', 'The pay rate must be more than zero.', 'pay details: the rate is more than zero');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"rate":"85000"}'))$$, '22023', 'That hourly rate looks too high. Check the pay basis.', 'pay details: an annual figure entered as hourly is caught');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"payBasis":"salary","rate":"42.50"}'))$$, '22023', 'That annual salary looks too low. Check the pay basis.', 'pay details: an hourly figure entered as annual is caught');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"payScheduleId":""}'))$$, '22023', 'Choose the pay schedule.', 'pay details: the pay schedule is required');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"payScheduleId":"00000000-0000-0000-0000-000000000000"}'))$$, '22023', 'Choose an active pay schedule.', 'pay details: the schedule must exist and be active');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"hoursPerWeek":""}'))$$, '22023', 'Enter the hours per week.', 'pay details: hours are required for full time');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"hoursPerWeek":"99"}'))$$, '22023', 'The hours per week must be between 1 and 80.', 'pay details: hours stay in range');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay(format('{"managerId":"%s"}', pg_temp.v('f1'))::jsonb))$$, '23514', 'A person cannot be their own manager.', 'pay details: nobody reports to themselves');
+select is(public.hr_admin_onboarding(pg_temp.v('f1'))->'payDetails'->>'completedAt', null, 'a refused save changes nothing');
+select is(public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"casual","hoursPerWeek":""}'))->>'stage', 'pay_details', 'a casual needs no hours: the stage is Pay details added');
+select is(public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"jobTitle":"Senior Trainer","managerId":""}'))->>'payComplete', 'true', 'the pay details can be changed before the offer');
+reset role;
+select is((select e.job_title || '/' || e.employment_type || '/' || (e.joining_date = current_date + 30)::text || '/' || ep.pay_basis || '/' || ep.rate || '/' || ep.ordinary_hours_week
+  from hr.employment e join hr.employee_pay ep on ep.profile_id = e.profile_id where e.profile_id = pg_temp.v('f1')), 'Senior Trainer/full_time/true/hourly/42.50/38.00', 'position, type, start date, basis, rate and hours are stored');
+select is((select pay_details_by from hr.employment where profile_id = pg_temp.v('f1')), 'a0000000-0000-0000-0000-000000000004'::uuid, '...with who completed them');
+
+-- ---- Templates
+select is((select count(*)::int from hr.templates where is_default and archived_at is null), 6, 'one seeded default template of each kind');
+select is((select count(*)::int from hr.templates t where hr.template_problem(t.type, t.subject, t.body_html) is not null), 0, 'every seeded template passes its own checks');
+select is((select string_agg(label, ',') from public.admin_menu_items where id = 'staff_templates' and parent_id = 'staff' and permission_key = 'cms.admin'), 'Templates', 'HRMS > Templates is in the menu for Admins only');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"offer_letter","name":"Bad","subject":"Offer","bodyHtml":"<p>Dear {{first_name}}, {{bogus}}</p>"}')$$, '22023', '{{bogus}} cannot be used in this kind of template.', 'a template: an unknown placeholder is refused');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"offer_letter","name":"Bad","subject":"Offer","bodyHtml":"<p>Open {{signing_link}}</p>"}')$$, '22023', '{{signing_link}} cannot be used in this kind of template.', 'a template: a link placeholder only goes in the email that carries the link');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"offer_email","name":"Bad","subject":"Offer","bodyHtml":"<p>Hello {{first_name}}</p>"}')$$, '22023', 'This email must contain {{signing_link}} so the person can sign in.', 'a template: the offer email must carry the sign-in link');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":"Bad","subject":"Sorry","bodyHtml":"<p>Hi</p><script>alert(1)</script>"}')$$, '22023', 'The template contains markup that is not allowed (scripts, styles, frames or event handlers).', 'a template: scripts are refused');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":"Bad","subject":"Sorry","bodyHtml":"<p onclick=\"x()\">Hi</p>"}')$$, '22023', 'The template contains markup that is not allowed (scripts, styles, frames or event handlers).', 'a template: event handlers are refused');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":" ","subject":"Sorry","bodyHtml":"<p>Hi</p>"}')$$, '22023', 'Give the template a name (up to 120 characters).', 'a template: a name is required');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":"Empty","subject":"Sorry","bodyHtml":"<p> &nbsp; </p>"}')$$, '22023', 'The template has no text.', 'a template: an empty body is refused');
+insert into t select 'tpl2', public.hr_admin_template_save(null, '{"type":"offer_letter","name":"Short offer","subject":"Offer: {{position}}","bodyHtml":"<p>Dear {{first_name}}, you start as {{position}} on {{start_date}} at {{pay_rate}} {{pay_basis}}. Manager: {{manager_name}}.</p>"}')->>'id';
+select is((select x->>'isDefault' from jsonb_array_elements(public.hr_admin_templates()) x where x->>'id' = pg_temp.v('tpl2')::text), 'false', 'a new template is not the default while one exists');
+select throws_ok($$select public.hr_admin_template_save(null, '{"type":"offer_letter","name":"short OFFER","subject":"Offer","bodyHtml":"<p>Hi</p>"}')$$, '23505', 'Another template of this kind is already called "short OFFER".', 'a template: names are unique within a kind');
+select is(public.hr_admin_template_duplicate(pg_temp.v('tpl2'))->>'name', 'Short offer (copy)', 'a template is duplicated');
+select is(public.hr_admin_template_set_default(pg_temp.v('tpl2'))->>'isDefault', 'true', 'another template becomes the default');
+select is(pg_temp.tpl_defaults('offer_letter'), 1, '...and there is still exactly one default of that kind');
+select throws_ok($$select public.hr_admin_template_archive(pg_temp.v('tpl2'), true)$$, '23514', 'This is the default template. Make another one the default before archiving it.', 'the default template cannot be archived');
+select ok((public.hr_admin_template_archive(pg_temp.tpl('Short offer (copy)'), true)->>'archivedAt') is not null, 'a template is archived');
+select throws_ok($$select public.hr_admin_template_set_default(pg_temp.tpl('Short offer (copy)'))$$, '23514', 'An archived template cannot be the default.', 'an archived template cannot be the default');
+select throws_ok($$select public.hr_admin_template_save(pg_temp.tpl('Short offer (copy)'), '{"name":"X","subject":"Y","bodyHtml":"<p>Z</p>"}')$$, '23514', 'Restore the template before editing it.', 'an archived template is not edited');
+select is(public.hr_admin_template_archive(pg_temp.tpl('Short offer (copy)'), false)->>'archivedAt', null, 'a template is restored');
+-- placeholders fill from the person's real details
+select is(public.hr_admin_template_values(pg_temp.v('f1'))->>'position', 'Senior Trainer', 'template values: the position');
+select is((public.hr_admin_template_values(pg_temp.v('f1'))->>'firstName') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'payBasis') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'payRate')
+  || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'paySchedule') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'employmentType'), 'Flo/hourly/42.50/' || pg_temp.sched_name() || '/full_time', 'template values: name, pay and schedule');
+select is(public.hr_admin_template_values(pg_temp.v('f1'))->>'managerName', null, 'template values: missing data stays empty (the renderer refuses to send it)');
+select is(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->>'problem', null, 'the offer letter can be made now');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->'templates') x where x->>'type' = 'offer_letter'), 3, 'the letter templates to choose from (archived ones are not offered)');
+reset role;
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('f1') || '/offer/letter.pdf');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer.pdf', 1000, repeat('d', 64), pg_temp.v('tpl2'), 'Offer', '<p>Dear {{first_name}}</p>', '{}')$$,
+ '23514', 'The letter still has placeholders that were not filled in.', 'a letter with an unfilled placeholder is never recorded');
+select throws_ok($$select public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer.pdf', 1000, repeat('d', 64), pg_temp.tpl('Standard rejection'), 'Offer', '<p>Dear Flo</p>', '{}')$$,
+ '22023', 'Choose an offer letter template.', 'only an offer letter template makes a letter');
+select ok((public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer - Flo One.pdf', 1000, repeat('d', 64), pg_temp.v('tpl2'), 'Offer: Senior Trainer', '<p>Dear Flo, you start as Senior Trainer.</p>', '{"first_name":"Flo"}')->'offer'->>'id') is not null,
+ 'the generated letter is recorded as the offer');
+select lives_ok($$select public.hr_admin_template_save(pg_temp.v('tpl2'), '{"name":"Short offer","subject":"Changed","bodyHtml":"<p>Completely different text for {{first_name}}.</p>"}')$$, 'the template is edited afterwards');
+reset role;
+select is((select l.template_name || '|' || l.title || '|' || l.body_html from hr.staff_offer_letters l where l.profile_id = pg_temp.v('f1')), 'Short offer|Offer: Senior Trainer|<p>Dear Flo, you start as Senior Trainer.</p>',
+ 'the letter made for the person keeps its own copy: a later template edit does not change it');
+
+-- ---- Offer sent, with the login
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('f1'), 'trainer', current_date)$$, '23514', 'Only a person who signed the offer can be activated.', 'blocked: no activation before the offer is signed');
+select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-00000000f001', null)$$, '22023', 'A sign-in link is needed for this person.', 'a login that was never set up needs a sign-in link');
+select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-000000000006', pg_temp.h('flow-acct-1'))$$, '42501', 'That login does not belong to this person.', 'someone else''s login is refused');
+select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), null, pg_temp.h('flow-acct-1'))$$, '22023', 'A login is needed before the offer can be sent.', 'the offer does not go out without a login');
+select is((public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-00000000f001', pg_temp.h('flow-acct-1'))->>'firstSend') , 'true', 'the offer is sent with the login');
+reset role;
+select is((select status || '/' || auth_user_id from hr.staff_profiles where id = pg_temp.v('f1')), 'offer_sent/a0000000-0000-0000-0000-00000000f001', 'offer_sent, and the login is linked to the person');
+select ok((select expires_at between now() + interval '6 days 23 hours' and now() + interval '7 days 1 hour' from hr.staff_invites where token_hash = pg_temp.h('flow-acct-1')), 'the set-password link lasts 7 days');
+select is((select count(*)::int from hr.staff_invites where profile_id = pg_temp.v('f1') and purpose = 'account' and token_hash !~ '^[0-9a-f]{64}$'), 0, 'only the hash of the link is stored');
+select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'offer_sent', 'the stage is Offer sent');
+select is((hr.onboarding_account_json(pg_temp.v('f1'))->>'hasLogin') || '/' || (hr.onboarding_account_json(pg_temp.v('f1'))->>'passwordSet') || '/' || (hr.onboarding_account_json(pg_temp.v('f1'))->'link'->>'state'), 'true/false/live', 'the admin sees: login made, password not chosen, link live');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{}'))$$, '23514', 'The offer has already gone out with these pay details. Withdraw the offer to change them.', 'blocked: pay details do not change under a sent offer');
+reset role;
+-- the person: before a password is chosen nothing is reachable with the login
+select throws_ok($$select public.hr_svc_staff_session('a0000000-0000-0000-0000-00000000f001')$$, '28000', 'There is no offer for this login.', 'no offer through a login whose password was never chosen');
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('nope'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'an unknown set-password link is refused neutrally');
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow-doc-1'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a document link does not set a password');
+select is(public.hr_svc_account_open(pg_temp.h('flow-acct-1'))->>'email', 'flow.one@example.test', 'the set-password link opens for its person');
+select is(public.hr_svc_account_done(pg_temp.h('flow-acct-1'))->>'ok', 'true', 'the link is used up once the password is set');
+update auth.users set email_confirmed_at = now() where id = 'a0000000-0000-0000-0000-00000000f001';
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow-acct-1'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'the set-password link works once');
+select throws_ok($$select public.hr_svc_account_done(pg_temp.h('flow-acct-1'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', '...and cannot be used up twice');
+select is((select count(*)::int from hr.staff_audit where profile_id = pg_temp.v('f1') and action = 'password_set' and actor_kind = 'applicant'), 1, 'choosing the password is in the audit trail, as the person');
+-- signed in, before Active: own offer and documents only
+select ok(public.hr_svc_staff_session('a0000000-0000-0000-0000-00000000f001') ~ '^[0-9a-f]{64}$', 'the signed-in person reaches their own offer');
+select is(public.hr_svc_offer_open(public.hr_svc_staff_session('a0000000-0000-0000-0000-00000000f001'))->'offer'->>'filename', 'Offer - Flo One.pdf', '...the letter that was made for them');
+select throws_ok($$select public.hr_svc_staff_session('a0000000-0000-0000-0000-000000000006')$$, '28000', 'There is no offer for this login.', 'another login reaches no offer');
+select is(public.hr_svc_staff_document_path('a0000000-0000-0000-0000-00000000f001', (select id from hr.staff_documents where profile_id = pg_temp.v('f1') and category = 'Passport' and is_current)), pg_temp.v('f1') || '/passport/p.pdf', 'the person opens their own document');
+select throws_ok($$select public.hr_svc_staff_document_path('a0000000-0000-0000-0000-000000000006', (select id from hr.staff_documents where profile_id = pg_temp.v('f1') and category = 'Passport' and is_current))$$, 'P0002', 'Document not found.', 'nobody else opens it');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-00000000f001';
+select is((public.hr_staff_onboarding_me()->>'status') || '/' || jsonb_array_length(public.hr_staff_onboarding_me()->'documents') || '/' || (public.hr_staff_onboarding_me()->'offer'->>'filename'), 'offer_sent/3/Offer - Flo One.pdf', 'the person sees their status, their three documents and their offer');
+select is(public.hr_staff_me()->'documents', '[]'::jsonb, 'My HR stays closed before Active');
+select is((select count(*)::int from storage.objects where bucket_id = 'staff-documents'), 0, 'storage gives a not-yet-active login no files');
+select throws_ok($$select public.hr_admin_onboarding(pg_temp.v('f1'))$$, '42501', 'Only an administrator can do this.', 'the person cannot read the admin view of themselves');
+select throws_ok($$select public.hr_admin_staff_detail(pg_temp.v('a1'))$$, '42501', 'Only an administrator can do this.', '...or anyone else');
+reset role;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-00000000f001';
+select is(hr.me_profile(), null, 'timesheets, leave and pay are for active employees only');
+set local request.jwt.claim.sub = '';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_onboarding_login_resend(pg_temp.v('f1'), pg_temp.h('flow-acct-2'))$$, '23514', 'This person has already chosen a password. They can use "Forgot password" on the login page.', 'no new set-password link once a password is chosen');
+reset role;
+
+-- ---- Offer signed > Active
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('f1') || '/offer/signed.pdf');
+select is(public.hr_svc_offer_sign(public.hr_svc_staff_session('a0000000-0000-0000-0000-00000000f001'), (select id from hr.staff_offers where profile_id = pg_temp.v('f1') and withdrawn_at is null), 'Flo One', 'I agree', '127.0.0.1', 'test',
+  pg_temp.v('f1') || '/offer/signed.pdf', repeat('e', 64))->>'status', 'offer_signed', 'the signed-in person signs their offer');
+select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'offer_signed', 'the stage is Offer signed');
+select is(public.hr_svc_offer_open(public.hr_svc_staff_session('a0000000-0000-0000-0000-00000000f001'))->>'readOnly', 'true', 'afterwards the offer is read-only for them');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_staff_activate_account(pg_temp.v('f1'), 'trainer', current_date + 30)->>'existingLogin', 'true', 'activation finds the login the person already uses');
+select is(public.hr_admin_staff_activate_account(pg_temp.v('f1'), 'trainer', current_date + 30, 'a0000000-0000-0000-0000-00000000f001')->>'activated', 'true', 'Activate makes them a current employee at once');
+select is(public.hr_admin_onboarding(pg_temp.v('f1'))->>'stage', 'active', 'the stage is Active');
+select is((select count(*)::int from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f1'))->'steps') s where s->>'state' = 'done' and s->>'at' is not null), 9, 'all nine steps are complete, each with its date');
+select ok((public.hr_admin_staff_list(null, null, 50, 0, array['active'])->'rows') @> jsonb_build_array(jsonb_build_object('id', pg_temp.v('f1'))), 'they are listed under Active');
+-- the history: who did what, when
+select ok((select count(*) from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f1'))->'timeline') e where e->>'type' = 'action' and e->>'action' = 'pay_details_added' and e->>'actorName' = 'Test Admin') >= 1, 'history: the pay details, by the administrator''s name');
+select is((select string_agg(distinct e->>'action', ',' order by e->>'action') from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f1'))->'timeline') e
+  where e->>'type' = 'action' and e->>'action' in ('document_approved', 'document_rejected', 'document_uploaded', 'offer_letter_generated', 'offer_sent', 'offer_signed', 'password_set', 'role_granted')),
+ 'document_approved,document_rejected,document_uploaded,offer_letter_generated,offer_sent,offer_signed,password_set,role_granted', 'history: documents, the letter, the offer, the password and the role');
+select ok((select count(*) from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f1'))->'timeline') e where e->>'type' = 'status') >= 6, 'history: every status change');
+select is((select e->>'actorName' from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f1'))->'timeline') e where e->>'action' = 'offer_signed' and e->>'type' = 'action'), 'The applicant', 'history: the signature is the person''s own');
+reset role;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-00000000f001';
+select is(hr.me_profile(), pg_temp.v('f1'), 'once Active they are available to timesheets, leave and pay');
+set local request.jwt.claim.sub = '';
+select is((select count(*)::int from hr.employee_pay ep where ep.profile_id = pg_temp.v('f1') and ep.pay_schedule_id is not null), 1, '...and are on their pay schedule for the Xero export');
+select throws_ok($$update hr.staff_audit set action = 'edited'$$, '23514', 'The staff status log is append-only.', 'the audit trail cannot be edited');
+
+-- ---- A failed offer email is undone; resend login; withdraw at any stage
+select pg_temp.to_ready('f2', 'Fay', 'flow.two@example.test', '0400 000 952');
+select is(hr.onboarding_stage(pg_temp.v('f2'))->>'stage', 'pay_details', 'a direct applicant with approved documents and pay details is at Pay details added');
+select is(hr.onboarding_stage(pg_temp.v('f2'))->'steps'->1->>'state', 'done', '...and Shortlisted counts as passed for someone who never went through Candidates');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select lives_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f2'), 'a0000000-0000-0000-0000-00000000f002', pg_temp.h('flow2-acct-1'))$$, 'an offer goes out');
+select is(public.hr_admin_onboarding_offer_unsend(pg_temp.v('f2'), true)->'profile'->>'status', 'documents_submitted', 'a failed email is undone: back to before the send');
+reset role;
+select is((select (sent_at is null)::text || '/' || (withdrawn_at is null)::text from hr.staff_offers where profile_id = pg_temp.v('f2')), 'true/true', 'the offer is unsent again (not withdrawn)');
+select is((select auth_user_id from hr.staff_profiles where id = pg_temp.v('f2')), null, 'the login made for that send is unlinked (the function deletes it)');
+select is((select count(*)::int from hr.staff_invites where profile_id = pg_temp.v('f2') and revoked_at is null and superseded_at is null and used_at is null), 0, 'no link is left live');
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow2-acct-1'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'the link of the failed send is dead');
+select is((select count(*)::int from hr.staff_audit where profile_id = pg_temp.v('f2') and action = 'offer_send_failed'), 1, 'the failed send is in the audit trail');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_onboarding_offer_unsend(pg_temp.v('f2'), true)$$, '23514', 'There is no sent offer to undo.', 'nothing to undo twice');
+select lives_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f2'), 'a0000000-0000-0000-0000-00000000f002', pg_temp.h('flow2-acct-2'))$$, 'the offer is sent again');
+reset role;
+update hr.staff_offers set sent_at = now() - interval '20 minutes' where profile_id = pg_temp.v('f2') and withdrawn_at is null;
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_onboarding_offer_unsend(pg_temp.v('f2'), true)$$, '23514', 'Only a send that has just failed can be undone. Withdraw the offer instead.', 'an offer that is really out cannot be silently unsent');
+select is(public.hr_admin_onboarding_login_resend(pg_temp.v('f2'), pg_temp.h('flow2-acct-3'))->'invite'->>'purpose', 'account', 'Resend login makes a new set-password link');
+reset role;
+select is((select count(*)::int from hr.staff_invites where profile_id = pg_temp.v('f2') and purpose = 'account' and revoked_at is null and superseded_at is null and used_at is null), 1, 'exactly one set-password link is live');
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow2-acct-2'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'the earlier link stops working');
+-- (every row of this test shares one transaction time: the earlier links are moved back so this one is clearly the latest, then it expires)
+update hr.staff_invites set created_at = created_at - interval '10 days', expires_at = expires_at - interval '10 days' where profile_id = pg_temp.v('f2') and purpose = 'account' and token_hash <> pg_temp.h('flow2-acct-3');
+update hr.staff_invites set created_at = now() - interval '8 days', expires_at = now() - interval '1 day' where token_hash = pg_temp.h('flow2-acct-3');
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow2-acct-3'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'an unused link expires');
+select is(hr.onboarding_account_json(pg_temp.v('f2'))->'link'->>'state', 'expired', 'the admin sees that it expired');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_onboarding_login_resend(pg_temp.v('f2'), pg_temp.h('flow2-acct-4'))->'invite'->>'state', 'live', 'Resend login after an expiry makes a fresh link');
+select lives_ok($$select public.hr_admin_staff_offer_withdraw(pg_temp.v('f2'), 'Changed terms')$$, 'the offer is withdrawn');
+reset role;
+select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow2-acct-4'))$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a withdrawn offer ends its set-password link');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_onboarding(pg_temp.v('f2'))->>'stage', 'pay_details', 'after a withdrawal the stage is back at Pay details added');
+select lives_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('f2'), '{"jobTitle":"Trainer","employmentType":"casual"}')$$, 'Casual is an employment type');
+select throws_ok($$select public.hr_admin_staff_reject(pg_temp.v('f2'), '  ', false)$$, '22023', 'Add a note explaining the decision.', 'withdrawing needs a reason');
+select lives_ok($$select public.hr_admin_staff_reject(pg_temp.v('f2'), 'Took another role', false)$$, 'an application is withdrawn at any stage with a reason');
+select is((public.hr_admin_onboarding(pg_temp.v('f2'))->>'closed') || '/' || (public.hr_admin_onboarding(pg_temp.v('f2'))->'steps'->4->>'state') || '/' || (public.hr_admin_onboarding(pg_temp.v('f2'))->'steps'->6->>'state'), 'rejected/done/todo',
+ 'a withdrawn application keeps the steps it reached and has no current step');
+select is((select e->'detail'->>'note' from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f2'))->'timeline') e where e->>'type' = 'status' and e->>'action' = 'rejected'), 'Took another role', 'the reason is in the history');
+reset role;
+
 select * from finish();
 rollback;

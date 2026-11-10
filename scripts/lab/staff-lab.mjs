@@ -10,6 +10,8 @@
 //   node scripts/lab/staff-lab.mjs offer    end-to-end checks of the offer: upload checks, send, view, sign, signed PDF emailed (HR-02e)
 //   node scripts/lab/staff-lab.mjs activate end-to-end checks of activation: Auth invite, password, claim, My HR, existing login (HR-02f)
 //   node scripts/lab/staff-lab.mjs retention the real pg_cron job deletes the files of applications rejected long ago (HR-02h)
+//   node scripts/lab/staff-lab.mjs flow     end-to-end checks of the onboarding flow: document link, review, pay details, offer letter from a
+//                                           template, offer + one-time set-password link, own offer before Active, sign, activate, failed-email undo
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
@@ -329,7 +331,7 @@ function startMockPostmark() {
         const token = req.headers["x-postmark-server-token"];
         if (req.url !== "/email" || token !== LAB_SECRETS.EF_POSTMARK_SERVER_TOKEN) { res.writeHead(401); return res.end("{}"); }
         if (postmark.mode === "down") { res.writeHead(503); return res.end("{}"); }
-        postmark.messages.push({ to: body.To, from: body.From, subject: body.Subject, text: body.TextBody, attachments: body.Attachments ?? [], mode: postmark.mode });
+        postmark.messages.push({ to: body.To, from: body.From, subject: body.Subject, text: body.TextBody, html: body.HtmlBody ?? null, attachments: body.Attachments ?? [], mode: postmark.mode });
         if (postmark.mode === "fail") { res.writeHead(422, { "content-type": "application/json" }); return res.end(JSON.stringify({ ErrorCode: 406, Message: "Inactive recipient" })); }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: crypto.randomUUID() }));
@@ -418,7 +420,7 @@ async function newLink() {
   const hash = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))).toString("hex");
   return { token, hash };
 }
-async function onboardCall(lab, body, file) {
+async function onboardCall(lab, body, file, ip) {
   let init;
   if (file) {
     const form = new FormData();
@@ -428,6 +430,7 @@ async function onboardCall(lab, body, file) {
   } else {
     init = { method: "POST", body: JSON.stringify(body), headers: { apikey: lab.anonKey, "content-type": "application/json" } };
   }
+  if (ip) init.headers["x-forwarded-for"] = ip; // a probe of a dead link counts against this address, not the lab's
   const res = await fetch(`${lab.apiUrl}/functions/v1/staff-onboarding`, init);
   return { status: res.status, body: await res.json().catch(() => ({})), headers: res.headers };
 }
@@ -702,6 +705,10 @@ async function readyForOffer(lab, label) {
   for (const id of psql(`select id from hr.staff_documents where profile_id = '${person.id}' and is_current;`).split("\n").filter(Boolean)) {
     asAdmin(`select public.hr_admin_staff_document_review('${id}', 'approved');`);
   }
+  // Onboarding flow (20261111090000): the pay details come before any offer.
+  const schedule = psql("select id from hr.pay_schedules where is_active order by name limit 1;");
+  asAdmin(`select public.hr_admin_onboarding_pay_save('${person.id}', jsonb_build_object('jobTitle', 'Lab Trainer', 'employmentType', 'full_time', 'startDate', (current_date + 30)::text,
+    'payBasis', 'hourly', 'rate', '42.50', 'payScheduleId', '${schedule}', 'hoursPerWeek', '38'));`);
   return { ...person, documentToken: link.token };
 }
 
@@ -930,6 +937,197 @@ async function retention() {
   check("the job is back to daily and inactive", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-retention-purge';") === "false/15 3 * * *");
 }
 
+/* ------------------------------------------------------------------ onboarding flow (2026-11-10): the whole journey through the real functions */
+const signIn = async (lab, email, password) => {
+  const res = await fetch(`${lab.apiUrl}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: lab.anonKey, "content-type": "application/json" }, body: JSON.stringify({ email, password }) });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+/** staff-onboarding as a signed-in person (no link token): the function resolves the session to their own record. */
+const sessionCall = async (lab, jwt, body, ip) => {
+  const res = await fetch(`${lab.apiUrl}/functions/v1/staff-onboarding`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json", ...(ip ? { "x-forwarded-for": ip } : {}) }, body: JSON.stringify(body) });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+const paySave = (lab, jwt, id, over = {}) => restRpc(lab, jwt, "hr_admin_onboarding_pay_save", { p_id: id, p_details: { jobTitle: "Lab Trainer", employmentType: "full_time",
+  startDate: new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10), payBasis: "hourly", rate: "42.50", payScheduleId: psql("select id from hr.pay_schedules where is_active order by name limit 1;"), hoursPerWeek: "38", ...over } });
+
+async function flow() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  const mailsTo = (address) => postmark.messages.filter((m) => m.to === address);
+  const stage = (id) => psql(`select hr.onboarding_stage('${id}')->>'stage';`);
+  const letterTemplate = psql("select id from hr.templates where type = 'offer_letter' and is_default;");
+  const seededLetter = psql(`select body_html from hr.templates where id = '${letterTemplate}';`);
+  const PASSWORD = "correct horse 42 battery";
+  // Calls that are MEANT to be refused as a dead link come from their own address (see onboardCall).
+  const probe = `203.0.113.${1 + (Date.now() % 250)}`;
+
+  // 1. Apply (the public form), then the document link from the employee page.
+  const person = await freshApplicant(lab, "flow");
+  check("apply: the application is at Applied", stage(person.id) === "applied");
+  const sentDocs = await staffAdminCall(lab, jwt, { action: "send_documents", profileId: person.id });
+  const docMail = mailsTo(person.email).at(-1);
+  const docToken = tokenIn(docMail?.text);
+  check("send document link: the email is the HRMS template (HTML and text) with the private link; stage Documents requested",
+    sentDocs.status === 200 && sentDocs.body.emailSent === true && docMail?.subject === "Next step: your details and documents" && /<a href=/.test(docMail?.html ?? "") && docToken.length > 20
+    && stage(person.id) === "documents_requested", `${sentDocs.status} ${JSON.stringify(sentDocs.body)} ${docMail?.subject}`);
+
+  // 2. Upload and submit; nothing further is possible before review.
+  await completeDocuments(lab, docToken);
+  const submitted = await onboardCall(lab, { action: "submit", t: docToken });
+  check("upload: the documents are submitted; stage Documents submitted", submitted.status === 200 && stage(person.id) === "documents_submitted", JSON.stringify(submitted.body));
+  const tooEarly = await staffAdminCall(lab, jwt, { action: "offer_generate", profileId: person.id, templateId: letterTemplate });
+  const payTooEarly = await paySave(lab, jwt, person.id);
+  check("blocked: no offer letter and no pay details before the documents are approved", tooEarly.status === 400 && payTooEarly.status === 400 && /Approve every required document first/.test(`${tooEarly.body.error} ${payTooEarly.body?.message}`),
+    `${tooEarly.status} ${JSON.stringify(tooEarly.body)} ${payTooEarly.status}`);
+
+  // 3. Reject one document with a reason: the person is emailed the reason and a re-upload link; they replace it.
+  const passport = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Passport' and is_current;`);
+  const rejected = await restRpc(lab, jwt, "hr_admin_staff_document_review", { p_doc: passport, p_decision: "rejected", p_note: "The photo page is cut off" });
+  const again = await staffAdminCall(lab, jwt, { action: "send_invite", profileId: person.id, purpose: "reupload" });
+  const againMail = mailsTo(person.email).at(-1);
+  const againToken = tokenIn(againMail?.text);
+  check("reject a document: the reason is emailed with a link to upload it again",
+    rejected.status === 200 && again.status === 200 && againMail?.subject === "Please upload a document again" && /Passport: The photo page is cut off/.test(againMail?.text ?? "") && againToken.length > 20 && againToken !== docToken,
+    `${rejected.status} ${again.status} ${againMail?.subject}`);
+  const year = new Date().getFullYear();
+  const replaced = await onboardCall(lab, { action: "upload", t: againToken, category: "Passport", expiryDate: `${year + 6}-06-30`, replaces: passport }, { blob: new Blob([PDF], { type: "application/pdf" }), name: "Passport-new.pdf" });
+  const resubmitted = await onboardCall(lab, { action: "submit", t: againToken });
+  check("the person replaces it through the link and submits again", replaced.status === 200 && resubmitted.status === 200 && stage(person.id) === "documents_submitted", `${replaced.status} ${JSON.stringify(replaced.body)} ${resubmitted.status}`);
+  for (const id of psql(`select id from hr.staff_documents where profile_id = '${person.id}' and is_current;`).split("\n").filter(Boolean)) {
+    await restRpc(lab, jwt, "hr_admin_staff_document_review", { p_doc: id, p_decision: "approved" });
+  }
+  check("approve: every required document approved; stage Documents approved", stage(person.id) === "documents_approved");
+
+  // 4. Pay details: required before the offer, checked field by field.
+  const noPay = await staffAdminCall(lab, jwt, { action: "offer_generate", profileId: person.id, templateId: letterTemplate });
+  const badPay = await paySave(lab, jwt, person.id, { rate: "85000" });
+  const paid = await paySave(lab, jwt, person.id);
+  check("pay details: an offer is refused without them, a wrong figure is caught, then they save; stage Pay details added",
+    noPay.status === 400 && /pay details/i.test(noPay.body.error ?? "") && badPay.status === 400 && /too high/.test(badPay.body?.message ?? "") && paid.status === 200 && paid.body.stage === "pay_details",
+    `${noPay.status} ${JSON.stringify(noPay.body)} ${badPay.status} ${paid.status}`);
+
+  // 5. The offer letter from the template: a real PDF and the exact rendered letter are kept against the person.
+  const made = await staffAdminCall(lab, jwt, { action: "offer_generate", profileId: person.id, templateId: letterTemplate });
+  const letter = psql(`select o.storage_path || '|' || l.template_name || '|' || (l.body_html !~ '\\{\\{')::text || '|' || (l.body_html like '%Lab Trainer%')::text || '|' || (l.body_html like '%$42.50%')::text
+    from hr.staff_offer_letters l join hr.staff_offers o on o.id = l.offer_id where l.profile_id = '${person.id}';`).split("|");
+  const letterBytes = await storageBytes(lab, letter[0]);
+  check("offer letter: made from the default template, every placeholder filled with the person's details, stored as a PDF with the rendered copy",
+    made.status === 200 && made.body.pages >= 1 && letter[1] === "Standard offer letter" && letter[2] === "true" && letter[3] === "true" && letter[4] === "true"
+    && new TextDecoder().decode(letterBytes.subarray(0, 5)) === "%PDF-", `${made.status} ${JSON.stringify(made.body)} ${letter.join("|")}`);
+  psql(`update hr.templates set body_html = '<p>Edited later for {{first_name}}.</p>' where id = '${letterTemplate}';`);
+  check("editing the template afterwards does not change the letter that was made", psql(`select (body_html like '%Lab Trainer%')::text from hr.staff_offer_letters where profile_id = '${person.id}';`) === "true");
+
+  // 6. Send: one email with the offer and a one-time set-password link. A login exists but cannot sign in yet.
+  const before = mailsTo(person.email).length;
+  const sent = await staffAdminCall(lab, jwt, { action: "offer_send_login", profileId: person.id });
+  const offerMail = mailsTo(person.email).at(-1);
+  const accountToken = tokenIn(offerMail?.text);
+  const login = psql(`select u.id || '|' || (u.email_confirmed_at is null)::text || '|' || (coalesce(u.encrypted_password, '') = '')::text || '|' || (p.auth_user_id = u.id)::text
+    from auth.users u join hr.staff_profiles p on p.id = '${person.id}' where lower(u.email) = '${person.email}';`).split("|"); // id | unconfirmed | (unused) | linked
+  check("send offer: one email with the sign-in link; a login is created (unconfirmed, no password anyone knows) and linked; stage Offer sent",
+    sent.status === 200 && sent.body.emailSent === true && sent.body.needsPassword === true && mailsTo(person.email).length === before + 1 && /\/staff\/welcome#t=/.test(offerMail?.text ?? "")
+    && /Your offer letter from/.test(offerMail?.subject ?? "") && login[1] === "true" && login[3] === "true" && stage(person.id) === "offer_sent",
+    `${sent.status} ${JSON.stringify(sent.body)} ${offerMail?.subject} ${login.join("|")}`);
+  check("only the hash of the link is stored; no email log holds it; nothing in the email or the answer is a password",
+    psql(`select count(*) from hr.staff_invites where profile_id = '${person.id}' and token_hash = '${accountToken}';`) === "0"
+    && psql(`select count(*) from hr.staff_emails where profile_id = '${person.id}' and payload::text like '%${accountToken}%';`) === "0"
+    && psql(`select to_char(expires_at - created_at, 'DD') from hr.staff_invites where profile_id = '${person.id}' and purpose = 'account' and revoked_at is null and superseded_at is null;`) === "07"
+    && !JSON.stringify(sent.body).includes(accountToken) && !/temporary password|password is|password:/i.test(offerMail?.text ?? ""));
+  const noPassword = await signIn(lab, person.email, PASSWORD);
+  const noSession = await sessionCall(lab, lab.anonKey, { action: "offer_open" }, probe);
+  check("before a password is chosen nobody can sign in, and nothing opens without a session", noPassword.status === 400 && !noPassword.body.access_token && noSession.status === 403, `${noPassword.status} ${noSession.status}`);
+
+  // 7. The person: choose a password through the link (weak ones refused), once.
+  const opened = await onboardCall(lab, { action: "account_open", t: accountToken });
+  const weak = await onboardCall(lab, { action: "account_setup", t: accountToken, password: "short1" });
+  const set = await onboardCall(lab, { action: "account_setup", t: accountToken, password: PASSWORD });
+  const reuse = await onboardCall(lab, { action: "account_setup", t: accountToken, password: "another good one 77" }, null, probe);
+  check("set password: the link opens for its person, a weak password is refused, the chosen one is saved, and the link then stops working",
+    opened.status === 200 && opened.body.view?.email === person.email && !("authUserId" in (opened.body.view ?? {})) && weak.status === 400 && weak.body.field === "password"
+    && set.status === 200 && set.body.ok === true && reuse.status === 403 && reuse.body.code === "link_invalid", `${opened.status} ${weak.status} ${set.status} ${JSON.stringify(set.body)} ${reuse.status}`);
+  const session = await signIn(lab, person.email, PASSWORD);
+  const userJwt = session.body.access_token;
+  check("they sign in with the password they chose (the second attempt did not change it)", session.status === 200 && Boolean(userJwt) && (await signIn(lab, person.email, "another good one 77")).status === 400, String(session.status));
+
+  // 8. Signed in, before Active: own offer and own documents only.
+  const me = await restRpc(lab, userJwt, "hr_staff_onboarding_me");
+  const myHr = await restRpc(lab, userJwt, "hr_staff_me");
+  const myOffer = await sessionCall(lab, userJwt, { action: "offer_open" });
+  const myPdf = await sessionCall(lab, userJwt, { action: "offer_view_url", which: "offer" });
+  const firstDoc = me.body?.documents?.[0];
+  const myDoc = await sessionCall(lab, userJwt, { action: "my_document_url", id: firstDoc?.id });
+  check("before Active the person sees their offer and their own documents",
+    me.status === 200 && me.body.status === "offer_sent" && me.body.documents.length === 5 && myOffer.status === 200 && myOffer.body.view?.readOnly === false && /^http/.test(myPdf.body.url ?? "") && /^http/.test(myDoc.body.url ?? ""),
+    `${me.status} ${myOffer.status} ${myPdf.status} ${myDoc.status}`);
+  const adminView = await restRpc(lab, userJwt, "hr_admin_onboarding", { p_id: person.id });
+  const adminAction = await staffAdminCall(lab, userJwt, { action: "activate", profileId: person.id, role: "admin", joiningDate: "2027-01-01", confirmAdmin: true });
+  const direct = await ownFile(lab, userJwt, psql(`select storage_path from hr.staff_documents where id = '${firstDoc?.id}';`));
+  const punch = await restRpc(lab, userJwt, "hr_time_status");
+  const adminOffer = await sessionCall(lab, jwt, { action: "offer_open" });
+  const otherDoc = await sessionCall(lab, jwt, { action: "my_document_url", id: firstDoc?.id });
+  check("...and nothing else: no admin view or action, no direct storage, no My HR documents, no timesheet; another login reaches neither the offer nor the document",
+    adminView.status >= 400 && adminAction.status === 403 && direct !== 200 && myHr.status === 200 && (myHr.body?.documents ?? []).length === 0 && punch.status >= 400
+    && adminOffer.status === 404 && adminOffer.body.code === "no_offer" && otherDoc.status === 404,
+    `${adminView.status} ${adminAction.status} ${direct} ${myHr.status} ${punch.status} ${adminOffer.status} ${otherDoc.status}`);
+
+  // 9. Sign, then Activate (not possible before the signature).
+  const early = await staffAdminCall(lab, jwt, { action: "activate", profileId: person.id, role: "trainer", joiningDate: new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10) });
+  const signed = await sessionCall(lab, userJwt, { action: "offer_sign", name: "Lab Flow", consent: true });
+  check("blocked: no activation before the signature; then the signed-in person signs; stage Offer signed",
+    early.status === 400 && /signed the offer/.test(early.body.error ?? "") && signed.status === 200 && Boolean(signed.body.view?.offer?.signedAt) && stage(person.id) === "offer_signed", `${early.status} ${signed.status} ${JSON.stringify(signed.body).slice(0, 200)}`);
+  await waitFor(`select count(*) from hr.staff_emails where profile_id = '${person.id}' and kind = 'signed_offer' and state = 'sent';`, "1");
+  const signedMail = mailsTo(person.email).find((m) => m.subject === "Your signed offer letter");
+  check("the signed copy is emailed to the person with the PDF attached", Boolean(signedMail) && signedMail.attachments.length === 1);
+  const activated = await staffAdminCall(lab, jwt, { action: "activate", profileId: person.id, role: "trainer", joiningDate: new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10) });
+  const afterJwt = (await signIn(lab, person.email, PASSWORD)).body.access_token;
+  const hrAfter = await restRpc(lab, afterJwt, "hr_staff_me");
+  check("activate: a current employee at once on the login they already use; all nine stages complete; My HR opens; listed under Active",
+    activated.status === 200 && activated.body.activated === true && stage(person.id) === "active"
+    && psql(`select count(*) from jsonb_array_elements(hr.onboarding_stage('${person.id}')->'steps') s where s->>'state' = 'done';`) === "9"
+    && hrAfter.body?.status === "active" && hrAfter.body.documents.length === 5
+    && psql(`select count(*) from hr.employee_pay ep join hr.staff_profiles p on p.id = ep.profile_id where p.id = '${person.id}' and p.status = 'active' and ep.pay_schedule_id is not null;`) === "1",
+    `${activated.status} ${JSON.stringify(activated.body).slice(0, 160)} ${stage(person.id)}`);
+  const history = JSON.parse(psql(`select hr.onboarding_timeline('${person.id}')::text;`));
+  const actions = new Set(history.filter((e) => e.type === "action").map((e) => e.action));
+  check("history: every action is logged with who did it and when",
+    ["document_uploaded", "document_rejected", "document_approved", "pay_details_added", "offer_letter_generated", "offer_sent", "password_set", "offer_signed", "role_granted"].every((a) => actions.has(a))
+    && history.some((e) => e.action === "pay_details_added" && e.actorName === "Lab Admin" && e.at) && history.some((e) => e.action === "offer_signed" && e.actorName === "The applicant")
+    && history.filter((e) => e.type === "status").length >= 6, [...actions].join(","));
+
+  // 10. A failed offer email: everything is put back, and no login is left behind.
+  const second = await readyForOffer(lab, "flowfail");
+  psql(`update hr.templates set body_html = '<p>Dear {{first_name}}, you start as {{position}} on {{start_date}}.</p>' where id = '${letterTemplate}';`);
+  await staffAdminCall(lab, jwt, { action: "offer_generate", profileId: second.id, templateId: letterTemplate });
+  postmark.mode = "fail";
+  const failedSend = await staffAdminCall(lab, jwt, { action: "offer_send_login", profileId: second.id });
+  postmark.mode = "ok";
+  check("a failed offer email is undone: not sent, no live link, no login left, and the admin is told clearly",
+    failedSend.status === 502 && failedSend.body.rolledBack === true && /Nothing went out and nothing was changed/.test(failedSend.body.error ?? "")
+    && psql(`select status || '|' || coalesce(auth_user_id::text, 'none') from hr.staff_profiles where id = '${second.id}';`) === "documents_submitted|none"
+    && psql(`select count(*) from auth.users where lower(email) = '${second.email}';`) === "0" && liveLinks(second.id) === "0"
+    && psql(`select (sent_at is null)::text from hr.staff_offers where profile_id = '${second.id}' and withdrawn_at is null;`) === "true"
+    && psql(`select count(*) from hr.staff_emails where profile_id = '${second.id}' and kind = 'offer' and state = 'failed';`) === "1", `${failedSend.status} ${JSON.stringify(failedSend.body)}`);
+  const retry = await staffAdminCall(lab, jwt, { action: "offer_send_login", profileId: second.id });
+  const firstLink = tokenIn(mailsTo(second.email).at(-1)?.text);
+  const resent = await staffAdminCall(lab, jwt, { action: "resend_login", profileId: second.id });
+  const newLinkToken = tokenIn(mailsTo(second.email).at(-1)?.text);
+  check("sending again works; Resend login emails a new link and the earlier one stops working",
+    retry.status === 200 && retry.body.emailSent === true && resent.status === 200 && newLinkToken && newLinkToken !== firstLink
+    && (await onboardCall(lab, { action: "account_open", t: firstLink }, null, probe)).status === 403 && (await onboardCall(lab, { action: "account_open", t: newLinkToken })).status === 200,
+    `${retry.status} ${resent.status}`);
+  psql(`update hr.staff_invites set created_at = now() - interval '8 days', expires_at = now() - interval '1 day' where profile_id = '${second.id}' and purpose = 'account' and revoked_at is null and superseded_at is null;`);
+  check("an unused link expires after 7 days", (await onboardCall(lab, { action: "account_open", t: newLinkToken }, null, probe)).status === 403);
+  const withdrawn = await staffAdminCall(lab, jwt, { action: "reject", profileId: second.id, note: "Took another role", notify: true });
+  await waitFor(`select count(*) from hr.staff_emails where profile_id = '${second.id}' and kind = 'rejected' and state = 'sent';`, "1");
+  const rejectionMail = mailsTo(second.email).find((m) => m.subject === "Your staff application");
+  check("withdraw at any stage with a reason: closed, links dead, and the rejection email is the HRMS template",
+    withdrawn.status === 200 && psql(`select status from hr.staff_profiles where id = '${second.id}';`) === "rejected" && liveLinks(second.id) === "0"
+    && Boolean(rejectionMail?.html) && psql(`select hr.onboarding_stage('${second.id}')->>'closed';`) === "rejected", `${withdrawn.status} ${Boolean(rejectionMail)}`);
+  // Leave the lab's default letter template as it was seeded.
+  psql(`update hr.templates set body_html = '${seededLetter.replace(/'/g, "''")}' where id = '${letterTemplate}';`);
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -947,7 +1145,7 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
-  if (["apply", "onboard", "emails", "offer", "activate", "retention", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); }
+  if (["apply", "onboard", "emails", "offer", "activate", "retention", "flow", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); }
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
@@ -955,6 +1153,7 @@ try {
   else if (command === "offer") await offer();
   else if (command === "activate") await activate();
   else if (command === "retention") await retention();
+  else if (command === "flow") await flow();
   else if (command === "e2e") {
     const lab = readLab();
     const env = { ...process.env, E2E_SUPABASE_URL: lab.apiUrl, E2E_SUPABASE_ANON_KEY: lab.anonKey, E2E_SUPABASE_SERVICE_KEY: lab.serviceKey, E2E_MAIL_URL: lab.mailUrl,
@@ -964,7 +1163,7 @@ try {
   }
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | e2e | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | flow | e2e | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
   await stopMockPostmark(); await stopMockReader();

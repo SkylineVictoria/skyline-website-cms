@@ -12,16 +12,28 @@ import { OFFER_CONSENT, type Signature } from "../_shared/offer-pdf.ts";
 // signature page (typed name, time, IP, browser, the fixed consent text, the offer hash), stores the signed copy as a NEW file
 // and records it with its own sha256; any refusal after the upload removes that file. The consent text is fixed server-side.
 
+// Login with the offer (2026-11-10): account_open / account_setup work on the one-time set-password link (purpose account, 7 days)
+// that goes out with the offer: the person chooses their own password (never generated, stored or logged here), the Auth admin API
+// sets it and confirms the email, and the link is marked used. After that the person is signed in, and offer_open / offer_view_url /
+// offer_sign / my_document_url may come WITHOUT a link token: index.ts verifies the session and passes the user id, and the database
+// resolves that user to their own offer link (hr_svc_staff_session) or their own document (hr_svc_staff_document_path). A session
+// never reaches anyone else's record, and nothing but the offer and own documents is served before the person is Active.
+
 export const LINK_INVALID = "This link is not valid any more. Ask us for a new one.";
+export const NO_OFFER = "There is no offer letter for your account right now.";
+export const PASSWORD_MIN = 12;
+export const PASSWORD_MAX = 72;
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;
 /** Invalid-link answers allowed per caller IP in BAD_LINK_WINDOW seconds before that IP is refused for every action. */
 export const BAD_LINK_LIMIT = 20;
 export const BAD_LINK_WINDOW = 600;
-export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign"] as const;
+export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "account_open", "account_setup", "my_document_url"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
-export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null }
+export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null;
+  /** The verified signed-in user (index.ts checks the session with Auth); used only when no link token is sent. */
+  session?: { userId: string } | null }
 export interface OnboardingResult { status: number; body: Record<string, unknown>; headers?: Record<string, string> }
 export interface DocumentToRead { id: string; category: string; filename: string; mimeType: string; storagePath: string }
 export interface OnboardingDeps {
@@ -40,6 +52,18 @@ export interface OnboardingDeps {
   sha256(bytes: Uint8Array): Promise<string>;
   stampOffer(original: Uint8Array, signature: Signature): Promise<Uint8Array>;
   now(): Date;
+  /** Auth admin: sets the password the person chose and confirms their email. Never logged. */
+  setPassword?(userId: string, password: string): Promise<{ error: string | null }>;
+}
+
+/** What is wrong with a chosen password (null = fine). The same rule is shown on the page. */
+export function passwordProblem(password: unknown, email = ""): string | null {
+  if (typeof password !== "string" || password.length < PASSWORD_MIN) return `Choose a password of at least ${PASSWORD_MIN} characters.`;
+  if (password.length > PASSWORD_MAX) return `Choose a password of at most ${PASSWORD_MAX} characters.`;
+  if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) return "Use at least one letter and one number.";
+  const local = email.split("@")[0]?.toLowerCase() ?? "";
+  if (email && (password.toLowerCase() === email.toLowerCase() || (local.length >= 4 && password.toLowerCase().includes(local)))) return "Do not use your email address as the password.";
+  return null;
 }
 
 const TOKEN = /^[A-Za-z0-9_-]{40,128}$/;
@@ -90,9 +114,29 @@ export async function handleOnboarding(req: OnboardingRequest, deps: OnboardingD
   return result;
 }
 
+const SESSION_ACTIONS: readonly OnboardingAction[] = ["offer_open", "offer_view_url", "offer_sign", "my_document_url"];
+
 async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
-  if (typeof req.token !== "string" || !TOKEN.test(req.token)) return linkInvalid();
-  const link = await deps.hash(req.token);
+  let link: string;
+  const hasToken = typeof req.token === "string" && req.token !== "";
+  if (!hasToken && req.session && SESSION_ACTIONS.includes(action)) {
+    // Signed in: the database resolves this user to their own record. Nobody else's offer or document can be reached this way.
+    if (action === "my_document_url") {
+      const id = typeof req.fields.id === "string" && UUID.test(req.fields.id) ? req.fields.id : null;
+      if (!id) return bad("Document not found.");
+      const { data, error } = await deps.rpc("hr_svc_staff_document_path", { p_user: req.session.userId, p_doc: id });
+      if (error) return error.code === "P0002" ? { status: 404, body: { error: "Document not found." } } : fromDb(error);
+      const url = await deps.signedUrl(String(data), 300);
+      return url ? { status: 200, body: { url } } : { status: 500, body: { error: "The document could not be opened." } };
+    }
+    const session = await deps.rpc("hr_svc_staff_session", { p_user: req.session.userId });
+    if (session.error) return session.error.code === "28000" ? { status: 404, body: { error: NO_OFFER, code: "no_offer" } } : fromDb(session.error);
+    link = String(session.data);
+  } else {
+    if (action === "my_document_url") return { status: 401, body: { error: "Sign in to open your documents." } };
+    if (typeof req.token !== "string" || !TOKEN.test(req.token)) return linkInvalid();
+    link = await deps.hash(req.token);
+  }
   const perLink = action === "upload" ? 60 : 600;
   if (!(await deps.takeRateLimit(`staff-onboarding:link:${action === "upload" ? "upload" : "any"}:${link}`, perLink, 3600))) {
     return { status: 429, body: { error: "Please wait a while before trying again." }, headers: { "Retry-After": "3600" } };
@@ -105,6 +149,30 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
   const docId = (): string | null => (typeof req.fields.id === "string" && UUID.test(req.fields.id) ? req.fields.id : null);
 
   switch (action) {
+    case "account_open": {
+      const { data, error } = await call("hr_svc_account_open");
+      if (error) return fromDb(error);
+      const view = data as { name: string; firstName: string; email: string; expiresAt: string };
+      return { status: 200, body: { view: { name: view.name, firstName: view.firstName, email: view.email, expiresAt: view.expiresAt }, passwordMin: PASSWORD_MIN } };
+    }
+    case "account_setup": {
+      if (!deps.setPassword) return { status: 503, body: { error: "Passwords cannot be set here." } };
+      // The link is checked first (one neutral answer when it is not usable), then the password, then Auth, then the link is used up.
+      const opened = await call("hr_svc_account_open");
+      if (opened.error) return fromDb(opened.error);
+      const account = opened.data as { email: string; authUserId: string };
+      const problem = passwordProblem(req.fields.password, account.email);
+      if (problem) return bad(problem, "password");
+      const set = await deps.setPassword(account.authUserId, req.fields.password as string);
+      if (set.error) {
+        return /weak|pwned|leaked|compromised|should contain|at least/i.test(set.error)
+          ? bad("That password is too easy to guess or has appeared in a data breach. Choose a different one.", "password")
+          : { status: 503, body: { error: "The password could not be saved. Please try again." } };
+      }
+      const done = await call("hr_svc_account_done");
+      if (done.error) return fromDb(done.error);
+      return { status: 200, body: { ok: true, email: account.email } };
+    }
     case "offer_open": {
       const { data, error } = await call("hr_svc_offer_open");
       return error ? fromDb(error) : { status: 200, body: { view: data, consent: OFFER_CONSENT } };

@@ -12,7 +12,7 @@ export interface AdminMenuItem {
 
 // Database keys never become class names or executable components.
 const icons: Record<string, string> = {
-  dashboard: 'ri-dashboard-3-line', courses: 'ri-book-2-line', pages: 'ri-file-text-line',
+  template: 'ri-file-edit-line', dashboard: 'ri-dashboard-3-line', courses: 'ri-book-2-line', pages: 'ri-file-text-line',
   navigation: 'ri-menu-line', footer: 'ri-layout-bottom-line', settings: 'ri-settings-3-line',
   documents: 'ri-file-pdf-2-line', knowledge: 'ri-question-answer-line', extraction: 'ri-file-search-line',
   forms: 'ri-survey-line', contact: 'ri-contacts-line', seo: 'ri-search-eye-line',

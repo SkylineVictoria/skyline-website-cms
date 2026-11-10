@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
-  PDF, candidateAction, createAdmin, employeeAction, expectStatus, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, signInAsAdmin, signedInClient, sql, staffAt, waitForHrMail,
+  PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAt, waitForHrMail,
 } from "./support";
 
 // Staff > Employees (HR-02g) in the browser, against the LOCAL lab stack only: the sidebar, tabs, every lifecycle action with its
@@ -24,7 +24,7 @@ test("Staff is its own sidebar group with Candidates, Employees and Jobs; the ol
   expect(sql(`select parent_id || '/' || label from public.admin_menu_items where route = '/admin/jobs'`)).toBe("website/Jobs");
   expect(sql(`select string_agg(route, ',' order by sort_order) from public.admin_menu_items where parent_id = 'website' and route in ('/admin/jobs', '/admin/staff/candidates')`)).toBe("/admin/jobs,/admin/staff/candidates");
   expect(sql(`select parent_id || '/' || label || '/' || route from public.admin_menu_items where id = 'agency_staff'`)).toBe("staff/Employees//admin/staff/employees");
-  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero,staff_templates");
   await page.goto("/admin/candidates");
   await expect(page).toHaveURL(/\/admin\/staff\/candidates$/);
   await page.goto(`/admin/employees/${someone.id}`);
@@ -75,14 +75,14 @@ test("withdraw an offer: the dialog needs a note, the status goes back and the o
   await expect(page.getByTestId("staff-action-status")).toContainText("Offer sent");
   await expect(page.getByTestId("staff-action-status")).toContainText("Documents submitted");
   await page.getByTestId("staff-decision-confirm").click();
-  await expect(page.getByTestId("staff-action-error")).toContainText("Add a note");
+  await expect(page.getByTestId("staff-action-error")).toContainText("Add the reason");
   await page.getByTestId("staff-decision-note").fill("Role filled internally");
   await page.getByTestId("staff-decision-confirm").click();
   await expectStatus(page, "Documents submitted");
   expect((await onboard({ action: "offer_open", t: p.offerToken! })).status).toBe(403);
   await expect(page.getByTestId("staff-history")).toContainText("Role filled internally");
-  // A new offer can be uploaded again.
-  await expect(page.getByTestId("staff-action-upload_offer")).toBeVisible();
+  // The offer letter can be sent again (the pay details are still in).
+  await expect(page.getByTestId("staff-action-send_offer")).toBeVisible();
 });
 
 test("deactivate and reactivate an Admin: console access goes off and back on, My HR follows", async ({ page }) => {
@@ -92,6 +92,7 @@ test("deactivate and reactivate an Admin: console access goes off and back on, M
   await waitForHrMail(p.email, /staff access is ready/);
   await signInAsAdmin(page, admin.email);
   await page.goto(`/admin/staff/employees/${p.id}`);
+  await page.getByTestId("employee-onboarding").click();
   await expectStatus(page, "Active");
   await employeeAction(page, "deactivate", async () => page.getByTestId("staff-decision-note").fill("Left the company"));
   await expectStatus(page, "Inactive");
@@ -113,26 +114,28 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
   const p = await staffAt(adminClient, "tabs", "documents_submitted");
   await signInAsAdmin(page, admin.email);
 
-  await page.goto(`/admin/staff/employees?tab=documents`);
-  await page.getByLabel("Search staff").fill(p.email);
-  await expect(page.getByTestId("staff-table")).toContainText(p.email);
-  await page.getByRole("row", { name: p.email }).getByRole("link").click();
+  await page.goto("/admin/staff/employees");
+  await page.getByRole("tab", { name: "Onboarding" }).click();
+  await page.getByLabel("Search employees").fill(p.email);
+  await expect(page.getByTestId("onboarding-table")).toContainText(p.email);
+  await page.getByTestId(`onboarding-row-${p.id}`).getByRole("link").click();
   await expectStatus(page, "Documents submitted");
 
-  await page.getByTestId("staff-action-upload_offer").click();
-  await page.getByTestId("staff-offer-file").setInputFiles({ name: "locked.pdf", mimeType: "application/pdf", buffer: await protectedPdf() });
-  await page.getByTestId("staff-decision-confirm").click();
-  await expect(page.getByTestId("staff-action-error")).toContainText("password-protected or encrypted");
+  // An uploaded PDF instead of a template: a protected one is refused before anything is sent.
+  await page.getByTestId("staff-action-send_offer").click();
+  await page.getByTestId("offer-letter-template").selectOption("__upload");
+  await page.getByTestId("offer-upload-file").setInputFiles({ name: "locked.pdf", mimeType: "application/pdf", buffer: await protectedPdf() });
+  await page.getByTestId("offer-send-next").click();
+  await page.getByTestId("offer-send-confirm").click();
+  await expect(page.getByTestId("offer-send-error")).toContainText("password-protected or encrypted");
   await page.getByRole("button", { name: "Cancel" }).click();
+  await expectStatus(page, "Documents submitted");
 
   await setHrMailMode("fail");
   await employeeAction(page, "reject", async () => page.getByTestId("staff-decision-note").fill("Not this time"));
   await expectStatus(page, "Rejected");
   await expect(page.getByTestId("staff-email-failed")).toBeVisible();
-  await page.goto("/admin/staff/employees?tab=closed");
-  await page.getByLabel("Search staff").fill(p.email);
-  await expect(page.getByTestId("staff-email-failed-badge").first()).toBeVisible();
-  await page.getByRole("row", { name: p.email }).getByRole("link").click();
+  // (A rejected person is in no list tab of the current Employees page; the test stays on their page.)
   await setHrMailMode("ok");
   await page.locator("[data-testid^='staff-email-retry-']").first().click();
   await expect(page.getByTestId("staff-email-failed")).toHaveCount(0);
@@ -142,6 +145,7 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
   await expectStatus(page, "Applied");
   await employeeAction(page, "send_documents_link");
   await expectStatus(page, "Invited");
+  await expect(page.getByTestId("staff-action-resend_documents_link")).toHaveText("Resend link");
   await page.getByTestId("staff-action-revoke_link").click();
   await expect(page.getByTestId("staff-action-status")).toContainText("does not change");
   await page.getByTestId("staff-decision-confirm").click();
@@ -149,25 +153,154 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
   await expectStatus(page, "Invited");
 });
 
-test("Add staff member: the record is created and the document link emailed; the same email cannot be added twice", async ({ page }) => {
+test("Add employee: Start onboarding emails the document link, the same email cannot be added twice, Add as Active now needs no email; Rejected / Withdrawn lists a withdrawn application", async ({ page }) => {
   const admin = await createAdmin("add-admin");
   await signInAsAdmin(page, admin.email);
   await page.goto("/admin/staff/employees");
-  const email = `added.${Date.now()}@example.test`;
-  const fill = async () => {
-    await page.getByTestId("staff-add").click();
-    await page.getByTestId("staff-add-first").fill("Ada");
-    await page.getByTestId("staff-add-last").fill("Added");
-    await page.getByTestId("staff-add-email").fill(email);
-    await page.getByTestId("staff-add-phone").fill(`04${String(Date.now()).slice(-8)}`);
-    await page.getByTestId("staff-add-confirm").click();
+  const who = person("added");
+  const fill = async (mode: "onboard" | "active", email: string, local: string) => {
+    await page.getByTestId("employee-add").click();
+    await page.getByTestId(`employee-mode-${mode}`).check();
+    await page.getByTestId("employee-firstName").fill("Ada");
+    await page.getByTestId("employee-lastName").fill("Added");
+    await page.getByTestId("employee-email").fill(email);
+    await page.locator("#employee-phone-input").fill(local);
+    await page.getByTestId("employee-save").click();
   };
-  await fill();
+
+  // Start onboarding: the record is created as an application and the document link is emailed.
+  await fill("onboard", who.email, who.local);
   await expect(page).toHaveURL(/\/admin\/staff\/employees\/[0-9a-f-]{36}$/);
   await expectStatus(page, "Invited");
-  await waitForHrMail(email, /details and documents/i);
+  await expect(page.getByTestId("staff-notice")).toContainText("document link was emailed");
+  await expect(page.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "documents_requested");
+  await waitForHrMail(who.email, /details and documents/i);
   await expect(page.getByTestId("staff-history")).toContainText("Added by an administrator");
+  const profileId = sql(`select id from hr.staff_profiles where email = '${who.email}'`);
+  expect(sql(`select status || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles where id = '${profileId}'`)).toBe("invited/0");
+
+  // The same email (or mobile) cannot be added twice, in either mode.
   await page.goto("/admin/staff/employees");
-  await fill();
-  await expect(page.getByTestId("staff-add-error")).toContainText("already has a staff record");
+  await fill("onboard", who.email, who.local);
+  await expect(page.locator("#employee-form [role='alert']").last()).toContainText("already has a staff record");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  expect(sql(`select count(*) from hr.staff_profiles where email = '${who.email}'`)).toBe("1");
+
+  // Add as Active now: no email, Active at once, on the simple employee page.
+  const direct = person("direct");
+  const before = (await hrMails(direct.email)).length;
+  await fill("active", direct.email, direct.local);
+  await expect(page).toHaveURL(/\/admin\/staff\/employees\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId("employee-status")).toHaveText("Make inactive");
+  expect(sql(`select status from hr.staff_profiles where email = '${direct.email}'`)).toBe("active");
+  expect((await hrMails(direct.email)).length).toBe(before);
+
+  // Withdraw the first one: it leaves Onboarding and is found under Rejected / Withdrawn, from where it can be opened again.
+  await page.goto(`/admin/staff/employees/${profileId}`);
+  await employeeAction(page, "reject", async () => {
+    await page.getByTestId("staff-decision-note").fill("Withdrew before starting");
+    await page.getByTestId("staff-reject-notify").uncheck();
+  });
+  await expectStatus(page, "Rejected");
+  await page.goto("/admin/staff/employees");
+  await page.getByRole("tab", { name: "Onboarding" }).click();
+  await page.getByLabel("Search employees").fill(who.email);
+  await expect(page.getByTestId(`onboarding-row-${profileId}`)).toHaveCount(0);
+  await page.getByRole("tab", { name: "Rejected / Withdrawn" }).click();
+  await expect(page.getByTestId("closed-table")).toContainText(who.email);
+  await shot(page, "employees-rejected-withdrawn-tab");
+  await page.getByTestId(`onboarding-row-${profileId}`).getByRole("link").click();
+  await expectStatus(page, "Rejected");
+  await expect(page.getByTestId("staff-stage-hint")).toContainText("withdrawn or rejected");
+  await expect(page.getByTestId("staff-history")).toContainText("Withdrew before starting");
+  await expect(page.getByTestId("staff-action-reopen")).toBeVisible();
+});
+
+test("HRMS > Templates: create with placeholders, preview with a real employee, duplicate, default, archive; closed to an Editor", async ({ page, browser }) => {
+  test.setTimeout(240_000);
+  const admin = await createAdmin("tpl-admin");
+  const adminClient = await signedInClient(admin.email);
+  const p = await staffAt(adminClient, "tpl", "documents_submitted");
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/staff/templates");
+  await expect(page.getByTestId("templates-offer_letter")).toContainText("Standard offer letter");
+  for (const kind of ["offer_email", "document_request", "document_reupload", "welcome_login", "rejection"]) await expect(page.getByTestId(`templates-${kind}`).getByTestId("template-row")).toHaveCount(1);
+  await shot(page, "templates-list");
+
+  // A new offer letter: placeholders are inserted from the list; an unknown one is refused.
+  const name = `E2E letter ${Date.now()}`;
+  await page.getByTestId("template-new-offer_letter").click();
+  await page.getByTestId("template-name").fill(name);
+  await page.getByTestId("template-subject").fill("Offer for {{full_name}}");
+  await page.getByTestId("template-editor").click();
+  await page.keyboard.type("Dear ");
+  await page.getByTestId("template-placeholder-first_name").click();
+  await page.keyboard.type(", you start as ");
+  await page.getByTestId("template-placeholder-position").click();
+  await page.keyboard.type(" on ");
+  await page.getByTestId("template-placeholder-start_date").click();
+  await page.keyboard.type(" at ");
+  await page.getByTestId("template-placeholder-pay_rate").click();
+  await page.keyboard.type(". {{bogus}}");
+  await page.getByTestId("template-save").click();
+  await expect(page.getByTestId("template-error")).toContainText("{{bogus}}");
+  await page.getByTestId("template-editor").click();
+  await page.keyboard.press("Control+End");
+  for (let i = 0; i < 10; i++) await page.keyboard.press("Backspace");
+  await shot(page, "template-editor");
+  await page.getByTestId("template-save").click();
+  await expect(page.getByTestId("templates-notice")).toContainText("added");
+  expect(sql(`select body_html ~ 'Dear \\{\\{first_name\\}\\}, you start as \\{\\{position\\}\\} on \\{\\{start_date\\}\\} at \\{\\{pay_rate\\}\\}' from hr.templates where name = '${name}'`)).toBe("t");
+
+  // Preview with the employee's real details.
+  const row = page.getByTestId("template-row").filter({ hasText: name }).first();
+  await row.getByTestId("template-preview").click();
+  await expect(page.getByTestId("template-preview-body")).toContainText("Dear Asha, you start as Trainer (Commercial Cookery)");
+  await page.getByTestId("template-preview-search").fill(p.email);
+  await expect(page.getByTestId("template-preview-person").locator(`option[value="${p.id}"]`)).toHaveCount(1);
+  await page.getByTestId("template-preview-person").selectOption(p.id);
+  await expect(page.getByTestId("template-preview-body")).toContainText("Dear E2E, you start as Trainer on");
+  await expect(page.getByTestId("template-preview-body")).toContainText("at $42.50");
+  await expect(page.getByTestId("template-preview-subject")).toHaveText("Offer for E2E tpl");
+  await expect(page.getByTestId("template-preview-missing")).toHaveCount(0);
+  await shot(page, "template-preview-real-employee");
+  await page.getByRole("button", { name: "Close" }).last().click();
+
+  // Duplicate, make default (one default per kind), archive and restore.
+  await row.getByTestId("template-duplicate").click();
+  await expect(page.getByTestId("templates-notice")).toContainText("copy");
+  const copy = page.getByTestId("template-row").filter({ hasText: `${name} (copy)` });
+  await expect(copy).toHaveCount(1);
+  await page.getByTestId("template-row").filter({ hasText: name }).filter({ hasNotText: "(copy)" }).getByTestId("template-make-default").click();
+  await expect(page.getByTestId("templates-notice")).toContainText("is now the default");
+  expect(sql("select count(*) from hr.templates where type = 'offer_letter' and is_default")).toBe("1");
+  page.once("dialog", (d) => { void d.accept(); });
+  await copy.getByTestId("template-archive").click();
+  await expect(copy).toHaveCount(0);
+  await page.getByTestId("templates-show-archived").check();
+  await expect(copy).toContainText("Archived");
+  await copy.getByTestId("template-restore").click();
+  await expect(copy).not.toContainText("Archived");
+  // The chosen default is what Send offer letter proposes for this person.
+  await page.goto(`/admin/staff/employees/${p.id}`);
+  await page.getByTestId("staff-action-send_offer").click();
+  await expect(page.getByTestId("offer-letter-preview")).toContainText("Dear E2E, you start as Trainer on");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  // Put the seeded letter back as the default for the other tests, and remove what this test added.
+  sql(`update hr.templates set is_default = false where type = 'offer_letter'; update hr.templates set is_default = true where name = 'Standard offer letter'; delete from hr.templates where name like 'E2E letter %'`);
+
+  // An Editor: no HRMS in the menu, the page is closed, and the database refuses.
+  const editor = await createEditor("tpl-editor");
+  const other = await (await browser.newContext()).newPage();
+  await signInAsAdmin(other, editor.email);
+  await other.goto("/admin/staff/templates");
+  await expect(other).not.toHaveURL(/staff\/templates/);
+  await expect(other.getByTestId("templates-offer_letter")).toHaveCount(0);
+  await other.goto(`/admin/staff/employees/${p.id}`);
+  await expect(other.getByTestId("staff-onboarding-progress")).toHaveCount(0);
+  const editorClient = await signedInClient(editor.email);
+  for (const [fn, args] of [["hr_admin_templates", {}], ["hr_admin_onboarding", { p_id: p.id }], ["hr_admin_onboarding_pay_save", { p_id: p.id, p_details: {} }]] as const) {
+    const { error } = await editorClient.rpc(fn, args);
+    expect(error?.message ?? "").toContain("Only an administrator can do this.");
+  }
 });

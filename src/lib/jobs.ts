@@ -3,7 +3,7 @@
 
 export type EmploymentType = "full_time" | "part_time";
 export const EMPLOYMENT_TYPES: readonly EmploymentType[] = ["full_time", "part_time"];
-export const EMPLOYMENT_TYPE_LABEL: Record<EmploymentType, string> = { full_time: "Full time", part_time: "Part time" };
+export const EMPLOYMENT_TYPE_LABEL: Record<EmploymentType | "casual", string> = { full_time: "Full time", part_time: "Part time", casual: "Casual" };
 
 export type JobStatus = "draft" | "open" | "closed";
 export type JobApplicationStatus = "applied" | "hired" | "declined" | "withdrawn";

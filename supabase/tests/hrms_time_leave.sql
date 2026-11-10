@@ -339,8 +339,8 @@ select pg_temp.su();
 
 -- ---------------------------------------------------------------- admin sidebar rows
 select is((select string_agg(id || ':' || route, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled and sort_order >= 40),
- 'staff_timesheets:/admin/staff/timesheets,staff_leave:/admin/staff/leave,staff_pay_schedules:/admin/staff/pay-schedules,staff_holidays:/admin/staff/holidays,staff_xero:/admin/staff/xero-export',
- 'five new Staff menu rows in order');
+ 'staff_timesheets:/admin/staff/timesheets,staff_leave:/admin/staff/leave,staff_pay_schedules:/admin/staff/pay-schedules,staff_holidays:/admin/staff/holidays,staff_xero:/admin/staff/xero-export,staff_templates:/admin/staff/templates',
+ 'the HRMS menu rows in order (Templates added by 20261111100000)');
 
 select * from finish();
 rollback;

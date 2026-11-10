@@ -5,7 +5,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
-import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail } from "../_shared/hr-mail.ts";
+import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail, sendTemplateEmail } from "../_shared/hr-mail.ts";
+import { buildLetterPdf } from "../_shared/offer-letter-pdf.ts";
+import type { TemplatePerson, TemplateSource } from "../_shared/hr-template.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
@@ -71,6 +73,23 @@ Deno.serve(async (req) => {
     },
     config,
     sendLink: (mail) => sendLinkEmail(provider, config, mail),
+    // HRMS > Templates: the template to send (a chosen one, else the default of that kind) with the person's values.
+    templateMail: async (profileId, type, templateId) => {
+      const { data, error } = await service.rpc("hr_svc_template_mail", { p_profile: profileId, p_type: type, p_template: templateId ?? null });
+      if (error || !data) return null;
+      const mail = data as { template: (TemplateSource & { id: string; name: string }) | null; values: TemplatePerson | null };
+      return { template: mail.template, values: mail.values ?? {} };
+    },
+    sendTemplate: (mail) => sendTemplateEmail(provider, config, mail),
+    accountUrl: (token) => `${config.siteUrl}/staff/welcome#t=${encodeURIComponent(token)}`,
+    // An unconfirmed login with no password given (Auth stores a random one nobody knows): it cannot sign in until the person
+    // chooses a password through their one-time link, which also confirms the email.
+    createLogin: async (email, name) => {
+      const { data, error } = await service.auth.admin.createUser({ email, email_confirm: false, user_metadata: { name, account_type: "staff" } });
+      return { userId: data?.user?.id ?? null, error: error ? error.message : null };
+    },
+    deleteLogin: async (userId) => { await service.auth.admin.deleteUser(userId); },
+    letterPdf: (input) => buildLetterPdf(PdfLib, input),
     linkUrl: (purpose, token) => linkUrl(config.siteUrl!, purpose, token),
     drain: () => drainHrOutbox(service, env),
     file,

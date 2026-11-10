@@ -9,7 +9,7 @@ select is(has_table_privilege('authenticated','public.admin_menu_items','update'
 select is(has_table_privilege('authenticated','public.admin_menu_items','delete'),false,'browser cannot delete menu');
 select is((select relrowsecurity from pg_class where oid='public.admin_menu_items'::regclass),true,'menu has RLS');
 -- 32 seeded rows plus later menu migrations (businesses, agents, students, staff item, Staff group, Jobs, HRMS pages, ...) on a full repo replay.
-select is((select count(*)::int from public.admin_menu_items),46,'desired menu seeded');
+select is((select count(*)::int from public.admin_menu_items),47,'desired menu seeded (47 with HRMS > Templates, 20261111100000)');
 -- Seeded hidden: students (unimplemented group), media (unimplemented). 20261102095335: agent_users and agency_directory
 -- (replaced by Agencies > Businesses / Agents / Students). 20261103090000: courses (the group emptied when Course Catalogue
 -- moved under Website).

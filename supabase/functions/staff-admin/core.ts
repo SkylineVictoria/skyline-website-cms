@@ -9,6 +9,18 @@
 // returned to the admin once to pass on.
 import type { HrMailConfig } from "../_shared/hr-mail.ts";
 import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
+import { builtInLoginEmail } from "../_shared/hr-mail.ts";
+import { longDate, placeholderLabels, renderMessage, templateValues, type RenderedMessage, type TemplatePerson, type TemplateSource, type TemplateType } from "../_shared/hr-template.ts";
+import { letterFileName } from "../_shared/offer-letter-pdf.ts";
+//
+// Onboarding flow (2026-11-10): `send_documents` is "Send document link" on the employee page (a Careers applicant is hired for their
+// open job application, anyone else gets the plain link). Document and re-upload emails use the HRMS template of that kind when one
+// exists (HRMS > Templates). `offer_generate` fills an offer letter template for the person, refuses while a placeholder has no
+// value, makes the PDF and records it with the rendered HTML. `offer_send_login` sends the offer with the person's login: a login is
+// created when none exists (unconfirmed, with no password anyone knows: it cannot sign in), the database marks the offer sent and records a one-time set-password
+// link (hash only, 7 days), and ONE email carries the link. A failed email on the first send undoes everything (offer unsent, links
+// revoked, the login made for it deleted); nothing half-made is left. `resend_login` emails a new one-time link while no password
+// has been chosen. No password is ever generated, stored, logged or shown.
 //
 // Candidates (HR-02j): `hire` ("Hire and send document link", from the selected stage) lets the database mark the job application
 // hired, write the employment record from the job and make the document link, then mails it like send_invite; the person is learned
@@ -20,7 +32,7 @@ import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add", "hire", "candidate_file"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add", "hire", "candidate_file", "send_documents", "offer_generate", "offer_send_login", "resend_login"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -36,8 +48,20 @@ export interface AdminDeps {
   serviceRpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: DbError }>;
   newLink(): Promise<{ token: string; hash: string }>;
   config: HrMailConfig;
-  sendLink(mail: { kind: LinkKind; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
+  sendLink(mail: { kind: LinkKind; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string; rendered?: RenderedMessage | null }):
     Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
+  /** The HRMS template to send for a kind of email (a chosen one, else the default) with the person's raw values; template null = none. */
+  templateMail?(profileId: string, type: TemplateType, templateId?: string | null): Promise<{ template: (TemplateSource & { id: string; name: string }) | null; values: TemplatePerson } | null>;
+  /** A template email sent inline (offer + sign-in link, new sign-in link). */
+  sendTemplate?(mail: { to: string; message: { subject: string; text: string; html?: string }; deliveryId: string }): Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
+  /** The one-time set-password page for a token. */
+  accountUrl?(token: string): string;
+  /** Auth (service role): a new, unconfirmed login for this email with no password anyone knows (it cannot sign in until the person sets one). */
+  createLogin?(email: string, name: string): Promise<{ userId: string | null; error: string | null }>;
+  /** Auth (service role): removes a login this request created. */
+  deleteLogin?(userId: string): Promise<void>;
+  /** The filled-in letter as a PDF (pdf-lib). */
+  letterPdf?(input: { title: string; html: string; footer: string }): Promise<{ bytes: Uint8Array; pages: number }>;
   linkUrl(purpose: LinkPurpose, token: string): string;
   /** Auth (service role): the single login for an email, or null. */
   findLogin(email: string): Promise<{ login: LoginInfo | null; error: string | null }>;
@@ -96,7 +120,22 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
     const owner = pid ?? (typeof invite.profileId === "string" && UUID.test(invite.profileId) ? invite.profileId : null);
     const kind: LinkKind = purpose === "documents" ? "document_invite" : purpose === "reupload" ? "reupload_invite" : "offer";
     const url = deps.linkUrl(purpose, link.token);
-    const sent = await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}` });
+    // The HRMS template for this email (document request / re-upload), filled for the person; none = the built-in text. A template
+    // that cannot be filled completely is not sent: it counts as a failed email (the link is cancelled, the admin sees why).
+    let rendered: RenderedMessage | null = null;
+    let templateError: string | null = null;
+    const type: TemplateType | null = purpose === "documents" ? "document_request" : purpose === "reupload" ? "document_reupload" : null;
+    if (type && owner && deps.templateMail) {
+      const mail = await deps.templateMail(owner, type).catch(() => null);
+      if (mail?.template) {
+        rendered = renderMessage(mail.template, templateValues(mail.values ?? {}, { document_link: url, link_expiry: longDate(invite.invite.expiresAt), login_url: `${deps.config.siteUrl}/login`,
+          rejected_documents: (invite.rejected ?? []).map((r) => `${r.category}: ${r.note}`).join("\n") }));
+        const gaps = [...rendered.missing, ...rendered.unknown];
+        if (gaps.length) templateError = `the "${mail.template.name}" template needs ${placeholderLabels(gaps)}, which this person does not have yet`;
+      }
+    }
+    const sent = templateError ? { state: "failed" as const, error: templateError, messageId: undefined }
+      : await deps.sendLink({ kind, to: invite.email, name: invite.name, link: url, expiresAt: invite.invite.expiresAt, rejected: invite.rejected, deliveryId: `hr-invite-${invite.invite.id}`, rendered });
     // The log never holds the token or the link: only which invite it was and what happened.
     await deps.serviceRpc("hr_svc_email_log", { p_profile: owner, p_kind: kind, p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
       p_payload: { inviteId: invite.invite.id, purpose, expiresAt: invite.invite.expiresAt } });
@@ -145,7 +184,136 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
     return { status: 200, body: { activated: false, inviteSent: true, existingLogin: false, resent: resend, detail: (recorded.data as { detail?: unknown }).detail } };
   };
 
+  // The offer letter with the person's login, or a new sign-in link ("Resend login"). See the notes at the top of this file.
+  const loginEmail = async (kind: "offer" | "login_link", templateId: string | null, links: Record<string, string>):
+    Promise<{ ok: true; message: { subject: string; text: string; html?: string } } | { ok: false; result: AdminResult }> => {
+    const mail = deps.templateMail ? await deps.templateMail(profileId!, kind === "offer" ? "offer_email" : "welcome_login", templateId).catch(() => null) : null;
+    const values = templateValues(mail?.values ?? {}, links);
+    if (!mail?.template) {
+      if (templateId) return { ok: false, result: { status: 400, body: { error: "That email template was not found. Choose another one." } } };
+      return { ok: true, message: builtInLoginEmail(kind, values) };
+    }
+    const rendered = renderMessage(mail.template, values);
+    const gaps = [...rendered.missing, ...rendered.unknown];
+    if (gaps.length) {
+      return { ok: false, result: { status: 400, body: { error: `The "${mail.template.name}" email template needs ${placeholderLabels(gaps)}, which this person does not have yet. Fix the template or the person's details. Nothing was sent.`, missing: gaps } } };
+    }
+    return { ok: true, message: { subject: rendered.subject, text: rendered.text, html: rendered.html } };
+  };
+
   switch (action as AdminAction) {
+    case "send_documents":
+      // "Send document link" on the employee page: the database hires an open job application (as Candidates does) or makes the
+      // plain document link; the email, log and cancel rules are send_invite's.
+      return sendLinkFlow("documents", "hr_admin_onboarding_documents_invite", { p_id: profileId });
+    case "offer_generate": {
+      const templateId = typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null;
+      if (!templateId) return { status: 400, body: { error: "Choose an offer letter template." } };
+      if (!deps.letterPdf) return { status: 503, body: { error: "Offer letters cannot be made here." } };
+      // Admin, state and everything the letter needs, with the caller's JWT: nothing is rendered or stored otherwise.
+      const context = await deps.adminRpc("hr_admin_offer_letter_context", { p_id: profileId });
+      if (context.error) return fromDb(context.error);
+      const ctx = context.data as { problem: string | null; values: TemplatePerson; templates: Array<TemplateSource & { id: string; type: string; name: string }> };
+      if (ctx.problem) return { status: 400, body: { error: ctx.problem } };
+      const template = ctx.templates.find((t) => t.id === templateId && t.type === "offer_letter");
+      if (!template) return { status: 400, body: { error: "That offer letter template was not found. Choose another one." } };
+      const values = templateValues(ctx.values ?? {});
+      const letter = renderMessage(template, values);
+      const gaps = [...letter.missing, ...letter.unknown];
+      if (gaps.length) {
+        return { status: 400, body: { error: `The letter cannot be made yet: ${placeholderLabels(gaps)} ${gaps.length === 1 ? "has" : "have"} no value for this person. Add ${gaps.length === 1 ? "it" : "them"} in the pay details, or use another template.`, missing: gaps } };
+      }
+      let pdf: { bytes: Uint8Array; pages: number };
+      try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name }); }
+      catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the template and try again." } }; }
+      // The same checks as an uploaded offer, so signing it later cannot fail on the file.
+      const checked = await deps.inspectOffer(pdf.bytes);
+      if (!checked.ok) return { status: 400, body: { error: checked.error } };
+      const sha256 = await deps.sha256(pdf.bytes);
+      const path = `${profileId}/offer/${deps.newId()}.pdf`;
+      const stored = await deps.upload(path, pdf.bytes, "application/pdf");
+      if (stored.error) return { status: 503, body: { error: "The letter could not be stored. Please try again." } };
+      const added = await deps.adminRpc("hr_admin_offer_letter_add", { p_id: profileId, p_path: path, p_filename: letterFileName(letter.subject, values.full_name), p_size: pdf.bytes.length,
+        p_sha256: sha256, p_template: template.id, p_title: letter.subject, p_html: letter.html, p_values: values });
+      if (added.error) { await deps.remove([path]); return fromDb(added.error); }
+      const result = added.data as { offer: unknown; replacedPath?: string | null };
+      if (result.replacedPath) await deps.remove([result.replacedPath]);
+      return { status: 200, body: { offer: result.offer, pages: pdf.pages, title: letter.subject, templateName: template.name } };
+    }
+    case "offer_send_login": {
+      if (!deps.config.siteUrl) return { status: 503, body: { error: "The offer cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+      if (!deps.sendTemplate || !deps.accountUrl || !deps.createLogin || !deps.deleteLogin) return { status: 503, body: { error: "Offers cannot be sent here." } };
+      const templateId = typeof body.emailTemplateId === "string" && UUID.test(body.emailTemplateId) ? body.emailTemplateId : null;
+      // Admin and state first, with the caller's JWT.
+      const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
+      if (before.error) return fromDb(before.error);
+      const person = (before.data as { profile?: { status?: string; email?: string; first_name?: string; last_name?: string } }).profile ?? {};
+      if (person.status !== "documents_submitted" && person.status !== "offer_sent") return { status: 400, body: { error: "An offer can be sent after the documents are submitted." } };
+      const email = String(person.email ?? "");
+      const name = [person.first_name, person.last_name].filter(Boolean).join(" ");
+      // The email is checked before anything is created: a template that cannot be filled stops here.
+      const trial = await loginEmail("offer", templateId, { signing_link: "https://example.invalid", login_url: `${deps.config.siteUrl}/login`, link_expiry: "1 January 2000" });
+      if (!trial.ok) return trial.result;
+      // The login: the one this email already has, or a new one without a password.
+      const found = await deps.findLogin(email);
+      if (found.error) return { status: 503, body: { error: "The login could not be checked. Please try again shortly." } };
+      let userId = found.login?.id ?? null;
+      let created = false;
+      if (!userId) {
+        const made = await deps.createLogin(email, name);
+        if (made.error || !made.userId) return { status: 502, body: { error: `The login could not be created (${made.error ?? "error"}). Nothing was sent and nothing was changed.` } };
+        userId = made.userId; created = true;
+      }
+      const needsPassword = !found.login?.confirmed;
+      const link = needsPassword ? await deps.newLink() : null;
+      const sentOffer = await deps.adminRpc("hr_admin_onboarding_offer_send", { p_id: profileId, p_auth_user_id: userId, p_account_hash: link?.hash ?? null });
+      if (sentOffer.error) { if (created) await deps.deleteLogin(userId).catch(() => undefined); return fromDb(sentOffer.error); }
+      const made = sentOffer.data as { firstSend: boolean; needsPassword: boolean; expiresAt: string | null; invite: { id: string } | null; offer: { id: string } };
+      const signingLink = link ? deps.accountUrl(link.token) : `${deps.config.siteUrl}/login?next=%2Fstaff`;
+      const composed = await loginEmail("offer", templateId, { signing_link: signingLink, login_url: `${deps.config.siteUrl}/login`,
+        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + 30 * 86400_000).toISOString()) });
+      const sent = composed.ok ? await deps.sendTemplate({ to: email, message: composed.message, deliveryId: `hr-offer-${made.offer.id}-${deps.newId().slice(0, 8)}` })
+        : { state: "failed" as const, error: String(composed.result.body.error ?? "the email template could not be filled"), messageId: undefined };
+      // The log never holds the token or the link.
+      await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: "offer", p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+        p_payload: { offerId: made.offer.id, withLogin: true, setPasswordLink: Boolean(link), expiresAt: made.expiresAt } });
+      if (sent.state === "failed") {
+        if (made.firstSend) {
+          // Nothing reached the person: put everything back, and remove the login this request made.
+          const undone = await deps.adminRpc("hr_admin_onboarding_offer_unsend", { p_id: profileId, p_unlink: created });
+          if (created && !undone.error) await deps.deleteLogin(userId).catch(() => undefined);
+          return { status: 502, body: { emailSent: false, rolledBack: !undone.error, error: undone.error
+            ? `The email could not be sent (${sent.error ?? "error"}) and the offer could not be put back automatically. Withdraw the offer, then send it again.`
+            : `The email could not be sent (${sent.error ?? "error"}). Nothing went out and nothing was changed: the offer is not sent and no login was left behind. Fix the problem and send it again.` } };
+        }
+        if (made.invite) await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: made.invite.id });
+        return { status: 502, body: { emailSent: false, error: `The email could not be sent (${sent.error ?? "error"}). The offer is still out; the new sign-in link was cancelled. Use Resend login.` } };
+      }
+      if (sent.state === "skipped") {
+        return { status: 200, body: { emailSent: false, link: signingLink, expiresAt: made.expiresAt, needsPassword, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      }
+      return { status: 200, body: { emailSent: true, needsPassword, expiresAt: made.expiresAt, firstSend: made.firstSend } };
+    }
+    case "resend_login": {
+      if (!deps.config.siteUrl) return { status: 503, body: { error: "The link cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+      if (!deps.sendTemplate || !deps.accountUrl) return { status: 503, body: { error: "Sign-in links cannot be sent here." } };
+      const link = await deps.newLink();
+      const made = await deps.adminRpc("hr_admin_onboarding_login_resend", { p_id: profileId, p_account_hash: link.hash });
+      if (made.error) return fromDb(made.error);
+      const invite = made.data as { email: string; expiresAt: string; invite: { id: string } };
+      const url = deps.accountUrl(link.token);
+      const composed = await loginEmail("login_link", null, { signing_link: url, login_url: `${deps.config.siteUrl}/login`, link_expiry: longDate(invite.expiresAt) });
+      const sent = composed.ok ? await deps.sendTemplate({ to: invite.email, message: composed.message, deliveryId: `hr-login-${invite.invite.id}` })
+        : { state: "failed" as const, error: String(composed.result.body.error ?? "the email template could not be filled"), messageId: undefined };
+      await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: "login_link", p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+        p_payload: { inviteId: invite.invite.id, expiresAt: invite.expiresAt } });
+      if (sent.state === "failed") {
+        await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: invite.invite.id });
+        return { status: 502, body: { emailSent: false, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Resend login again.` } };
+      }
+      if (sent.state === "skipped") return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      return { status: 200, body: { emailSent: true, expiresAt: invite.expiresAt } };
+    }
     case "send_invite": {
       const purpose = body.purpose === "reupload" ? "reupload" : body.purpose === "documents" ? "documents" : null;
       if (!purpose) return { status: 400, body: { error: "Choose a document or re-upload link." } };

@@ -64,6 +64,13 @@ Deno.serve(async (req) => {
   } catch { return json({ error: "The request could not be read." }, 400); }
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  // A signed-in person (no link token): the session is verified with Auth; the anon key and expired or forged tokens give no session.
+  let session: { userId: string } | null = null;
+  const bearer = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if ((token === null || token === undefined || token === "") && bearer && bearer.split(".").length === 3) {
+    const { data, error } = await admin.auth.getUser(bearer);
+    if (!error && data?.user?.id && data.user.email_confirmed_at) session = { userId: data.user.id };
+  }
   const bucket = admin.storage.from("staff-documents");
   const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
@@ -85,7 +92,7 @@ Deno.serve(async (req) => {
   };
 
   const userAgent = req.headers.get("user-agent");
-  const result = await handleOnboarding({ action, token, ip, userAgent, fields, file }, {
+  const result = await handleOnboarding({ action, token, ip, userAgent, fields, file, session }, {
     takeRateLimit: async (b, limit, windowSeconds) => {
       const { data, error } = await admin.rpc("public_assistant_take_rate_limit", { p_bucket: b, p_limit: limit, p_window_seconds: windowSeconds });
       return !error && data === true; // a failed limiter fails closed
@@ -105,6 +112,10 @@ Deno.serve(async (req) => {
     sha256: async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)))].map((x) => x.toString(16).padStart(2, "0")).join(""),
     stampOffer: (original, signature) => stampSignedOffer(PdfLib, original, signature),
     now: () => new Date(),
+    setPassword: async (userId, password) => {
+      const { error } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
+      return { error: error ? error.message : null };
+    },
   });
   // Submit queues "X has uploaded documents" for the admins: send it after the response.
   // Signing queues the signed copy for the applicant and HR (with the PDF attached).

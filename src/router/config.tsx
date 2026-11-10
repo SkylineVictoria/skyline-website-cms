@@ -69,6 +69,7 @@ import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
+import TemplatesPage from "@/pages/admin/TemplatesPage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
@@ -218,6 +219,7 @@ const routes: RouteObject[] = [
           { path: "staff/pay-schedules", element: <RequireAdmin><PaySchedulesPage /></RequireAdmin> },
           { path: "staff/holidays", element: <RequireAdmin><PublicHolidaysPage /></RequireAdmin> },
           { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
+          { path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "candidates", element: <Navigate to="/admin/staff/candidates" replace /> },
           { path: "candidates/:id", element: <LegacyCandidateRedirect /> },

@@ -16,6 +16,8 @@ export interface EmailMessage {
   to: string;
   subject: string;
   textBody: string;
+  /** Optional HTML version (HR template emails); the text body is always sent with it. */
+  htmlBody?: string;
   attachments?: EmailAttachment[];
 }
 
@@ -48,7 +50,7 @@ export function createPostmarkProvider(options: { serverToken: string; fetch?: t
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/json", "X-Postmark-Server-Token": options.serverToken },
           body: JSON.stringify({
-            From: formatFrom(message.from.name, message.from.email), ...(message.replyTo ? { ReplyTo: message.replyTo } : {}), To: message.to, Subject: message.subject, TextBody: message.textBody,
+            From: formatFrom(message.from.name, message.from.email), ...(message.replyTo ? { ReplyTo: message.replyTo } : {}), To: message.to, Subject: message.subject, TextBody: message.textBody, ...(message.htmlBody ? { HtmlBody: message.htmlBody } : {}),
             ...(message.attachments?.length ? { Attachments: message.attachments.map((a) => ({ Name: a.name, Content: a.contentBase64, ContentType: a.contentType })) } : {}),
             MessageStream: "outbound", Metadata: { deliveryId: message.deliveryId }, TrackOpens: false, TrackLinks: "None",
           }),

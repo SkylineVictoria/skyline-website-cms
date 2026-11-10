@@ -22,7 +22,7 @@ export interface StaffDocSummary { required: number; uploaded: number; approved:
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
 /** hr.employment (HR-02j): the employment details; the joining date is set at activation. */
 export interface StaffEmployment {
-  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | null; joiningDate: string | null;
+  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "casual" | null; joiningDate: string | null;
   managerId: string | null; managerName: string | null; workLocation: string; candidateId: string | null; since: string;
 }
 /** hr_staff_me: the signed-in person's own staff record (documents, employment and the signed offer once they are active). */
@@ -117,7 +117,7 @@ export interface StaffJobApplication {
   stage: "screening" | "shortlisted" | "interview" | "selected"; source: "careers" | "manual"; appliedAt: string; decidedAt: string | null; decisionNote: string;
   coverLetter: string; coverLetterFile: { filename: string; storagePath: string; mimeType: string | null } | null;
 }
-export interface StaffInvite { id: string; purpose: "documents" | "reupload" | "offer"; createdAt: string; expiresAt: string; usedAt: string | null; lastSeenAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" }
+export interface StaffInvite { id: string; purpose: "documents" | "reupload" | "offer" | "account"; createdAt: string; expiresAt: string; usedAt: string | null; lastSeenAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" }
 export interface StaffOffer {
   id: string; filename: string; fileSize: number; storagePath: string; sha256: string; uploadedAt: string; sentAt: string | null; withdrawnAt: string | null;
   signedAt: string | null; signerName: string | null; signedPath: string | null; signedSha256: string | null;
@@ -132,7 +132,7 @@ export interface StaffDetail {
   invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean; jobApplications: StaffJobApplication[]; employment: StaffEmployment | null;
 }
 /** The editable employment fields (hr_admin_staff_employment_save); the joining date is set at activation, not here. */
-export interface StaffEmploymentForm { department: string; jobTitle: string; employmentType: "full_time" | "part_time" | ""; managerId: string; workLocation: string }
+export interface StaffEmploymentForm { department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "casual" | ""; managerId: string; workLocation: string }
 
 /** One or more statuses (p_statuses); an empty list means every status. */
 export async function adminListStaff(statuses: readonly StaffStatus[], search: string, limit = 50, offset = 0): Promise<{ total: number; rows: StaffListRow[] }> {
@@ -161,6 +161,8 @@ export interface StaffAdminResult {
   detail?: StaffDetail | null; emailSent?: boolean; linkCancelled?: boolean; link?: string; note?: string; expiresAt?: string;
   inviteSent?: boolean; activated?: boolean; existingLogin?: boolean; resent?: boolean; offer?: StaffOffer; pages?: number; profileId?: string;
   ok?: boolean; which?: "resume" | "cover_letter"; filename?: string;
+  /** Onboarding flow: a generated letter (title, template), the offer sent with the login, an email that failed and was undone. */
+  title?: string; templateName?: string; needsPassword?: boolean; firstSend?: boolean; rolledBack?: boolean; missing?: string[];
 }
 export class StaffAdminError extends Error {
   readonly status: number;
@@ -192,6 +194,14 @@ export const staffAdminActions = {
     return staffAdmin(form);
   },
   sendOffer: (profileId: string) => staffAdmin({ action: "offer_send", profileId }),
+  /** Onboarding flow: the document link from the employee page (a Careers applicant is hired for their open job application). */
+  sendDocuments: (profileId: string) => staffAdmin({ action: "send_documents", profileId }),
+  /** Fills an offer letter template for the person and stores the PDF with the rendered letter. */
+  generateOffer: (profileId: string, templateId: string) => staffAdmin({ action: "offer_generate", profileId, templateId }),
+  /** Sends the prepared offer with the person's login (one email with a one-time set-password link). Also the resend. */
+  sendOfferWithLogin: (profileId: string, emailTemplateId: string | null) => staffAdmin({ action: "offer_send_login", profileId, emailTemplateId }),
+  /** A new one-time set-password link, while the person has not chosen a password. */
+  resendLogin: (profileId: string) => staffAdmin({ action: "resend_login", profileId }),
   withdrawOffer: (profileId: string, note: string) => staffAdmin({ action: "offer_withdraw", profileId, note }),
   activate: (profileId: string, role: StaffRole, joiningDate: string, confirmAdmin: boolean) => staffAdmin({ action: "activate", profileId, role, joiningDate, confirmAdmin }),
   resendActivation: (profileId: string) => staffAdmin({ action: "resend_activation", profileId }),
@@ -223,3 +233,47 @@ async function adminRpc(name: string, args: Record<string, unknown>, fallback: s
 export const adminDeactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_deactivate", { p_id: id, p_note: note || null }, "That could not be done.");
 export const adminReactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_activate", { p_id: id, p_note: note || null }, "That could not be done.");
 export const adminReopenStaff = (id: string, note: string) => adminRpc("hr_staff_reopen", { p_id: id, p_note: note }, "That could not be done.");
+
+/* ------------------------------------------------------------------ onboarding flow (stages, pay details, history) */
+
+export type OnboardingStageKey = "applied" | "shortlisted" | "documents_requested" | "documents_submitted" | "documents_approved" | "pay_details" | "offer_sent" | "offer_signed" | "active";
+export interface OnboardingStep { key: OnboardingStageKey; label: string; state: "done" | "current" | "todo"; at: string | null }
+export interface OnboardingTimelineEntry {
+  at: string; type: "status" | "action" | "recruitment" | "email"; action: string; detail: Record<string, unknown>;
+  actorKind: "admin" | "applicant" | "system"; actorName: string;
+}
+export interface OnboardingPay {
+  payScheduleId: string | null; payScheduleName: string | null; payBasis: "salary" | "hourly" | null; rate: number | null; ordinaryHoursWeek: number | null;
+  usualWorkDays: number[] | null; award: string; xeroEmployeeId: string; effectiveOrdinaryHoursWeek: number;
+}
+export interface OnboardingPayDetails {
+  employment: StaffEmployment | null; pay: OnboardingPay; completedAt: string | null; schedules: Array<{ id: string; name: string; frequency: string }>;
+}
+export interface OnboardingAccount {
+  hasLogin: boolean; passwordSet: boolean; lastSignInAt: string | null;
+  link: { sentAt: string; expiresAt: string; usedAt: string | null; state: "live" | "used" | "revoked" | "replaced" | "expired" } | null;
+}
+/** hr_admin_onboarding: where the person is in the nine stages, with the date of each step, the pay details, the login and the history. */
+export interface StaffOnboarding {
+  stage: OnboardingStageKey; index: number; closed: "rejected" | "inactive" | null; steps: OnboardingStep[];
+  documentsApproved: boolean; documentsProblem: string | null; payComplete: boolean; payProblem: string | null;
+  payDetails: OnboardingPayDetails; documentLinkSentAt: string | null; account: OnboardingAccount;
+  offerLetter: { offerId: string; templateName: string; title: string; createdAt: string } | null;
+  timeline: OnboardingTimelineEntry[];
+}
+export async function adminOnboarding(id: string): Promise<StaffOnboarding> {
+  const { data, error } = await supabase.rpc("hr_admin_onboarding", { p_id: id });
+  if (error) fail(error, "The onboarding progress could not be loaded.");
+  return data as StaffOnboarding;
+}
+
+/** The pay details form (hr_admin_onboarding_pay_save): everything the offer letter and payroll need, validated again by the database. */
+export interface PayDetailsForm {
+  jobTitle: string; department: string; employmentType: "full_time" | "part_time" | "casual" | ""; startDate: string; workLocation: string; managerId: string;
+  payBasis: "hourly" | "salary" | ""; rate: string; payScheduleId: string; hoursPerWeek: string; award: string; xeroEmployeeId: string;
+}
+export async function adminSavePayDetails(id: string, form: PayDetailsForm): Promise<StaffOnboarding> {
+  const { data, error } = await supabase.rpc("hr_admin_onboarding_pay_save", { p_id: id, p_details: form });
+  if (error) fail(error, "The pay details could not be saved.");
+  return data as StaffOnboarding;
+}

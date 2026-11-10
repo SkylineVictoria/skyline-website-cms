@@ -7,7 +7,8 @@
 // thank-you answer and nothing is stored or sent, so the form never reveals who has applied.
 // Careers (HR-02i): the same form with jobId (an open job), an optional cover letter text (<= 5000) and an optional cover letter file
 // (PDF or Word .docx, 5 MB, checked by content like the resume), stored at {profile id}/cover-letter/ and recorded by
-// hr_svc_job_cover_letter. An open application applying for another job gets that job added and the same thank-you.
+// hr_svc_job_cover_letter. An open application or an active employee applying for a job gets the same thank-you and nothing is
+// recorded (20261110230000).
 import type { CaptchaVerifier } from "../_shared/captcha.ts";
 import { cleanEmail } from "../_shared/user-input.ts";
 import { toE164 } from "../_shared/staff-phone.ts";

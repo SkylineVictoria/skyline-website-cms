@@ -37,7 +37,7 @@ export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
  */
 export type EmployeeAction =
   | "send_documents_link" | "resend_documents_link" | "revoke_link" | "send_reupload_link"
-  | "upload_offer" | "send_offer" | "resend_offer" | "withdraw_offer"
+  | "add_pay_details" | "edit_pay_details" | "send_offer" | "resend_offer" | "resend_login" | "withdraw_offer"
   | "activate" | "resend_activation" | "reject" | "deactivate" | "reactivate" | "reopen";
 export interface EmployeeContext {
   status: StaffStatus;
@@ -47,22 +47,28 @@ export interface EmployeeContext {
   /** The open (not withdrawn, not signed) offer: uploaded only, or sent. */
   offer: { sent: boolean } | null;
   activationInvited: boolean;
-  /** HR-02j: an open job application (a Careers applicant or manual candidate): the document link comes from Candidates ("Hire"). */
+  /** An open job application (a Careers applicant or manual candidate): sending the document link also hires them for that job. */
   openJobApplication?: boolean;
+  /** Onboarding flow: the pay details are complete (the database refuses an offer without them). */
+  payComplete?: boolean;
+  /** The login that went out with the offer: it exists, and the person has chosen their password. */
+  hasLogin?: boolean;
+  passwordSet?: boolean;
 }
 export function employeeActions(c: EmployeeContext): EmployeeAction[] {
   switch (c.status) {
-    case "applied": return c.openJobApplication ? ["reject"] : ["send_documents_link", "reject"];
+    case "applied": return ["send_documents_link", "reject"];
     case "invited": return [...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
     case "documents_submitted": {
       const out: EmployeeAction[] = [];
       if (c.rejectedDocuments > 0) out.push("send_reupload_link");
-      if (c.allApproved) out.push("upload_offer");
-      if (c.allApproved && c.offer && !c.offer.sent) out.push("send_offer");
+      // Documents approved > pay details > offer: only the step that is next is offered.
+      if (c.allApproved && !c.payComplete) out.push("add_pay_details");
+      if (c.allApproved && c.payComplete) out.push("send_offer", "edit_pay_details");
       return [...out, "reject"];
     }
-    case "offer_sent": return ["resend_offer", "withdraw_offer", "reject"];
-    case "offer_signed": return [c.activationInvited ? "resend_activation" : "activate", "reject"];
+    case "offer_sent": return ["resend_offer", ...(c.hasLogin && !c.passwordSet ? ["resend_login"] as const : []), "withdraw_offer", "reject"];
+    case "offer_signed": return [c.activationInvited ? "resend_activation" : "activate", ...(c.hasLogin && !c.passwordSet ? ["resend_login"] as const : []), "reject"];
     case "active": return ["deactivate"];
     case "inactive": return ["reactivate"];
     case "rejected": return ["reopen"];
@@ -72,23 +78,25 @@ export function employeeActions(c: EmployeeContext): EmployeeAction[] {
 /** The status an action leads to (null = the status does not change). */
 export const EMPLOYEE_ACTION_TARGET: Record<EmployeeAction, StaffStatus | null> = {
   send_documents_link: "invited", resend_documents_link: null, revoke_link: null, send_reupload_link: "invited",
-  upload_offer: null, send_offer: "offer_sent", resend_offer: null, withdraw_offer: "documents_submitted",
+  add_pay_details: null, edit_pay_details: null, send_offer: "offer_sent", resend_offer: null, resend_login: null, withdraw_offer: "documents_submitted",
   activate: "active", resend_activation: null, reject: "rejected", deactivate: "inactive", reactivate: "active", reopen: "applied",
 };
 export interface EmployeeActionSpec { label: string; confirm: string; danger?: boolean; note?: "required" | "optional"; explain: string }
 export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
   send_documents_link: { label: "Send document link", confirm: "Send the link", explain: "Emails a private link (valid 14 days) to add personal details and documents. No account is needed." },
-  resend_documents_link: { label: "Send the link again", confirm: "Send a new link", explain: "Emails a new private link. The earlier link stops working at once." },
+  add_pay_details: { label: "Add pay details", confirm: "Save pay details", explain: "Position, employment type, start date, pay and schedule. They fill the offer letter and set up payroll." },
+  edit_pay_details: { label: "Edit pay details", confirm: "Save pay details", explain: "Change the pay details before the offer goes out." },
+  resend_documents_link: { label: "Resend link", confirm: "Send a new link", explain: "Emails a new private link. The earlier link stops working at once." },
   revoke_link: { label: "Revoke link", confirm: "Revoke the link", danger: true, explain: "The current link stops working. The status does not change; you can send a new link later." },
   send_reupload_link: { label: "Ask for documents again", confirm: "Send the re-upload link", explain: "Emails a link to replace only the rejected documents (with your notes). The application goes back to Invited until they send them." },
-  upload_offer: { label: "Upload offer letter", confirm: "Upload", explain: "PDF, 7 MB or smaller, not password-protected. It is checked before it is stored. An unsent offer is replaced." },
-  send_offer: { label: "Send offer", confirm: "Send the offer", explain: "Emails a private link (valid 30 days) to read and sign the offer letter on the page." },
-  resend_offer: { label: "Send the offer link again", confirm: "Send a new link", explain: "Emails a new offer link. The earlier link stops working at once." },
+  send_offer: { label: "Send offer letter", confirm: "Send the offer", explain: "Makes the offer letter from a template and emails it with the person's sign-in link (valid 7 days). They choose their own password, then read and sign the letter." },
+  resend_offer: { label: "Send the offer email again", confirm: "Send it again", explain: "Emails the offer again with a new sign-in link. An earlier link stops working at once." },
+  resend_login: { label: "Resend login", confirm: "Send a new link", explain: "Emails a new one-time link to choose a password (valid 7 days). The earlier link stops working at once." },
   withdraw_offer: { label: "Withdraw offer", confirm: "Withdraw the offer", danger: true, note: "required", explain: "The offer link stops working and the application goes back to Documents submitted." },
-  activate: { label: "Activate account", confirm: "Activate", explain: "Grants the role from the joining date. A person who already has a confirmed login is active at once (and emailed); everyone else gets an email to set a password." },
+  activate: { label: "Activate employee", confirm: "Activate", explain: "Makes them a current employee from the joining date, with the role you choose. They appear under Active and in Timesheets, Leave, Pay Schedules and the Xero export, and are emailed that their staff access is ready." },
   resend_activation: { label: "Resend activation email", confirm: "Send it again", explain: "Sends a new set-a-password email (for example when the link expired), with the role and joining date already recorded." },
-  reject: { label: "Reject", confirm: "Reject", danger: true, note: "required", explain: "Ends this application. Any link stops working and an unsigned offer is withdrawn. The note is for the record; it is not sent." },
-  deactivate: { label: "Deactivate", confirm: "Deactivate", danger: true, note: "optional", explain: "Switches off their admin console access (if any) and marks them Inactive. My HR closes for them." },
+  reject: { label: "Withdraw / reject", confirm: "Withdraw", danger: true, note: "required", explain: "Ends this application at any stage. Any link stops working and an unsigned offer is withdrawn. The reason is for the record; it is not sent." },
+  deactivate: { label: "Mark inactive", confirm: "Mark inactive", danger: true, note: "required", explain: "Switches off their admin console access (if any) and marks them Inactive. My HR closes for them." },
   reactivate: { label: "Reactivate", confirm: "Reactivate", note: "optional", explain: "Gives back the role they had and marks them Active." },
   reopen: { label: "Reopen", confirm: "Reopen", note: "required", explain: "Moves the application back to Applications so you can send a new document link." },
 };
@@ -97,7 +105,7 @@ export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
 export const EMAIL_KIND_LABEL: Record<string, string> = {
   application_received: "Application received", already_applied: "Already applied", admin_new_application: "New application (to HR)",
   document_invite: "Document link", reupload_invite: "Re-upload link", admin_documents_submitted: "Documents uploaded (to HR)",
-  offer: "Offer link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
+  offer: "Offer and sign-in link", login_link: "Sign-in link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
 };
 
 export const isStaffStatus = (value: unknown): value is StaffStatus => typeof value === "string" && (STAFF_STATUSES as readonly string[]).includes(value);
@@ -204,3 +212,50 @@ export const EMPLOYEE_TABS: readonly EmployeeTab[] = [
   { id: "closed", label: "Rejected/Inactive", statuses: ["rejected", "inactive"], countBadge: false },
 ];
 export const employeeTab = (id: string | null | undefined): EmployeeTab => EMPLOYEE_TABS.find((t) => t.id === id) ?? EMPLOYEE_TABS[0];
+
+/* ------------------------------------------------------------------ onboarding stages (hr.onboarding_stage) */
+
+export type OnboardingStage = "applied" | "shortlisted" | "documents_requested" | "documents_submitted" | "documents_approved" | "pay_details" | "offer_sent" | "offer_signed" | "active";
+export const ONBOARDING_STAGES: readonly OnboardingStage[] = ["applied", "shortlisted", "documents_requested", "documents_submitted", "documents_approved", "pay_details", "offer_sent", "offer_signed", "active"];
+export const ONBOARDING_STAGE_LABEL: Record<OnboardingStage, string> = {
+  applied: "Applied", shortlisted: "Shortlisted", documents_requested: "Documents requested", documents_submitted: "Documents submitted",
+  documents_approved: "Documents approved", pay_details: "Pay details added", offer_sent: "Offer sent", offer_signed: "Offer signed", active: "Active",
+};
+/** The banner under the stepper: what the stage means and what happens next. */
+export const ONBOARDING_STAGE_HINT: Record<OnboardingStage, string> = {
+  applied: "New application. Send the document link when you are ready to continue.",
+  shortlisted: "Shortlisted. Send the document link to start onboarding.",
+  documents_requested: "The document link is out. Waiting for the person to add their details and documents.",
+  documents_submitted: "The documents are in. Approve or reject each one.",
+  documents_approved: "Every required document is approved. Add the pay details next.",
+  pay_details: "The pay details are in. Send the offer letter next.",
+  offer_sent: "The offer is out with the person's sign-in link. Waiting for them to sign.",
+  offer_signed: "The offer is signed. Activate them to make them a current employee.",
+  active: "Current employee.",
+};
+
+/** Problems with the pay details form, by field (the database checks the same rules in hr_admin_onboarding_pay_save). */
+export interface PayDetailsInput {
+  jobTitle: string; employmentType: string; startDate: string; payBasis: string; rate: string; payScheduleId: string; hoursPerWeek: string;
+}
+export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): Partial<Record<keyof PayDetailsInput, string>> {
+  const problems: Partial<Record<keyof PayDetailsInput, string>> = {};
+  if (!input.jobTitle.trim()) problems.jobTitle = "Enter the position (job title).";
+  else if (input.jobTitle.trim().length > 150) problems.jobTitle = "Keep the position under 150 characters.";
+  if (!["full_time", "part_time", "casual"].includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) || Number.isNaN(Date.parse(`${input.startDate}T00:00:00Z`))) problems.startDate = "Enter the start date.";
+  else {
+    const days = Math.round((Date.parse(`${input.startDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+    if (days < -365 || days > 730) problems.startDate = "The start date must be within the last year or the next two years.";
+  }
+  if (input.payBasis !== "hourly" && input.payBasis !== "salary") problems.payBasis = "Choose hourly or annual.";
+  const rate = Number(input.rate);
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(input.rate.trim()) || !(rate > 0)) problems.rate = "Enter the pay rate as a number, for example 38.50.";
+  else if (input.payBasis === "hourly" && rate > 1000) problems.rate = "That hourly rate looks too high. Check the pay basis.";
+  else if (input.payBasis === "salary" && rate < 1000) problems.rate = "That annual salary looks too low. Check the pay basis.";
+  if (!input.payScheduleId) problems.payScheduleId = "Choose the pay schedule.";
+  const hours = Number(input.hoursPerWeek);
+  if (!input.hoursPerWeek.trim()) { if (input.employmentType !== "casual") problems.hoursPerWeek = "Enter the hours per week."; }
+  else if (!/^\d{1,2}(\.\d{1,2})?$/.test(input.hoursPerWeek.trim()) || !(hours > 0) || hours > 80) problems.hoursPerWeek = "The hours per week must be between 1 and 80.";
+  return problems;
+}

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PDFDocument } from "pdf-lib";
@@ -61,6 +63,41 @@ export async function createStudentLogin(label = "student") {
   return { email, local, id, agency, student };
 }
 
+/** An Editor: a CMS user who is not an Admin (HRMS is closed to them). */
+export async function createEditor(label = "editor") {
+  const { email } = person(label);
+  const id = await createAuthUser(email);
+  sql(`insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values (gen_random_uuid()::text, 'E2E Editor', ${q(email)}, 'Editor', 'Active', '${id}', false)`);
+  return { email, id };
+}
+
+/**
+ * Screenshots of a step, desktop (1440 wide) and mobile (390 wide), written to E2E_SHOTS_DIR (outside the repo) when it is set.
+ * Without it nothing is written, so a normal run leaves no files behind.
+ */
+let shots = 0;
+export async function shot(page: Page, name: string): Promise<void> {
+  const dir = process.env.E2E_SHOTS_DIR;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  shots += 1;
+  const original = page.viewportSize();
+  for (const [label, size] of [["desktop", { width: 1440, height: 900 }], ["mobile", { width: 390, height: 844 }]] as const) {
+    await page.setViewportSize(size);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: path.join(dir, `${String(shots).padStart(2, "0")}-${name}-${label}.png`), fullPage: true });
+  }
+  if (original) await page.setViewportSize(original);
+}
+
+/** The pay details an offer needs (hr_admin_onboarding_pay_save), as the admin form sends them. */
+export async function payDetails(adminClient: SupabaseClient, profileId: string, over: Record<string, string> = {}): Promise<void> {
+  const schedule = sql("select id from hr.pay_schedules where is_active order by name limit 1");
+  const { error } = await adminClient.rpc("hr_admin_onboarding_pay_save", { p_id: profileId, p_details: { jobTitle: "Trainer", employmentType: "full_time", startDate: inDays(21), payBasis: "hourly", rate: "42.50",
+    payScheduleId: schedule, hoursPerWeek: "38", ...over } });
+  if (error) throw new Error(`pay details: ${error.message}`);
+}
+
 /** YYYY-MM-DD `days` from today (UTC). */
 export const inDays = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 
@@ -76,7 +113,7 @@ export async function protectedPdf(): Promise<Buffer> {
 
 /* ------------------------------------------------------------------ HR mail (mock Postmark run by scripts/lab/staff-lab.mjs e2e) */
 
-export interface MockMail { to: string; subject: string; text: string; attachments: Array<{ Name: string; ContentType: string }> }
+export interface MockMail { to: string; subject: string; text: string; html?: string | null; attachments: Array<{ Name: string; ContentType: string }> }
 export async function hrMails(address?: string): Promise<MockMail[]> {
   const all = await (await fetch(`${E2E_POSTMARK_MOCK_URL}/__messages`)).json() as MockMail[];
   return address ? all.filter((m) => String(m.to).split(",").map((a) => a.trim()).includes(address)) : all;
@@ -144,7 +181,10 @@ export async function staffAt(adminClient: SupabaseClient, label: string, target
     const { error } = await adminClient.rpc("hr_admin_staff_document_review", { p_doc: id, p_decision: "approved", p_note: null });
     if (error) throw new Error(`review: ${error.message}`);
   }
+  // Onboarding flow: the pay details come before any offer (documents approved + pay details = ready for the offer).
+  await payDetails(adminClient, p.id);
   if (target === "documents_submitted") return { ...p, token };
+  // An uploaded PDF sent by its own link (the path that needs no login); the browser journeys use the template + sign-in link.
   const form = new FormData();
   form.set("action", "offer_upload"); form.set("profileId", p.id); form.set("file", new Blob([await offerPdf()], { type: "application/pdf" }), "offer.pdf");
   await staffAdmin(adminClient, form);
@@ -225,8 +265,9 @@ export async function candidateAction(page: Page, action: string, fill?: () => P
 
 /**
  * The shared second half of the journey, from the emailed document link to My HR: details and documents on /staff/onboard (no login),
- * review, offer upload and send in the admin UI (`office` is signed in as an administrator), signing on the page, activation (Auth
- * invite, password on /staff/welcome) and a fresh sign-in. Used by the Enroll now journey and the Careers journey.
+ * review, pay details, the offer letter from a template sent with the person's sign-in link (`office` is signed in as an
+ * administrator), the person choosing their password on /staff/welcome and signing the offer on /staff, activation, and a fresh
+ * sign-in. Used by the Enroll now journey and the Careers journey. Each step is screenshotted when E2E_SHOTS_DIR is set.
  */
 export async function journeyFromDocumentLink(visitor: Page, office: Page, baseURL: string, who: { email: string; profileId: string; fullName: string; street: string; jobTitle?: string }): Promise<void> {
   const token = linkToken((await waitForHrMail(who.email, /details and documents/i)).text);
@@ -250,31 +291,95 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
     await expect.poll(() => sql(`select count(*) from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.id = '${who.profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
   }
   await visitor.getByTestId("staff-next").click();
+  await shot(visitor, "person-documents-ready-to-submit");
   await visitor.getByTestId("staff-submit").click();
   await expect(visitor.getByTestId("staff-onboard-submitted")).toBeVisible();
   await waitForHrMail("hr.one@lab.example.test", /has uploaded documents/);
 
-  // Review, offer upload and send in the admin UI.
+  // Review in the admin UI: the stepper follows each stage.
   await office.goto(`/admin/staff/employees/${who.profileId}`);
   await expectStatus(office, "Documents submitted");
+  await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "documents_submitted");
+  await expect(office.getByTestId("staff-action-add_pay_details")).toHaveCount(0);
+  await expect(office.getByTestId("staff-action-send_offer")).toHaveCount(0);
+  await shot(office, "admin-documents-submitted");
   for (const id of sql(`select id from hr.staff_documents where profile_id = '${who.profileId}' and is_current`).split("\n")) {
     await office.getByTestId(`staff-doc-approve-${id}`).click();
     await expect(office.getByTestId(`staff-doc-approve-${id}`)).toHaveCount(0);
   }
-  await employeeAction(office, "upload_offer", async () => office.getByTestId("staff-offer-file").setInputFiles({ name: "offer.pdf", mimeType: "application/pdf", buffer: await offerPdf(2) }));
-  await expect(office.getByTestId("staff-action-send_offer")).toBeVisible();
-  await employeeAction(office, "send_offer");
-  await expectStatus(office, "Offer sent");
-  const offerToken = linkToken((await waitForHrMail(who.email, /offer letter from Skyline/i)).text);
+  await office.reload();
+  await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "documents_approved");
+  await expect(office.getByTestId("onboarding-step-documents_approved")).toHaveAttribute("data-state", "current");
+  await expect(office.getByTestId("staff-action-send_offer")).toHaveCount(0);
+  await shot(office, "admin-documents-approved");
 
-  // The applicant signs on the page.
-  await visitor.goto(`/staff/offer#t=${offerToken}`);
-  await expect(visitor.getByRole("heading", { name: "Your offer letter" })).toBeVisible();
+  // Pay details: required before the offer, every field checked.
+  await office.getByTestId("staff-action-add_pay_details").click();
+  await expect(office.getByTestId("pay-details-dialog")).toBeVisible();
+  await office.getByTestId("pay-job-title").fill(who.jobTitle ?? "Trainer");
+  await office.getByTestId("pay-employment-type").selectOption("full_time");
+  await office.getByTestId("pay-start-date").fill(inDays(21));
+  await office.getByTestId("pay-basis").selectOption("hourly");
+  await office.getByTestId("pay-rate").fill("85000");
+  await office.getByTestId("pay-details-save").click();
+  await expect(office.getByTestId("pay-problem-rate")).toContainText("too high");
+  await expect(office.getByTestId("pay-problem-payScheduleId")).toBeVisible();
+  await expect(office.getByTestId("pay-problem-hoursPerWeek")).toBeVisible();
+  await office.getByTestId("pay-rate").fill("42.50");
+  await office.getByTestId("pay-schedule").selectOption({ index: 1 });
+  await office.getByTestId("pay-hours").fill("38");
+  await shot(office, "admin-pay-details-form");
+  await office.getByTestId("pay-details-save").click();
+  await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "pay_details");
+  await expect(office.getByTestId("staff-pay-details")).toContainText("$42.50 an hour");
+  await shot(office, "admin-pay-details-added");
+
+  // Send offer letter: pick the template, preview it filled in, confirm, send (one email with the sign-in link).
+  await office.getByTestId("staff-action-send_offer").click();
+  await expect(office.getByTestId("offer-letter-preview")).toContainText("$42.50 per hour");
+  await expect(office.getByTestId("offer-letter-preview")).toContainText(who.jobTitle ?? "Trainer");
+  await expect(office.getByTestId("offer-letter-preview")).not.toContainText("{{");
+  await shot(office, "admin-offer-preview");
+  await office.getByTestId("offer-send-next").click();
+  await expect(office.getByTestId("offer-confirm")).toContainText(who.email);
+  await shot(office, "admin-offer-confirm");
+  await office.getByTestId("offer-send-confirm").click();
+  await expectStatus(office, "Offer sent");
+  await expect(office.getByTestId("staff-login-state")).toContainText("password not chosen yet");
+  await expect(office.getByTestId("staff-offer-template")).toContainText("Standard offer letter");
+  await shot(office, "admin-offer-sent");
+  const offerMail = await waitForHrMail(who.email, /offer letter from/i);
+  expect(offerMail.text).toContain("/staff/welcome#t=");
+  expect(offerMail.text).not.toMatch(/temporary password|password is|password:/i);
+  const accountToken = linkToken(offerMail.text);
+  expect(sql(`select count(*) from hr.staff_invites where profile_id = '${who.profileId}' and token_hash = '${accountToken}'`)).toBe("0");
+
+  // The person: choose a password through the one-time link, then read and sign the offer on their own page.
+  await visitor.goto(`/staff/welcome#t=${accountToken}`);
+  await expect(visitor.getByTestId("staff-set-password")).toContainText(who.email);
+  expect(visitor.url()).not.toContain(accountToken);
+  await visitor.getByTestId("set-password-new").fill("short1");
+  await visitor.getByTestId("set-password-confirm").fill("short1");
+  await visitor.getByTestId("set-password-save").click();
+  await expect(visitor.getByTestId("staff-set-password")).toContainText("at least 12 characters");
+  await visitor.getByTestId("set-password-new").fill(PASSWORD);
+  await visitor.getByTestId("set-password-confirm").fill(PASSWORD);
+  await shot(visitor, "person-set-password");
+  await visitor.getByTestId("set-password-save").click();
+  await expect(visitor).toHaveURL(/\/staff$/);
+  await expect(visitor.getByTestId("staff-preactive")).toBeVisible();
+  await expect(visitor.getByTestId("staff-preactive-document")).toHaveCount(3);
+  await expect(visitor.getByRole("heading", { name: "My HR" })).toHaveCount(0);
+  await expect(visitor.getByTestId("my-hr-role")).toHaveCount(0);
   await expect(visitor.getByTestId("offer-open-pdf")).toHaveAttribute("target", "_blank");
+  await shot(visitor, "person-own-offer-before-active");
+  expect((await onboard({ action: "account_open", t: accountToken })).status).toBe(403); // the link works once
   await visitor.getByLabel(/Your full name/).fill(who.fullName);
   await visitor.getByRole("checkbox").check();
   await visitor.getByRole("button", { name: "Sign the offer" }).click();
-  await expect(visitor.getByRole("heading", { name: "Your signed offer" })).toBeVisible();
+  await expect(visitor.getByTestId("offer-status-line")).toContainText("You signed this offer");
+  await expect(visitor.getByTestId("staff-home-status")).toContainText("Thank you for signing");
+  await shot(visitor, "person-offer-signed");
   let signedMail: MockMail;
   try { signedMail = await waitForHrMail(who.email, /Your signed offer letter/); }
   catch (e) {
@@ -287,21 +392,27 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   }
   expect(signedMail.attachments[0]?.ContentType).toBe("application/pdf");
 
-  // Activation: the Auth invite, the password on /staff/welcome, then My HR.
+  // Activation: the person already has their login, so they are a current employee at once.
   await office.reload();
   await expectStatus(office, "Offer signed");
-  await employeeAction(office, "activate", async () => office.getByTestId("staff-joining-date").fill(inDays(21)));
-  await expect(office.getByTestId("staff-action-resend_activation")).toBeVisible();
+  await expect(office.getByTestId("staff-login-state")).toContainText("Password chosen");
+  await shot(office, "admin-offer-signed");
+  await employeeAction(office, "activate", async () => { await expect(office.getByTestId("staff-joining-date")).toHaveValue(inDays(21)); });
+  await expectStatus(office, "Active");
+  await expect(office.getByTestId("onboarding-step-active")).toHaveAttribute("data-state", "done");
+  await expect(office.getByTestId("staff-timeline")).toContainText("Offer signed");
+  await expect(office.getByTestId("staff-timeline")).toContainText("E2E Admin");
+  await shot(office, "admin-active");
   expect(sql(`select joining_date::text from hr.employment where profile_id = '${who.profileId}'`)).toBe(inDays(21));
-  await visitor.goto(await authLanding(await latestLink(who.email), baseURL));
-  await expect(visitor.getByRole("heading", { name: "Welcome to Skyline" })).toBeVisible();
-  await visitor.getByLabel(/^Password/).fill(PASSWORD);
-  await visitor.getByLabel(/^Confirm password/).fill(PASSWORD);
-  await visitor.getByRole("button", { name: "Set password and continue" }).click();
-  await expect(visitor.getByRole("heading", { name: "My HR" })).toBeVisible();
   expect(sql(`select status from hr.staff_profiles where id = '${who.profileId}'`)).toBe("active");
+  await office.goto("/admin/staff/employees");
+  await office.getByRole("tab", { name: "Active", exact: true }).click();
+  await office.getByLabel("Search employees").fill(who.email);
+  await expect(office.getByTestId("employees-table")).toContainText(who.email);
 
-  // A fresh sign-in through the normal form lands on My HR with the role, documents, the signed offer (and the job, when hired for one).
+  // The person's page turns into My HR; a fresh sign-in lands there with the role, documents and the signed offer (and the job).
+  await visitor.reload();
+  await expect(visitor.getByRole("heading", { name: "My HR" })).toBeVisible();
   await signOutEverywhere(visitor);
   await signInThroughTheForm(visitor, who.email);
   await expect(visitor).toHaveURL(/\/staff$/);
@@ -310,4 +421,5 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await expect(visitor.getByTestId("my-hr-document")).toHaveCount(3);
   await expect(visitor.getByRole("button", { name: "Open the signed offer" })).toBeVisible();
   if (who.jobTitle) await expect(visitor.getByTestId("my-hr-employment")).toContainText(who.jobTitle);
+  await shot(visitor, "person-my-hr");
 }

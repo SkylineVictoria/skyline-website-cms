@@ -86,8 +86,8 @@ test("Employees actions follow the status and what exists; each one is a legal m
   assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["resend_documents_link", "revoke_link", "reject"]);
   assert.deepEqual(acts("documents_submitted"), ["reject"], "nothing to offer before every document is approved");
   assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1 }), ["send_reupload_link", "reject"]);
-  assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["upload_offer", "reject"]);
-  assert.deepEqual(acts("documents_submitted", { allApproved: true, offer: { sent: false } }), ["upload_offer", "send_offer", "reject"]);
+  assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "pay details come before the offer");
+  assert.deepEqual(acts("documents_submitted", { allApproved: true, payComplete: true, offer: { sent: false } }), ["send_offer", "edit_pay_details", "reject"]);
   assert.deepEqual(acts("offer_sent"), ["resend_offer", "withdraw_offer", "reject"]);
   assert.deepEqual(acts("offer_signed"), ["activate", "reject"]);
   assert.deepEqual(acts("offer_signed", { activationInvited: true }), ["resend_activation", "reject"]);
@@ -1221,4 +1221,446 @@ test("simple employees: validation, file checks, upload path, two statuses", asy
   assert.ok(upload.includes("multiple") && upload.includes("onDrop") && upload.includes("uploadEmployeeDocument("), "several files by picking or dropping, each uploaded on its own");
   const page = read("src/pages/admin/StaffDetailPage.tsx");
   assert.ok(page.includes("employeeDocumentUrl(") && !/getPublicUrl|\.download\(/.test(page), "files open through signed URLs only");
+});
+
+/* ------------------------------------------------------------------ onboarding flow (2026-11-10): stages, pay details, templates, offer + login */
+const tpl = await load.import<typeof import("../supabase/functions/_shared/hr-template.ts")>("../supabase/functions/_shared/hr-template.ts");
+const letterLib = await load.import<typeof import("../supabase/functions/_shared/offer-letter-pdf.ts")>("../supabase/functions/_shared/offer-letter-pdf.ts");
+
+test("onboarding: only the step that is next is offered, and every stage has its label and banner", () => {
+  const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
+  const acts = (st: string, extra: Record<string, unknown> = {}) => staffStatusLib.employeeActions({ ...base, ...extra, status: st } as never);
+  assert.deepEqual(acts("applied", { openJobApplication: true }), ["send_documents_link", "reject"], "a Careers applicant gets the document link from the employee page too");
+  assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "documents approved: pay details are next, not the offer");
+  assert.deepEqual(acts("documents_submitted", { allApproved: true, payComplete: true }), ["send_offer", "edit_pay_details", "reject"]);
+  assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1, payComplete: true }), ["send_reupload_link", "reject"], "no offer while a document is rejected");
+  assert.deepEqual(acts("offer_sent", { hasLogin: true, passwordSet: false }), ["resend_offer", "resend_login", "withdraw_offer", "reject"]);
+  assert.deepEqual(acts("offer_sent", { hasLogin: true, passwordSet: true }), ["resend_offer", "withdraw_offer", "reject"], "no new sign-in link once a password is chosen");
+  assert.deepEqual(acts("offer_signed", { hasLogin: true, passwordSet: true }), ["activate", "reject"]);
+  assert.deepEqual(staffStatusLib.ONBOARDING_STAGES, ["applied", "shortlisted", "documents_requested", "documents_submitted", "documents_approved", "pay_details", "offer_sent", "offer_signed", "active"]);
+  for (const stage of staffStatusLib.ONBOARDING_STAGES) assert.ok(staffStatusLib.ONBOARDING_STAGE_LABEL[stage] && staffStatusLib.ONBOARDING_STAGE_HINT[stage], `${stage} has a label and a banner`);
+  assert.equal(staffStatusLib.EMPLOYEE_ACTION.deactivate.note, "required", "marking inactive needs a reason");
+  assert.equal(staffStatusLib.EMAIL_KIND_LABEL.login_link, "Sign-in link");
+  const sql = read("supabase/migrations/20261111090000_hr_onboarding_stages_pay.sql");
+  for (const stage of staffStatusLib.ONBOARDING_STAGES) assert.ok(sql.includes(`'${stage}'`), `the database knows the ${stage} stage`);
+  for (const label of Object.values(staffStatusLib.ONBOARDING_STAGE_LABEL)) assert.ok(sql.includes(`'${label}'`), `the database uses the same label: ${label}`);
+});
+
+test("pay details form: every field is checked, the same way as the database", () => {
+  const ok = { jobTitle: "Trainer", employmentType: "full_time", startDate: "2026-12-01", payBasis: "hourly", rate: "42.50", payScheduleId: "s-1", hoursPerWeek: "38" };
+  const check = (over: Record<string, string>) => staffStatusLib.payDetailsProblems({ ...ok, ...over }, "2026-11-10");
+  assert.deepEqual(check({}), {});
+  assert.ok(check({ jobTitle: " " }).jobTitle);
+  assert.ok(check({ employmentType: "contract" }).employmentType);
+  assert.ok(check({ startDate: "" }).startDate && check({ startDate: "2001-01-01" }).startDate && check({ startDate: "2030-01-01" }).startDate);
+  assert.ok(check({ payBasis: "" }).payBasis);
+  assert.ok(check({ rate: "abc" }).rate && check({ rate: "0" }).rate && check({ rate: "-5" }).rate && check({ rate: "1.234" }).rate);
+  assert.match(String(check({ rate: "85000" }).rate), /too high/, "an annual figure entered as hourly is caught");
+  assert.match(String(check({ payBasis: "salary", rate: "42.50" }).rate), /too low/, "an hourly figure entered as annual is caught");
+  assert.deepEqual(check({ payBasis: "salary", rate: "85000" }), {});
+  assert.ok(check({ payScheduleId: "" }).payScheduleId);
+  assert.ok(check({ hoursPerWeek: "" }).hoursPerWeek && check({ hoursPerWeek: "99" }).hoursPerWeek && check({ hoursPerWeek: "x" }).hoursPerWeek);
+  assert.deepEqual(check({ employmentType: "casual", hoursPerWeek: "" }), {}, "a casual needs no hours");
+  const sql = read("supabase/migrations/20261111090000_hr_onboarding_stages_pay.sql");
+  for (const message of ["Enter the position (job title).", "Choose the employment type.", "Enter the start date.", "The start date must be within the last year or the next two years.",
+    "Enter the pay rate as a number, for example 38.50.", "That hourly rate looks too high. Check the pay basis.", "That annual salary looks too low. Check the pay basis.", "Choose the pay schedule.",
+    "Enter the hours per week.", "The hours per week must be between 1 and 80."]) assert.ok(sql.includes(message), `the database has the same rule: ${message}`);
+});
+
+const PERSON = { firstName: "Asha", lastName: "Patel", email: "asha@example.test", position: "Trainer <Cookery>", employmentType: "part_time", startDate: "2027-02-02", payRate: 42.5,
+  payBasis: "hourly", paySchedule: "Fortnightly", hoursPerWeek: 22.5, companyName: "Skyline Institute of Technology", today: "2026-11-10" };
+
+test("templates: placeholders fill from the person, values are escaped, missing data and unknown placeholders are caught before sending", () => {
+  const values = tpl.templateValues(PERSON, { signing_link: "https://x.example/staff/welcome#t=abc" });
+  assert.equal(values.full_name, "Asha Patel");
+  assert.equal(values.employment_type, "Part time");
+  assert.equal(values.start_date, "2 February 2027");
+  assert.equal(values.pay_rate, "$42.50");
+  assert.equal(values.pay_basis, "per hour");
+  assert.equal(values.hours_per_week, "22.5");
+  assert.equal(values.today, "10 November 2026");
+  assert.equal(tpl.templateValues({ payRate: 85000, payBasis: "salary" }).pay_rate + " " + tpl.templateValues({ payRate: 85000, payBasis: "salary" }).pay_basis, "$85,000.00 per year");
+  assert.equal(tpl.templateValues({}).position, "", "nothing is invented for a value the person does not have");
+
+  const letter = tpl.renderMessage({ subject: "Offer: {{position}} for {{ full_name }}", bodyHtml: "<p>Dear {{first_name}},</p><p>You start on <strong>{{start_date}}</strong> at {{pay_rate}} {{pay_basis}} ({{pay_schedule}}), {{hours_per_week}} hours. Manager: {{manager_name}}.</p>" }, values);
+  assert.deepEqual([letter.missing, letter.unknown], [[], []], "an optional value (the manager) may be empty");
+  assert.equal(letter.subject, "Offer: Trainer <Cookery> for Asha Patel", "the subject is plain text");
+  assert.ok(letter.html.includes("Dear Asha,") && letter.html.includes("<strong>2 February 2027</strong>") && letter.html.includes("$42.50 per hour (Fortnightly), 22.5 hours"));
+  assert.ok(!/\{\{/.test(letter.html), "no placeholder is left");
+  // A line that only holds an empty optional detail is left out (no bare "Reporting to:"), together with a list left empty.
+  const lines = tpl.renderMessage({ subject: "x", bodyHtml: "<ul><li>Position: {{position}}</li><li>Location: {{work_location}}</li><li>Reporting to: {{manager_name}}</li></ul><p>Department: {{department}}</p><ul><li>{{department}}</li></ul><p>Regards, {{first_name}} {{manager_name}}</p>" }, values);
+  assert.equal(lines.html, "<ul><li>Position: Trainer &lt;Cookery&gt;</li></ul><p>Regards, Asha </p>", "empty optional lines and the empty list are gone; a line with something else in it stays");
+  assert.deepEqual([lines.missing, lines.unknown], [[], []]);
+  const withManager = tpl.renderMessage({ subject: "x", bodyHtml: "<ul><li>Reporting to: {{manager_name}}</li><li>Location: {{work_location}}</li></ul>" }, { ...values, manager_name: "Jordan Lee" });
+  assert.equal(withManager.html, "<ul><li>Reporting to: Jordan Lee</li></ul>", "the line is shown for someone who has the detail");
+  const escaped = tpl.renderMessage({ subject: "x", bodyHtml: "<p>{{position}}</p>" }, values);
+  assert.ok(escaped.html.includes("Trainer &lt;Cookery&gt;") && !escaped.html.includes("<Cookery>"), "a value can never add markup");
+
+  const gaps = tpl.renderMessage({ subject: "Offer", bodyHtml: "<p>{{first_name}} starts as {{position}} on {{start_date}} at {{pay_rate}}. {{bogus}}</p>" }, tpl.templateValues({ firstName: "Asha" }));
+  assert.deepEqual(gaps.missing, ["position", "start_date", "pay_rate"], "each placeholder without a value is named");
+  assert.deepEqual(gaps.unknown, ["bogus"], "a placeholder that does not exist is named");
+  assert.equal(tpl.placeholderLabels(gaps.missing), "Position, Start date, Pay rate");
+
+  const email = tpl.renderMessage({ subject: "Your offer from {{company_name}}", bodyHtml: "<p>Hello {{first_name}},</p><p><a href=\"{{signing_link}}\">Sign in</a></p><ul><li>One</li><li>Two</li></ul>" }, values);
+  assert.ok(email.html.includes('<a href="https://x.example/staff/welcome#t=abc">Sign in</a>'), "a link placeholder fills the link");
+  assert.equal(email.text, "Hello Asha,\n\nSign in (https://x.example/staff/welcome#t=abc)\n\n- One\n- Two", "the plain-text version carries the link and the list");
+  assert.ok(tpl.emailHtmlDocument(email.html).startsWith("<!doctype html>"));
+  assert.deepEqual(tpl.templatePlaceholders("{{ a }} {{b}} {{A}}"), ["a", "b"]);
+  // The catalogue: link placeholders belong only to the emails that carry that link; every kind lists what it must contain.
+  assert.ok(!tpl.placeholdersFor("offer_letter").some((p) => p.key === "signing_link") && tpl.placeholdersFor("offer_email").some((p) => p.key === "signing_link"));
+  assert.ok(tpl.placeholdersFor("document_reupload").some((p) => p.key === "rejected_documents") && !tpl.placeholdersFor("document_request").some((p) => p.key === "rejected_documents"));
+  for (const key of ["first_name", "full_name", "position", "employment_type", "start_date", "pay_rate", "pay_basis", "pay_schedule", "hours_per_week", "manager_name", "company_name", "today", "signing_link", "login_url"]) {
+    assert.ok(tpl.PLACEHOLDERS.some((p) => p.key === key), `{{${key}}} is in the list an Admin inserts from`);
+  }
+  const sql = read("supabase/migrations/20261111100000_hr_templates.sql");
+  for (const t of tpl.TEMPLATE_TYPES) assert.ok(sql.includes(`'${t.type}'`), `the database knows the ${t.type} template`);
+  for (const p of tpl.PLACEHOLDERS) assert.ok(sql.includes(`'${p.key}'`), `the database allows {{${p.key}}}`);
+});
+
+test("templates: the sanitiser keeps the formatting and drops everything unsafe", () => {
+  const clean = tpl.sanitizeTemplateHtml;
+  assert.equal(clean('<p onclick="x()">Hi <b>there</b> <i>you</i></p>'), "<p>Hi <strong>there</strong> <em>you</em></p>", "event handlers go, bold and italic stay");
+  assert.equal(clean("<p>Before</p><script>alert(1)</script><style>p{}</style><iframe src=x></iframe><p>After</p>"), "<p>Before</p><p>After</p>", "scripts, styles and frames go with their content");
+  assert.equal(clean('<a href="javascript:alert(1)">x</a> <a href="https://ok.example/a">y</a> <a href="{{signing_link}}">z</a>'), 'x <a href="https://ok.example/a">y</a> <a href="{{signing_link}}">z</a>', "only http(s), mailto and placeholder links");
+  assert.equal(clean('<img src=x onerror="alert(1)"><svg onload=alert(1)></svg>text'), "text");
+  assert.equal(clean('<span style="font-weight: bold; color:red">B</span><span style="font-style:italic">I</span>'), "<strong>B</strong><em>I</em>", "styled spans become tags; colours go");
+  assert.equal(clean('<div style="text-align:center;font-size:40px">Centre</div>'), '<p style="text-align:center">Centre</p>', "alignment is the only style kept");
+  assert.equal(clean("<ul><li>One<li>Two</ul>"), "<ul><li>One</li><li>Two</li></ul>", "the result is well formed");
+  assert.equal(clean("<p>Unclosed <strong>bold"), "<p>Unclosed <strong>bold</strong></p>");
+  assert.equal(clean("a < b"), "a &lt; b");
+  assert.equal(clean("<h1>T</h1><h6>S</h6><blockquote><p>Q</p></blockquote><hr>"), "<h1>T</h1><h4>S</h4><blockquote><p>Q</p></blockquote><hr>");
+  // Rendering sanitises again: a template stored before a rule changed still comes out clean.
+  assert.ok(!tpl.renderMessage({ subject: "s", bodyHtml: "<p>Hi</p><script>bad()</script>" }, {}).html.includes("script"));
+});
+
+test("offer letter PDF: made from the filled-in template, loadable, signable, and it refuses an empty or endless letter", async () => {
+  const html = tpl.renderMessage({ subject: "Offer of employment", bodyHtml: "<h2>Offer: {{position}}</h2><p>Dear {{first_name}}, “welcome” — 日本</p><ul><li>Start: {{start_date}}</li><li>Pay: <strong>{{pay_rate}}</strong> {{pay_basis}}</li></ul><p style=\"text-align:center\"><em>Yours</em> <u>sincerely</u></p>" },
+    tpl.templateValues(PERSON)).html;
+  const made = await letterLib.buildLetterPdf(PdfLib as never, { title: "Offer of employment", html, footer: "Skyline Institute of Technology" });
+  assert.equal(new TextDecoder().decode(made.bytes.subarray(0, 5)), "%PDF-");
+  assert.equal(made.pages, 1);
+  const inspected = await offerPdf.inspectOfferPdf(PdfLib as never, made.bytes);
+  assert.deepEqual(inspected, { ok: true, pages: 1 }, "it passes the same checks as an uploaded offer");
+  const signed = await offerPdf.stampSignedOffer(PdfLib as never, made.bytes, { signerName: "Asha Patel", signedAt: "2026-11-10T00:00:00Z", ip: null, userAgent: null, consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "a".repeat(64) });
+  assert.equal((await PdfLib.PDFDocument.load(signed)).getPageCount(), 2, "the signature page is added to the generated letter");
+  assert.equal(letterLib.winAnsi("café “q” – • 日 ć"), "café “q” – • ? c", "text the PDF fonts cannot draw is folded or replaced, never an error");
+  const long = await letterLib.buildLetterPdf(PdfLib as never, { title: "Long", html: "<p>Line of text for the letter.</p>".repeat(140) });
+  assert.ok(long.pages >= 3, "a long letter flows onto more pages");
+  await assert.rejects(letterLib.buildLetterPdf(PdfLib as never, { title: "Empty", html: "<p> </p>" }), /empty/);
+  await assert.rejects(letterLib.buildLetterPdf(PdfLib as never, { title: "Endless", html: "<p>Line</p>".repeat(3000) }), /longer than/);
+  assert.equal(letterLib.letterFileName("Offer: Trainer/Chef", "Asha Patel"), "Offer Trainer Chef - Asha Patel.pdf");
+});
+
+/** adminDeps plus what the onboarding-flow actions use; `calls` records every call so a test can prove what did NOT happen. */
+function flowDeps(options: Parameters<typeof adminDeps>[0] & { template?: Record<string, { name: string; subject: string; bodyHtml: string } | null>; person?: Record<string, unknown>; mail?: "sent" | "failed" | "skipped"; createError?: string } = {}) {
+  const base = adminDeps(options);
+  const sent: Array<{ to: string; message: { subject: string; text: string; html?: string }; deliveryId: string }> = [];
+  const deps = {
+    ...base.deps,
+    templateMail: async (profileId: string, type: string, templateId?: string | null) => {
+      base.calls.push(["templateMail", { profileId, type, templateId: templateId ?? null }]);
+      const t = options.template?.[type];
+      return { template: t ? { id: "tpl-1", ...t } : null, values: options.person ?? PERSON };
+    },
+    sendTemplate: async (mail: { to: string; message: { subject: string; text: string; html?: string }; deliveryId: string }) => {
+      sent.push(mail);
+      return options.mail === "failed" ? { state: "failed" as const, error: "inactive_recipient" } : options.mail === "skipped" ? { state: "skipped" as const, error: "off" } : { state: "sent" as const, messageId: "m-9" };
+    },
+    accountUrl: (token: string) => `https://x.example/staff/welcome#t=${token}`,
+    createLogin: async (email: string, name: string) => { base.calls.push(["createLogin", { email, name }]); return options.createError ? { userId: null, error: options.createError } : { userId: "made-login", error: null }; },
+    deleteLogin: async (userId: string) => { base.calls.push(["deleteLogin", userId]); },
+    letterPdf: async (input: { title: string; html: string; footer: string }) => { base.calls.push(["letterPdf", input]); return { bytes: new Uint8Array([37, 80, 68, 70, 45, 1, 2, 3]), pages: 2 }; },
+  };
+  return { ...base, deps, sent };
+}
+const TEMPLATE_ID = "0b7b1c1e-0000-4000-8000-0000000000dd";
+const LETTER_CONTEXT = { status: "documents_submitted", problem: null, values: PERSON, templates: [
+  { id: TEMPLATE_ID, type: "offer_letter", name: "Standard offer letter", subject: "Offer of employment: {{position}}", bodyHtml: "<p>Dear {{first_name}}, you start on {{start_date}} at {{pay_rate}} {{pay_basis}}.</p>" }] };
+
+test("staff-admin offer_generate: fills the template, refuses missing data before anything is stored, records the PDF with the rendered letter", async () => {
+  const ok = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT }, hr_admin_offer_letter_add: { data: { offer: { id: "o-1" }, replacedPath: `${PROFILE}/offer/old.pdf` } } } });
+  const made = await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, ok.deps as never);
+  assert.equal(made.status, 200);
+  assert.deepEqual([made.body.pages, made.body.title, made.body.templateName], [2, "Offer of employment: Trainer <Cookery>", "Standard offer letter"]);
+  const added = ok.calls.find(([n]) => n === "admin:hr_admin_offer_letter_add")![1] as Record<string, unknown>;
+  assert.equal(added.p_template, TEMPLATE_ID);
+  assert.equal(added.p_path, `${PROFILE}/offer/rnd.pdf`, "stored in the person's own offer folder");
+  assert.equal(added.p_html, "<p>Dear Asha, you start on 2 February 2027 at $42.50 per hour.</p>", "the exact rendered letter is saved with the offer");
+  assert.equal((added.p_values as Record<string, string>).start_date, "2 February 2027", "...with the values it was filled with");
+  assert.equal(added.p_filename, "Offer of employment Trainer Cookery - Asha Patel.pdf");
+  assert.deepEqual(ok.calls.find(([n]) => n === "remove")![1], [`${PROFILE}/offer/old.pdf`], "an unsent letter it replaces is deleted");
+  assert.ok(ok.names().indexOf("admin:hr_admin_offer_letter_context") < ok.names().indexOf("upload"), "admin and state are checked before anything is stored");
+
+  const missing = flowDeps({ db: { hr_admin_offer_letter_context: { data: { ...LETTER_CONTEXT, values: { firstName: "Asha" } } } } });
+  const refused = await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, missing.deps as never);
+  assert.equal(refused.status, 400);
+  assert.deepEqual(refused.body.missing, ["position", "start_date", "pay_rate", "pay_basis"], "missing data is named");
+  assert.match(String(refused.body.error), /Position, Start date, Pay rate, Pay basis have no value/);
+  assert.ok(!missing.names().includes("letterPdf") && !missing.names().includes("upload"), "nothing is made or stored");
+
+  const blocked = flowDeps({ db: { hr_admin_offer_letter_context: { data: { ...LETTER_CONTEXT, problem: "Add the pay details first." } } } });
+  assert.deepEqual((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, blocked.deps as never)).body, { error: "Add the pay details first." }, "no letter before the pay details");
+  const notAdmin = flowDeps({ db: { hr_admin_offer_letter_context: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, notAdmin.deps as never)).status, 403);
+  const dbRefuses = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT }, hr_admin_offer_letter_add: { error: { code: "23514", message: "Upload an offer once the documents are submitted (withdraw a sent offer first)." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, dbRefuses.deps as never)).status, 400);
+  assert.deepEqual(dbRefuses.calls.find(([n]) => n === "remove")![1], [`${PROFILE}/offer/rnd.pdf`], "a refused record removes the stored file");
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: "nope" }, ok.deps as never)).status, 400);
+});
+
+const DETAIL_READY = { profile: { status: "documents_submitted", email: "asha@example.test", first_name: "Asha", last_name: "Patel" } };
+const OFFER_EMAIL = { name: "Standard offer email", subject: "Your offer letter from {{company_name}}", bodyHtml: "<p>Hello {{first_name}},</p><p>Your offer for {{position}}: <a href=\"{{signing_link}}\">{{signing_link}}</a> (until {{link_expiry}})</p>" };
+const SENT_FIRST = { firstSend: true, needsPassword: true, expiresAt: "2026-11-17T00:00:00Z", invite: { id: "inv-acct" }, offer: { id: "o-1" } };
+
+test("staff-admin offer_send_login: one email with a one-time set-password link; no password anywhere", async () => {
+  const d = flowDeps({ template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: SENT_FIRST } } });
+  const r = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, d.deps as never);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.needsPassword, r.body.firstSend], [200, true, true, true]);
+  assert.deepEqual(d.calls.find(([n]) => n === "createLogin")![1], { email: "asha@example.test", name: "Asha Patel" }, "a login is created when the person has none");
+  const sentArgs = d.calls.find(([n]) => n === "admin:hr_admin_onboarding_offer_send")![1] as Record<string, unknown>;
+  assert.deepEqual(sentArgs, { p_id: PROFILE, p_auth_user_id: "made-login", p_account_hash: "h".repeat(64) }, "the database gets the login and only the HASH of the link");
+  assert.equal(d.sent.length, 1, "one email");
+  assert.equal(d.sent[0].to, "asha@example.test");
+  assert.equal(d.sent[0].message.subject, "Your offer letter from Skyline Institute of Technology");
+  const link = `https://x.example/staff/welcome#t=${"T".repeat(43)}`;
+  assert.ok(d.sent[0].message.text.includes(link) && d.sent[0].message.html!.includes(link), "the email carries the personal link");
+  assert.ok(d.sent[0].message.text.includes("until 17 November 2026"), "...and says when it expires (7 days)");
+  const logged = d.calls.find(([n]) => n === "svc:hr_svc_email_log")![1] as Record<string, unknown>;
+  assert.equal(logged.p_kind, "offer");
+  assert.ok(!JSON.stringify(d.calls).includes("T".repeat(43)), "the token is never stored or logged");
+  assert.ok(!/"(p_)?(temp(orary)?_?)?password"\s*:/i.test(JSON.stringify(d.calls)) && !/password\s*(is|:)/i.test(d.sent[0].message.text), "no password is generated, stored or sent: only a link to choose one");
+  assert.ok(!JSON.stringify(r.body).includes("T".repeat(43)), "the admin does not get the link when the email went out");
+  assert.ok(d.names().indexOf("templateMail") < d.names().indexOf("createLogin"), "the email template is checked before a login is made");
+
+  // A login the person already uses (a student or agent): no new login, no link; they sign in with their own password.
+  const existing = flowDeps({ template: { offer_email: OFFER_EMAIL }, login: { id: "their-login", confirmed: true, invited: false, signedIn: true },
+    db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: { ...SENT_FIRST, needsPassword: false, expiresAt: null, invite: null } } } });
+  const e = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, existing.deps as never);
+  assert.deepEqual([e.status, e.body.needsPassword], [200, false]);
+  assert.ok(!existing.names().includes("createLogin"));
+  assert.deepEqual((existing.calls.find(([n]) => n === "admin:hr_admin_onboarding_offer_send")![1] as Record<string, unknown>).p_account_hash, null);
+  assert.ok(existing.sent[0].message.text.includes("https://x.example/login?next=%2Fstaff"), "the email points at the login page");
+
+  // Email switched off: the link is handed to the admin once.
+  const off = flowDeps({ mail: "skipped", template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: SENT_FIRST } } });
+  const o = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, off.deps as never);
+  assert.deepEqual([o.status, o.body.emailSent, o.body.link], [200, false, link]);
+
+  // No template of that kind: the built-in text is used, still with the link.
+  const builtIn = flowDeps({ db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: SENT_FIRST } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, builtIn.deps as never)).status, 200);
+  assert.ok(builtIn.sent[0].message.text.includes(link) && builtIn.sent[0].message.html === undefined);
+});
+
+test("staff-admin offer_send_login: a failed email undoes everything; a refusal leaves no half-made login", async () => {
+  // First send, email fails: offer unsent, links revoked, person unlinked, and the login this request made is deleted.
+  const failed = flowDeps({ mail: "failed", template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: SENT_FIRST } } });
+  const r = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, failed.deps as never);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.rolledBack], [502, false, true]);
+  assert.match(String(r.body.error), /could not be sent \(inactive_recipient\)\. Nothing went out and nothing was changed/);
+  assert.deepEqual(failed.calls.find(([n]) => n === "admin:hr_admin_onboarding_offer_unsend")![1], { p_id: PROFILE, p_unlink: true });
+  assert.deepEqual(failed.calls.find(([n]) => n === "deleteLogin")![1], "made-login", "no half-created account is left");
+  assert.equal((failed.calls.find(([n]) => n === "svc:hr_svc_email_log")![1] as Record<string, unknown>).p_state, "failed", "the failure is logged for the admin");
+
+  // The same failure for a login that already existed: undone, but that login is NOT deleted.
+  const kept = flowDeps({ mail: "failed", template: { offer_email: OFFER_EMAIL }, login: { id: "their-login", confirmed: false, invited: true, signedIn: false },
+    db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { data: SENT_FIRST } } });
+  await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, kept.deps as never);
+  assert.deepEqual(kept.calls.find(([n]) => n === "admin:hr_admin_onboarding_offer_unsend")![1], { p_id: PROFILE, p_unlink: false });
+  assert.ok(!kept.names().includes("deleteLogin"));
+
+  // The database refuses (for example no pay details): the login made a moment ago is removed and nothing is sent.
+  const refused = flowDeps({ template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY }, hr_admin_onboarding_offer_send: { error: { code: "23514", message: "An offer cannot be sent yet. Add the pay details first." } } } });
+  const x = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, refused.deps as never);
+  assert.deepEqual([x.status, x.body.error], [400, "An offer cannot be sent yet. Add the pay details first."]);
+  assert.ok(refused.names().includes("deleteLogin") && refused.sent.length === 0);
+
+  // The email template cannot be filled: stopped before a login exists.
+  const gap = flowDeps({ person: { firstName: "Asha" }, template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY } } });
+  const g = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, gap.deps as never);
+  assert.equal(g.status, 400);
+  assert.match(String(g.body.error), /needs Position, which this person does not have yet.*Nothing was sent/);
+  assert.ok(!gap.names().includes("createLogin") && !gap.names().includes("admin:hr_admin_onboarding_offer_send"));
+
+  // The login cannot be created: nothing else happens.
+  const noLogin = flowDeps({ createError: "rate limited", template: { offer_email: OFFER_EMAIL }, db: { hr_admin_staff_detail: { data: DETAIL_READY } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, noLogin.deps as never)).status, 502);
+  assert.ok(!noLogin.names().includes("admin:hr_admin_onboarding_offer_send"));
+
+  // A resend whose email fails: the offer stays out; only the new link is cancelled.
+  const resend = flowDeps({ mail: "failed", template: { offer_email: OFFER_EMAIL }, login: { id: "their-login", confirmed: false, invited: false, signedIn: false },
+    db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "offer_sent" } } }, hr_admin_onboarding_offer_send: { data: { ...SENT_FIRST, firstSend: false } } } });
+  const z = await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, resend.deps as never);
+  assert.equal(z.status, 502);
+  assert.ok(!resend.names().includes("admin:hr_admin_onboarding_offer_unsend"), "an offer that is out is never silently unsent");
+  assert.deepEqual(resend.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-acct" });
+
+  const wrongStage = flowDeps({ db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "invited" } } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, wrongStage.deps as never)).status, 400);
+  const notAdmin = flowDeps({ db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, notAdmin.deps as never)).status, 403);
+});
+
+test("staff-admin resend_login and send_documents: a new one-time link; document emails use the HRMS template", async () => {
+  const resend = flowDeps({ template: { welcome_login: { name: "Welcome", subject: "Your sign-in", bodyHtml: "<p>{{first_name}}: {{signing_link}} until {{link_expiry}}</p>" } },
+    db: { hr_admin_onboarding_login_resend: { data: { email: "asha@example.test", expiresAt: "2026-11-17T00:00:00Z", invite: { id: "inv-2" } } } } });
+  const r = await staffAdmin.handleAdmin({ action: "resend_login", profileId: PROFILE }, resend.deps as never);
+  assert.deepEqual([r.status, r.body.emailSent], [200, true]);
+  assert.deepEqual(resend.calls.find(([n]) => n === "admin:hr_admin_onboarding_login_resend")![1], { p_id: PROFILE, p_account_hash: "h".repeat(64) });
+  assert.ok(resend.sent[0].message.text.includes(`https://x.example/staff/welcome#t=${"T".repeat(43)}`) && resend.sent[0].message.text.includes("17 November 2026"));
+  assert.equal((resend.calls.find(([n]) => n === "svc:hr_svc_email_log")![1] as Record<string, unknown>).p_kind, "login_link");
+  const failed = flowDeps({ mail: "failed", db: { hr_admin_onboarding_login_resend: { data: { email: "asha@example.test", expiresAt: "2026-11-17T00:00:00Z", invite: { id: "inv-2" } } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "resend_login", profileId: PROFILE }, failed.deps as never)).status, 502);
+  assert.deepEqual(failed.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-2" }, "a link nobody received is cancelled");
+  const chosen = flowDeps({ db: { hr_admin_onboarding_login_resend: { error: { code: "23514", message: "This person has already chosen a password." } } } });
+  assert.equal((await staffAdmin.handleAdmin({ action: "resend_login", profileId: PROFILE }, chosen.deps as never)).status, 400);
+  assert.equal(chosen.sent.length, 0);
+
+  // Send document link from the employee page: the database decides (hire the job application, or the plain link).
+  const invite = { invite: { id: "inv-1", expiresAt: "2026-11-24T00:00:00Z" }, email: "asha@example.test", name: "Asha Patel", rejected: [], profileId: PROFILE };
+  const docs = flowDeps({ template: { document_request: { name: "Docs", subject: "Documents for {{company_name}}", bodyHtml: "<p>Hi {{first_name}}, <a href=\"{{document_link}}\">upload here</a> by {{link_expiry}}.</p>" } },
+    db: { hr_admin_onboarding_documents_invite: { data: invite } } });
+  const s = await staffAdmin.handleAdmin({ action: "send_documents", profileId: PROFILE }, docs.deps as never);
+  assert.deepEqual([s.status, s.body.emailSent], [200, true]);
+  assert.deepEqual(docs.calls.find(([n]) => n === "admin:hr_admin_onboarding_documents_invite")![1], { p_id: PROFILE, p_token_hash: "h".repeat(64) });
+  const rendered = (docs.mails[0] as { rendered: { subject: string; text: string } }).rendered;
+  assert.equal(rendered.subject, "Documents for Skyline Institute of Technology", "the document email is the Admin's template");
+  assert.ok(rendered.text.includes(`https://x.example/staff/onboard#t=${"T".repeat(43)}`) && rendered.text.includes("24 November 2026"));
+  // A template that cannot be filled is not sent: the link is cancelled, like any failed email.
+  const broken = flowDeps({ person: { lastName: "Patel" }, template: { document_request: { name: "Docs", subject: "Hi", bodyHtml: "<p>{{first_name}} {{document_link}}</p>" } }, db: { hr_admin_onboarding_documents_invite: { data: invite } } });
+  const b = await staffAdmin.handleAdmin({ action: "send_documents", profileId: PROFILE }, broken.deps as never);
+  assert.equal(b.status, 502);
+  assert.match(String(b.body.error), /"Docs" template needs First name/);
+  assert.equal(broken.mails.length, 0);
+  assert.ok(broken.names().includes("admin:hr_admin_staff_invite_cancel"));
+  // The re-upload email lists each rejected document with its reason.
+  const again = flowDeps({ template: { document_reupload: { name: "Again", subject: "Again", bodyHtml: "<p>{{rejected_documents}}</p><p>{{document_link}}</p>" } },
+    db: { hr_admin_staff_invite: { data: { ...invite, rejected: [{ category: "Passport", note: "Photo page cut off" }, { category: "Visa", note: "Expired" }] } } } });
+  await staffAdmin.handleAdmin({ action: "send_invite", profileId: PROFILE, purpose: "reupload" }, again.deps as never);
+  assert.ok((again.mails[0] as { rendered: { text: string } }).rendered.text.includes("Passport: Photo page cut off\nVisa: Expired"));
+});
+
+test("outbox: the rejection email uses the HRMS template when one exists, and the built-in text otherwise", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const provider = { id: "mock", send: async (m: Record<string, unknown>) => { sent.push(m); return { kind: "accepted" as const, messageId: "abcdef123456" }; } };
+  const config = hrMail.readHrMailConfig(MAIL_ENV);
+  const row = { id: 7, profileId: PROFILE, kind: "rejected" as const, audience: "applicant" as const, to: "asha@example.test", payload: { name: "Asha Patel" }, attempts: 0 };
+  const port = (template: unknown) => ({ claim: async () => [row], result: async () => undefined, template: async () => template as never });
+  await hrMail.drainHrEmails(port(tpl.renderMessage({ subject: "About your application, {{first_name}}", bodyHtml: "<p>Dear {{first_name}}, thank you.</p>" }, tpl.templateValues(PERSON))) as never, provider as never, config);
+  assert.equal(sent[0].subject, "About your application, Asha");
+  assert.ok(String(sent[0].htmlBody).includes("<p>Dear Asha, thank you.</p>") && sent[0].textBody === "Dear Asha, thank you.", "HTML with a plain-text version");
+  await hrMail.drainHrEmails(port(null) as never, provider as never, config);
+  assert.equal(sent[1].subject, "Your staff application");
+  assert.equal(sent[1].htmlBody, undefined, "no template: the built-in plain text");
+});
+
+function accountDeps(options: Parameters<typeof linkDeps>[0] & { setError?: string } = {}) {
+  const base = linkDeps({ ...options, db: { hr_svc_account_open: { data: { name: "Asha Patel", firstName: "Asha", email: "asha@example.test", expiresAt: "2026-11-17T00:00:00Z", authUserId: "login-1" } },
+    hr_svc_account_done: { data: { ok: true, email: "asha@example.test" } }, ...(options.db ?? {}) } });
+  const passwords: Array<[string, string]> = [];
+  return { ...base, passwords, deps: { ...base.deps, setPassword: async (userId: string, password: string) => { passwords.push([userId, password]); return { error: options.setError ?? null }; } } };
+}
+
+test("set-password link: the person chooses the password, weak ones are refused, and the link works once", async () => {
+  const rule = onboard.passwordProblem;
+  assert.equal(rule("Short1", ""), "Choose a password of at least 12 characters.");
+  assert.equal(rule("onlylettersonly", ""), "Use at least one letter and one number.");
+  assert.equal(rule("123456789012345", ""), "Use at least one letter and one number.");
+  assert.equal(rule("asha.patel2026x", "asha.patel@example.test"), "Do not use your email address as the password.");
+  assert.equal(rule("x".repeat(72) + "1", ""), "Choose a password of at most 72 characters.");
+  assert.equal(rule("correct horse 42 battery", "asha@example.test"), null);
+
+  const open = accountDeps();
+  const view = await onboard.handleOnboarding(linkRequest("account_open") as never, open.deps as never);
+  assert.equal(view.status, 200);
+  assert.deepEqual(view.body.view, { name: "Asha Patel", firstName: "Asha", email: "asha@example.test", expiresAt: "2026-11-17T00:00:00Z" }, "the page never learns the login id");
+
+  const weak = accountDeps();
+  const w = await onboard.handleOnboarding(linkRequest("account_setup", { password: "tooshort1" }) as never, weak.deps as never);
+  assert.deepEqual([w.status, w.body.field], [400, "password"]);
+  assert.equal(weak.passwords.length, 0, "a weak password never reaches Auth");
+  assert.ok(!weak.names().includes("hr_svc_account_done"), "...and the link is not used up");
+
+  const ok = accountDeps();
+  const done = await onboard.handleOnboarding(linkRequest("account_setup", { password: "correct horse 42 battery" }) as never, ok.deps as never);
+  assert.deepEqual(done.body, { ok: true, email: "asha@example.test" }, "the answer carries no password");
+  assert.deepEqual(ok.passwords, [["login-1", "correct horse 42 battery"]], "the password goes to the login the LINK belongs to, never one named by the browser");
+  assert.ok(ok.names().indexOf("hr_svc_account_open") < ok.names().indexOf("hr_svc_account_done"), "the link is checked first and used up last");
+  assert.ok(!JSON.stringify(ok.calls).includes("correct horse"), "the password is never passed to the database or logged");
+
+  const used = accountDeps({ db: { hr_svc_account_open: { error: { code: "28000", message: "This link is not valid any more. Ask us for a new one." } } } });
+  const u = await onboard.handleOnboarding(linkRequest("account_setup", { password: "correct horse 42 battery" }) as never, used.deps as never);
+  assert.deepEqual([u.status, u.body.code], [403, "link_invalid"], "a used, expired or replaced link gets the one neutral answer");
+  assert.equal(used.passwords.length, 0);
+
+  const authDown = accountDeps({ setError: "Database error" });
+  const a = await onboard.handleOnboarding(linkRequest("account_setup", { password: "correct horse 42 battery" }) as never, authDown.deps as never);
+  assert.equal(a.status, 503);
+  assert.ok(!authDown.names().includes("hr_svc_account_done"), "a password that was not saved does not use the link up");
+  const breached = accountDeps({ setError: "Password is known to be weak and easy to guess" });
+  assert.equal((await onboard.handleOnboarding(linkRequest("account_setup", { password: "correct horse 42 battery" }) as never, breached.deps as never)).body.field, "password");
+  const noToken = accountDeps();
+  assert.equal((await onboard.handleOnboarding({ ...linkRequest("account_setup", { password: "correct horse 42 battery" }, null, ""), session: { userId: "someone" } } as never, noToken.deps as never)).body.code, "link_invalid", "a session is not a set-password link");
+});
+
+test("signed in before Active: the person reaches their own offer and documents, and nothing else", async () => {
+  const DOC = "0b7b1c1e-0000-4000-8000-0000000000ee";
+  const session = (action: string, fields: Record<string, unknown> = {}, user: string | null = "login-1") => ({ ...linkRequest(action, fields, null, null), session: user ? { userId: user } : null });
+  const mine = linkDeps({ db: { hr_svc_staff_session: { data: "s".repeat(64) }, hr_svc_offer_open: { data: { name: "Asha", status: "offer_sent" } }, hr_svc_staff_document_path: { data: "p-1/passport/x.pdf" } } });
+  const opened = await onboard.handleOnboarding(session("offer_open") as never, mine.deps as never);
+  assert.equal(opened.status, 200);
+  assert.deepEqual(mine.calls.find(([n]) => n === "hr_svc_staff_session")![1], { p_user: "login-1" }, "the database resolves the SESSION's user to their own offer");
+  assert.deepEqual(mine.calls.find(([n]) => n === "hr_svc_offer_open")![1], { p_token_hash: "s".repeat(64) });
+  const url = await onboard.handleOnboarding(session("my_document_url", { id: DOC }) as never, mine.deps as never);
+  assert.equal(url.body.url, "signed:p-1/passport/x.pdf:300");
+  assert.deepEqual(mine.calls.find(([n]) => n === "hr_svc_staff_document_path")![1], { p_user: "login-1", p_doc: DOC });
+
+  // No session and no link: nothing.
+  const anon = linkDeps();
+  assert.equal((await onboard.handleOnboarding(session("offer_open", {}, null) as never, anon.deps as never)).body.code, "link_invalid");
+  assert.equal((await onboard.handleOnboarding(session("my_document_url", { id: DOC }, null) as never, anon.deps as never)).status, 401);
+  assert.ok(!anon.names().includes("hr_svc_staff_session") && !anon.names().includes("hr_svc_staff_document_path"));
+  // A session opens the offer and own documents only: not the details form, uploads or submit of the document link.
+  for (const action of ["open", "save", "upload", "remove", "submit", "view_url", "account_open", "account_setup"]) {
+    const other = linkDeps({ db: { hr_svc_staff_session: { data: "s".repeat(64) } } });
+    assert.equal((await onboard.handleOnboarding(session(action, { patch: {}, password: "correct horse 42 battery" }) as never, other.deps as never)).body.code, "link_invalid", `${action} is not available to a session`);
+    assert.ok(!other.names().includes("hr_svc_staff_session"));
+  }
+  // Someone with no offer (or whose offer was withdrawn) gets a calm answer, not another person's letter.
+  const none = linkDeps({ db: { hr_svc_staff_session: { error: { code: "28000", message: "There is no offer for this login." } } } });
+  const n = await onboard.handleOnboarding(session("offer_open") as never, none.deps as never);
+  assert.deepEqual([n.status, n.body.code], [404, "no_offer"]);
+  assert.ok(!none.names().includes("hr_svc_offer_open"));
+  const notMine = linkDeps({ db: { hr_svc_staff_document_path: { error: { code: "P0002", message: "Document not found." } } } });
+  assert.equal((await onboard.handleOnboarding(session("my_document_url", { id: DOC }) as never, notMine.deps as never)).status, 404, "another person's document is not found");
+  // A link token always wins over a session (an Admin signed in on the same browser never opens the link as themselves).
+  const both = linkDeps();
+  await onboard.handleOnboarding({ ...linkRequest("offer_open"), session: { userId: "admin-1" } } as never, both.deps as never);
+  assert.ok(!both.names().includes("hr_svc_staff_session"));
+});
+
+test("onboarding pages are wired: stepper, stage actions, templates, set-password link, own offer before Active", () => {
+  const detail = read("src/pages/admin/StaffOnboardingDetail.tsx");
+  assert.ok(detail.includes("<OnboardingStepper") && detail.includes("adminOnboarding(") && detail.includes("<PayDetailsDialog") && detail.includes("<SendOfferDialog"), "the employee page shows the stepper and the stage dialogs");
+  assert.ok(detail.includes("staffAdminActions.sendDocuments(") && detail.includes("staffAdminActions.resendLogin(") && detail.includes("timelineText("), "document link, resend login and the history");
+  assert.ok(!/uploadOffer\(|staffAdminActions\.sendOffer\(/.test(detail), "the offer goes out through the Send offer letter dialog only");
+  const stepper = read("src/pages/admin/components/hrms/OnboardingStepper.tsx");
+  assert.ok(stepper.includes("ri-check-line") && stepper.includes("Current") && stepper.includes("lg:flex-row") && stepper.includes("flex-col"), "ticks, a Current label, stacked on a narrow screen");
+  const offer = read("src/pages/admin/components/hrms/SendOfferDialog.tsx");
+  assert.ok(offer.includes("renderMessage(") && offer.includes("generateOffer(") && offer.includes("sendOfferWithLogin(") && offer.includes("offer-confirm"), "template, preview, confirmation, then send");
+  const router = read("src/router/config.tsx");
+  assert.ok(router.includes('path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin>'), "Templates is an Admin-only route");
+  const templates = read("src/pages/admin/TemplatesPage.tsx");
+  for (const call of ["saveTemplate(", "duplicateTemplate(", "archiveTemplate(", "setDefaultTemplate(", "templatePerson(", "sanitizeTemplateHtml("]) assert.ok(templates.includes(call), `Templates page: ${call}`);
+  const welcome = read("src/pages/staff/StaffWelcomePage.tsx");
+  assert.ok(welcome.includes('takeLinkToken("account")') && welcome.includes("accountLink.setup(") && welcome.includes("signInWithPassword("), "the set-password link signs the person in afterwards");
+  const home = read("src/pages/staff/StaffHomePage.tsx");
+  assert.ok(home.includes("myOfferApi") && home.includes("myDocumentUrl(") && home.includes("staff-preactive"), "before Active: the offer and own documents");
+  const api = read("src/lib/staffOnboardingApi.ts");
+  assert.ok(!/localStorage/.test(api + welcome), "the link token is kept for the tab only");
+  for (const file of ["src/pages/staff/StaffWelcomePage.tsx", "src/pages/admin/StaffOnboardingDetail.tsx", "supabase/functions/staff-admin/core.ts", "supabase/functions/staff-onboarding/index.ts"]) {
+    assert.ok(!/console\.(log|info|debug)\(/.test(read(file)), `${file} logs nothing`);
+  }
+  const m3 = read("supabase/migrations/20261111110000_hr_offer_login.sql");
+  assert.ok(m3.includes("interval '7 days'") && !/password\s+text|encrypted_password/i.test(m3), "the link lasts 7 days and the database never holds a password");
 });

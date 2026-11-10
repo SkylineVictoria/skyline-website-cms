@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
-  PDF, candidateAction, createAdmin, employeeAction, expectStatus, hrMails, journeyFromDocumentLink, onboard, person, resetRateLimits, signInAsAdmin, sql, waitForHrMail,
+  PDF, candidateAction, createAdmin, expectStatus, hrMails, journeyFromDocumentLink, onboard, person, resetRateLimits, shot, signInAsAdmin, sql, waitForHrMail,
 } from "./support";
 
 // Staff enrolment v2 end to end, against the LOCAL lab stack only (scripts/lab/staff-lab.mjs e2e): the public form without a login,
@@ -9,6 +9,7 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(() => { resetRateLimits(); });
 
 test("Enroll now > Staff: one full journey from the public form to My HR (document link from Employees)", async ({ browser, baseURL }) => {
+  test.setTimeout(300_000); // the whole journey, screenshotted at each step
   const applicant = person("journey");
   const admin = await createAdmin("journey-admin");
   const visitor = await (await browser.newContext()).newPage();
@@ -35,8 +36,17 @@ test("Enroll now > Staff: one full journey from the public form to My HR (docume
   await signInAsAdmin(office, admin.email);
   await office.goto(`/admin/staff/employees/${profileId}`);
   await expectStatus(office, "Applied");
-  await employeeAction(office, "send_documents_link");
+  await expect(office.getByTestId("onboarding-step-applied")).toHaveAttribute("data-state", "current");
+  await shot(office, "admin-applied");
+  await office.getByTestId("staff-action-send_documents_link").click();
+  await expect(office.getByTestId("staff-action-email-note")).toContainText(applicant.email);
+  await shot(office, "admin-send-document-link-confirm");
+  await office.getByTestId("staff-decision-confirm").click();
   await expectStatus(office, "Invited");
+  await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "documents_requested");
+  await expect(office.getByTestId("staff-stage-hint")).toContainText("Link last sent");
+  await expect(office.getByTestId("staff-action-resend_documents_link")).toBeVisible();
+  await shot(office, "admin-documents-requested");
   // 3-7. Details and documents by link, review, offer, signing, activation, sign in to My HR (shared with the Careers journey).
   await journeyFromDocumentLink(visitor, office, baseURL!, { email: applicant.email, profileId, fullName: "Jo Journey", street: "1 Journey St" });
   expect(sql(`select (joining_date is not null)::text from hr.employment where profile_id = '${profileId}'`)).toBe("true");
@@ -75,6 +85,7 @@ test("an unknown or used onboarding link shows 'This link cannot be used'", asyn
 });
 
 test("Careers: the same no-login form with the job, then Candidates (shortlist, interview, selected, hire and send document link) and the full journey to My HR", async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
   const job = sql(`insert into hr.jobs(title, description, employment_type, location, department) values ('E2E Trainer ${Date.now()}', 'Teach our students.', 'full_time', 'Melbourne', 'Training') returning id || '|' || title`).split("\n")[0].split("|");
   const who = person("careers");
   const visitor = await (await browser.newContext()).newPage();
@@ -97,13 +108,13 @@ test("Careers: the same no-login form with the job, then Candidates (shortlist, 
   expect(sql(`select p.status || '/' || j.status || '/' || j.stage || '/' || (j.cover_letter_path is not null) || '/' || (select count(*) from auth.users where lower(email) = '${who.email}') from hr.staff_profiles p join hr.job_applications j on j.profile_id = p.id where p.id = '${profileId}'`)).toBe("applied/applied/screening/true/0");
   await waitForHrMail(who.email, new RegExp(`We received your application: ${job[1]}`));
 
-  // The admin: no document link from Employees while the job application is open; the pipeline on Candidates.
+  // The admin: the employee page offers the document link too (it hires the job application); this journey uses the Candidates pipeline.
   const admin = await createAdmin("careers-admin");
   const office = await (await browser.newContext()).newPage();
   await signInAsAdmin(office, admin.email);
   await office.goto(`/admin/staff/employees/${profileId}`);
   await expect(office.getByTestId("staff-hire-hint")).toContainText(job[1]);
-  await expect(office.getByTestId("staff-action-send_documents_link")).toHaveCount(0);
+  await expect(office.getByTestId("staff-action-send_documents_link")).toBeVisible();
   await office.goto(`/admin/staff/candidates?job=${job[0]}`);
   await expect(office.getByTestId("candidates-table")).toContainText(who.email);
   await office.getByRole("link", { name: "Cam Careers" }).click();
@@ -113,6 +124,7 @@ test("Careers: the same no-login form with the job, then Candidates (shortlist, 
   await expect(office.getByTestId("candidate-action-hired")).toHaveCount(0);
   await candidateAction(office, "shortlisted");
   await expect(office.getByTestId("candidate-status")).toHaveText("Shortlisted");
+  expect(sql(`select hr.onboarding_stage('${profileId}')->>'stage'`)).toBe("shortlisted");
   await candidateAction(office, "interview", async () => {
     await office.getByTestId("candidate-interview-at").fill("2026-12-01T10:00");
     await office.getByTestId("candidate-interview-notes").fill("Bring the portfolio.");

@@ -3,6 +3,7 @@
 // stays queued (sending off) or is retried / marked failed by the outbox rules, and the admin sees failures.
 import { toBase64 } from "./notification/submission-pdf.ts";
 import { drainHrEmails, readHrMailConfig, selectHrMailProvider, type HrEmailRow } from "./hr-mail.ts";
+import { renderMessage, templateValues, type TemplatePerson, type TemplateSource } from "./hr-template.ts";
 
 export const HR_MAIL_ENV = ["EF_NOTIFICATION_EMAIL_ENABLED", "EF_POSTMARK_SERVER_TOKEN", "EF_POSTMARK_API_URL", "EF_HR_EMAIL_FROM", "EF_HR_ADMIN_NOTIFY_TO", "EF_HR_PUBLIC_SITE_URL"] as const;
 
@@ -28,6 +29,15 @@ export function drainHrOutbox(service: any, env: Record<string, string | undefin
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((x) => x.toString(16).padStart(2, "0")).join("");
       if (hash !== file.sha256) return null;
       return { name: signedName(file.filename ?? "offer-letter.pdf"), contentType: "application/pdf", contentBase64: toBase64(bytes) };
+    },
+    // The HRMS template for this kind of email (HRMS > Templates), filled for the person; none, or one that cannot be filled
+    // completely, falls back to the built-in text so the email still goes out.
+    template: async (row, type) => {
+      const { data, error } = await service.rpc("hr_svc_template_mail", { p_profile: row.profileId, p_type: type, p_template: null });
+      const mail = data as { template?: TemplateSource | null; values?: TemplatePerson | null } | null;
+      if (error || !mail?.template) return null;
+      const rendered = renderMessage(mail.template, templateValues(mail.values ?? {}, { login_url: config.siteUrl ? `${config.siteUrl}/login` : "" }));
+      return rendered.missing.length || rendered.unknown.length ? null : rendered;
     },
     result: async (id, state, messageId, error) => {
       await service.rpc("hr_svc_email_result", { p_id: id, p_state: state, p_message_id: messageId ?? null, p_error: error ?? null });

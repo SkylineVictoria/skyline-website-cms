@@ -13,9 +13,12 @@
 // Local lab only: EF_POSTMARK_API_URL redirects the Postmark calls to a mock server, and only when SUPABASE_URL is local.
 import { POSTMARK_API, selectEmailProvider, type EmailProvider, type SendOutcome } from "./notification/delivery.ts";
 import { isLocalSupabaseUrl } from "./captcha.ts";
+import { emailHtmlDocument, type RenderedMessage, type TemplateType } from "./hr-template.ts";
 
 export type HrEmailKind = "application_received" | "already_applied" | "admin_new_application" | "document_invite" | "reupload_invite"
-  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected" | "access_ready";
+  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected" | "access_ready" | "login_link";
+/** Outbox kinds that use an HRMS template when one exists (the built-in text below is the fallback). */
+export const TEMPLATE_FOR_KIND: Partial<Record<HrEmailKind, TemplateType>> = { rejected: "rejection" };
 /** Outbox kinds this module sends. The two signed-offer kinds carry the signed PDF (DrainPort.attachment). */
 export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed", "access_ready"];
 export const ATTACHMENT_KINDS: readonly HrEmailKind[] = ["signed_offer", "admin_offer_signed"];
@@ -132,6 +135,8 @@ export interface DrainPort {
   /** The signed offer PDF for a signed-offer email (payload.offerId), or null when it cannot be found. */
   attachment?(row: HrEmailRow): Promise<HrAttachment | null>;
   result(id: number, state: "sent" | "queued" | "failed", messageId?: string, error?: string): Promise<void>;
+  /** The HRMS template for this email filled for the person, or null (none, or it cannot be filled): the built-in text is used. */
+  template?(row: HrEmailRow, type: TemplateType): Promise<RenderedMessage | null>;
 }
 
 /** Sends queued outbox mail. Off (no provider): nothing is claimed and the rows stay queued. */
@@ -142,7 +147,10 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
   for (const row of rows) {
     const to = row.audience === "admin" ? config.adminTo.join(", ") : row.to ?? "";
     const missing = !config.from ? "EF_HR_EMAIL_FROM is not set" : !to ? (row.audience === "admin" ? "EF_HR_ADMIN_NOTIFY_TO is not set" : "no recipient") : null;
-    const message = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
+    const builtIn = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
+    const type = TEMPLATE_FOR_KIND[row.kind];
+    const custom = !missing && type && port.template ? await port.template(row, type).catch(() => null) : null;
+    const message = custom ? { subject: custom.subject, text: custom.text, html: emailHtmlDocument(custom.html) as string | undefined } : builtIn ? { ...builtIn, html: undefined as string | undefined } : null;
     if (missing || !message) { await port.result(row.id, "failed", undefined, missing ?? "no template"); totals.failed++; continue; }
     let attachments: HrAttachment[] | undefined;
     if (ATTACHMENT_KINDS.includes(row.kind)) {
@@ -151,7 +159,7 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
       if (!file) { await port.result(row.id, "failed", undefined, "the signed offer PDF could not be attached"); totals.failed++; continue; }
       attachments = [file];
     }
-    const outcome = await provider.send({ deliveryId: `hr-${row.id}`, from: config.from!, to, subject: message.subject, textBody: message.text, ...(attachments ? { attachments } : {}) });
+    const outcome = await provider.send({ deliveryId: `hr-${row.id}`, from: config.from!, to, subject: message.subject, textBody: message.text, ...(message.html ? { htmlBody: message.html } : {}), ...(attachments ? { attachments } : {}) });
     const mapped = outcomeState(outcome);
     await port.result(row.id, mapped.state, mapped.messageId, mapped.error);
     if (mapped.state === "sent") totals.sent++; else if (mapped.state === "queued") totals.requeued++; else totals.failed++;
@@ -160,13 +168,34 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
 }
 
 /** A link email, sent inline. "skipped" = sending is switched off: the caller shows the link to the admin once instead. */
-export async function sendLinkEmail(provider: EmailProvider | null, config: HrMailConfig, mail: { kind: "document_invite" | "reupload_invite" | "offer"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string }):
+export async function sendLinkEmail(provider: EmailProvider | null, config: HrMailConfig, mail: { kind: "document_invite" | "reupload_invite" | "offer"; to: string; name: string; link: string; expiresAt: string; rejected?: Array<{ category: string; note: string }>; deliveryId: string; rendered?: RenderedMessage | null }):
   Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }> {
   if (!provider) return { state: "skipped", error: "email sending is switched off" };
   if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };
-  const message = renderHrEmail(mail.kind, { name: mail.name }, { siteUrl: config.siteUrl, link: mail.link, expiresAt: mail.expiresAt, rejected: mail.rejected });
+  // An HRMS template filled for this person (HRMS > Templates), or the built-in text when there is none.
+  const builtIn = mail.rendered ? null : renderHrEmail(mail.kind, { name: mail.name }, { siteUrl: config.siteUrl, link: mail.link, expiresAt: mail.expiresAt, rejected: mail.rejected });
+  const message = mail.rendered ? { subject: mail.rendered.subject, text: mail.rendered.text, html: emailHtmlDocument(mail.rendered.html) as string | undefined } : builtIn ? { ...builtIn, html: undefined as string | undefined } : null;
   if (!message) return { state: "failed", error: "no template" };
-  const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: message.subject, textBody: message.text }));
+  const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: message.subject, textBody: message.text, ...(message.html ? { htmlBody: message.html } : {}) }));
   // A link that may or may not have arrived is treated as failed: the caller cancels it and the admin sends a new one.
   return mapped.state === "sent" ? { state: "sent", messageId: mapped.messageId } : { state: "failed", error: mapped.error };
+}
+
+/** A template email sent inline (the offer with its sign-in link, a new sign-in link). Same outcome rules as a link email. */
+export async function sendTemplateEmail(provider: EmailProvider | null, config: HrMailConfig, mail: { to: string; message: { subject: string; text: string; html?: string }; deliveryId: string }):
+  Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }> {
+  if (!provider) return { state: "skipped", error: "email sending is switched off" };
+  if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };
+  const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: mail.message.subject, textBody: mail.message.text,
+    ...(mail.message.html ? { htmlBody: emailHtmlDocument(mail.message.html) } : {}) }));
+  return mapped.state === "sent" ? { state: "sent", messageId: mapped.messageId } : { state: "failed", error: mapped.error };
+}
+
+/** The built-in text of the two sign-in emails, used when no HRMS template of that kind exists. */
+export function builtInLoginEmail(kind: "offer" | "login_link", values: Record<string, string>): { subject: string; text: string } {
+  const hello = `Hello ${values.first_name || "there"},`;
+  const tail = `\n\n${values.signing_link}\n\n${values.link_expiry ? `The link works until ${values.link_expiry}. ` : ""}It is personal: please do not forward it.${SIGN_OFF}`;
+  return kind === "offer"
+    ? { subject: "Your offer letter from Skyline", text: `${hello}\n\nWe are pleased to offer you a position. Your offer letter is ready to read and sign. Use your personal link to sign in (the first time it asks you to choose a password):${tail}` }
+    : { subject: "Your Skyline staff sign-in", text: `${hello}\n\nHere is a new personal link to sign in to your staff account. It asks you to choose your own password and can be used once:${tail}` };
 }

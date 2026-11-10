@@ -3,14 +3,19 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
 import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  StaffAdminError, adminDeactivateStaff, adminListStaff, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
-  type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow,
+  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
+  type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow, type StaffOnboarding,
 } from "@/lib/staffApi";
+import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
+import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
+import SendOfferDialog from "@/pages/admin/components/hrms/SendOfferDialog";
+import { accountText, timelineText } from "@/pages/admin/lib/onboardingText";
+import { money } from "@/lib/hrTime";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
 import {
-  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist,
+  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, ONBOARDING_STAGE_HINT, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist,
   type EmployeeAction, type StaffDocCategory, type StaffRole,
 } from "@/lib/staffStatus";
 
@@ -22,7 +27,12 @@ import {
  * again), failed notification emails can be retried, and with email switched off the link is shown ONCE to pass on. Files (resume,
  * documents, offer, signed offer) open through short-lived signed URLs. The status history is at the bottom. HR-02j: the employment
  * details (hr.employment, written by a hire or edited here; the joining date comes with activation), and a Careers applicant or manual
- * candidate gets the document link from Staff > Candidates ("Hire"), so Send document link is not offered while a job application is open.
+ * candidate gets the document link from Staff > Candidates ("Hire") or from Send document link here, which hires them for that job too.
+ *
+ * Onboarding flow (2026-11-10): the nine stages are shown as a stepper at the top (hr_admin_onboarding: stage, dates, pay details,
+ * login state, history). Only the action that fits the stage is offered: Send document link > review documents > Add pay details
+ * > Send offer letter (a template, previewed, emailed with the person's sign-in link) > Activate. Rejecting a document can email
+ * the reason with a re-upload link at once. The history lists every action with who did it and when.
  */
 const STAGE_LABEL = { screening: "Screening", shortlisted: "Shortlisted", interview: "Interview", selected: "Selected" } as const;
 
@@ -32,7 +42,8 @@ const REVIEW_LABEL = { pending: "Pending", approved: "Approved", rejected: "Reje
 const EMAIL_TONE = { queued: "muted", sending: "muted", sent: "success", failed: "primary", skipped: "warn" } as const;
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
-const LINK_EMAIL_PURPOSE: Record<string, "documents" | "reupload" | "offer"> = { document_invite: "documents", reupload_invite: "reupload", offer: "offer" };
+const LINK_EMAIL_PURPOSE: Record<string, "documents" | "reupload" | "offer" | "login"> = { document_invite: "documents", reupload_invite: "reupload", offer: "offer", login_link: "login" };
+const DEFAULT_REJECT_NOTE = "Please upload this document again.";
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -54,6 +65,10 @@ type Preview = { title: string; url: string; kind: "pdf" | "image" | "other" };
 export default function StaffOnboardingDetail() {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
+  const [flow, setFlow] = useState<StaffOnboarding | null>(null);
+  const [payOpen, setPayOpen] = useState(false);
+  const [offerOpen, setOfferOpen] = useState<"send" | "resend" | null>(null);
+  const [emailReject, setEmailReject] = useState(true);
   const [error, setError] = useState("");
   const location = useLocation();
   const [notice, setNotice] = useState((location.state as { message?: string } | null)?.message ?? "");
@@ -63,7 +78,6 @@ export default function StaffOnboardingDetail() {
   const [role, setRole] = useState<StaffRole>("trainer");
   const [joiningDate, setJoiningDate] = useState("");
   const [confirmAdmin, setConfirmAdmin] = useState(false);
-  const [offerFile, setOfferFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState("");
   const [shownLink, setShownLink] = useState<{ link: string; expiresAt?: string } | null>(null);
@@ -75,13 +89,18 @@ export default function StaffOnboardingDetail() {
   const [editingEmployment, setEditingEmployment] = useState(false);
 
   const load = useCallback(async () => {
-    try { const next = await adminStaffDetail(id); setDetail(next); setError(""); return next; }
-    catch (e) { setError(e instanceof Error ? e.message : "The application could not be loaded."); return null; }
+    try {
+      const [next, progress] = await Promise.all([adminStaffDetail(id), adminOnboarding(id)]);
+      setDetail(next); setFlow(progress); setError(""); return next;
+    } catch (e) { setError(e instanceof Error ? e.message : "The application could not be loaded."); return null; }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
 
   const openAction = (next: EmployeeAction) => {
-    setAction(next); setNote(""); setNotify(true); setConfirmAdmin(false); setOfferFile(null); setDialogError("");
+    setError(""); setNotice("");
+    if (next === "add_pay_details" || next === "edit_pay_details") { setPayOpen(true); return; }
+    if (next === "send_offer" || next === "resend_offer") { setOfferOpen(next === "send_offer" ? "send" : "resend"); return; }
+    setAction(next); setNote(""); setNotify(true); setConfirmAdmin(false); setDialogError("");
     setRole(detail?.roles.find((r) => !r.revokedAt)?.role ?? detail?.application.requested_role ?? "trainer");
     setJoiningDate(detail?.employment?.joiningDate ?? "");
   };
@@ -89,11 +108,11 @@ export default function StaffOnboardingDetail() {
   const run = async (): Promise<StaffAdminResult | StaffDetail | null> => {
     const pid = detail!.profile.id;
     switch (action) {
-      case "send_documents_link": case "resend_documents_link": return staffAdminActions.sendLink(pid, "documents");
+      case "send_documents_link": return staffAdminActions.sendDocuments(pid);
+      case "resend_documents_link": return staffAdminActions.sendLink(pid, "documents");
+      case "resend_login": return staffAdminActions.resendLogin(pid);
       case "send_reupload_link": return staffAdminActions.sendLink(pid, "reupload");
       case "revoke_link": return staffAdminActions.revokeLink(pid);
-      case "upload_offer": return staffAdminActions.uploadOffer(pid, offerFile!);
-      case "send_offer": case "resend_offer": return staffAdminActions.sendOffer(pid);
       case "withdraw_offer": return staffAdminActions.withdrawOffer(pid, note.trim());
       case "activate": return staffAdminActions.activate(pid, role, joiningDate, confirmAdmin);
       case "resend_activation": return staffAdminActions.resendActivation(pid);
@@ -108,8 +127,7 @@ export default function StaffOnboardingDetail() {
   const confirm = async () => {
     if (!action || !detail) return;
     const spec = EMPLOYEE_ACTION[action];
-    if (spec.note === "required" && !note.trim()) { setDialogError("Add a note explaining the decision."); return; }
-    if (action === "upload_offer" && !offerFile) { setDialogError("Choose the offer letter (PDF)."); return; }
+    if (spec.note === "required" && !note.trim()) { setDialogError("Add the reason."); return; }
     if (action === "activate") {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(joiningDate)) { setDialogError("Enter the joining date."); return; }
       if (role === "admin" && !confirmAdmin) { setDialogError("Tick the box to confirm this person should become an Admin."); return; }
@@ -145,10 +163,22 @@ export default function StaffOnboardingDetail() {
     } catch (e) { setError(e instanceof Error ? e.message : "The file could not be opened."); }
   };
 
-  const review = async (doc: StaffDocument, decision: "approved" | "rejected", text = "") => {
-    if (decision === "rejected" && !text.trim()) { setDialogError("Add a note telling them what to fix."); return; }
-    setDocBusy(doc.id); setDialogError(""); setError("");
-    try { setDetail(await adminReviewStaffDocument(doc.id, decision, text.trim())); setRejecting(null); }
+  const review = async (doc: StaffDocument, decision: "approved" | "rejected", text = "", emailNow = false) => {
+    setDocBusy(doc.id); setDialogError(""); setError(""); setNotice("");
+    try {
+      // The reason is optional for the admin; the record (and the email) always carries one.
+      const next = await adminReviewStaffDocument(doc.id, decision, decision === "rejected" ? text.trim() || DEFAULT_REJECT_NOTE : "");
+      setDetail(next); setRejecting(null);
+      if (decision === "rejected" && emailNow) {
+        // The re-upload email lists every rejected document with its reason and carries the link.
+        try {
+          const sent = await staffAdminActions.sendLink(next.profile.id, "reupload");
+          if (sent.link) setShownLink({ link: sent.link, expiresAt: sent.expiresAt });
+          setNotice(sent.link ? "Email is switched off: copy the re-upload link from the window and send it yourself." : "The document was rejected and the person was emailed the reason with a link to upload it again.");
+        } catch (e) { setError(`The document was rejected, but the email could not be sent: ${e instanceof Error ? e.message : "error"} Use “Ask for documents again”.`); }
+      }
+      await load();
+    }
     catch (e) { (decision === "rejected" ? setDialogError : setError)(e instanceof Error ? e.message : "The review could not be saved."); }
     finally { setDocBusy(""); }
   };
@@ -176,7 +206,12 @@ export default function StaffOnboardingDetail() {
     offer: openOffer ? { sent: Boolean(openOffer.sentAt) } : null,
     activationInvited: profile.status === "offer_signed" && Boolean(application.account_invited_at),
     openJobApplication: openJob !== null,
+    payComplete: flow?.payComplete ?? false,
+    hasLogin: flow?.account?.hasLogin ?? false,
+    passwordSet: flow?.account?.passwordSet ?? false,
   });
+  const pay = flow?.payDetails ?? null;
+  const stageHint = flow && !flow.closed ? ONBOARDING_STAGE_HINT[flow.stage] : null;
   const employment = detail.employment;
   const joining = employment?.joiningDate ?? null;
   const canReview = profile.status === "documents_submitted";
@@ -204,13 +239,26 @@ export default function StaffOnboardingDetail() {
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`} data-testid="staff-notice">{notice}</p> : null}
       {failedEmails.length ? (
         <p className={`mb-4 ${ALERT}`} data-testid="staff-email-failed">
-          {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails below to retry or send the link again.
+          {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails below to retry or resend the link.
         </p>
+      ) : null}
+      {flow ? (
+        <Card className="mb-4 p-5"><div data-testid="staff-onboarding-progress" data-stage={flow.stage}>
+          <OnboardingStepper steps={flow.steps} closed={flow.closed} />
+          <p className="mt-4 border-t border-background-200 pt-3 text-sm text-foreground-800" data-testid="staff-stage-hint">
+            {flow.closed === "rejected" ? "This application was withdrawn or rejected. Reopen it to continue."
+              : flow.closed === "inactive" ? "This person is inactive. Their record and documents are kept."
+                : stageHint}
+            {!flow.closed && flow.stage === "documents_requested" && flow.documentLinkSentAt ? <span className="text-foreground-600"> Link last sent {when(flow.documentLinkSentAt)}.</span> : null}
+            {!flow.closed && flow.stage === "documents_submitted" && summary.rejected > 0 ? <span className="text-foreground-600"> {summary.rejected === 1 ? "One document is" : `${summary.rejected} documents are`} rejected: use “Ask for documents again” if the person has not been emailed yet.</span> : null}
+            {!flow.closed && flow.stage === "offer_sent" && flow.account.hasLogin && !flow.account.passwordSet ? <span className="text-foreground-600"> They have not chosen a password yet.</span> : null}
+          </p>
+        </div></Card>
       ) : null}
       {profile.status === "applied" && openJob ? (
         <p className={`mb-4 ${NOTICE}`} data-testid="staff-hire-hint">
-          This person applied for <strong>{openJob.jobTitle}</strong> ({STAGE_LABEL[openJob.stage]}). The document link is sent by hiring them from{" "}
-          <Link to={staffCandidatePath(openJob.id)} className="font-semibold text-primary-700 hover:underline">Candidates</Link> once they are selected.
+          This person applied for <strong>{openJob.jobTitle}</strong> ({STAGE_LABEL[openJob.stage]}). Sending the document link also marks that application as hired, the same as hiring them from{" "}
+          <Link to={staffCandidatePath(openJob.id)} className="font-semibold text-primary-700 hover:underline">Candidates</Link>.
         </p>
       ) : null}
       {application.files_purged_at ? <p className={`mb-4 ${NOTICE}`} data-testid="staff-files-purged">The resume, documents and offer files were deleted on {new Date(application.files_purged_at).toLocaleDateString()} under the retention rule. The record stays.</p> : null}
@@ -234,12 +282,12 @@ export default function StaffOnboardingDetail() {
                 </button>
               ) : ""}
             </Row>
-            <Row label="Login">{detail.hasAccount ? (profile.status === "offer_signed" ? "Invited, waiting for the password" : "Yes") : "None yet"}</Row>
+            <Row label="Login"><span data-testid="staff-login-state">{flow ? accountText(flow.account, when) : detail.hasAccount ? "Yes" : "None yet"}</span></Row>
             <Row label="Admin console access">{detail.hasCmsAccess ? "Yes (Admin)" : "No"}</Row>
           </dl>
           {liveLinks.length ? (
             <div className="mt-4 border-t border-background-200 pt-3 text-xs text-foreground-600" data-testid="staff-live-link">
-              {liveLinks.map((l) => <p key={l.id}>Live {l.purpose === "offer" ? "offer" : l.purpose === "reupload" ? "re-upload" : "document"} link until {new Date(l.expiresAt).toLocaleDateString()}{l.lastSeenAt ? ` · last opened ${when(l.lastSeenAt)}` : " · not opened yet"}</p>)}
+              {liveLinks.filter((l) => l.purpose !== "offer").map((l) => <p key={l.id}>Live {l.purpose === "account" ? "sign-in" : l.purpose === "reupload" ? "re-upload" : "document"} link until {new Date(l.expiresAt).toLocaleDateString()}{l.lastSeenAt ? ` · last opened ${when(l.lastSeenAt)}` : " · not opened yet"}</p>)}
             </div>
           ) : null}
         </Card>
@@ -264,7 +312,7 @@ export default function StaffOnboardingDetail() {
                           <Badge tone={REVIEW_TONE[d.status]}>{REVIEW_LABEL[d.status]}</Badge>
                           {application.files_purged_at ? null : <Button size="sm" variant="outline" onClick={() => void view(`${STAFF_DOC_LABEL[d.category as StaffDocCategory] ?? d.category}: ${d.filename}`, d.storagePath, d.mimeType)} data-testid={`staff-doc-view-${d.id}`}>Preview</Button>}
                           {canReview && d.status !== "approved" ? <Button size="sm" onClick={() => void review(d, "approved")} disabled={docBusy === d.id} data-testid={`staff-doc-approve-${d.id}`}>Approve</Button> : null}
-                          {canReview && d.status !== "rejected" ? <Button size="sm" variant="outline" onClick={() => { setRejecting(d); setDocNote(""); setDialogError(""); }} disabled={docBusy === d.id} data-testid={`staff-doc-reject-${d.id}`}>Reject</Button> : null}
+                          {canReview && d.status !== "rejected" ? <Button size="sm" variant="outline" onClick={() => { setRejecting(d); setDocNote(""); setEmailReject(true); setDialogError(""); }} disabled={docBusy === d.id} data-testid={`staff-doc-reject-${d.id}`}>Reject</Button> : null}
                         </span>
                       </div>
                       {d.status === "rejected" && d.reviewNote ? <p className="mt-1 text-xs text-primary-900">Note: {d.reviewNote}</p> : null}
@@ -289,10 +337,31 @@ export default function StaffOnboardingDetail() {
             <Row label="Employment type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
             <Row label="Work location">{employment.workLocation}</Row>
             <Row label="Manager">{employment.managerId ? <Link to={`${STAFF_EMPLOYEES_PATH}/${employment.managerId}`} className="font-semibold text-primary-700 hover:underline">{employment.managerName ?? "Manager"}</Link> : ""}</Row>
-            <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set at activation</span>}</Row>
+            <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set with the pay details</span>}</Row>
           </dl>
-        ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the joining date is set at activation.</p>}
+        ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the pay details add the rest.</p>}
       </div></Card>
+
+      {pay && (flow?.documentsApproved || pay.completedAt) ? (
+        <Card className="mt-6 p-5"><div data-testid="staff-pay-details">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-heading text-base font-bold text-foreground-950">Pay details <span className="ml-2 align-middle"><Badge tone={flow?.payComplete ? "success" : "warn"}>{flow?.payComplete ? "Complete" : "Needed before the offer"}</Badge></span></h2>
+            {profile.status === "documents_submitted" && flow?.documentsApproved ? <Button size="sm" variant="outline" onClick={() => setPayOpen(true)} data-testid="staff-pay-details-edit">{pay.completedAt ? "Edit pay details" : "Add pay details"}</Button> : null}
+          </div>
+          {pay.completedAt ? (
+            <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Row label="Position">{pay.employment?.jobTitle}</Row>
+              <Row label="Employment type">{pay.employment?.employmentType ? EMPLOYMENT_TYPE_LABEL[pay.employment.employmentType] : ""}</Row>
+              <Row label="Start date">{pay.employment?.joiningDate ? new Date(`${pay.employment.joiningDate}T00:00:00`).toLocaleDateString() : ""}</Row>
+              <Row label="Pay">{pay.pay.payBasis === "salary" ? `${money(pay.pay.rate)} a year` : pay.pay.payBasis === "hourly" ? `${money(pay.pay.rate)} an hour` : ""}</Row>
+              <Row label="Pay schedule">{pay.pay.payScheduleName}</Row>
+              <Row label="Hours per week">{pay.pay.ordinaryHoursWeek ?? (pay.employment?.employmentType === "casual" ? "As rostered" : "")}</Row>
+              <Row label="Reporting manager">{pay.employment?.managerName}</Row>
+              <Row label="Xero employee id">{pay.pay.xeroEmployeeId || <span className="text-foreground-500">Not set yet</span>}</Row>
+            </dl>
+          ) : <p className="text-sm text-foreground-600">{flow?.payProblem ?? "Add the pay details to continue."} They fill the offer letter and set up payroll.</p>}
+        </div></Card>
+      ) : null}
 
       <BankDetailsCard profileId={profile.id} />
       {profile.status === "active" || profile.status === "inactive" ? <PaySetupCard profileId={profile.id} hasEmployment={Boolean(employment)} /> : null}
@@ -337,7 +406,8 @@ export default function StaffOnboardingDetail() {
                 </li>
               ))}
             </ul>
-          ) : <p className="text-sm text-foreground-600">No offer yet. Upload one once every required document is approved.</p>}
+          ) : <p className="text-sm text-foreground-600">No offer yet. It is made from a template once the documents are approved and the pay details are in.</p>}
+          {flow?.offerLetter ? <p className="mt-2 text-xs text-foreground-600" data-testid="staff-offer-template">Letter “{flow.offerLetter.title}” made from the “{flow.offerLetter.templateName}” template on {when(flow.offerLetter.createdAt)}. Later template edits do not change it.</p> : null}
         </div></Card>
 
         <Card className="p-5"><div data-testid="staff-emails">
@@ -354,7 +424,7 @@ export default function StaffOnboardingDetail() {
                   <span className="flex items-center gap-2">
                     {e.state === "failed" && resolved(e) ? <Badge tone="muted">Failed, sent again later</Badge> : <Badge tone={EMAIL_TONE[e.state]}>{e.state === "failed" ? "Failed" : e.state === "sent" ? "Sent" : e.state === "skipped" ? "Skipped" : "Waiting"}</Badge>}
                     {e.state === "failed" && !resolved(e) && e.retryable ? <Button size="sm" variant="outline" disabled={retrying === e.id} onClick={() => void retry(e)} data-testid={`staff-email-retry-${e.id}`}>{retrying === e.id ? "Retrying…" : "Retry"}</Button> : null}
-                    {e.state === "failed" && !resolved(e) && !e.retryable && LINK_EMAIL_PURPOSE[e.kind] ? <span className="text-xs text-foreground-600">Use “{LINK_EMAIL_PURPOSE[e.kind] === "offer" ? "Send the offer link again" : "Send the link again"}”</span> : null}
+                    {e.state === "failed" && !resolved(e) && !e.retryable && LINK_EMAIL_PURPOSE[e.kind] ? <span className="text-xs text-foreground-600">Use “{LINK_EMAIL_PURPOSE[e.kind] === "offer" ? "Send the offer email again" : LINK_EMAIL_PURPOSE[e.kind] === "login" ? "Resend login" : "Resend link"}”</span> : null}
                   </span>
                 </li>
               ))}
@@ -364,13 +434,31 @@ export default function StaffOnboardingDetail() {
       </div>
 
       <Card className="mt-6 p-5"><div data-testid="staff-history">
-        <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Status history</h2>
-        <ol className="space-y-2">
-          {[...detail.events].reverse().map((e, i) => (
-            <li key={`${e.at}-${i}`} className="text-sm"><span className="font-semibold">{e.from ? `${STAFF_STATUS_LABEL[e.from]} → ` : ""}{STAFF_STATUS_LABEL[e.to]}</span>
-              <span className="ml-2 text-xs text-foreground-500">{when(e.at)} · {e.actorKind === "admin" ? "an administrator" : e.actorKind === "applicant" ? "the applicant" : e.actorKind}</span>{e.note ? <p className="text-foreground-700">{e.note}</p> : null}</li>
-          ))}
-        </ol>
+        <h2 className="mb-1 font-heading text-base font-bold text-foreground-950">History</h2>
+        <p className="mb-3 text-xs text-foreground-600">Every action on this record: who did it and when. Newest first.</p>
+        {flow ? (
+          <ol className="relative space-y-3 border-l border-background-300 pl-4" data-testid="staff-timeline">
+            {flow.timeline.map((entry, i) => {
+              const line = timelineText(entry);
+              if (!line) return null;
+              return (
+                <li key={`${entry.at}-${entry.type}-${i}`} className="relative text-sm" data-testid="staff-timeline-entry" data-type={entry.type} data-action={entry.action}>
+                  <span aria-hidden="true" className={`absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-background-50 ${entry.type === "status" ? "bg-primary-500" : entry.type === "email" ? "bg-secondary-500" : "bg-foreground-400"}`} />
+                  <span className={entry.type === "status" ? "font-semibold text-foreground-950" : "text-foreground-900"}>{line.text}</span>
+                  <span className="ml-2 text-xs text-foreground-500">{when(entry.at)} · {entry.type === "email" ? "System" : entry.actorName}</span>
+                  {line.note ? <p className="text-foreground-700">{line.note}</p> : null}
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <ol className="space-y-2">
+            {[...detail.events].reverse().map((e, i) => (
+              <li key={`${e.at}-${i}`} className="text-sm"><span className="font-semibold">{e.from ? `${STAFF_STATUS_LABEL[e.from]} → ` : ""}{STAFF_STATUS_LABEL[e.to]}</span>
+                <span className="ml-2 text-xs text-foreground-500">{when(e.at)} · {e.actorKind === "admin" ? "an administrator" : e.actorKind === "applicant" ? "the applicant" : e.actorKind}</span>{e.note ? <p className="text-foreground-700">{e.note}</p> : null}</li>
+            ))}
+          </ol>
+        )}
       </div></Card>
 
       <Modal open={preview !== null} title={preview?.title ?? ""} onClose={() => setPreview(null)}
@@ -385,10 +473,13 @@ export default function StaffOnboardingDetail() {
       </Modal>
 
       <Modal open={rejecting !== null} title={rejecting ? `Reject ${rejecting.filename}` : ""} onClose={() => setRejecting(null)}
-        footer={<><Button variant="outline" onClick={() => setRejecting(null)}>Cancel</Button><Button variant="danger" onClick={() => rejecting && void review(rejecting, "rejected", docNote)} disabled={docBusy !== ""} data-testid="staff-doc-reject-confirm">Reject document</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setRejecting(null)}>Cancel</Button><Button variant="danger" onClick={() => rejecting && void review(rejecting, "rejected", docNote, emailReject)} disabled={docBusy !== ""} data-testid="staff-doc-reject-confirm">{docBusy ? "Working…" : emailReject ? "Reject and email" : "Reject document"}</Button></>}>
         <div className="space-y-3">
-          <p className="text-sm text-foreground-700">They see this note when you ask for the documents again (“Ask for documents again” sends them a re-upload link).</p>
-          <Field label="What needs fixing (required)"><TextArea rows={3} value={docNote} onChange={(e) => setDocNote(e.target.value)} data-testid="staff-doc-reject-note" /></Field>
+          <Field label="Reason (optional)" hint={`They are told this. Left empty, it reads “${DEFAULT_REJECT_NOTE}”`}><TextArea rows={3} value={docNote} onChange={(e) => setDocNote(e.target.value)} data-testid="staff-doc-reject-note" /></Field>
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm text-foreground-800">
+            <input type="checkbox" checked={emailReject} onChange={(e) => setEmailReject(e.target.checked)} className="mt-0.5 h-4 w-4" data-testid="staff-doc-reject-email" />
+            <span>Email them now with the reason and a link to upload it again. The application goes back to <strong>Documents requested</strong> until they do. Untick this to reject more documents first, then use “Ask for documents again” (one email lists them all).</span>
+          </label>
           {dialogError ? <p role="alert" className={ALERT}>{dialogError}</p> : null}
         </div>
       </Modal>
@@ -401,10 +492,11 @@ export default function StaffOnboardingDetail() {
             <p className="text-xs text-foreground-600" data-testid="staff-action-status">
               Now: <strong>{STAFF_STATUS_LABEL[profile.status]}</strong>{target && target !== profile.status ? <> → after this: <strong>{STAFF_STATUS_LABEL[target]}</strong></> : " (the status does not change)"}
             </p>
-            {action === "upload_offer" ? (
-              <Field label="Offer letter (PDF)" required>
-                <input type="file" accept="application/pdf,.pdf" data-testid="staff-offer-file" onChange={(e) => setOfferFile(e.target.files?.[0] ?? null)} className="block w-full text-sm" />
-              </Field>
+            {action === "send_documents_link" && openJob ? (
+              <p className={NOTICE} data-testid="staff-action-hire-note">They applied for <strong>{openJob.jobTitle}</strong>. This also marks that job application as hired and fills the employment details from the job, the same as Candidates › Hire.</p>
+            ) : null}
+            {action === "send_documents_link" || action === "resend_documents_link" || action === "send_reupload_link" || action === "resend_login" ? (
+              <p className="text-sm text-foreground-800" data-testid="staff-action-email-note">An email goes to <strong>{profile.email}</strong>.</p>
             ) : null}
             {action === "activate" ? (
               <>
@@ -433,11 +525,16 @@ export default function StaffOnboardingDetail() {
                 <span>Email them that we are not continuing with the application (a short, polite message without your note).</span>
               </label>
             ) : null}
-            {spec.note ? <Field label={spec.note === "required" ? "Note (required)" : "Note (optional)"}><TextArea rows={3} value={note} onChange={(e) => setNote(e.target.value)} data-testid="staff-decision-note" /></Field> : null}
+            {spec.note ? <Field label={spec.note === "required" ? "Reason (required)" : "Reason (optional)"}><TextArea rows={3} value={note} onChange={(e) => setNote(e.target.value)} data-testid="staff-decision-note" /></Field> : null}
             {dialogError ? <p role="alert" className={ALERT} data-testid="staff-action-error">{dialogError}</p> : null}
           </div>
         ) : null}
       </Modal>
+
+      {payOpen && pay ? <PayDetailsDialog profileId={profile.id} current={pay} onClose={() => setPayOpen(false)}
+        onSaved={(next) => { setPayOpen(false); setFlow(next); setNotice("The pay details were saved. You can send the offer letter now."); void load(); }} /> : null}
+      {offerOpen ? <SendOfferDialog profileId={profile.id} name={name} email={profile.email} resend={offerOpen === "resend"} onClose={() => { setOfferOpen(null); void load(); }}
+        onDone={(result, message) => { setOfferOpen(null); if (result.link) setShownLink({ link: result.link, expiresAt: result.expiresAt }); setNotice(message); void load(); }} /> : null}
 
       {editingEmployment ? <EmploymentDialog profileId={profile.id} employment={employment} onClose={() => setEditingEmployment(false)}
         onSaved={(next) => { setEditingEmployment(false); setDetail(next); setNotice("The employment details were saved."); }} /> : null}
@@ -460,15 +557,16 @@ function doneMessage(action: EmployeeAction, result: StaffAdminResult | null): s
   if (result?.link) return "Email is switched off: copy the link from the window and send it yourself.";
   switch (action) {
     case "send_documents_link": case "resend_documents_link": return "The document link was emailed.";
+    case "resend_login": return "A new sign-in link was emailed.";
+    case "add_pay_details": case "edit_pay_details": return "The pay details were saved.";
     case "send_reupload_link": return "The re-upload link was emailed.";
     case "revoke_link": return "The link was revoked.";
-    case "upload_offer": return `The offer letter was checked and uploaded${result?.pages ? ` (${result.pages} page${result.pages === 1 ? "" : "s"})` : ""}.`;
-    case "send_offer": case "resend_offer": return "The offer link was emailed.";
+    case "send_offer": case "resend_offer": return "The offer was emailed.";
     case "withdraw_offer": return "The offer was withdrawn.";
-    case "activate": return result?.activated ? "Activated on their existing login. HR emailed them that their access is ready." : "The set-a-password email was sent. They become active when they set it.";
+    case "activate": return result?.activated ? "Activated. They are a current employee now and were emailed that their staff access is ready." : "The set-a-password email was sent. They become active when they set it.";
     case "resend_activation": return "A new set-a-password email was sent.";
-    case "reject": return "The application was rejected.";
-    case "deactivate": return "Deactivated.";
+    case "reject": return "The application was withdrawn.";
+    case "deactivate": return "Marked inactive.";
     case "reactivate": return "Reactivated.";
     case "reopen": return "Reopened.";
   }
@@ -508,7 +606,7 @@ function EmploymentDialog({ profileId, employment, onClose, onSaved }: { profile
           <Field label="Job title"><TextInput maxLength={150} value={form.jobTitle} onChange={(e) => patch({ jobTitle: e.target.value })} data-testid="staff-employment-title" /></Field>
           <Field label="Department"><TextInput maxLength={120} value={form.department} onChange={(e) => patch({ department: e.target.value })} data-testid="staff-employment-department" /></Field>
           <Field label="Employment type"><Select value={form.employmentType} onChange={(e) => patch({ employmentType: e.target.value as StaffEmploymentForm["employmentType"] })} data-testid="staff-employment-type">
-            <option value="">Not set</option><option value="full_time">Full time</option><option value="part_time">Part time</option>
+            <option value="">Not set</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="casual">Casual</option>
           </Select></Field>
           <Field label="Work location"><TextInput maxLength={150} value={form.workLocation} onChange={(e) => patch({ workLocation: e.target.value })} data-testid="staff-employment-location" /></Field>
           <Field label="Find a manager" hint="Active employees only."><TextInput placeholder="Search by name or email" value={managerSearch} onChange={(e) => setManagerSearch(e.target.value)} /></Field>
@@ -518,7 +616,7 @@ function EmploymentDialog({ profileId, employment, onClose, onSaved }: { profile
             {managers.map((m) => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
           </Select></Field>
         </div>
-        <p className="text-xs text-foreground-600">The joining date is recorded when the account is activated{employment?.joiningDate ? ` (${new Date(`${employment.joiningDate}T00:00:00`).toLocaleDateString()})` : ""}.</p>
+        <p className="text-xs text-foreground-600">The start date comes from the pay details and is confirmed at activation{employment?.joiningDate ? ` (${new Date(`${employment.joiningDate}T00:00:00`).toLocaleDateString()})` : ""}.</p>
         {error ? <p role="alert" className={ALERT} data-testid="staff-employment-error">{error}</p> : null}
       </div>
     </Modal>

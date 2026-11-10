@@ -50,6 +50,7 @@ export function timelineText(e: OnboardingTimelineEntry): { text: string; note?:
     case "bank_saved": return { text: "Bank details saved" };
     case "bank_removed": return { text: "Bank details removed" };
     case "bank_revealed": return { text: "Bank details revealed (viewed in full)" };
+    case "tax_super_saved": return { text: "Tax and super answers saved" };
     case "section_verified": return { text: `Verified: ${SECTION[String(d.section)] ?? String(d.section ?? "a section")}` };
     case "section_unverified": return { text: `Verification removed: ${SECTION[String(d.section)] ?? String(d.section ?? "a section")}` };
     case "role_granted": return { text: `Role granted: ${d.role === "admin" ? "Admin" : "Trainer"}` };
@@ -60,7 +61,7 @@ export function timelineText(e: OnboardingTimelineEntry): { text: string; note?:
 
 /** The sections an administrator ticks as verified (hr.staff_section_checks). */
 export const SECTION: Record<string, string> = {
-  personal: "Personal details", bank: "Bank details", passport: "Passport", visa: "Visa", english: "English test result", academic: "Academic results",
+  personal: "Personal details", bank: "Bank details", tax: "Tax and super", passport: "Passport", visa: "Visa", english: "English test result", academic: "Academic results",
   "driving-licence": "Driving licence", "health-insurance": "Health insurance",
 };
 

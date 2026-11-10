@@ -12,11 +12,14 @@ import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { STAFF_WIZARD_STEPS, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import type { StaffDocument } from "@/lib/staffApi";
 import { FieldError as SaveError, LinkInvalidError, onboarding, takeLinkToken, type OnboardingView } from "@/lib/staffOnboardingApi";
-import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
+import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, taxSuperRows, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
 import { bankProblems, bsbBank, dateOfBirthRange, formatBsb, type Address, type BankDetails, type BankProblems } from "../../../supabase/functions/_shared/validation/person";
-import { normalizeStaffField, staffFieldProblem, staffProblems, type StaffDetails, type StaffField, type StaffTextField } from "../../../supabase/functions/_shared/validation/staff-onboarding";
+import {
+  SUPER_CHOICE, SUPER_CHOICE_LABEL, TAX_RESIDENCY, TAX_RESIDENCY_LABEL, normalizeStaffField, staffFieldProblem, staffProblems, superFundNeeded,
+  type StaffDetails, type StaffField, type StaffTextField,
+} from "../../../supabase/functions/_shared/validation/staff-onboarding";
 
 /**
  * /staff/onboard#t=<token>: a new staff member's onboarding wizard, opened from the emailed link. No login; the link is the
@@ -31,8 +34,9 @@ import { normalizeStaffField, staffFieldProblem, staffProblems, type StaffDetail
  *   2 Check details: what the documents told us, each with where it came from; anything unread or not matching is marked.
  *   3 Personal details: mobile, address (unless the licence gave it) and an emergency contact.
  *   4 Bank details: saved encrypted; shown back masked. Never kept in the browser.
- *   5 Review and submit: everything on one page with an Edit button per section; Submit only when nothing is missing.
- * (Tax and super is not built yet: it waits for the owner's decision on collecting tax file numbers.)
+ *   5 Tax and super: the declaration answers and the super choice only (owner's option A); the tax file number is never asked
+ *     for here, the person gives it through Xero.
+ *   6 Review and submit: everything on one page with an Edit button per section; Submit only when nothing is missing.
  * Details save by themselves a moment after typing; only valid values are sent.
  */
 
@@ -300,7 +304,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
 
   /** Everything this step needs, shown on its fields. True when the step may be left forwards. */
   const checkStep = (id: StaffWizardStepId): boolean => {
-    if (id === "documents" || id === "prefill" || id === "personal") {
+    if (id === "documents" || id === "prefill" || id === "personal" || id === "tax") {
       const fields = stepFields(id, addressFromLicence);
       const found = staffProblems(latest.current, fields, true);
       setErrors((prev) => { const next = { ...prev }; for (const field of fields) next[field] = ""; for (const p of found) next[p.field] = p.message; return next; });
@@ -552,6 +556,72 @@ function Wizard({ view, token, onChange, onError }: Props) {
         </div>
       );
     }
+    if (current.id === "tax") {
+      const pick = (name: StaffTextField, value: string) => edit(name, value, true);
+      // Changing how super is paid also clears the fund details that no longer apply, in one save.
+      const pickSuper = (value: string) => {
+        const cleared = value === "default" ? { super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "" } : value === "smsf" ? { super_usi: "", super_member_number: "" } : {};
+        const next = { ...latest.current, super_choice: value, ...cleared } as StaffDetails;
+        latest.current = next;
+        setDetails(next);
+        setErrors((prev) => ({ ...prev, super_choice: "", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "" }));
+        for (const name of ["super_choice", ...Object.keys(cleared)] as StaffField[]) dirty.current.add(name);
+        void flush();
+      };
+      const yesNo = (name: "tax_free_threshold" | "study_loan", label: string, hint: string) => (
+        <div>
+          <p className="mb-1 text-[13px] font-medium text-foreground-800">{label} <span className="text-primary-600">*</span></p>
+          <p className="mb-2 text-xs text-foreground-600">{hint}</p>
+          <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={label}>
+            <Choice selected={details[name] === "yes"} onClick={() => pick(name, "yes")} title="Yes" testId={`staff-${name}-yes`} />
+            <Choice selected={details[name] === "no"} onClick={() => pick(name, "no")} title="No" testId={`staff-${name}-no`} />
+          </div>
+          <FieldError text={errors[name]} />
+        </div>
+      );
+      const RESIDENCY_HINT: Record<string, string> = { resident: "Most people who live in Australia.", foreign: "You live outside Australia for tax purposes.", whm: "On a 417 or 462 visa." };
+      const SUPER_HINT: Record<string, string> = { default: "We pay your super into Skyline's default fund. You can change this later.", own: "An APRA-regulated fund or retirement savings account. Have your member number handy.", smsf: "Your own self-managed fund." };
+      return (
+        <div className="space-y-6">
+          <StepHeading title={current.title} subtitle={current.subtitle} />
+          <p className="flex items-start gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-[13px] text-foreground-800" data-testid="staff-tax-note">
+            <i className="ri-shield-check-line mt-0.5 text-primary-600" aria-hidden="true" />
+            We do not ask for your tax file number (TFN) here. Xero, our payroll system, will ask you for it securely once you start. The answers below go on your tax and super declarations.
+          </p>
+          <div className="space-y-5">
+            <p className="font-heading text-sm font-semibold text-foreground-950">Tax</p>
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-foreground-800">Your residency status for tax purposes <span className="text-primary-600">*</span></p>
+              <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Residency status for tax purposes">
+                {TAX_RESIDENCY.map((value) => <Choice key={value} selected={details.tax_residency === value} onClick={() => pick("tax_residency", value)} title={TAX_RESIDENCY_LABEL[value]} text={RESIDENCY_HINT[value]} testId={`staff-tax_residency-${value}`} />)}
+              </div>
+              <FieldError text={errors.tax_residency} />
+            </div>
+            {details.tax_residency === "resident" ? yesNo("tax_free_threshold", "Do you want to claim the tax-free threshold from Skyline?", "Claim it from one employer only, usually the one that pays you the most.") : null}
+            {yesNo("study_loan", "Do you have a study or training support loan?", "For example HELP, VSL, SSL, AASL or TSL. Answer yes if any is still owing.")}
+          </div>
+          <div className="space-y-4">
+            <p className="font-heading text-sm font-semibold text-foreground-950">Superannuation</p>
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-foreground-800">Where should your super go? <span className="text-primary-600">*</span></p>
+              <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Super fund">
+                {SUPER_CHOICE.map((value) => <Choice key={value} selected={details.super_choice === value} onClick={() => pickSuper(value)} title={SUPER_CHOICE_LABEL[value]} text={SUPER_HINT[value]} testId={`staff-super_choice-${value}`} />)}
+              </div>
+              <FieldError text={errors.super_choice} />
+            </div>
+            {superFundNeeded(details.super_choice) ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="staff-super-fund">
+                {field("super_fund_name", "Fund name", { placeholder: "e.g. AustralianSuper" })}
+                {field("super_fund_abn", "Fund ABN", { maxLength: 14, placeholder: "11 digits" })}
+                {details.super_choice === "own" ? field("super_usi", "Unique Superannuation Identifier (USI)", { required: false, maxLength: 20, upper: true, placeholder: "On your fund's website or statement" }) : null}
+                {details.super_choice === "own" ? field("super_member_number", "Member number", { maxLength: 30 }) : null}
+                {details.super_choice === "smsf" ? <p className="text-xs text-foreground-600 sm:col-span-2">We will ask you separately for the fund's electronic service address and bank account.</p> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
     // Review and submit
     const edits = (id: StaffWizardStepId, label: string) => <EditSectionButton label={label} onClick={() => void goTo(indexOf(id))} />;
     const passport = documents.find((d) => d.category === "Passport");
@@ -590,6 +660,11 @@ function Wizard({ view, token, onChange, onError }: Props) {
           <ReviewCard icon="ri-bank-line" title="Bank details" edit={edits("bank", "Bank details")}>
             <dl className="mt-3 space-y-2" data-testid="staff-review-bank">
               {view.bank ? <>{row("Account name", view.bank.accountName)}{row("BSB", view.bank.bsb)}{row("Account number", view.bank.accountNumber)}</> : row("Bank details", "Not entered yet")}
+            </dl>
+          </ReviewCard>
+          <ReviewCard icon="ri-government-line" title="Tax and super" edit={edits("tax", "Tax and super")}>
+            <dl className="mt-3 space-y-2" data-testid="staff-review-tax">
+              {taxSuperRows(details).map(([label, value]) => row(label, value))}
             </dl>
           </ReviewCard>
         </div>

@@ -10,7 +10,7 @@ import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
 import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
 import SendOfferDialog from "@/pages/admin/components/hrms/SendOfferDialog";
 import { EXTRACTED_LABEL, SECTION, accountText, timelineText } from "@/pages/admin/lib/onboardingText";
-import { READABLE_CATEGORIES } from "@/lib/staffOnboardingWizard";
+import { READABLE_CATEGORIES, taxSuperRows } from "@/lib/staffOnboardingWizard";
 import { money } from "@/lib/hrTime";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
@@ -417,6 +417,15 @@ export default function StaffOnboardingDetail() {
       ) : null}
 
       <BankDetailsCard profileId={profile.id} footer={extras?.bank ? tick("bank") : undefined} onChanged={() => void load()} />
+      <Card className="mt-6 p-5"><div data-testid="staff-tax-super">
+        <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Tax and super</h2>
+        {profile.tax_residency || profile.super_choice ? (
+          <>
+            <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{taxSuperRows(profile).map(([label, value]) => <Row key={label} label={label}>{value}</Row>)}</dl>
+            <div className="mt-3">{tick("tax")}</div>
+          </>
+        ) : <p className="text-sm text-foreground-600">Not answered yet. The person answers these on the Tax and super step of their onboarding link. The tax file number is given through Xero, never here.</p>}
+      </div></Card>
       {profile.status === "active" || profile.status === "inactive" ? <PaySetupCard profileId={profile.id} hasEmployment={Boolean(employment)} /> : null}
 
       {detail.jobApplications.length ? (

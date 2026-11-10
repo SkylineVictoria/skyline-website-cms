@@ -11,7 +11,7 @@ import type { HrMailConfig } from "../_shared/hr-mail.ts";
 import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
 import { builtInLoginEmail } from "../_shared/hr-mail.ts";
 import { longDate, placeholderLabels, renderMessage, templateValues, type RenderedMessage, type TemplatePerson, type TemplateSource, type TemplateType } from "../_shared/hr-template.ts";
-import { letterFileName } from "../_shared/offer-letter-pdf.ts";
+import { letterFileName } from "../_shared/offer-rules.ts";
 //
 // Onboarding flow (2026-11-10): `send_documents` is "Send document link" on the employee page (a Careers applicant is hired for their
 // open job application, anyone else gets the plain link). Document and re-upload emails use the HRMS template of that kind when one

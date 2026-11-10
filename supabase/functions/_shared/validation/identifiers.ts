@@ -4,6 +4,20 @@
 /* ---------------------------------------------------------------------- USI */
 
 /** Characters a USI can contain: A-Z without I and O, and 2-9 (no 0 or 1). */
+export type UsiStatus = "provided" | "pending" | "none";
+
+/**
+ * Where a student's USI stands: "provided" once a number is entered, "pending" when the agent chose to add it later (and none is entered yet),
+ * otherwise "none". A pending USI never blocks a finish or a submission: the form still records "No" for "Do you already have a USI?".
+ * (From the live notification-delivery function of 2026-11-02; the submission PDF prints "Pending" for it.)
+ */
+export function usiStatus(values: Record<string, unknown>, pending: boolean): UsiStatus {
+  const has = String(values.has_usi ?? "").trim() === "Yes";
+  const number = normalizeUsi(String(values.usi_number ?? ""));
+  if (has && number) return "provided";
+  return pending ? "pending" : "none";
+}
+
 export const USI_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 export const USI_LENGTH = 10;
 export const USI_FORMAT_MESSAGE = "USI must be 10 characters using letters and numbers (no 0, 1, I or O).";

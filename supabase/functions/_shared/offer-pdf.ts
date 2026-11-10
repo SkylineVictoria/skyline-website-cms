@@ -1,17 +1,16 @@
-// Offer letters (HR-02e): checking an uploaded offer PDF and adding the signature page when it is signed. Runtime-neutral:
-// pdf-lib 1.17.1 is passed in (Edge Functions: npm:pdf-lib@1.17.1; offline tests: the pinned devDependency), so both run the
-// same code. The PDFs exist only in memory here; nothing is logged.
-import { pdfSafe } from "./notification/submission-pdf.ts";
+// Offer letters (HR-02e): checking an uploaded offer PDF and adding the signature page when it is signed. The signature page is drawn with
+// the shared Skyline PDF styling (notification/pdf-layout.ts), the same as the offer letter and the submitted application PDF. Runtime-neutral:
+// pdf-lib comes from the function's import map (Deno) or node_modules (offline tests). The PDFs exist only in memory here; nothing is logged.
+import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PdfWriter, type Row } from "./notification/pdf-layout.ts";
+import { formatDateTime } from "./notification/submission-pdf.ts";
+import { paletteOf } from "./offer-letter-pdf.ts";
+import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
+import { MAX_OFFER_BYTES, OFFER_ENCRYPTED, OFFER_UNREADABLE, type Signature } from "./offer-rules.ts";
 
-// deno-lint-ignore no-explicit-any
-export type PdfLib = { PDFDocument: any; StandardFonts: any; rgb: (r: number, g: number, b: number) => unknown };
-
-/** Offers are emailed back signed, so they must stay under Postmark's 10 MB message limit after base64 (x1.37) and the page. */
-export const MAX_OFFER_BYTES = 7 * 1024 * 1024;
-export const OFFER_ENCRYPTED = "This PDF is password-protected or encrypted, so it cannot be signed. Save or export an unprotected copy and upload that.";
-export const OFFER_UNREADABLE = "This file could not be read as a PDF. Export the offer letter as a PDF again and upload that.";
-/** The consent the applicant agrees to. Fixed here (never taken from the browser) and stored with the signature. */
-export const OFFER_CONSENT = "I have read this offer letter and accept it. I agree that typing my full name and selecting Sign is my electronic signature.";
+// The limits, messages and the signature record live in offer-rules.ts (no PDF engine), so the functions import them at boot and load
+// this module only when a request makes or signs a PDF.
+export { MAX_OFFER_BYTES, OFFER_CONSENT, OFFER_ENCRYPTED, OFFER_UNREADABLE, type Signature } from "./offer-rules.ts";
 
 const isPdf = (bytes: Uint8Array) => bytes.length > 5 && String.fromCharCode(...bytes.subarray(0, 5)) === "%PDF-";
 
@@ -19,13 +18,12 @@ const isPdf = (bytes: Uint8Array) => bytes.length > 5 && String.fromCharCode(...
  * Checks an uploaded offer before it is stored: a real PDF by content, not encrypted or protected, and one pdf-lib can load
  * AND modify (a page is added and the result saved, in memory only), so signing it later cannot fail on the file.
  */
-export async function inspectOfferPdf(lib: PdfLib, bytes: Uint8Array): Promise<{ ok: true; pages: number } | { ok: false; error: string }> {
+export async function inspectOfferPdf(bytes: Uint8Array): Promise<{ ok: true; pages: number } | { ok: false; error: string }> {
   if (bytes.length < 1 || bytes.length > MAX_OFFER_BYTES) return { ok: false, error: "The offer letter must be a PDF of 7 MB or smaller." };
   if (!isPdf(bytes)) return { ok: false, error: "Upload the offer letter as a PDF." };
-  // deno-lint-ignore no-explicit-any
-  let doc: any;
+  let doc: PDFDocument;
   try {
-    doc = await lib.PDFDocument.load(bytes, { updateMetadata: false });
+    doc = await PDFDocument.load(bytes, { updateMetadata: false });
   } catch (error) {
     return { ok: false, error: /encrypt/i.test(String((error as Error)?.message ?? error)) ? OFFER_ENCRYPTED : OFFER_UNREADABLE };
   }
@@ -35,7 +33,7 @@ export async function inspectOfferPdf(lib: PdfLib, bytes: Uint8Array): Promise<{
   if (pages < 1) return { ok: false, error: OFFER_UNREADABLE };
   try {
     const page = doc.addPage();
-    const font = await doc.embedFont(lib.StandardFonts.Helvetica);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
     page.drawText("check", { x: 50, y: 50, size: 10, font });
     await doc.save();
   } catch {
@@ -44,50 +42,32 @@ export async function inspectOfferPdf(lib: PdfLib, bytes: Uint8Array): Promise<{
   return { ok: true, pages };
 }
 
-export interface Signature { signerName: string; signedAt: string; ip: string | null; userAgent: string | null; consent: string; offerFilename: string; offerSha256: string }
+/** Accents folded and anything else printable-ASCII-unsafe replaced, for PDF metadata (the page text itself uses the embedded font). */
+const metaSafe = (text: string) => text.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^\x20-\x7e]/g, "?");
 
-function wrap(text: string, max: number): string[] {
-  const out: string[] = [];
-  let line = "";
-  for (let word of pdfSafe(text).split(" ")) {
-    while (word.length > max) { if (line) { out.push(line); line = ""; } out.push(word.slice(0, max)); word = word.slice(max); }
-    if (!line) line = word;
-    else if ((line + " " + word).length <= max) line += " " + word;
-    else { out.push(line); line = word; }
-  }
-  if (line) out.push(line);
-  return out;
-}
-
-/** The original offer with one signature page added at the end. Every original page is kept unchanged. */
-export async function stampSignedOffer(lib: PdfLib, original: Uint8Array, sig: Signature): Promise<Uint8Array> {
-  const doc = await lib.PDFDocument.load(original, { updateMetadata: false });
-  const page = doc.addPage([595.28, 841.89]);
-  const regular = await doc.embedFont(lib.StandardFonts.Helvetica);
-  const bold = await doc.embedFont(lib.StandardFonts.HelveticaBold);
-  const ink = lib.rgb(0.1, 0.1, 0.1), muted = lib.rgb(0.35, 0.35, 0.35);
-  let y = 780;
-  const write = (text: string, opts: { size?: number; font?: unknown; color?: unknown; gap?: number } = {}) => {
-    const size = opts.size ?? 10;
-    for (const part of wrap(text, Math.floor(495 / (size * 0.5)))) {
-      page.drawText(part, { x: 50, y, size, font: opts.font ?? regular, color: opts.color ?? ink });
-      y -= size * 1.45;
-    }
-    y -= opts.gap ?? 4;
-  };
-  write("Electronic signature", { size: 16, font: bold, gap: 10 });
-  write("This page was added when the offer letter above was signed through a personal link sent by Skyline Institute of Technology.", { color: muted, gap: 12 });
-  const rows: Array<[string, string]> = [
-    ["Signed by (typed name)", sig.signerName],
-    ["Signed at (UTC)", sig.signedAt],
-    ["IP address", sig.ip ?? "not available"],
-    ["Browser", sig.userAgent ?? "not available"],
-    ["Offer letter", sig.offerFilename],
-    ["Offer letter SHA-256", sig.offerSha256],
+/**
+ * The original offer with one signature page added at the end, on the shared letterhead and styling. Every original page is kept unchanged;
+ * the page is numbered after them ("Page 3 of 3").
+ */
+export async function stampSignedOffer(original: Uint8Array, sig: Signature, letterhead?: Letterhead | null): Promise<Uint8Array> {
+  const institution = letterhead?.institution?.trim() || DEFAULT_INSTITUTION;
+  const writer = await PdfWriter.open(original, paletteOf(letterhead?.primary));
+  let logo = letterhead?.logo ?? null;
+  if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
+  const signed = formatDateTime(sig.signedAt) || sig.signedAt;
+  writer.header({ institution, logo, title: "Electronic signature", meta: ["Signature page", `Signed ${signed}`] });
+  writer.block([{ spans: [{ text: `This page was added when the offer letter above was signed through a personal link sent by ${institution}.`, tone: "muted" }] }], 10);
+  const rows: Row[] = [
+    { label: "Signed by (typed name)", paras: [{ spans: [{ text: sig.signerName }], bold: true }] },
+    { label: "Signed at", paras: [{ spans: [{ text: `${signed} (Australia/Sydney)` }] }, { spans: [{ text: `${sig.signedAt} UTC`, tone: "muted" }] }] },
+    { label: "IP address", paras: [{ spans: [{ text: sig.ip ?? "not available" }] }] },
+    { label: "Browser", paras: [{ spans: [{ text: sig.userAgent ?? "not available" }] }] },
+    { label: "Offer letter", paras: [{ spans: [{ text: sig.offerFilename }] }] },
+    { label: "Offer letter SHA-256", paras: [{ spans: [{ text: sig.offerSha256 }] }] },
+    { label: "Agreement", paras: [{ spans: [{ text: sig.consent }], check: true }] },
   ];
-  for (const [label, value] of rows) { write(label, { size: 9, font: bold, color: muted, gap: 0 }); write(value, { gap: 8 }); }
-  write("Agreement", { size: 9, font: bold, color: muted, gap: 0 });
-  write(sig.consent, { gap: 8 });
-  doc.setSubject(pdfSafe(`Offer letter signed by ${sig.signerName}`).slice(0, 200));
-  return await doc.save();
+  writer.section("Signature details", rows);
+  writer.footers(institution, "Signed offer letter");
+  writer.pdf.setSubject(metaSafe(`Offer letter signed by ${sig.signerName}`).slice(0, 200));
+  return await writer.save();
 }

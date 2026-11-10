@@ -11,5 +11,7 @@ export const STAFF_LEAVE_PATH = "/admin/staff/leave";
 export const STAFF_PAY_SCHEDULES_PATH = "/admin/staff/pay-schedules";
 export const STAFF_HOLIDAYS_PATH = "/admin/staff/holidays";
 export const STAFF_XERO_PATH = "/admin/staff/xero-export";
+// HRMS > Templates (offer letters and onboarding emails; menu row 'staff_templates' of 20261111100000).
+export const STAFF_TEMPLATES_PATH = "/admin/staff/templates";
 export const staffEmployeePath = (id: string) => `${STAFF_EMPLOYEES_PATH}/${encodeURIComponent(id)}`;
 export const staffCandidatePath = (id: string) => `${STAFF_CANDIDATES_PATH}/${encodeURIComponent(id)}`;

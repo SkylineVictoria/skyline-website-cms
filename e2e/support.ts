@@ -217,7 +217,8 @@ export async function staffAt(adminClient: SupabaseClient, label: string, target
   await staffAdmin(adminClient, { action: "send_invite", profileId: p.id, purpose: "documents" });
   const token = linkToken((await waitForHrMail(p.email, /details and documents/i)).text);
   const saved = await onboard({ action: "save", t: token, patch: { first_name: "E2E", last_name: label, date_of_birth: "1990-05-06", address_street: "1 E2E St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000",
-    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444", is_australian_citizen: true, nationality: "Australian", passport_number: "PE1234567" } });
+    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444", is_australian_citizen: true, nationality: "Australian", passport_number: "PE1234567",
+    tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default" } });
   if (saved.status !== 200) throw new Error(`details: ${JSON.stringify(saved.body)}`);
   const bank = await onboard({ action: "bank_save", t: token, bank: { accountName: `E2E ${label}`, bsb: "062-000", accountNumber: "1234 4321" } });
   if (bank.status !== 200) throw new Error(`bank details: ${JSON.stringify(bank.body)}`);
@@ -376,6 +377,15 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await visitor.getByTestId("staff-bank-accountNumber").fill("12344321");
   await expect(visitor.getByTestId("staff-bank-name")).toContainText("Commonwealth Bank");
   await shot(visitor, "staff-wizard-bank");
+  await visitor.getByTestId("staff-next").click();
+
+  // Tax and super: the declaration answers and the super choice (no tax file number is asked for).
+  await expect(visitor.getByTestId("staff-step-tax")).toBeVisible();
+  await visitor.getByTestId("staff-tax_residency-resident").click();
+  await visitor.getByTestId("staff-tax_free_threshold-yes").click();
+  await visitor.getByTestId("staff-study_loan-no").click();
+  await visitor.getByTestId("staff-super_choice-default").click();
+  await shot(visitor, "staff-wizard-tax-super");
   await visitor.getByTestId("staff-next").click();
 
   // Review and submit.

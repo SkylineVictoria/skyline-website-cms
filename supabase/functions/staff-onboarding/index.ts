@@ -13,8 +13,9 @@ import { DOCUMENT_SIZE_MESSAGE } from "../_shared/validation/person.ts";
 import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
 import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
-import * as PdfLib from "npm:pdf-lib@1.17.1";
-import { stampSignedOffer } from "../_shared/offer-pdf.ts";
+import { loadLetterhead } from "../_shared/letterhead.ts";
+// The PDF code (pdf-lib, the embedded fonts) is loaded only when an offer is signed, so the worker boots light.
+const offerPdfModule = () => import("../_shared/offer-pdf.ts");
 
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
 
@@ -121,7 +122,7 @@ Deno.serve(async (req) => {
     newId: () => crypto.randomUUID(),
     download: async (path) => { const { data } = await bucket.download(path); return data ? new Uint8Array(await data.arrayBuffer()) : null; },
     sha256: async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)))].map((x) => x.toString(16).padStart(2, "0")).join(""),
-    stampOffer: (original, signature) => stampSignedOffer(PdfLib, original, signature),
+    stampOffer: async (original, signature) => (await offerPdfModule()).stampSignedOffer(original, signature, await loadLetterhead(admin)),
     now: () => new Date(),
     searchAddress: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
     setPassword: async (userId, password) => {

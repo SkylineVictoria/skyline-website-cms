@@ -788,9 +788,27 @@ test("notify: the worker accepts only a service_role token of this project (401 
 
 // ---- P08-06: submission PDF attached to the application_submitted email ----
 import { composeBody, type SubmissionInfo } from "../supabase/functions/_shared/notification/delivery.ts";
-import { MAX_ATTACHMENT_BYTES, MAX_PDF_PAGES, attachmentFileName, buildPdf, buildSubmissionPdf, submissionPdfLines } from "../supabase/functions/_shared/notification/submission-pdf.ts";
+import { MAX_ATTACHMENT_BYTES, MAX_PDF_PAGES, attachmentFileName, buildSubmissionModel, buildSubmissionPdf, renderSubmission, resolvePrimary } from "../supabase/functions/_shared/notification/submission-pdf.ts";
+import { MAX_PDF_PAGES as LAYOUT_MAX_PAGES, PAGE_H, PAGE_W, PdfWriter } from "../supabase/functions/_shared/notification/pdf-layout.ts";
+import { PDF_FORM_SECTIONS } from "../supabase/functions/_shared/notification/pdf-form-layout.ts";
+import { toPdfSections } from "../supabase/functions/_shared/notification/pdf-form.ts";
+import * as PdfLib from "pdf-lib";
+import { createJiti } from "jiti";
+import path from "node:path";
 
-const pdfText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+/** The names of the fonts each page of a PDF draws with (the shared styling embeds Noto Sans on every page it makes). */
+async function pdfFonts(bytes: Uint8Array): Promise<string[]> {
+  const doc = await PdfLib.PDFDocument.load(bytes);
+  const names = new Set<string>();
+  for (const page of doc.getPages()) {
+    const fonts = page.node.Resources()?.lookup(PdfLib.PDFName.of("Font"));
+    if (!(fonts instanceof PdfLib.PDFDict)) continue;
+    for (const [, ref] of fonts.entries()) { const dict = doc.context.lookup(ref); if (dict instanceof PdfLib.PDFDict) names.add(String(dict.get(PdfLib.PDFName.of("BaseFont")))); }
+  }
+  return [...names];
+}
+/** What the PDF prints (its sections and rows), as text to search; the consent record itself is not printed. */
+const modelText = (snapshot: unknown, extra: Record<string, unknown> = {}) => JSON.stringify(buildSubmissionModel({ reference: "SK-2026-0001", institution: "Skyline Institute", version: 2, submittedAt: "2026-10-27T01:02:03Z", snapshot, ...extra }).sections);
 const snapshotOf = (extra: Record<string, unknown> = {}) => ({
   values: { first_name: "Ada", family_name: "Lovelace", passport_copy: "files/a.pdf", english_upload: "x", nationality: "Australia", interests: ["Maths", "Code"] },
   courses: [{ title: "Certificate IV in Cyber Security", code: "22334VIC" }],
@@ -801,37 +819,45 @@ const snapshotOf = (extra: Record<string, unknown> = {}) => ({
 const info = (patch: Partial<SubmissionInfo> = {}): SubmissionInfo => ({ mode: "attach", link: "https://slit.edu.au/agency/applications/app-1", reference: "SK-2026-0001", version: 1, institution: "Skyline Institute", submittedAt: "2026-10-27T01:02:03Z", snapshot: snapshotOf(), ...patch });
 const submitted = (id = "s1"): ClaimedDelivery => ({ ...claimed(id), event: "application_submitted", body: "Application SK-2026-0001 has been submitted." });
 
-test("pdf: the file is structurally valid (header, xref offsets, trailer, page count) and text is escaped and ASCII-safe", () => {
-  const bytes = buildPdf([{ text: "Smith (Jr) \\ back", style: "title" }, { text: "Zoë 山 café" }], "Tëst");
-  const text = pdfText(bytes);
-  assert.ok(text.startsWith("%PDF-1.4\n") && text.endsWith("%%EOF\n"));
-  const xrefAt = Number(/startxref\n(\d+)\n/.exec(text)?.[1]);
-  assert.ok(text.slice(xrefAt).startsWith("xref\n0 "));
-  const offsets = [...text.slice(xrefAt).matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-  offsets.forEach((offset, i) => assert.ok(text.slice(offset).startsWith(`${i + 1} 0 obj`), `object ${i + 1}`));
-  assert.equal(Number(/\/Count (\d+)/.exec(text)?.[1]), 1);
-  assert.ok(text.includes("Smith \\(Jr\\) \\\\ back"));
-  assert.ok(text.includes("Zoe ? cafe"));
-  assert.ok(/^[\n\x20-\x7e]*$/.test(text), "pure ASCII output");
+test("pdf: the file is a valid A4 PDF on the shared styling (embedded Noto Sans, title, one page), and text the font lacks is folded, never dropped", async () => {
+  const bytes = await buildSubmissionPdf({ reference: "SK-2026-0001", institution: "Skyline Institute", version: 2, submittedAt: "2026-10-27T01:02:03Z", snapshot: snapshotOf() });
+  assert.equal(new TextDecoder().decode(bytes.subarray(0, 5)), "%PDF-");
+  const doc = await PdfLib.PDFDocument.load(bytes);
+  assert.ok(doc.getPageCount() >= 1 && doc.getPageCount() <= 8, `the whole enrolment form, "Not provided" where blank: ${doc.getPageCount()} pages`);
+  assert.equal(doc.getTitle(), "Application SK-2026-0001");
+  assert.deepEqual([doc.getPage(0).getWidth(), doc.getPage(0).getHeight()], [PAGE_W, PAGE_H], "A4");
+  const fonts = await pdfFonts(bytes);
+  assert.ok(fonts.length >= 1 && fonts.every((f) => /NotoSans/.test(f)), `the shared fonts: ${fonts.join(", ")}`);
+  const writer = await PdfWriter.create("t", { primary: [0, 0, 0], tint: [1, 1, 1] });
+  assert.equal(writer.clean("Smith (Jr) \\ back Zoë 山 café ć"), "Smith (Jr) \\ back Zoë ? café c", "Latin letters stay, accents the font lacks are folded, the rest becomes ?");
+  assert.equal(MAX_PDF_PAGES, LAYOUT_MAX_PAGES);
+  assert.deepEqual([resolvePrimary("#1d4ed8").hex, resolvePrimary("not a colour").fellBack, resolvePrimary("#ffff00").darkened], ["#1d4ed8", true, true], "the tenant colour, the default, and a too-light colour darkened");
 });
 
-test("pdf: long content paginates, is capped, stays under the attachment limit and says it was truncated", () => {
-  const lines = Array.from({ length: 8000 }, (_, i) => ({ text: `Line ${i} ${"word ".repeat(30)}` }));
-  const bytes = buildPdf(lines, "Long");
-  const text = pdfText(bytes);
-  const pages = Number(/\/Count (\d+)/.exec(text)?.[1]);
-  assert.ok(pages > 1 && pages <= MAX_PDF_PAGES, String(pages));
-  assert.ok(text.includes("Truncated: open the application in the portal"));
-  assert.ok(bytes.length < MAX_ATTACHMENT_BYTES);
+test("pdf: long content paginates, is capped, stays under the attachment limit and says it was truncated", async () => {
+  const values = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [`line_${i}`, `Line ${i} ${"word ".repeat(30)}`]));
+  const writer = await renderSubmission({ reference: "LONG", institution: "I", version: 1, submittedAt: null, snapshot: { values } });
+  assert.ok(writer.pages.length > 1 && writer.pages.length <= MAX_PDF_PAGES, String(writer.pages.length));
+  assert.equal(writer.truncated, true, "the 40-page cap cut it short, and the note says so");
+  const bytes = await writer.save();
+  assert.ok(bytes.length < MAX_ATTACHMENT_BYTES, String(bytes.length));
+  // Nothing is split: every row and heading the writer placed sits inside one page's content area.
+  assert.ok(writer.placed.every((p) => p.top <= PAGE_H && p.bottom >= 0), "no row runs off a page");
 });
 
 test("pdf: only entered values are printed; uploads, wizard / provenance internals, actor ids and storage paths are left out", () => {
-  const text = pdfText(buildSubmissionPdf({ reference: "SK-2026-0001", institution: "Skyline Institute", version: 2, submittedAt: "2026-10-27T01:02:03Z", snapshot: snapshotOf() }));
-  for (const wanted of ["Application SK-2026-0001", "version 2, 2026-10-27", "First name: Ada", "Family name: Lovelace", "Interests: Maths, Code", "Certificate IV in Cyber Security \\(22334VIC\\)", "electronic"]) assert.ok(text.includes(wanted), wanted);
+  const text = modelText(snapshotOf());
+  for (const wanted of ["Ada", "Lovelace", "Maths, Code", "Certificate IV in Cyber Security", "22334VIC", "electronic"]) assert.ok(text.includes(wanted), wanted);
   for (const unwanted of ["files/a.pdf", "Passport copy", "English upload", "manual", "8f2c1d3e", "private/path.pdf", "Wizard", "Provenance"]) assert.ok(!text.includes(unwanted), unwanted);
-  assert.ok(submissionPdfLines({ reference: "R", institution: "I", version: 1, submittedAt: null, snapshot: null }).some((l) => /No form values/.test(l.text)));
+  assert.ok(buildSubmissionModel({ reference: "R", institution: "I", version: 1, submittedAt: null, snapshot: null }).sections.some((s) => s.title === "Consent"), "an empty snapshot still prints the consent section");
   assert.equal(attachmentFileName("SK 2026/0001 «"), "application-SK20260001.pdf");
   assert.equal(attachmentFileName(""), "application-submitted.pdf");
+});
+
+test("pdf: the form definition the PDF prints is the enrolment form (pdf-form-layout.ts is generated from applicationForms.ts)", async () => {
+  const load = createJiti(import.meta.url, { alias: { "@": path.resolve("src") } });
+  const forms = await load.import<{ enrolSections: Parameters<typeof toPdfSections>[0] }>("../src/data/applicationForms.ts");
+  assert.deepEqual(toPdfSections(forms.enrolSections), PDF_FORM_SECTIONS, "regenerate supabase/functions/_shared/notification/pdf-form-layout.ts from enrolSections with toPdfSections()");
 });
 
 test("pdf: attach mode adds one PDF and says so; link mode sends only the sign-in link; other events are untouched", async () => {
@@ -839,7 +865,7 @@ test("pdf: attach mode adds one PDF and says so; link mode sends only the sign-i
   assert.equal(attach.attachments?.length, 1);
   assert.equal(attach.attachments?.[0].name, "application-SK-2026-0001.pdf");
   assert.equal(attach.attachments?.[0].contentType, "application/pdf");
-  assert.ok(atob(attach.attachments![0].contentBase64).startsWith("%PDF-1.4"));
+  assert.ok(atob(attach.attachments![0].contentBase64).startsWith("%PDF-1."));
   assert.match(attach.textBody, /attached as a PDF/);
   assert.ok(!attach.textBody.includes("Ada"));
   const link = await composeBody({ ...fakePort([]).port, submission: async () => info({ mode: "link", snapshot: null }) }, submitted());
@@ -916,8 +942,9 @@ test("coe/voe email: if the document cannot be read the delivery is retried late
 });
 
 test("pdf: qualifications list is printed once, single fields only fill in when the list lacks them", () => {
-  const lines = (snapshot: unknown) => submissionPdfLines({ reference: "R", institution: "I", version: 1, submittedAt: null, snapshot }).map((l) => l.text);
-  const both = lines({
+  const rows = (snapshot: unknown) => buildSubmissionModel({ reference: "R", institution: "I", version: 1, submittedAt: null, snapshot }).sections
+    .flatMap((s) => s.rows).filter((r) => /^Qualification/.test(r.label)).map((r) => `${r.label}: ${r.paras.map((p) => p.spans.map((x) => x.text).join("")).join("")}`);
+  const both = rows({
     values: { first_name: "Ada", academic_institution: "Uni A", academic_qualification: "BSc", academic_year: "2020" },
     academicQualifications: [
       { institution: "uni a", qualification: "bsc", year: "2020", documentIds: ["d1"] },
@@ -925,10 +952,8 @@ test("pdf: qualifications list is printed once, single fields only fill in when 
       { institution: "Manual Inst", qualification: "Cert" },
     ],
   });
-  assert.deepEqual(both.filter((t) => /^\d\. /.test(t)), ["1. bsc, uni a, 2020", "2. MSc, Uni B, 2022", "3. Cert, Manual Inst"]);
-  assert.ok(!both.some((t) => t.startsWith("Academic institution")));
-  const fallback = lines({ values: { academic_institution: "Uni C", academic_qualification: "Diploma", academic_year: "2019" }, academicQualifications: [] });
-  assert.deepEqual(fallback.filter((t) => /^\d\. /.test(t)), ["1. Diploma, Uni C, 2019"]);
-  const extra = lines({ values: { academic_institution: "Typed", academic_qualification: "Own" }, academicQualifications: [{ institution: "Uni B", qualification: "MSc", documentIds: ["d2"] }] });
-  assert.equal(extra.filter((t) => /^\d\. /.test(t)).length, 2);
+  assert.deepEqual(both, ["Qualification 1: bsc, uni a, 2020", "Qualification 2: MSc, Uni B, 2022", "Qualification 3: Cert, Manual Inst"]);
+  assert.ok(!modelText({ values: { academic_institution: "Uni A" } }).includes("Academic institution"));
+  assert.deepEqual(rows({ values: { academic_institution: "Uni C", academic_qualification: "Diploma", academic_year: "2019" }, academicQualifications: [] }), ["Qualification: Diploma, Uni C, 2019"]);
+  assert.equal(rows({ values: { academic_institution: "Typed", academic_qualification: "Own" }, academicQualifications: [{ institution: "Uni B", qualification: "MSc", documentIds: ["d2"] }] }).length, 2);
 });

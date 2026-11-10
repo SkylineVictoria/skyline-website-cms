@@ -1,4 +1,4 @@
-import { STAFF_CANDIDATES_PATH, STAFF_EMPLOYEES_PATH, STAFF_HOLIDAYS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_TIMESHEETS_PATH, STAFF_XERO_PATH } from './staffRoutes';
+import { STAFF_CANDIDATES_PATH, STAFF_EMPLOYEES_PATH, STAFF_HOLIDAYS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_TEMPLATES_PATH, STAFF_TIMESHEETS_PATH, STAFF_XERO_PATH } from './staffRoutes';
 export interface AdminMenuItem {
   id: string;
   parent_id: string | null;
@@ -31,7 +31,7 @@ const routes = new Set([
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
   '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
-  STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH,
+  STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH,
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

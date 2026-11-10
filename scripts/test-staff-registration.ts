@@ -610,6 +610,7 @@ const completeDetails = {
   is_australian_citizen: false as boolean | null, first_name: "Tara", middle_name: "", last_name: "Trainer", date_of_birth: "1990-05-06", phone: "+61400000111",
   address_street: "1 Example St", address_line2: "", address_suburb: "Melbourne", address_country: "Australia", address_state: "VIC", address_postcode: "3000",
   emergency_name: "Em", emergency_phone: "+61422333444", emergency_relationship: "Sibling", nationality: "Indian", passport_number: "PA1234567", visa_subclass: "485", visa_conditions: "",
+  tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "",
 };
 
 test("submit needs the details, citizenship, every required document with a current expiry date, and the bank details", () => {
@@ -637,11 +638,14 @@ test("submit needs the details, citizenship, every required document with a curr
     "Tell us whether you are an Australian citizen.", "Enter your first name.", "Enter your last name.", "Enter your date of birth.", "Enter your mobile number.",
     "Enter the street address.", "Enter the suburb or city.", "Enter the country.", "Enter the emergency contact's name.", "Enter the emergency contact's phone number.",
     "Enter how they are related to you.", "Enter your nationality.", "Enter your passport number.",
+    "Tell us your residency status for tax purposes.", "Tell us whether you have a study or training support loan.", "Choose how your super is paid.",
     "A passport is required before you can submit.", "Upload your visa.", "Upload your English test result.", "Upload your academic results.", "Upload your health insurance.",
     "Enter your bank details.",
   ], "everything missing, in the order the database checks it");
   // Each problem belongs to the step that fixes it; a step is complete (ticked) once it has none.
-  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal", "bank"]);
+  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal", "tax", "bank"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"], "Tax and super sits between Bank details and Review");
+  assert.ok(!texts().some((p) => /tax file|tfn/i.test(p)) && !Object.keys(staffRules.EMPTY_STAFF_DETAILS).some((k) => /tfn|tax_file/.test(k)), "no tax file number is asked for anywhere");
   assert.equal(wizardLib.stepComplete("documents", blank), false);
   assert.equal(wizardLib.stepComplete("review", []), true);
   assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, all, false, now)), false);
@@ -841,21 +845,35 @@ async function encryptedPdf(): Promise<Uint8Array> {
 }
 
 test("offer PDF: a real PDF passes (pdf-lib loads AND modifies it); encrypted, fake, empty and oversized files are refused clearly", async () => {
-  assert.deepEqual(await offerPdf.inspectOfferPdf(PdfLib, await makePdf(3)), { ok: true, pages: 3 });
-  assert.deepEqual(await offerPdf.inspectOfferPdf(PdfLib, await encryptedPdf()), { ok: false, error: offerPdf.OFFER_ENCRYPTED });
+  assert.deepEqual(await offerPdf.inspectOfferPdf(await makePdf(3)), { ok: true, pages: 3 });
+  assert.deepEqual(await offerPdf.inspectOfferPdf(await encryptedPdf()), { ok: false, error: offerPdf.OFFER_ENCRYPTED });
   assert.match(offerPdf.OFFER_ENCRYPTED, /password-protected or encrypted/);
-  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new TextEncoder().encode("MZ not a pdf"))).ok, false);
-  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new TextEncoder().encode("%PDF-1.7\n garbage with no objects"))).ok, false, "a file that only starts like a PDF is refused");
-  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new Uint8Array(0))).ok, false);
-  assert.equal((await offerPdf.inspectOfferPdf(PdfLib, new Uint8Array(offerPdf.MAX_OFFER_BYTES + 1))).ok, false, "over 7 MB (it is emailed back signed)");
+  assert.equal((await offerPdf.inspectOfferPdf(new TextEncoder().encode("MZ not a pdf"))).ok, false);
+  assert.equal((await offerPdf.inspectOfferPdf(new TextEncoder().encode("%PDF-1.7\n garbage with no objects"))).ok, false, "a file that only starts like a PDF is refused");
+  assert.equal((await offerPdf.inspectOfferPdf(new Uint8Array(0))).ok, false);
+  assert.equal((await offerPdf.inspectOfferPdf(new Uint8Array(offerPdf.MAX_OFFER_BYTES + 1))).ok, false, "over 7 MB (it is emailed back signed)");
 });
 
-test("offer PDF: signing keeps every original page and adds one signature page", async () => {
-  const signed = await offerPdf.stampSignedOffer(PdfLib, await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",
+/** The fonts each page of a PDF draws with: the shared styling embeds Noto Sans on every page it makes. */
+async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
+  const doc = await PdfLib.PDFDocument.load(bytes);
+  return doc.getPages().map((page) => {
+    const fonts = page.node.Resources()?.lookup(PdfLib.PDFName.of("Font"));
+    if (!(fonts instanceof PdfLib.PDFDict)) return [];
+    return fonts.entries().map(([, ref]) => { const dict = doc.context.lookup(ref); return dict instanceof PdfLib.PDFDict ? String(dict.get(PdfLib.PDFName.of("BaseFont"))) : "?"; });
+  });
+}
+
+test("offer PDF: signing keeps every original page and adds one signature page on the shared styling", async () => {
+  const signed = await offerPdf.stampSignedOffer(await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",
     userAgent: "Mozilla/5.0 (Windows NT 10.0) ".repeat(8), consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
   const doc = await PdfLib.PDFDocument.load(signed);
   assert.equal(doc.getPageCount(), 3, "2 original pages + the signature page");
   assert.match(doc.getSubject() ?? "", /signed by Ann Applicant/, "accents are made PDF-safe");
+  const fonts = await pdfFonts(signed);
+  assert.ok(fonts[0].every((f) => /Helvetica/.test(f)) && fonts[1].every((f) => /Helvetica/.test(f)), "the original pages are untouched");
+  assert.ok(fonts[2].length >= 1 && fonts[2].every((f) => /NotoSans/.test(f)), `the signature page uses the shared fonts: ${fonts[2].join(", ")}`);
+  assert.deepEqual([doc.getPage(2).getWidth(), doc.getPage(2).getHeight()], [595.28, 841.89], "A4, as every Skyline PDF");
 });
 
 test("staff-admin offer upload: admin and state first, PDF checked before storage, recorded with its sha256, replaced unsent offer deleted", async () => {
@@ -1258,6 +1276,7 @@ test("simple employees: validation, file checks, upload path, two statuses", asy
 /* ------------------------------------------------------------------ onboarding flow (2026-11-10): stages, pay details, templates, offer + login */
 const tpl = await load.import<typeof import("../supabase/functions/_shared/hr-template.ts")>("../supabase/functions/_shared/hr-template.ts");
 const letterLib = await load.import<typeof import("../supabase/functions/_shared/offer-letter-pdf.ts")>("../supabase/functions/_shared/offer-letter-pdf.ts");
+const submissionLib = await load.import<typeof import("../supabase/functions/_shared/notification/submission-pdf.ts")>("../supabase/functions/_shared/notification/submission-pdf.ts");
 
 test("onboarding: only the step that is next is offered, and every stage has its label and banner", () => {
   const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
@@ -1368,18 +1387,32 @@ test("templates: the sanitiser keeps the formatting and drops everything unsafe"
 test("offer letter PDF: made from the filled-in template, loadable, signable, and it refuses an empty or endless letter", async () => {
   const html = tpl.renderMessage({ subject: "Offer of employment", bodyHtml: "<h2>Offer: {{position}}</h2><p>Dear {{first_name}}, “welcome” — 日本</p><ul><li>Start: {{start_date}}</li><li>Pay: <strong>{{pay_rate}}</strong> {{pay_basis}}</li></ul><p style=\"text-align:center\"><em>Yours</em> <u>sincerely</u></p>" },
     tpl.templateValues(PERSON)).html;
-  const made = await letterLib.buildLetterPdf(PdfLib as never, { title: "Offer of employment", html, footer: "Skyline Institute of Technology" });
+  const made = await letterLib.buildLetterPdf({ title: "Offer of employment", html, footer: "Skyline Institute of Technology", date: "2026-11-10" });
   assert.equal(new TextDecoder().decode(made.bytes.subarray(0, 5)), "%PDF-");
   assert.equal(made.pages, 1);
-  const inspected = await offerPdf.inspectOfferPdf(PdfLib as never, made.bytes);
+  const inspected = await offerPdf.inspectOfferPdf(made.bytes);
   assert.deepEqual(inspected, { ok: true, pages: 1 }, "it passes the same checks as an uploaded offer");
-  const signed = await offerPdf.stampSignedOffer(PdfLib as never, made.bytes, { signerName: "Asha Patel", signedAt: "2026-11-10T00:00:00Z", ip: null, userAgent: null, consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "a".repeat(64) });
-  assert.equal((await PdfLib.PDFDocument.load(signed)).getPageCount(), 2, "the signature page is added to the generated letter");
-  assert.equal(letterLib.winAnsi("café “q” – • 日 ć"), "café “q” – • ? c", "text the PDF fonts cannot draw is folded or replaced, never an error");
-  const long = await letterLib.buildLetterPdf(PdfLib as never, { title: "Long", html: "<p>Line of text for the letter.</p>".repeat(140) });
+  const letterhead = { institution: "Skyline Institute of Technology", logo: null, primary: "#1d4ed8" };
+  const signed = await offerPdf.stampSignedOffer(made.bytes, { signerName: "Asha Patel", signedAt: "2026-11-10T00:00:00Z", ip: null, userAgent: null, consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "a".repeat(64) }, letterhead);
+  const signedDoc = await PdfLib.PDFDocument.load(signed);
+  assert.equal(signedDoc.getPageCount(), 2, "the signature page is added to the generated letter");
+  assert.equal(signedDoc.getTitle(), "Offer of employment", "the letter's own metadata is kept");
+  // One styling for every Skyline PDF: the letter, its signature page and the submitted application are all A4 in the embedded Noto Sans.
+  const application = await submissionLib.buildSubmissionPdf({ reference: "SK-1", institution: "Skyline Institute of Technology", version: 1, submittedAt: "2026-11-10T00:00:00Z", snapshot: { values: { first_name: "Ada" } } });
+  for (const [name, bytes] of [["offer letter", made.bytes], ["signed offer", signed], ["application", application]] as const) {
+    const fonts = await pdfFonts(bytes);
+    assert.ok(fonts.length >= 1 && fonts.every((page) => page.length >= 1 && page.every((f) => /NotoSans/.test(f))), `${name}: Noto Sans on every page (${JSON.stringify(fonts)})`);
+    const doc = await PdfLib.PDFDocument.load(bytes);
+    assert.ok(doc.getPages().every((p) => p.getWidth() === 595.28 && p.getHeight() === 841.89), `${name}: A4`);
+  }
+  const branded = await letterLib.buildLetterPdf({ title: "Offer of employment", html, letterhead: { institution: "Another College", logo: null, primary: "#1d4ed8" } });
+  assert.equal(branded.pages, 1, "the letterhead's name and colour are drawn in place of the defaults");
+  assert.deepEqual(letterLib.paletteOf("#1d4ed8").primary.map((v) => Math.round(v * 255)), [29, 78, 216], "the letterhead colour becomes the writer's palette");
+  assert.deepEqual([letterLib.paletteOf(null).primary.map((v) => Math.round(v * 255)), submissionLib.resolvePrimary(null).fellBack], [submissionLib.resolvePrimary(null).rgb.map((v) => Math.round(v)), true], "no colour set: the same default as the application PDF (the Skyline orange, darkened to read on white)");
+  const long = await letterLib.buildLetterPdf({ title: "Long", html: "<p>Line of text for the letter.</p>".repeat(140) });
   assert.ok(long.pages >= 3, "a long letter flows onto more pages");
-  await assert.rejects(letterLib.buildLetterPdf(PdfLib as never, { title: "Empty", html: "<p> </p>" }), /empty/);
-  await assert.rejects(letterLib.buildLetterPdf(PdfLib as never, { title: "Endless", html: "<p>Line</p>".repeat(3000) }), /longer than/);
+  await assert.rejects(letterLib.buildLetterPdf({ title: "Empty", html: "<p> </p>" }), /empty/);
+  await assert.rejects(letterLib.buildLetterPdf({ title: "Endless", html: "<p>Line</p>".repeat(3000) }), /longer than/);
   assert.equal(letterLib.letterFileName("Offer: Trainer/Chef", "Asha Patel"), "Offer Trainer Chef - Asha Patel.pdf");
 });
 
@@ -1818,7 +1851,48 @@ test("staff wizard rules: a draft takes blanks, the final check needs everything
   const typed = { ...details, date_of_birth: " 3/2/1991 ", address_country: "Australia", address_state: "vic", passport_number: " pa 1234567 ", first_name: "  Jo " };
   assert.deepEqual(["date_of_birth", "address_state", "passport_number", "first_name"].map((k) => staffRules.normalizeStaffField(k as never, typed, now)), ["1991-02-03", "VIC", "PA1234567", "Jo"]);
   assert.equal(staffRules.normalizeStaffField("address_state", { ...typed, address_country: "India", address_state: "Punjab" }, now), "Punjab");
-  assert.deepEqual([...staffRules.STAFF_STEP_FIELDS.documents, ...staffRules.STAFF_STEP_FIELDS.prefill, ...staffRules.STAFF_STEP_FIELDS.personal].sort(), [...staffRules.STAFF_FIELDS].sort(), "every field belongs to exactly one step");
+  assert.deepEqual([...staffRules.STAFF_STEP_FIELDS.documents, ...staffRules.STAFF_STEP_FIELDS.prefill, ...staffRules.STAFF_STEP_FIELDS.personal, ...staffRules.STAFF_STEP_FIELDS.tax].sort(), [...staffRules.STAFF_FIELDS].sort(), "every field belongs to exactly one step");
+});
+
+test("tax and super rules (option A): the declaration answers and the super choice, conditional on each other; the same messages in SQL; no tax file number", () => {
+  const now = new Date("2026-11-10T03:00:00Z");
+  const base = { ...staffRules.EMPTY_STAFF_DETAILS };
+  const problem = (field: string, patch: Partial<typeof base>, final: boolean) => staffRules.staffFieldProblem(field as never, { ...base, ...patch }, final, now);
+  assert.equal(problem("tax_residency", {}, false), "", "blank in a draft");
+  assert.equal(problem("tax_residency", {}, true), "Tell us your residency status for tax purposes.");
+  assert.equal(problem("tax_residency", { tax_residency: "martian" }, false), "Choose your residency status for tax purposes.");
+  assert.equal(problem("tax_free_threshold", { tax_residency: "resident" }, true), "Tell us whether you claim the tax-free threshold.");
+  assert.equal(problem("tax_free_threshold", { tax_residency: "foreign" }, true), "", "a foreign resident or a working holiday maker is not asked");
+  assert.equal(problem("tax_free_threshold", { tax_residency: "resident", tax_free_threshold: "maybe" }, false), "Answer yes or no for the tax-free threshold.");
+  assert.equal(problem("study_loan", {}, true), "Tell us whether you have a study or training support loan.");
+  assert.equal(problem("super_choice", {}, true), "Choose how your super is paid.");
+  assert.equal(problem("super_choice", { super_choice: "bank" }, false), "Choose how your super is paid.");
+  assert.equal(problem("super_fund_name", { super_choice: "own" }, true), "Enter the name of your super fund.");
+  assert.equal(problem("super_fund_name", { super_choice: "default" }, true), "", "the default fund needs no details");
+  assert.equal(problem("super_fund_abn", { super_choice: "smsf" }, true), "Enter the fund's ABN.");
+  assert.equal(problem("super_fund_abn", { super_fund_abn: "51 824 753 556" }, false), "", "the ABN check digits, spaces allowed");
+  assert.equal(problem("super_fund_abn", { super_fund_abn: "51824753557" }, false), "Enter a valid ABN; its check digits do not match.");
+  assert.equal(problem("super_fund_abn", { super_fund_abn: "123" }, false), "ABN must contain 11 digits.");
+  assert.equal(problem("super_usi", { super_usi: "abc-def" }, false), "The USI must be up to 20 letters and numbers.");
+  assert.equal(problem("super_usi", { super_choice: "own" }, true), "", "the USI is never required");
+  assert.equal(problem("super_member_number", { super_choice: "own" }, true), "Enter your member number.");
+  assert.equal(problem("super_member_number", { super_choice: "smsf" }, true), "", "an SMSF has no member number");
+  assert.equal(problem("super_member_number", { super_member_number: "a@b" }, false), "The member number must be up to 30 letters, numbers, spaces or hyphens.");
+  // Stored: the ABN as digits, the USI in capitals.
+  const typed = { ...base, super_fund_abn: " 51 824 753 556 ", super_usi: " sta0100au " };
+  assert.deepEqual(["super_fund_abn", "super_usi"].map((k) => staffRules.normalizeStaffField(k as never, typed, now)), ["51824753556", "STA0100AU"]);
+  // The review card and the Admin's card say the same, including where the tax file number goes.
+  const rows = wizardLib.taxSuperRows({ ...base, tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "own", super_fund_name: "AustralianSuper", super_fund_abn: "65714394898", super_usi: "STA0100AU", super_member_number: "123456" });
+  assert.deepEqual(rows, [["Residency for tax", "Australian resident for tax purposes"], ["Tax-free threshold", "Yes"], ["Study or training loan", "No"], ["Super", "My own super fund"],
+    ["Fund", "AustralianSuper"], ["Fund ABN", "65 714 394 898"], ["USI", "STA0100AU"], ["Member number", "123456"], ["Tax file number", "Given through Xero, not collected here"]]);
+  assert.deepEqual(wizardLib.taxSuperRows({ ...base, tax_residency: "whm", study_loan: "no", super_choice: "default" }).map((r) => r[0]), ["Residency for tax", "Study or training loan", "Super", "Tax file number"]);
+  // The database repeats the lists, the messages and the ABN check, and the retention purge clears every answer.
+  const sql = read("supabase/migrations/20261112110000_hr_tax_super.sql");
+  for (const message of ["Tell us your residency status for tax purposes.", "Tell us whether you claim the tax-free threshold.", "Tell us whether you have a study or training support loan.", "Choose how your super is paid.",
+    "Enter the name of your super fund.", "Enter the fund''s ABN.", "The USI must be up to 20 letters and numbers.", "Enter your member number.", "The member number must be up to 30 letters, numbers, spaces or hyphens."]) assert.ok(sql.includes(message), message);
+  assert.ok(sql.includes("('', 'resident', 'foreign', 'whm')") && sql.includes("('', 'default', 'own', 'smsf')") && sql.includes("array[10,1,3,5,7,9,11,13,15,17,19]"), "the same lists and ABN weights");
+  for (const column of staffRules.STAFF_STEP_FIELDS.tax) assert.ok(sql.includes(`${column} = ''`), `retention clears ${column}`);
+  assert.ok(!/tfn|tax_file/i.test(sql), "the migration has no tax file number column");
 });
 
 test("onboarding save: checked with the shared rules before the database, answered with the field; stored normalised", async () => {
@@ -1911,7 +1985,7 @@ test("wizard: where each pre-filled value came from, what could not be read, and
   assert.equal(wizardLib.readerDate("03/02/1991"), "1991-02-03");
   assert.equal(wizardLib.isBeingRead({ ...passport, extractionStatus: "pending" as const }), true);
   assert.equal(wizardLib.isBeingRead({ ...passport, category: "Academic", extractionStatus: "pending" as const }), false, "academic results are never read");
-  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "review"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"]);
   // What the server sends becomes the wizard's fields.
   const details = wizardLib.detailsOf({ first_name: "Jo", phone_e164: "+61400000111", emergency_phone_e164: null, is_australian_citizen: true, date_of_birth: null, passport_number: "N1234567" });
   assert.deepEqual([details.first_name, details.phone, details.emergency_phone, details.is_australian_citizen, details.date_of_birth, details.passport_number], ["Jo", "+61400000111", "", true, "", "N1234567"]);

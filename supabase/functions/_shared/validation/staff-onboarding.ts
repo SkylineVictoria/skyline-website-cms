@@ -5,13 +5,27 @@ import {
   addressProblems, dateOfBirthProblem, emergencyContactProblems, mobileProblem, nameProblem, normalizePassportNumber, parseDateOfBirth,
   passportNumberProblem, phoneProblem, shortTextProblem, isAustralia, type Address,
 } from "./person.ts";
+import { normalizeAbn, validateAbn } from "./abn.ts";
 
-/** The wizard's fields, in the order problems are reported. Keys are the names the save action takes. */
+/**
+ * The wizard's fields, in the order problems are reported. Keys are the names the save action takes.
+ * Tax and super (2026-11-10, owner's option A): only the super choice and the non-secret declaration answers are kept here;
+ * the tax file number is never asked for or stored (the person gives it through Xero, the payroll system).
+ */
 export const STAFF_FIELDS = [
   "is_australian_citizen", "first_name", "middle_name", "last_name", "date_of_birth", "phone",
   "address_street", "address_line2", "address_suburb", "address_country", "address_state", "address_postcode",
   "emergency_name", "emergency_phone", "emergency_relationship", "nationality", "passport_number", "visa_subclass", "visa_conditions",
+  "tax_residency", "tax_free_threshold", "study_loan", "super_choice", "super_fund_name", "super_fund_abn", "super_usi", "super_member_number",
 ] as const;
+/** Residency for tax purposes (the ATO's three answers); yes / no answers; how super is paid. The database repeats these lists. */
+export const TAX_RESIDENCY = ["resident", "foreign", "whm"] as const;
+export const YES_NO = ["yes", "no"] as const;
+export const SUPER_CHOICE = ["default", "own", "smsf"] as const;
+export const TAX_RESIDENCY_LABEL: Record<(typeof TAX_RESIDENCY)[number], string> = { resident: "Australian resident for tax purposes", foreign: "Foreign resident", whm: "Working holiday maker" };
+export const SUPER_CHOICE_LABEL: Record<(typeof SUPER_CHOICE)[number], string> = { default: "Skyline's default super fund", own: "My own super fund", smsf: "Self-managed super fund (SMSF)" };
+/** A fund of the person's own needs its details; the member number only for an APRA fund (an SMSF has none). */
+export const superFundNeeded = (choice: string) => choice === "own" || choice === "smsf";
 export type StaffField = (typeof STAFF_FIELDS)[number];
 export type StaffTextField = Exclude<StaffField, "is_australian_citizen">;
 export type StaffDetails = Record<StaffTextField, string> & { is_australian_citizen: boolean | null };
@@ -21,6 +35,7 @@ export const EMPTY_STAFF_DETAILS: StaffDetails = {
   is_australian_citizen: null, first_name: "", middle_name: "", last_name: "", date_of_birth: "", phone: "",
   address_street: "", address_line2: "", address_suburb: "", address_country: "", address_state: "", address_postcode: "",
   emergency_name: "", emergency_phone: "", emergency_relationship: "", nationality: "", passport_number: "", visa_subclass: "", visa_conditions: "",
+  tax_residency: "", tax_free_threshold: "", study_loan: "", super_choice: "", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "",
 };
 
 const ADDRESS_KEY: Record<string, keyof Address> = {
@@ -59,6 +74,17 @@ export function staffFieldProblem(field: StaffField, details: StaffDetails, fina
     case "visa_subclass":
       return !value ? (final && details.is_australian_citizen === false ? "Enter your visa type or subclass." : "") : shortTextProblem(value, "The visa type or subclass", 100);
     case "visa_conditions": return shortTextProblem(value, "The visa work conditions", 500);
+    // Tax and super: the answers of the ATO declarations, never the tax file number.
+    case "tax_residency": return !value ? (final ? "Tell us your residency status for tax purposes." : "") : (TAX_RESIDENCY as readonly string[]).includes(value) ? "" : "Choose your residency status for tax purposes.";
+    case "tax_free_threshold":
+      if (!value) return final && text(details, "tax_residency") === "resident" ? "Tell us whether you claim the tax-free threshold." : "";
+      return (YES_NO as readonly string[]).includes(value) ? "" : "Answer yes or no for the tax-free threshold.";
+    case "study_loan": return !value ? (final ? "Tell us whether you have a study or training support loan." : "") : (YES_NO as readonly string[]).includes(value) ? "" : "Answer yes or no for the study or training support loan.";
+    case "super_choice": return !value ? (final ? "Choose how your super is paid." : "") : (SUPER_CHOICE as readonly string[]).includes(value) ? "" : "Choose how your super is paid.";
+    case "super_fund_name": return !value ? (final && superFundNeeded(text(details, "super_choice")) ? "Enter the name of your super fund." : "") : shortTextProblem(value, "The super fund name", 100);
+    case "super_fund_abn": return !value ? (final && superFundNeeded(text(details, "super_choice")) ? "Enter the fund's ABN." : "") : validateAbn(value);
+    case "super_usi": return !value ? "" : /^[A-Za-z0-9]{1,20}$/.test(value) ? "" : "The USI must be up to 20 letters and numbers.";
+    case "super_member_number": return !value ? (final && text(details, "super_choice") === "own" ? "Enter your member number." : "") : /^[A-Za-z0-9 -]{1,30}$/.test(value) ? "" : "The member number must be up to 30 letters, numbers, spaces or hyphens.";
   }
 }
 
@@ -79,6 +105,8 @@ export function normalizeStaffField(field: StaffTextField, details: StaffDetails
   if (field === "date_of_birth") return value ? parseDateOfBirth(value, today) ?? value : "";
   if (field === "address_state") return isAustralia(details.address_country) ? value.toUpperCase() : value;
   if (field === "passport_number") return normalizePassportNumber(value);
+  if (field === "super_fund_abn") return normalizeAbn(value);
+  if (field === "super_usi") return value.toUpperCase();
   return value;
 }
 
@@ -87,6 +115,7 @@ export const STAFF_STEP_FIELDS = {
   documents: ["is_australian_citizen"],
   prefill: ["first_name", "middle_name", "last_name", "date_of_birth", "nationality", "passport_number", "visa_subclass", "visa_conditions"],
   personal: ["phone", "address_street", "address_line2", "address_suburb", "address_country", "address_state", "address_postcode", "emergency_name", "emergency_phone", "emergency_relationship"],
+  tax: ["tax_residency", "tax_free_threshold", "study_loan", "super_choice", "super_fund_name", "super_fund_abn", "super_usi", "super_member_number"],
 } as const satisfies Record<string, readonly StaffField[]>;
 
 export { phoneProblem };

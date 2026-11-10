@@ -4,6 +4,7 @@ import { Button, Field, Modal, Select } from "@/pages/admin/components/ui";
 import { StaffAdminError, staffAdminActions, type StaffAdminResult } from "@/lib/staffApi";
 import { offerLetterContext, type HrTemplate, type OfferLetterContext } from "@/lib/hrTemplatesApi";
 import { TEMPLATE_PROSE } from "@/pages/admin/lib/onboardingText";
+import { STAFF_TEMPLATES_PATH } from "@/pages/admin/lib/staffRoutes";
 import { placeholderLabels, renderMessage, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
@@ -125,7 +126,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
                 <input type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="block w-full text-sm" data-testid="offer-upload-file" />
               </Field>
             ) : null}
-            {!resend && source === "template" && letters.length === 0 ? <p className={ALERT}>There is no offer letter template yet. <Link to="/admin/staff/templates" className="font-semibold underline">Add one under HRMS › Templates</Link>, or upload a PDF.</p> : null}
+            {!resend && source === "template" && letters.length === 0 ? <p className={ALERT}>There is no offer letter template yet. <Link to={STAFF_TEMPLATES_PATH} className="font-semibold underline">Add one under HRMS › Templates</Link>, or upload a PDF.</p> : null}
             {!resend && source === "template" && letterGaps.length ? (
               <p role="alert" className={ALERT} data-testid="offer-missing">The letter cannot be sent yet: <strong>{placeholderLabels(letterGaps)}</strong> {letterGaps.length === 1 ? "has" : "have"} no value for {name}. Add {letterGaps.length === 1 ? "it" : "them"} in the pay details, or choose another template.</p>
             ) : null}

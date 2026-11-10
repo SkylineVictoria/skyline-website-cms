@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(549);
+select plan(573);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -169,6 +169,8 @@ insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', gen_random_uuid() || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'a file outside the person''s folder is refused');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/visa/v.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'the folder must match the document type');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/missing.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, 'P0002', 'The uploaded file was not found.', 'the file must exist');
+select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Tell us your residency status for tax purposes.', 'submit needs the tax and super answers (20261112110000) before it looks at the documents');
+select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"tax_residency":"resident","tax_free_threshold":"yes","study_loan":"no","super_choice":"default"}')$$, 'the person answers them through the link');
 select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'A passport is required before you can submit.', 'submit names the passport first');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date - 1)$$, '22023', 'This passport has expired. Upload a current one.', 'an expired passport is refused');
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10)$$, 'a passport is recorded without its expiry date (the reader or the person adds it)');
@@ -955,6 +957,28 @@ select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"
 select is((select phone_e164 || '/' || date_of_birth || '/' || address_state || '/' || passport_number from hr.staff_profiles where id = pg_temp.v('w1p')), '+61400771952/1991-02-03/VIC/N1234567', 'stored normalised: E.164, ISO date, state and passport number in capitals');
 select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-wiz'))$$, '23514', 'Tell us whether you are an Australian citizen.', 'submit reports the first missing detail');
 
+-- Tax and super (20261112110000): the declaration answers and the super choice through the link, with the shared rules; never a tax file number.
+select is(hr.v_abn_problem('51 824 753 556'), '', 'a valid ABN, spaces allowed');
+select is(hr.v_abn_problem('51824753557'), 'Enter a valid ABN; its check digits do not match.', 'wrong ABN check digits');
+select is(hr.v_abn_problem('123'), 'ABN must contain 11 digits.', 'a short ABN');
+select is(hr.v_staff_problem('{"tax_residency":"resident","tax_free_threshold":""}', array['tax_free_threshold'], true)->>'message', 'Tell us whether you claim the tax-free threshold.', 'a resident must answer the tax-free threshold');
+select is(hr.v_staff_problem('{"tax_residency":"foreign","tax_free_threshold":""}', array['tax_free_threshold'], true), null, 'a foreign resident is not asked');
+select is(hr.v_staff_problem('{"tax_residency":"martian"}', array['tax_residency'], false)->>'message', 'Choose your residency status for tax purposes.', 'an unknown residency, even as a draft');
+select is(hr.v_staff_problem('{"super_choice":"own","super_member_number":""}', array['super_member_number'], true)->>'message', 'Enter your member number.', 'an own fund needs the member number');
+select is(hr.v_staff_problem('{"super_choice":"smsf","super_member_number":"","super_fund_name":""}', array['super_fund_name','super_member_number'], true)->>'message', 'Enter the name of your super fund.', 'an SMSF needs the fund name but no member number');
+select is(hr.v_staff_problem('{"super_choice":"default","super_fund_abn":""}', array['super_fund_abn'], true), null, 'the default fund needs no ABN');
+select is(hr.v_staff_problem('{"super_usi":"abc-def"}', array['super_usi'], false)->>'message', 'The USI must be up to 20 letters and numbers.', 'the USI format');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"super_choice":"bank"}')$$, '22023', 'Choose how your super is paid.', 'the link refuses an unknown super choice');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"super_fund_abn":"51824753557"}')$$, '22023', 'Enter a valid ABN; its check digits do not match.', 'the link refuses an ABN with wrong check digits');
+select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"tax_residency":"resident","tax_free_threshold":"no","study_loan":"yes","super_choice":"own","super_fund_name":" Wiz Super ","super_fund_abn":"51 824 753 556","super_usi":"wiz0100au","super_member_number":"W-123"}')$$, 'the answers save through the link');
+select is((select tax_residency || '/' || tax_free_threshold || '/' || study_loan || '/' || super_choice || '/' || super_fund_name || '/' || super_fund_abn || '/' || super_usi || '/' || super_member_number from hr.staff_profiles where id = pg_temp.v('w1p')),
+ 'resident/no/yes/own/Wiz Super/51824753556/WIZ0100AU/W-123', 'stored normalised: ABN digits only, USI in capitals, text trimmed');
+select is(public.hr_svc_onboarding_open(pg_temp.h('tok-wiz'))->'profile'->>'super_fund_abn', '51824753556', 'the page gets the answers back');
+select is((select count(*)::int from hr.staff_audit where profile_id = pg_temp.v('w1p') and action = 'tax_super_saved'), 1, 'the save is in the history');
+select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"study_loan":"yes"}')$$, 'saving the same answer again');
+select is((select count(*)::int from hr.staff_audit where profile_id = pg_temp.v('w1p') and action = 'tax_super_saved'), 1, '...adds nothing to the history');
+select is((select count(*)::int from information_schema.columns where table_schema = 'hr' and (column_name ilike '%tfn%' or column_name ilike '%tax_file%')), 0, 'no column in the hr schema holds a tax file number');
+
 -- Bank details: validated, stored encrypted, shown masked, revealed only to Admins with a history entry; an Editor gets nothing.
 select throws_ok($$select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"0620","accountNumber":"12344321"}')$$, '22023', 'The BSB must be 6 digits, for example 062-000.', 'the link refuses a bad BSB with the shared message');
 select is(public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"062-000","accountNumber":"1234 4321","bankName":"Commonwealth Bank"}')->'bank'->>'accountNumber', '•••• 4321', 'the link answers with the account number masked');
@@ -994,9 +1018,16 @@ select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz A
 
 -- "Verified by admin" ticks: recorded with who and when, cleared when the section changes.
 select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'passport', true)$$, '23514', 'There is no document to verify yet.', 'a document section needs a document');
-select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'tax', true)$$, '22023', 'Unknown section.', 'only known sections');
+select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'xyz', true)$$, '22023', 'Unknown section.', 'only known sections');
 select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'bank', true)->'checks'->'bank'->>'verifiedByName', 'Test Admin', 'the bank details are ticked as verified by the Admin');
 select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'personal', true)->'checks' ?& array['bank', 'personal'], true, 'the personal details too');
+select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'tax', true)->'checks' ? 'tax', true, 'and Tax and super');
+select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('x1'), 'tax', true)$$, '23514', 'There are no tax and super answers to verify yet.', 'a person without answers cannot be ticked');
+reset role;
+select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"study_loan":"no"}');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_onboarding_extras(pg_temp.v('w1p'))->'checks' ? 'tax', false, 'a changed tax answer clears the Tax and super tick');
 select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz Ard","bsb":"062000","accountNumber":"87654321"}')->>'accountNumber', '•••• 4321', 'the Admin changes the bank details');
 select is(public.hr_admin_onboarding_extras(pg_temp.v('w1p'))->'checks' ? 'bank', false, 'changing the bank details clears their tick');
 reset role;
@@ -1008,7 +1039,7 @@ select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'passport', true)->
 reset role;
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-wiz'), 'Passport', pg_temp.v('w1p') || '/passport/w2.pdf', 'w2.pdf', 'application/pdf', 10)$$, 'the person uploads a new passport');
 select is((select count(*)::int from hr.staff_section_checks where profile_id = pg_temp.v('w1p') and section = 'passport'), 0, 'a new file clears that section''s tick');
-select is((select string_agg(action, ',' order by id) from hr.staff_audit where profile_id = pg_temp.v('w1p') and action like 'section_%'), 'section_verified,section_verified,section_verified', 'each tick is in the history');
+select is((select string_agg(action, ',' order by id) from hr.staff_audit where profile_id = pg_temp.v('w1p') and action like 'section_%'), 'section_verified,section_verified,section_verified,section_verified', 'each tick is in the history');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'personal', false)->'checks' ? 'personal', false, 'a tick can be taken off');
@@ -1020,7 +1051,7 @@ select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp
 select is(hr.xero_csv('[]'::jsonb), 'EmployeeId,EmployeeName,Date,PayItem,Hours,LeaveType' || chr(10), 'the Xero timesheet export has no bank columns');
 select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"062-000","accountNumber":"1234 4321"}');
 select hr.staff_anonymise(pg_temp.v('w1p'));
-select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select passport_number || nationality || visa_subclass from hr.staff_profiles where id = pg_temp.v('w1p')), '0/', 'retention removes the bank details and the identity fields');
+select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select passport_number || nationality || visa_subclass || tax_residency || super_choice || super_fund_abn || super_member_number from hr.staff_profiles where id = pg_temp.v('w1p')), '0/', 'retention removes the bank details, the identity fields and the tax and super answers');
 
 select * from finish();
 rollback;

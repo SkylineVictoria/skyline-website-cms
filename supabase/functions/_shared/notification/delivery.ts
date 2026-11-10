@@ -2,7 +2,12 @@
 // dispatch loop. No Deno or Node globals beyond web standards, so the same source runs in Edge, Node tests and
 // any future host. Messages and errors are fixed strings: never addresses, bodies, tokens or provider text.
 
-import { MAX_ATTACHMENT_BYTES, attachmentFileName, buildSubmissionPdf, toBase64 } from "./submission-pdf.ts";
+// The PDF builder (pdf-lib and the embedded fonts) is loaded only when an application_submitted email actually attaches a PDF, so the
+// workers that share this module (HR mail, staff functions) boot without it.
+import { MAX_ATTACHMENT_BYTES, attachmentFileName, toBase64 } from "./attachment.ts";
+import { loadLogo } from "./pdf-logo.ts";
+import type { PdfDocumentLink } from "./submission-pdf.ts";
+import type { ImageData } from "./pdf-layout.ts";
 
 export const POSTMARK_API = "https://api.postmarkapp.com";
 export const MAX_DELIVERY_ATTEMPTS = 3;
@@ -189,11 +194,26 @@ export interface ClaimedDelivery { id: string; leaseToken: string; recipientEmai
 export interface CoeDocumentInfo { kind: "coe" | "voe"; sizeBytes: number; contentBase64: string; reference: string }
 /** Thrown when the issued document could not be fetched: the delivery is retried later rather than sent without the document it promises. */
 export class AttachmentUnavailableError extends Error {}
-export interface SubmissionInfo { mode: "attach" | "link"; link: string; reference: string; version: number; institution: string; submittedAt: string | null; snapshot: unknown }
+/** Tenant branding and documents for the PDF; every part is optional and a missing or failing part only degrades the look (name instead of logo, filename instead of link). */
+export interface SubmissionInfo {
+  mode: "attach" | "link"; link: string; reference: string; version: number; institution: string; submittedAt: string | null; snapshot: unknown;
+  host?: string | null;
+  /** Student copies carry no link and no signed document links. */
+  recipientKind?: "portal" | "internal" | "student";
+  branding?: { logo?: string; primaryColor?: string | null; timezone?: string | null };
+  documents?: { category: string; filename: string; bucket: string; path: string }[];
+}
+export const PDF_LINK_SECONDS = 7 * 24 * 60 * 60;
 export interface DeliveryPort {
   claim(): Promise<ClaimedDelivery | null>;
   /** Optional: submission details for application_submitted deliveries (lease-checked in the database). */
   submission?(delivery: ClaimedDelivery): Promise<SubmissionInfo | null>;
+  /** Optional: a signed link to a private document, valid for the given seconds; null when it cannot be made. */
+  signDocument?(bucket: string, path: string, seconds: number): Promise<string | null>;
+  /** Optional: fetches the tenant logo (default: a guarded https fetch). */
+  fetchLogo?(logo: string, base: string | null): Promise<ImageData | null>;
+  /** Optional clock for tests. */
+  now?(): Date;
   /** Optional: the issued CoE / VoE document for coe_voe_issued deliveries. Throws when it cannot be read; null when none was issued (a plain status change). */
   coeDocument?(delivery: ClaimedDelivery): Promise<CoeDocumentInfo | null>;
   record(delivery: ClaimedDelivery, outcome: "accepted" | "failed" | "unknown", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
@@ -221,7 +241,27 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
   const withLink = () => ({ textBody: info!.link ? `${delivery.body}\n\nOpen the application (sign-in required): ${info!.link}` : delivery.body });
   if (info.mode !== "attach" || info.snapshot === null || info.snapshot === undefined) return withLink();
   try {
-    const pdf = buildSubmissionPdf({ reference: info.reference, institution: info.institution, version: info.version, submittedAt: info.submittedAt, snapshot: info.snapshot });
+    const { buildSubmissionPdf, formatDateTime } = await import("./submission-pdf.ts");
+    const now = port.now?.() ?? new Date();
+    const timezone = info.branding?.timezone || undefined;
+    const base = info.host ? `https://${info.host}` : null;
+    let logo: ImageData | null = null;
+    if (!info.branding) console.warn("[pdf-logo] logo not embedded: the submission read returned no branding (migration 102 not applied?)");
+    try { logo = info.branding?.logo ? await (port.fetchLogo ? port.fetchLogo(info.branding.logo, base) : loadLogo(info.branding.logo, base)) : null; } catch { logo = null; }
+    const documents: PdfDocumentLink[] = [];
+    for (const d of info.documents ?? []) {
+      let url: string | null = null;
+      try { url = port.signDocument && info.recipientKind !== "student" && d.bucket && d.path ? await port.signDocument(d.bucket, d.path, PDF_LINK_SECONDS) : null; } catch { url = null; }
+      documents.push({ category: d.category, fileName: d.filename, url });
+    }
+    const pdf = await buildSubmissionPdf({
+      reference: info.reference, institution: info.institution, version: info.version, submittedAt: info.submittedAt, snapshot: info.snapshot,
+      branding: { primary: info.branding?.primaryColor, timezone, logo },
+      documents,
+      portalLink: info.link || undefined,
+      linksExpireOn: documents.some((d) => d.url) ? formatDateTime(new Date(now.getTime() + PDF_LINK_SECONDS * 1000), timezone).slice(0, 10) : undefined,
+      now,
+    });
     if (pdf.length > MAX_ATTACHMENT_BYTES) return withLink();
     return { textBody: `${delivery.body}\n\nThe submitted application is attached as a PDF.`, attachments: [{ name: attachmentFileName(info.reference), contentType: "application/pdf", contentBase64: toBase64(pdf) }] };
   } catch {

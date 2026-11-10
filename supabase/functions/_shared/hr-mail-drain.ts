@@ -1,7 +1,7 @@
 // Sends queued HR outbox mail with a service-role client. Used by staff-register and staff-onboarding right after the change
 // that queued the mail (run after the response with EdgeRuntime.waitUntil), and by staff-admin. Best effort: anything not sent
 // stays queued (sending off) or is retried / marked failed by the outbox rules, and the admin sees failures.
-import { toBase64 } from "./notification/submission-pdf.ts";
+import { toBase64 } from "./notification/attachment.ts";
 import { drainHrEmails, readHrMailConfig, selectHrMailProvider, type HrEmailRow } from "./hr-mail.ts";
 import { renderMessage, templateValues, type TemplatePerson, type TemplateSource } from "./hr-template.ts";
 

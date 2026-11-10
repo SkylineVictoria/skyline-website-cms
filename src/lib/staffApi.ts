@@ -11,6 +11,9 @@ export interface StaffProfile {
   emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; is_australian_citizen: boolean | null;
   /** Read from the documents or typed in the onboarding wizard (20261112090000). */
   nationality: string; passport_number: string; visa_subclass: string; visa_conditions: string;
+  /** Tax and super (20261112110000): the declaration answers and the super choice; '' = unanswered. No tax file number is ever stored. */
+  tax_residency: string; tax_free_threshold: string; study_loan: string; super_choice: string;
+  super_fund_name: string; super_fund_abn: string; super_usi: string; super_member_number: string;
   status: StaffStatus; created_at: string; updated_at: string;
 }
 export interface StaffApplicationRow { id: string; requested_role: StaffRole | null; submitted_at: string | null; review_note: string; reviewed_at: string | null }
@@ -271,10 +274,10 @@ export async function adminOnboarding(id: string): Promise<StaffOnboarding> {
 
 /**
  * What an administrator sees on top of the onboarding record (hr_admin_onboarding_extras): the bank details MASKED, and the
- * "verified by admin" tick of each section (personal, bank, and one per document type by its slug: passport, visa, english,
+ * "verified by admin" tick of each section (personal, bank, tax, and one per document type by its slug: passport, visa, english,
  * academic, driving-licence, health-insurance).
  */
-export type OnboardingSection = "personal" | "bank" | "passport" | "visa" | "english" | "academic" | "driving-licence" | "health-insurance";
+export type OnboardingSection = "personal" | "bank" | "tax" | "passport" | "visa" | "english" | "academic" | "driving-licence" | "health-insurance";
 export interface OnboardingCheck { verifiedAt: string; verifiedByName: string }
 export interface OnboardingExtras {
   bank: { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt: string; masked: boolean } | null;

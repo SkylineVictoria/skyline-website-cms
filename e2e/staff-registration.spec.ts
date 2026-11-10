@@ -257,17 +257,47 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   await shot(page, "staff-wizard-bank-phone");
   await page.getByTestId("staff-next").click();
 
-  // 5. Review: everything grouped, Edit goes to the section, the bank numbers are masked, Submit only when complete.
+  // 5. Tax and super: the declaration answers and the super choice; the fund details only for a fund of one's own; no tax file number asked.
+  await expect(page.getByTestId("staff-step-tax")).toBeVisible();
+  await expect(page.getByTestId("staff-tax-note")).toContainText("We do not ask for your tax file number");
+  await expect(page.getByTestId("staff-step-tax")).not.toContainText(/enter your tfn|tax file number\s*\*/i);
+  await page.getByTestId("staff-next").click();
+  await expect(page.getByText("Tell us your residency status for tax purposes.")).toBeVisible();
+  await expect(page.getByText("Tell us whether you have a study or training support loan.")).toBeVisible();
+  await expect(page.getByText("Choose how your super is paid.")).toBeVisible();
+  await shot(page, "staff-wizard-tax-required");
+  await page.getByTestId("staff-tax_residency-resident").click();
+  await page.getByTestId("staff-tax_free_threshold-yes").click();
+  await page.getByTestId("staff-study_loan-no").click();
+  await expect(page.getByTestId("staff-super-fund")).toHaveCount(0);
+  await page.getByTestId("staff-super_choice-own").click();
+  await expect(page.getByTestId("staff-super-fund")).toBeVisible();
+  await page.getByTestId("staff-next").click();
+  await expect(page.getByText("Enter the name of your super fund.")).toBeVisible();
+  await page.getByTestId("staff-super_fund_name").fill("Lab Super");
+  await page.getByTestId("staff-super_fund_abn").fill("51824753557");
+  await expect(page.getByText("Enter a valid ABN; its check digits do not match.")).toBeVisible();
+  await page.getByTestId("staff-super_fund_abn").fill("51 824 753 556");
+  await page.getByTestId("staff-super_usi").fill("lab0100au");
+  await page.getByTestId("staff-super_member_number").fill("123456");
+  await shot(page, "staff-wizard-tax-super-phone");
+  await page.getByTestId("staff-next").click();
+
+  // 6. Review: everything grouped, Edit goes to the section, the bank numbers are masked, Submit only when complete.
   await expect(page.getByTestId("staff-step-review")).toBeVisible();
   await expect(page.getByTestId("staff-review-bank")).toContainText("73••••");
   await expect(page.getByTestId("staff-review-bank")).toContainText("•••• 3344");
   await expect(page.locator("body")).not.toContainText("7711223344");
+  await expect(page.getByTestId("staff-review-tax")).toContainText("Australian resident for tax purposes");
+  await expect(page.getByTestId("staff-review-tax")).toContainText("51 824 753 556");
+  await expect(page.getByTestId("staff-review-tax")).toContainText("LAB0100AU");
+  await expect(page.getByTestId("staff-review-tax")).toContainText("Given through Xero, not collected here");
   await expect(page.getByTestId("staff-submit")).toBeEnabled();
   await page.getByRole("button", { name: "Edit Bank details" }).click();
   await expect(page.getByTestId("staff-bank-saved")).toContainText("•••• 3344");
   await shot(page, "staff-wizard-bank-saved");
   await page.getByTestId("staff-stepper").getByRole("button", { name: /Review and submit/ }).click();
-  await expect(page.getByTestId("staff-stepper").locator("i.ri-check-line")).toHaveCount(5);
+  await expect(page.getByTestId("staff-stepper").locator("i.ri-check-line")).toHaveCount(6);
   await shot(page, "staff-wizard-review-phone");
   // A refresh keeps the place and everything typed (saved as they went); the link is not in the address.
   await page.reload();
@@ -276,7 +306,7 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   expect(requests.some((url) => /7711223344|733000|bsb=|account/i.test(url)), "no bank value ever travels in an address").toBe(false);
   await page.getByTestId("staff-submit").click();
   await expect(page.getByTestId("staff-onboard-submitted")).toBeVisible();
-  expect(sql(`select status || '/' || visa_conditions || '/' || last_name from hr.staff_profiles where id = '${applicant.id}'`)).toBe("documents_submitted/8105 work limitation/READER");
+  expect(sql(`select status || '/' || visa_conditions || '/' || last_name || '/' || super_fund_abn || '/' || super_usi from hr.staff_profiles where id = '${applicant.id}'`)).toBe("documents_submitted/8105 work limitation/READER/51824753556/LAB0100AU");
   await phone.close();
 
   // The administrator: what was read beside each document, a tick per section, bank details masked until Reveal.
@@ -297,6 +327,11 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   await expect(office.locator("body")).not.toContainText("7711223344");
   await office.getByTestId("staff-check-bank").getByRole("checkbox").click();
   await expect(office.getByTestId("staff-check-bank")).toHaveAttribute("data-verified", "yes");
+  await expect(office.getByTestId("staff-tax-super")).toContainText("My own super fund");
+  await expect(office.getByTestId("staff-tax-super")).toContainText("51 824 753 556");
+  await expect(office.getByTestId("staff-tax-super")).toContainText("Given through Xero, not collected here");
+  await office.getByTestId("staff-check-tax").getByRole("checkbox").click();
+  await expect(office.getByTestId("staff-check-tax")).toHaveAttribute("data-verified", "yes");
   await shot(office, "admin-wizard-extracted-ticks-bank-masked");
   await office.getByTestId("bank-reveal").click();
   await expect(office.getByTestId("bank-account-number")).toHaveText("7711223344");

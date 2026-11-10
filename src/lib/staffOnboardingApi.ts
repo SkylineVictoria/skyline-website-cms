@@ -16,6 +16,8 @@ export interface OnboardingProfile {
   address_street: string; address_line2: string; address_suburb: string; address_state: string; address_postcode: string; address_country: string;
   emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; is_australian_citizen: boolean | null;
   nationality: string; passport_number: string; visa_subclass: string; visa_conditions: string;
+  tax_residency: string; tax_free_threshold: string; study_loan: string; super_choice: string;
+  super_fund_name: string; super_fund_abn: string; super_usi: string; super_member_number: string;
 }
 /** The person's bank details as the server gives them back: the BSB and account number are always masked (06••••, •••• 4321). */
 export interface OnboardingBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt: string; masked: boolean }

@@ -30,7 +30,16 @@ async function worker() {
       const { data, error } = await admin.rpc("notification_delivery_submission", { p_id: d.id, p_lease: d.leaseToken });
       if (error || !data || typeof data !== "object") return null;
       const info = data as Record<string, unknown>;
-      return { mode: info.mode === "link" ? "link" : "attach", link: typeof info.link === "string" ? info.link : "", reference: String(info.reference ?? ""), version: Number(info.version ?? 0), institution: String(info.institution ?? ""), submittedAt: typeof info.submittedAt === "string" ? info.submittedAt : null, snapshot: info.snapshot ?? null };
+      return { mode: info.mode === "link" ? "link" : "attach", link: typeof info.link === "string" ? info.link : "", reference: String(info.reference ?? ""), version: Number(info.version ?? 0), institution: String(info.institution ?? ""), submittedAt: typeof info.submittedAt === "string" ? info.submittedAt : null, snapshot: info.snapshot ?? null,
+        host: typeof info.host === "string" ? info.host : null,
+        recipientKind: info.recipientKind === "student" || info.recipientKind === "internal" ? info.recipientKind : "portal",
+        branding: info.branding && typeof info.branding === "object" ? { logo: String((info.branding as Record<string, unknown>).logo ?? ""), primaryColor: typeof (info.branding as Record<string, unknown>).primaryColor === "string" ? String((info.branding as Record<string, unknown>).primaryColor) : null, timezone: typeof (info.branding as Record<string, unknown>).timezone === "string" ? String((info.branding as Record<string, unknown>).timezone) : null } : undefined,
+        documents: Array.isArray(info.documents) ? (info.documents as Record<string, unknown>[]).map((x) => ({ category: String(x.category ?? ""), filename: String(x.filename ?? ""), bucket: String(x.bucket ?? ""), path: String(x.path ?? "") })).filter((x) => x.filename) : [] };
+    },
+    signDocument: async (bucket, path, seconds) => {
+      if (bucket !== "enrollment-documents") return null; // only the private application-document bucket is ever linked
+      const { data, error } = await admin.storage.from(bucket).createSignedUrl(path, seconds);
+      return error ? null : data?.signedUrl ?? null;
     },
     coeDocument: async (d) => {
       const { data, error } = await admin.rpc("notification_delivery_coe_document", { p_id: d.id, p_lease: d.leaseToken });

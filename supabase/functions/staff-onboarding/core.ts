@@ -5,7 +5,7 @@
 // link that was used (submitted) is read-only. Files pass through this function: type and size are checked by content before
 // anything is stored, and the database says whether this link may upload that document type BEFORE the file is written.
 import { STAFF_READER_CATEGORY } from "./reader.ts";
-import { OFFER_CONSENT, type Signature } from "../_shared/offer-pdf.ts";
+import { OFFER_CONSENT, type Signature } from "../_shared/offer-rules.ts";
 import { DOCUMENT_MAX_BYTES, DOCUMENT_MIME, bankDigits, bankProblems, documentFileProblem, sniffDocumentKind } from "../_shared/validation/person.ts";
 import { EMPTY_STAFF_DETAILS, STAFF_FIELDS, normalizeStaffField, staffProblems, type StaffDetails, type StaffField, type StaffTextField } from "../_shared/validation/staff-onboarding.ts";
 //

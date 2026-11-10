@@ -507,7 +507,7 @@ async function onboard() {
 
   const details = { first_name: "Lab", last_name: "Onboard", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000",
     address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444", is_australian_citizen: false,
-    nationality: "Indian", passport_number: "N1234567", visa_subclass: "485" };
+    nationality: "Indian", passport_number: "N1234567", visa_subclass: "485", tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default" };
   const noCode = await onboardCall(lab, { action: "save", t: link.token, patch: { emergency_phone: "0422 333 444" } });
   check("a phone without its country code is refused on its field, with the shared message", noCode.status === 400 && noCode.body.field === "emergency_phone"
     && noCode.body.error === "Enter the emergency contact's phone number.", JSON.stringify(noCode.body));
@@ -634,7 +634,8 @@ async function completeDocuments(lab, token) {
   const year = new Date().getFullYear();
   const saved = await onboardCall(lab, { action: "save", t: token, patch: { first_name: "Lab", last_name: "Mail", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne",
     address_state: "VIC", address_postcode: "3000", address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444",
-    is_australian_citizen: false, nationality: "Indian", passport_number: "N1234567", visa_subclass: "485" } });
+    is_australian_citizen: false, nationality: "Indian", passport_number: "N1234567", visa_subclass: "485",
+    tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default" } });
   if (saved.status !== 200) throw new Error(`details failed: ${JSON.stringify(saved.body)}`);
   const bank = await onboardCall(lab, { action: "bank_save", t: token, bank: { accountName: "Lab Mail", bsb: "062-000", accountNumber: "1234 4321" } });
   if (bank.status !== 200) throw new Error(`bank details failed: ${JSON.stringify(bank.body)}`);
@@ -1223,7 +1224,8 @@ const RULE_VECTORS = {
   staff: (() => {
     const base = { is_australian_citizen: false, first_name: "Jo", middle_name: "", last_name: "Journey", date_of_birth: "1990-05-06", phone: "+61412345678", address_street: "1 Lab St", address_line2: "",
       address_suburb: "Melbourne", address_country: "Australia", address_state: "VIC", address_postcode: "3000", emergency_name: "Em", emergency_phone: "+61422333444", emergency_relationship: "Sibling",
-      nationality: "Indian", passport_number: "N1234567", visa_subclass: "485", visa_conditions: "" };
+      nationality: "Indian", passport_number: "N1234567", visa_subclass: "485", visa_conditions: "",
+      tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "" };
     const all = Object.keys(base);
     const blank = Object.fromEntries(all.map((k) => [k, k === "is_australian_citizen" ? null : ""]));
     const cases = [];
@@ -1237,8 +1239,18 @@ const RULE_VECTORS = {
       address_street: ["", "x".repeat(201)], address_line2: ["x".repeat(201)], address_suburb: ["", "x".repeat(201)], address_country: ["", "x".repeat(201)], address_state: ["", "vic", "Punjab"],
       address_postcode: ["", "30", "30000", "abcd"], emergency_name: ["", "x".repeat(121)], emergency_phone: ["", "0422333444", "+6142"], emergency_relationship: ["", "x".repeat(61)],
       nationality: ["", "x".repeat(101)], passport_number: ["", "12", "pa 1234567", "ABCDEFGHIJKLM", "N12345!7"], visa_subclass: ["", "x".repeat(101)], visa_conditions: ["8105\nNo other limits", "x".repeat(501), "a\u0001b"],
+      tax_residency: ["", "foreign", "whm", "martian"], tax_free_threshold: ["", "no", "maybe"], study_loan: ["", "yes", "x"], super_choice: ["", "own", "smsf", "bank"],
+      super_fund_name: ["", "x".repeat(101), "Fund\u0001"], super_fund_abn: ["", "51 824 753 556", "51824753557", "123", "abcdefghijk"], super_usi: ["", "STA0100AU", "abc-def", "x".repeat(21)],
+      super_member_number: ["", "12345-6", "x".repeat(31), "a@b"],
     })) for (const value of values) for (const final of [false, true]) add({ ...base, [key]: value }, [key], final);
     for (const final of [false, true]) {
+      // Tax and super: the answers depend on each other (the threshold only for residents, the fund details only for a fund of one's own).
+      add({ ...base, tax_residency: "resident", tax_free_threshold: "" }, ["tax_free_threshold"], final);
+      add({ ...base, tax_residency: "foreign", tax_free_threshold: "" }, ["tax_free_threshold"], final);
+      add({ ...base, super_choice: "own", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "" }, ["super_fund_name", "super_fund_abn", "super_usi", "super_member_number"], final);
+      add({ ...base, super_choice: "own", super_fund_name: "Fund", super_fund_abn: "51824753556", super_usi: "", super_member_number: "" }, ["super_fund_name", "super_fund_abn", "super_usi", "super_member_number"], final);
+      add({ ...base, super_choice: "smsf", super_fund_name: "Fund", super_fund_abn: "51824753556", super_usi: "", super_member_number: "" }, ["super_fund_name", "super_fund_abn", "super_usi", "super_member_number"], final);
+      add({ ...base, super_choice: "smsf", super_fund_name: "", super_fund_abn: "" }, ["super_fund_name", "super_fund_abn"], final);
       add({ ...base, address_country: "India", address_state: "Punjab", address_postcode: "144001" }, ["address_state", "address_postcode"], final);
       add({ ...base, address_country: "India", address_state: "", address_postcode: "x".repeat(21) }, ["address_state", "address_postcode"], final);
       add({ ...base, address_country: "AU", address_state: "nsw", address_postcode: "2000" }, ["address_country", "address_state", "address_postcode"], final);
@@ -1351,6 +1363,15 @@ async function wizard() {
     emergency_name: "Em Contact", emergency_phone: "+61 422 333 444", emergency_relationship: "Sibling" } });
   check("the remaining details save: mobile corrected, state in capitals, text trimmed", saved.status === 200 && saved.body.view?.profile?.phone_e164 === mobile && saved.body.view?.profile?.address_state === "VIC"
     && saved.body.view?.profile?.address_street === "9 Wizard Way" && saved.body.view?.profile?.emergency_phone_e164 === "+61422333444", JSON.stringify(saved.body).slice(0, 200));
+  // Tax and super (option A): the declaration answers and the super choice through the link; the ABN check digits; no tax file number anywhere.
+  const noTax = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit is refused until the tax and super answers are in", noTax.status === 400 && noTax.body.error === "Tell us your residency status for tax purposes.", JSON.stringify(noTax.body));
+  const badAbn = await onboardCall(lab, { action: "save", t: link.token, patch: { super_choice: "own", super_fund_abn: "51824753557" } });
+  check("a fund ABN with wrong check digits is refused on its field, with the agency form's message", badAbn.status === 400 && badAbn.body.field === "super_fund_abn" && badAbn.body.error === "Enter a valid ABN; its check digits do not match.", JSON.stringify(badAbn.body));
+  const tax = await onboardCall(lab, { action: "save", t: link.token, patch: { tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "own", super_fund_name: " Lab Super ", super_fund_abn: "51 824 753 556", super_usi: "lab0100au", super_member_number: "123456" } });
+  check("the answers save normalised (ABN digits only, USI in capitals, text trimmed) and come back to the page", tax.status === 200 && tax.body.view?.profile?.super_fund_abn === "51824753556" && tax.body.view?.profile?.super_usi === "LAB0100AU"
+    && tax.body.view?.profile?.super_fund_name === "Lab Super" && tax.body.view?.profile?.tax_residency === "resident", JSON.stringify(tax.body).slice(0, 300));
+  check("no column in the hr schema holds a tax file number, and none is asked for", psql("select count(*) from information_schema.columns where table_schema = 'hr' and (column_name ilike '%tfn%' or column_name ilike '%tax_file%');") === "0");
   // Address search: the student form's Geoscape lookup, reached with the private link instead of a login.
   const QUERY = "77 Wizardtest Rd";
   const found = await onboardCall(lab, { action: "address_search", t: link.token, q: QUERY });
@@ -1421,6 +1442,8 @@ async function wizard() {
   const ticked = await restRpc(lab, jwt, "hr_admin_onboarding_check", { p_id: person.id, p_section: "bank", p_verified: true });
   const tickedPassport = await restRpc(lab, jwt, "hr_admin_onboarding_check", { p_id: person.id, p_section: "passport", p_verified: true });
   check("an Admin ticks the bank details and the passport as verified (who and when recorded)", ticked.status === 200 && ticked.body?.checks?.bank?.verifiedByName === "Lab Admin" && Boolean(tickedPassport.body?.checks?.passport?.verifiedAt), JSON.stringify(tickedPassport.body?.checks ?? tickedPassport.body));
+  const tickedTax = await restRpc(lab, jwt, "hr_admin_onboarding_check", { p_id: person.id, p_section: "tax", p_verified: true });
+  check("...and Tax and super; the Admin's page gets the answers with the profile", tickedTax.status === 200 && Boolean(tickedTax.body?.checks?.tax?.verifiedAt) && psql(`select super_fund_abn from hr.staff_profiles where id = '${person.id}';`) === "51824753556", JSON.stringify(tickedTax.body?.checks ?? tickedTax.body));
   const changed = await restRpc(lab, jwt, "hr_admin_emp_bank_save", { p_id: person.id, p_bank: { accountName: "Lab Wizard", bsb: "733-000", accountNumber: "555666" } });
   const extras = await restRpc(lab, jwt, "hr_admin_onboarding_extras", { p_id: person.id });
   check("an Admin changes the bank details: masked answer (two digits of a short number), and the bank tick is cleared", changed.status === 200 && changed.body?.accountNumber === masks[2] && !extras.body?.checks?.bank && Boolean(extras.body?.checks?.passport), JSON.stringify([changed.body, extras.body?.checks]));

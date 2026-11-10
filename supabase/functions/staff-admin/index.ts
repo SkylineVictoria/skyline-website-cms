@@ -6,14 +6,16 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { linkUrl, readHrMailConfig, selectHrMailProvider, sendLinkEmail, sendTemplateEmail } from "../_shared/hr-mail.ts";
-import { buildLetterPdf } from "../_shared/offer-letter-pdf.ts";
 import type { TemplatePerson, TemplateSource } from "../_shared/hr-template.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import { authorizeWorker } from "../_shared/notification/delivery.ts";
-import * as PdfLib from "npm:pdf-lib@1.17.1";
-import { MAX_OFFER_BYTES, inspectOfferPdf } from "../_shared/offer-pdf.ts";
+import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
+import { loadLetterhead } from "../_shared/letterhead.ts";
+// The PDF code (pdf-lib, the embedded fonts) is loaded only by the requests that make or check a PDF, so the worker boots light.
+const letterPdfModule = () => import("../_shared/offer-letter-pdf.ts");
+const offerPdfModule = () => import("../_shared/offer-pdf.ts");
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -89,11 +91,12 @@ Deno.serve(async (req) => {
       return { userId: data?.user?.id ?? null, error: error ? error.message : null };
     },
     deleteLogin: async (userId) => { await service.auth.admin.deleteUser(userId); },
-    letterPdf: (input) => buildLetterPdf(PdfLib, input),
+    // The letter carries the Website Settings letterhead (name, logo, colour): the same styling as every Skyline PDF.
+    letterPdf: async (input) => (await letterPdfModule()).buildLetterPdf({ ...input, letterhead: await loadLetterhead(service) }),
     linkUrl: (purpose, token) => linkUrl(config.siteUrl!, purpose, token),
     drain: () => drainHrOutbox(service, env),
     file,
-    inspectOffer: (bytes) => inspectOfferPdf(PdfLib, bytes),
+    inspectOffer: async (bytes) => (await offerPdfModule()).inspectOfferPdf(bytes),
     upload: async (path, bytes, contentType) => { const { error } = await bucket.upload(path, bytes, { contentType, upsert: false }); return { error: error ? error.message : null }; },
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
     sha256: async (bytes) => hex(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),

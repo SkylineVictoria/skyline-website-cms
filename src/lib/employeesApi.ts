@@ -1,6 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { toE164 } from "@/lib/staffPhone";
-import { employeeDocPath, employeeFileProblem, type EmployeeDetail, type EmployeeDocCategory, type EmployeeForm, type Employee, type EmployeeStatus } from "@/lib/employeeRules";
+import { employeeDocPath, employeeFileProblem, toAuMobile, type EmployeeDetail, type EmployeeDocCategory, type EmployeeForm, type Employee, type EmployeeStatus } from "@/lib/employeeRules";
 
 export * from "@/lib/employeeRules";
 
@@ -23,7 +22,7 @@ export const listEmployees = (status: EmployeeStatus | "", search: string) =>
 export const getEmployee = (id: string) => rpc<EmployeeDetail>("hr_admin_emp_get", { p_id: id }, "The employee could not be loaded.");
 /** Add (id null) or edit. Returns the employee id. */
 export const saveEmployee = (id: string | null, form: EmployeeForm) =>
-  rpc<string>("hr_admin_emp_save", { p_id: id, p_person: { firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: toE164(form.phone) ?? form.phone.trim() } }, "The employee could not be saved.");
+  rpc<string>("hr_admin_emp_save", { p_id: id, p_person: { firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: toAuMobile(form.phone) ?? form.phone.trim() } }, "The employee could not be saved.");
 export const setEmployeeStatus = (id: string, status: EmployeeStatus) =>
   rpc<void>("hr_admin_emp_set_status", { p_id: id, p_status: status }, "The status could not be changed.");
 

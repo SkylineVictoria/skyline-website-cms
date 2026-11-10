@@ -1,4 +1,3 @@
-import { toE164 } from "@/lib/staffPhone";
 
 /** Staff > Employees, simple (20261110170000): types and the checks shared by the form and tests. No network here. */
 
@@ -44,8 +43,7 @@ export function employeeProblems(form: EmployeeForm): Partial<Record<keyof Emplo
   const email = form.email.trim();
   if (!email) out.email = "Enter the email address.";
   else if (email.length > 254 || !EMAIL.test(email)) out.email = "Enter a valid email address.";
-  if (!form.phone.trim()) out.phone = "Enter the mobile number.";
-  else if (!toE164(form.phone)) out.phone = "Enter a valid mobile number (for example 0412 345 678 or +61 412 345 678).";
+  const phone = mobileProblem(form.phone); if (phone) out.phone = phone;
   return out;
 }
 
@@ -62,3 +60,38 @@ export function employeeDocPath(employeeId: string, filename: string, random: st
   const safe = filename.normalize("NFKD").replace(/[^\w.-]+/g, "_").replace(/_+/g, "_").replace(/^[._]+/, "").slice(-120) || "document";
   return `employees/${employeeId}/${random}-${safe}`;
 }
+
+/* mobile: Australian mobiles only; the database checks the same shape (+614 and 8 digits, 20261110180000) */
+
+/** An Australian mobile as +614XXXXXXXX from 0412 345 678, +61 412 345 678, 61412345678 or 0061 412 345 678; anything else null. */
+export function toAuMobile(input: unknown): string | null {
+  const raw = String(input ?? "").trim();
+  if (!raw || /[^\d\s()+-]/.test(raw)) return null;
+  const d = raw.replace(/[\s()-]/g, "");
+  if (/^04\d{8}$/.test(d)) return `+61${d.slice(1)}`;
+  if (/^\+614\d{8}$/.test(d)) return d;
+  if (/^614\d{8}$/.test(d)) return `+${d}`;
+  if (/^00614\d{8}$/.test(d)) return `+${d.slice(2)}`;
+  return null;
+}
+
+/** Why the mobile number is not accepted, or undefined. */
+export function mobileProblem(input: string): string | undefined {
+  const raw = input.trim();
+  if (!raw) return "Enter the mobile number.";
+  if (/[^\d\s()+-]/.test(raw)) return "The mobile number can only contain digits, spaces and a leading +.";
+  if (toAuMobile(raw)) return undefined;
+  const d = raw.replace(/[\s()+-]/g, "").replace(/^(00)?61/, "0");
+  if (/^0[2378]\d{8}$/.test(d)) return "That looks like a landline. Enter a mobile number starting with 04.";
+  if (/^04\d*$/.test(d)) return d.length < 10 ? "The mobile number is too short: it has 10 digits (04XX XXX XXX)." : "The mobile number is too long: it has 10 digits (04XX XXX XXX).";
+  return "Enter an Australian mobile number, for example 0412 345 678.";
+}
+
+/** +61412345678 as 0412 345 678 for display; any other value unchanged. */
+export function formatMobile(value: string): string {
+  const m = /^\+614(\d{2})(\d{3})(\d{3})$/.exec(value);
+  return m ? `04${m[1]} ${m[2]} ${m[3]}` : value;
+}
+
+/** Keeps only what a phone number can contain while typing. */
+export const mobileInput = (value: string) => value.replace(/[^\d\s()+-]/g, "").slice(0, 16);

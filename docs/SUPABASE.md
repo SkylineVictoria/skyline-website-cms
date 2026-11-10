@@ -284,7 +284,7 @@ Preconditions: a fresh backup checkpoint; the release-close manifest refreshed (
    | 20261106120000, 20261106130000 | missing | run by hand (objects present on 2026-11-09; hr_admin_staff_detail was the older body) | fingerprint rows all present: repair. 20261110090000 restates everything it needs from them anyway |
    | 20261109153953 | present | applied (hosted's copy of live/main 20261109143750) | nothing |
    | 20261110090000 | — | the release | run (SQL editor; or `db push` after a dry run once every row above is repaired), then repair |
-   | 20261110100000 | — | org chart (additive, two functions) | run after 20261110090000, then repair |
+   | 20261110100000 | — | org chart (additive, two functions; self-contained: also creates hr.staff_name, identical to 20261110090000) | may run before 20261110090000 (needs only 20261109153953), then repair |
 
    c. Order: repairs first (they only write history rows), then the three LOCAL 20261105 files, then 20261110090000. After it, append every newly recorded version to the backup manifest before the next checkpoint. 20261110090000 also creates the `hr-retention-purge` job INACTIVE; the 2 open jobs stay; job_applied rows (none on hosted) become applied; it refuses to run while any Resume / Cover Letter document row or any job application with document ids exists (none on hosted).
    d. The fingerprint query: every 20261106120000/130000 row and every ba95ce1 row says what hosted has; the three "20261110090000 HR-02" rows must be false before the release and true after it.

@@ -10,6 +10,11 @@
 set local lock_timeout='5s';
 set local statement_timeout='60s';
 
+-- Self-contained so it can run on hosted before 20261110090000 (hosted has hr.employment from 20261109153953): the same
+-- hr.staff_name as 20261110090000, which later replaces it with the identical body.
+create or replace function hr.staff_name(p hr.staff_profiles) returns text
+language sql immutable set search_path = pg_catalog, pg_temp as $fn$ select btrim(concat_ws(' ', nullif(btrim(p.first_name), ''), nullif(btrim(p.last_name), ''))); $fn$;
+
 -- On the chart: active staff, or a pipeline record that already has a manager.
 create or replace function hr.on_org_chart(p_status text, p_manager uuid) returns boolean
 language sql immutable parallel safe as $fn$

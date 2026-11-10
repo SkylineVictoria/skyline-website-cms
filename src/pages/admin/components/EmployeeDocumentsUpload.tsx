@@ -1,3 +1,4 @@
+import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { useRef, useState, type DragEvent } from "react";
 import { Button, Select } from "@/pages/admin/components/ui";
 import {
@@ -10,7 +11,7 @@ const size = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed
 
 /**
  * Several documents in one go: choose or drop the files, check the type guessed for each, then Upload all. Each file is uploaded on
- * its own, so one failure never loses the others; failed files stay in the list with the reason to try again.
+ * its own. Rejected files are discarded and temporary failures can be retried.
  */
 export default function EmployeeDocumentsUpload({ employeeId, onUploaded }: { employeeId: string; onUploaded: (message: string) => void }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -20,13 +21,15 @@ export default function EmployeeDocumentsUpload({ employeeId, onUploaded }: { em
   const input = useRef<HTMLInputElement>(null);
 
   const add = (files: FileList | File[]) => {
-    setError("");
+    const selected = Array.from(files, (file) => ({ file, problem: employeeFileProblem(file) }));
+    setError(selected.flatMap(({ file, problem }) => problem ? [`${file.name}: ${problem}`] : []).join(" "));
     setItems((current) => {
       const next = [...current.filter((i) => i.state !== "done")];
-      for (const file of Array.from(files)) {
+      for (const { file, problem } of selected) {
+        if (problem) continue;
         if (next.some((i) => i.file.name === file.name && i.file.size === file.size)) continue; // the same file twice
         next.push({ key: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`, file, category: guessDocCategory(file.name, next.map((i) => i.category)),
-          problem: employeeFileProblem(file) ?? "", state: "ready" });
+          problem: "", state: "ready" });
       }
       return next;
     });
@@ -40,16 +43,24 @@ export default function EmployeeDocumentsUpload({ employeeId, onUploaded }: { em
     if (busy) return;
     const todo = [...pending.filter((item) => item.category === "Passport"), ...pending.filter((item) => item.category !== "Passport")];
     if (!todo.length) { setError("Choose at least one file."); return; }
-    if (todo.some((i) => employeeFileProblem(i.file))) { setError("Remove the files marked in red first."); return; }
     if (duplicates.length) { setError(`Each type once per upload: ${duplicates.join(", ")} is chosen for more than one file.`); return; }
     setBusy(true); setError("");
     let done = 0;
+    const rejections: string[] = [];
     for (const item of todo) {
       patch(item.key, { state: "uploading", problem: "" });
       try { await uploadEmployeeDocument(employeeId, item.category, item.file); patch(item.key, { state: "done" }); done += 1; }
-      catch (e) { patch(item.key, { state: "failed", problem: e instanceof Error ? e.message : "The file could not be uploaded." }); }
+      catch (e) {
+        if (e instanceof RejectedDocumentError) {
+          rejections.push(`${item.file.name}: ${e.message}`);
+          setItems((list) => list.filter((entry) => entry.key !== item.key));
+        } else {
+          patch(item.key, { state: "failed", problem: e instanceof Error ? e.message : "The file could not be uploaded." });
+        }
+      }
     }
     setBusy(false);
+    if (rejections.length) setError(rejections.join(" "));
     const failed = todo.length - done;
     if (done) onUploaded(failed ? `${done} uploaded; ${failed} could not be uploaded (see below).` : `${done} ${done === 1 ? "document" : "documents"} uploaded.`);
     setItems((list) => list.filter((i) => i.state !== "done"));

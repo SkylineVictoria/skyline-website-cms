@@ -1,3 +1,4 @@
+import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { useState } from "react";
 import { Field, TextInput } from "@/pages/admin/components/ui";
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
@@ -49,6 +50,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
   dropzone?: boolean; camera?: boolean;
 }) {
   const [pending, setPending] = useState<PendingUpload[]>([]);
+  const [uploadRejections, setUploadRejections] = useState<Record<string, string>>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [expiry, setExpiry] = useState<Record<string, string>>({});
   const [expiryError, setExpiryError] = useState<Record<string, string>>({});
@@ -59,7 +61,14 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
       const progress = (fraction: number) => setPending((list) => list.map((p) => (p.key === key ? { ...p, progress: fraction } : p)));
       await adapter.upload(kind, file, kind.expiry === "none" || !askExpiry ? null : expiry[kind.category] || null, undefined, progress);
       setPending((list) => list.filter((p) => p.key !== key));
-    } catch (e) { setPending((list) => list.map((p) => (p.key === key ? { ...p, error: e instanceof Error ? e.message : "The upload failed." } : p))); }
+    } catch (e) {
+      if (e instanceof RejectedDocumentError) {
+        setPending((list) => list.filter((p) => p.key !== key));
+        setUploadRejections((current) => ({ ...current, [kind.category]: e.message }));
+      } else {
+        setPending((list) => list.map((p) => (p.key === key ? { ...p, error: e instanceof Error ? e.message : "The upload failed." } : p)));
+      }
+    }
   };
 
   const pick = (kind: DocumentKind, files: FileList | null) => {
@@ -67,6 +76,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
     if (!list.length) return;
     if (askExpiry && kind.expiry === "required" && !expiry[kind.category]) { setExpiryError((e) => ({ ...e, [kind.category]: "Enter the expiry date first." })); return; }
     setExpiryError((e) => ({ ...e, [kind.category]: "" }));
+    setUploadRejections((current) => ({ ...current, [kind.category]: "" }));
     for (const file of kind.multiple ? list : list.slice(0, 1)) void upload(kind, file);
   };
 
@@ -97,6 +107,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
                 {expiryError[kind.category] ? <p role="alert" className="mt-1 text-xs text-primary-900">{expiryError[kind.category]}</p> : null}
               </div>
             ) : null}
+            {uploadRejections[kind.category] ? <p role="alert" className={ALERT}>{uploadRejections[kind.category]}</p> : null}
             <WizardDocumentStep step={step} dropzone={dropzone} camera={camera}
               docs={documents.filter((d) => d.category === kind.category).map(toStepDoc)}
               pending={pending.filter((p) => p.category === kind.category)} dismissed={dismissed}

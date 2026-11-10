@@ -1,5 +1,5 @@
 import { checkedDocumentCategory } from "../../../../supabase/functions/_shared/document-category";
-import { uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
+import { RejectedDocumentError, uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
 import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
@@ -722,7 +722,7 @@ export { DOCUMENT_MAX_BYTES as MAX_DOCUMENT_BYTES } from "../../../../supabase/f
 /** Size, declared type and content of a picked file: the shared rule (also the staff onboarding wizard's and its Edge Function's). */
 async function validateDocumentFile(file: File): Promise<void> {
   const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
-  if (problem) throw new Error(problem);
+  if (problem) throw new RejectedDocumentError(problem);
 }
 
 export interface UploadDocumentInput {

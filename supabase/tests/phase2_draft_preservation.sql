@@ -9,7 +9,7 @@ set local role authenticated;
 set local request.jwt.claim.sub='36000000-0000-0000-0000-000000000001';
 select lives_ok($$select portal_save_application_draft('46000000-0000-0000-0000-000000000001','{"values":{"first_name":"Reviewed"}}','Reviewed','student@example.test','2027',20)$$,'own draft saves');
 select is((select data->'wizard'->'confirmed' from enrollment_applications where id='46000000-0000-0000-0000-000000000001'),'["first_name"]'::jsonb,'confirmed wizard metadata preserved');
-select is((select data->'values'->>'first_name' from enrollment_applications where id='46000000-0000-0000-0000-000000000001'),'Reviewed','edited form value saved');
+select is((select s.details->>'first_name' from enrollment_applications a join enrollment_students s on s.id = a.student_id where a.id='46000000-0000-0000-0000-000000000001'),'Reviewed','edited form value saved (on the student record since 20261104120000)');
 select throws_ok($$select portal_save_application_draft('46000000-0000-0000-0000-000000000001','{"wizard":{}}','','','',0)$$,'22023',null,'draft command cannot replace review metadata');
 set local request.jwt.claim.sub='36000000-0000-0000-0000-000000000002';
 select throws_ok($$select portal_save_application_draft('46000000-0000-0000-0000-000000000001','{}','','','',0)$$,'42501',null,'foreign actor denied');

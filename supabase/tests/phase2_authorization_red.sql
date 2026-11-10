@@ -9,7 +9,7 @@ select is(has_table_privilege('authenticated','public.admin_menu_items','update'
 select is(has_table_privilege('authenticated','public.admin_menu_items','delete'),false,'browser cannot delete menu');
 select is((select relrowsecurity from pg_class where oid='public.admin_menu_items'::regclass),true,'menu has RLS');
 -- 32 seeded rows plus later menu migrations (businesses, agents, students, staff item, Staff group, Jobs, HRMS pages, ...) on a full repo replay.
-select is((select count(*)::int from public.admin_menu_items),47,'desired menu seeded (47 with HRMS > Templates, 20261111100000)');
+select is((select count(*)::int from public.admin_menu_items),48,'desired menu seeded (48 with Document signing, 20261110154917)');
 -- Seeded hidden: students (unimplemented group), media (unimplemented). 20261102095335: agent_users and agency_directory
 -- (replaced by Agencies > Businesses / Agents / Students). 20261103090000: courses (the group emptied when Course Catalogue
 -- moved under Website).
@@ -41,6 +41,14 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
 insert into public.enrollment_application_messages(application_id,body,visibility) values
  ('42000000-0000-0000-0000-000000000001','Private staff note','internal'),
  ('42000000-0000-0000-0000-000000000001','Agency message','agency');
+-- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
+-- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
+create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
+begin
+  insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
+  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+end $$;
+select pg_temp.checked_upload('42000000-0000-0000-0000-000000000001/own.pdf', 'Passport'), pg_temp.checked_upload('42000000-0000-0000-0000-000000000002/foreign.pdf', 'Passport');
 insert into public.enrollment_application_documents(id,application_id,category,storage_path,filename) values
  ('52000000-0000-0000-0000-000000000001','42000000-0000-0000-0000-000000000001','Passport','42000000-0000-0000-0000-000000000001/own.pdf','own.pdf'),
  ('52000000-0000-0000-0000-000000000002','42000000-0000-0000-0000-000000000002','Passport','42000000-0000-0000-0000-000000000002/foreign.pdf','foreign.pdf');
@@ -604,6 +612,7 @@ insert into public.enrollment_applications(id,agency_id,tenant_id,status,data) v
  ('45000000-0000-0000-0000-000000000003','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','submitted','{}'),
  ('45000000-0000-0000-0000-000000000004','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','coe_issued','{}'),
  ('45000000-0000-0000-0000-0000000000a1','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000001','coe_issued','{}');
+select pg_temp.checked_upload('45000000-0000-0000-0000-000000000001/a.pdf', 'Passport'), pg_temp.checked_upload('45000000-0000-0000-0000-000000000004/a.pdf', 'Passport');
 insert into public.enrollment_application_documents(id,application_id,category,storage_path,filename) values
  ('55000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000001','Passport','45000000-0000-0000-0000-000000000001/a.pdf','a.pdf'),
  ('55000000-0000-0000-0000-000000000004','45000000-0000-0000-0000-000000000004','Passport','45000000-0000-0000-0000-000000000004/a.pdf','a.pdf');

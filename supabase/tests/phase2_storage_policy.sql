@@ -9,12 +9,14 @@ insert into public.agency_memberships(user_id,agency_id,role) values('25000000-0
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status) values
  ('45000000-0000-0000-0000-000000000001','15000000-0000-0000-0000-000000000001','25000000-0000-0000-0000-000000000001','draft'),
  ('45000000-0000-0000-0000-000000000002','15000000-0000-0000-0000-000000000001','25000000-0000-0000-0000-000000000001','submitted');
-insert into public.enrollment_application_documents(application_id,category,storage_path,filename) values
- ('45000000-0000-0000-0000-000000000001','Passport','45000000-0000-0000-0000-000000000001/passport.pdf','passport.pdf'),
- ('45000000-0000-0000-0000-000000000001','Consent','45000000-0000-0000-0000-000000000001/consent.pdf','consent.pdf');
 insert into storage.objects(bucket_id,name) values
  ('enrollment-documents','45000000-0000-0000-0000-000000000001/passport.pdf'),
  ('enrollment-documents','45000000-0000-0000-0000-000000000001/consent.pdf');
+-- Checked categories (20261112100000): the passport row needs the uploader's validation receipt on its object; a consent form is not read.
+select public.record_validated_document_category('enrollment-documents','45000000-0000-0000-0000-000000000001/passport.pdf','Passport');
+insert into public.enrollment_application_documents(application_id,category,storage_path,filename) values
+ ('45000000-0000-0000-0000-000000000001','Passport','45000000-0000-0000-0000-000000000001/passport.pdf','passport.pdf'),
+ ('45000000-0000-0000-0000-000000000001','Consent','45000000-0000-0000-0000-000000000001/consent.pdf','consent.pdf');
 set local role authenticated;
 set local request.jwt.claim.sub='35000000-0000-0000-0000-000000000001';
 select lives_ok($$insert into storage.objects(bucket_id,name) values('enrollment-documents','45000000-0000-0000-0000-000000000001/orphan.pdf')$$,'draft upload object insert preserved');

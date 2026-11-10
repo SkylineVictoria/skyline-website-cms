@@ -13,6 +13,14 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
 insert into auth.users(id,email) values ('33000000-0000-0000-0000-000000000002','positive-admin@example.test');
 insert into public.cms_users(id,name,email,role,status,auth_user_id) values ('phase2-positive-admin','Positive admin','positive-admin@example.test','Admin','Active','33000000-0000-0000-0000-000000000002');
 insert into public.portal_notifications(id,recipient,title) values ('63000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Original');
+-- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
+-- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
+create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
+begin
+  insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
+  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+end $$;
+select pg_temp.checked_upload(p, 'Passport') from unnest(array['43000000-0000-0000-0000-000000000001/a.pdf', '43000000-0000-0000-0000-000000000001/b.pdf', 'foreign/b.pdf']) as p;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000001';
 select is((select count(*)::int from public.agencies),1,'agent can only read own agency');
@@ -460,18 +468,18 @@ select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-00
 select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'x@example.test','X','agent','73000000-0000-0000-0000-000000000001')$$,'22023',null,'an agent invitation names no student');
 select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'stu.dent@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'23505',null,'an already-invited student is not invited twice');
 select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'wrong@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'22023',null,'the invitation goes to the email on the student record');
-insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000020','stu.dent@example.test',now());
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000077','stu.dent@example.test',now());
 set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000020';
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000077';
 select is((public.portal_resolve_access()->>'accepted')::boolean,true,'the student accepts their invitation on first sign-in');
-select is((select m.role||':'||m.student_id::text from public.agency_memberships m join public.portal_profiles p on p.id=m.user_id where p.auth_user_id='33000000-0000-0000-0000-000000000020'),'student:73000000-0000-0000-0000-000000000001','the membership is a student membership tied to the record');
+select is((select m.role||':'||m.student_id::text from public.agency_memberships m join public.portal_profiles p on p.id=m.user_id where p.auth_user_id='33000000-0000-0000-0000-000000000077'),'student:73000000-0000-0000-0000-000000000001','the membership is a student membership tied to the record');
 select is(public.portal_identity()->>'role','student','the student signs in as a student');
 select is(public.portal_identity()->>'student_id','73000000-0000-0000-0000-000000000001','identity names the student record');
 select lives_ok($$select public.portal_create_student_application('stu-key-1','73000000-0000-0000-0000-000000000001')$$,'the student starts their own application');
 reset role;
 select ok((select student_id='73000000-0000-0000-0000-000000000001' and assigned_agent_id is null from public.enrollment_applications where client_key='stu-key-1'),'the application belongs to the student and is not assigned to them as an agent');
 set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000020';
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000077';
 select is((select count(*)::int from public.portal_scoped_applications()),1,'the student is scoped to their own application only');
 select is(public.portal_can_access_application('43000000-0000-0000-0000-000000000001'),false,'another student''s application in the same business is out of reach');
 select throws_ok($$select public.portal_create_student_application('stu-key-2','73000000-0000-0000-0000-000000000003')$$,'42501',null,'a student cannot start another student''s application');
@@ -479,7 +487,7 @@ select is((select count(*)::int from public.enrollment_applications),1,'direct r
 reset role;
 update public.enrollment_students set status='Inactive' where id='73000000-0000-0000-0000-000000000001';
 set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000020';
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000077';
 select is(public.portal_resolve_access()->>'state','user_suspended','a disabled student is suspended');
 select is(public.portal_identity()->>'role',null::text,'a disabled student has no portal role');
 reset role;
@@ -538,7 +546,7 @@ select is((select status from public.agency_invitations where email='de.clined@e
 select is((select status from public.agents where email='de.clined@example.test'),'Inactive','and its agent is no longer invited');
 -- Signing up with Google, Facebook or a phone number: the signed-in account completes its details and becomes a student.
 reset role;
-select is((select count(*)::int from public.agents a join public.portal_profiles p on p.id = a.profile_id where p.auth_user_id = '33000000-0000-0000-0000-000000000020'),0,'a student''s sign-in is never mirrored as an agent');
+select is((select count(*)::int from public.agents a join public.portal_profiles p on p.id = a.profile_id where p.auth_user_id = '33000000-0000-0000-0000-000000000077'),0,'a student''s sign-in is never mirrored as an agent');
 insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000040','google.student@example.test',now());
 insert into auth.users(id,phone,phone_confirmed_at) values ('33000000-0000-0000-0000-000000000041','61498765432',now());
 insert into auth.users(id,email) values ('33000000-0000-0000-0000-000000000042','unconfirmed@example.test');

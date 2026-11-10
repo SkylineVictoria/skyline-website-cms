@@ -17,6 +17,14 @@ insert into public.agency_memberships(user_id, agency_id, role) values
 insert into public.enrollment_applications(id, agency_id, assigned_agent_id, data, status) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '{"values":{"last_name":"Verified"}}', 'draft'),
   ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', '{}', 'draft');
+-- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
+-- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
+create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
+begin
+  insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
+  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+end $$;
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/a.pdf', 'Passport'), pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/b.pdf', 'Passport');
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
   ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/a.pdf', 'a.pdf', '{}'),
   ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/b.pdf', 'b.pdf', '{}');
@@ -63,6 +71,9 @@ select is((public.portal_apply_document_candidates('50000000-0000-0000-0000-0000
 -- Replacement: an unedited value from a superseded file is replaced; an edited one is a conflict.
 insert into public.enrollment_applications(id, agency_id, assigned_agent_id, data, status) values
   ('40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '{"academicQualifications":[{"institution":"Manual Inst","qualification":"Cert"}]}', 'draft');
+reset role;
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000003/' || f, c) from (values ('old.pdf', 'Driving Licence'), ('new.pdf', 'Driving Licence'), ('a1.pdf', 'Academic'), ('a2.pdf', 'Academic'), ('a3.pdf', 'Academic')) as x(f, c);
+set local role service_role;
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
   ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/old.pdf', 'old.pdf', '{}'),
   ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/new.pdf', 'new.pdf', '{}'),

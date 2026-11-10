@@ -2,6 +2,14 @@ begin;
 select plan(34);
 insert into public.agencies(id,name,code) values('14000000-0000-0000-0000-000000000001','Fence fixture','P2-FENCE');
 insert into public.enrollment_applications(id,agency_id,status,data) values('44000000-0000-0000-0000-000000000001','14000000-0000-0000-0000-000000000001','draft','{"values":{"first_name":"Manual"},"wizard":{"confirmed":["first_name"]}}');
+-- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
+-- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
+create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
+begin
+  insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
+  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+end $$;
+select pg_temp.checked_upload('44000000-0000-0000-0000-000000000001/a.pdf', 'Passport');
 insert into public.enrollment_application_documents(id,application_id,category,filename,storage_path,metadata) values('54000000-0000-0000-0000-000000000001','44000000-0000-0000-0000-000000000001','Passport','a.pdf','44000000-0000-0000-0000-000000000001/a.pdf','{}');
 insert into public.enrollment_document_extraction_jobs(id,document_id,application_id) values('64000000-0000-0000-0000-000000000001','54000000-0000-0000-0000-000000000001','44000000-0000-0000-0000-000000000001');
 create temporary table leases(token uuid);

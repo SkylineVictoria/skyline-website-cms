@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(589);
+select plan(593);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -29,6 +29,10 @@ grant select, insert on t to public;
 create function pg_temp.v(text) returns uuid language sql stable as $$ select v::uuid from t where k = $1 $$;
 create function pg_temp.h(text) returns text language sql immutable as $$ select encode(sha256(convert_to($1, 'UTF8')), 'hex') $$;
 create function pg_temp.obj(text) returns void language sql as $$ insert into storage.objects(bucket_id, name) values ('staff-documents', $1) $$;
+-- Checked categories (20261112100000): a staff document row needs the uploader's validation receipt on its Storage object. The fixture
+-- files stand for files the Edge Function checked, so this records a receipt for every checked category on every fixture object.
+create function pg_temp.checked_uploads() returns void language sql as $$
+  select public.record_validated_document_category('staff-documents', o.name, c) from storage.objects o cross join unnest(array['Passport','Academic','Driving Licence','Visa','English','English Test','English Certificate','PTE','Health Insurance']) c where o.bucket_id = 'staff-documents' $$;
 -- Onboarding flow (20261111090000): the pay details an offer needs. pg_temp.pay() is the form with defaults (p_over replaces fields);
 -- pg_temp.set_pay() stores what hr_admin_onboarding_pay_save stores, for fixtures that are not about the form.
 insert into t select 'sched', id::text from hr.pay_schedules where is_active order by name limit 1;
@@ -54,6 +58,7 @@ begin
  update hr.staff_profiles set status = 'documents_submitted', is_australian_citizen = true where id = v_id;
  update hr.staff_applications set submitted_at = now() where profile_id = v_id;
  insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/passport/p.pdf'), ('staff-documents', v_id || '/academic/a.pdf'), ('staff-documents', v_id || '/health-insurance/h.pdf'), ('staff-documents', v_id || '/offer/o.pdf');
+ perform pg_temp.checked_uploads();
  insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, reviewed_at, expiry_date)
   select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', now(), case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
   from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
@@ -72,6 +77,7 @@ begin
  update hr.staff_applications set submitted_at = now() where profile_id = v_id;
  update hr.staff_profiles set is_australian_citizen = true where id = v_id;
  insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/passport/p.pdf'), ('staff-documents', v_id || '/academic/a.pdf'), ('staff-documents', v_id || '/health-insurance/h.pdf');
+ perform pg_temp.checked_uploads();
  insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, expiry_date)
   select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
   from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
@@ -166,6 +172,7 @@ insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/academic/a1.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/academic/a2.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/health-insurance/h.pdf');
+select pg_temp.checked_uploads();
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', gen_random_uuid() || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'a file outside the person''s folder is refused');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/visa/v.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'the folder must match the document type');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/missing.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, 'P0002', 'The uploaded file was not found.', 'the file must exist');
@@ -213,6 +220,7 @@ select throws_ok($$select public.hr_svc_upload_target(pg_temp.h('tok-4'), 'Paysl
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-4'), '{"first_name":"Changed"}')$$, '28000', 'This link is not valid any more. Ask us for a new one.', 'a re-upload link cannot change details');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/visa/v2.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/passport/p3.pdf');
+select pg_temp.checked_uploads();
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-4'), 'Visa', pg_temp.v('a1') || '/visa/v2.pdf', 'v.pdf', 'application/pdf', 10, current_date + 400)$$, '23514', 'Only a rejected document can be replaced.', 'an accepted or pending document stays');
 select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-4'))$$, '23514', 'Replace every document we asked you to upload again.', 'submit needs the rejected document replaced');
 select is(public.hr_svc_document_add(pg_temp.h('tok-4'), 'Passport', pg_temp.v('a1') || '/passport/p3.pdf', 'p3.pdf', 'application/pdf', 10, current_date + 900)->'replacedPaths', '[]'::jsonb, 'the rejected passport is replaced and the old file is kept');
@@ -489,6 +497,8 @@ select is(has_function_privilege('anon', 'public.hr_svc_rate_count(text, integer
 -- ---------------------------------------------------------------- document reading fills EMPTY details only, while invited
 insert into t select 'x1', public.hr_svc_apply('Xena', 'Keep', 'xena@example.test', '0400 000 701')->>'profileId';
 update hr.staff_profiles set status = 'invited', first_name = '' where id = pg_temp.v('x1');
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('x1') || '/passport/x.pdf'), ('staff-documents', pg_temp.v('x1') || '/visa/x.pdf');
+select pg_temp.checked_uploads();
 insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date)
  select a.id, a.profile_id, 'Passport', a.profile_id || '/passport/x.pdf', 'x.pdf', 'application/pdf', 10, current_date + 100 from hr.staff_applications a where a.profile_id = pg_temp.v('x1');
 select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1')), 'done', '{"first_name":"Asha","last_name":"Overwritten","dob":"1999-04-05","passport_number":"X1234567"}')$$, 'a passport reading is recorded');
@@ -709,6 +719,7 @@ select throws_ok($$update hr.staff_profiles set status = 'offer_sent' where id =
 -- ---- Documents submitted > approved
 update hr.staff_profiles set is_australian_citizen = true where id = pg_temp.v('f1');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('f1') || '/passport/p.pdf'), ('staff-documents', pg_temp.v('f1') || '/academic/a.pdf'), ('staff-documents', pg_temp.v('f1') || '/health-insurance/h.pdf');
+select pg_temp.checked_uploads();
 insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date)
  select a.id, a.profile_id, c.category, a.profile_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = pg_temp.v('f1');
@@ -1032,6 +1043,7 @@ select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz A
 select is(public.hr_admin_onboarding_extras(pg_temp.v('w1p'))->'checks' ? 'bank', false, 'changing the bank details clears their tick');
 reset role;
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('w1p') || '/passport/w.pdf'), ('staff-documents', pg_temp.v('w1p') || '/passport/w2.pdf');
+select pg_temp.checked_uploads();
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-wiz'), 'Passport', pg_temp.v('w1p') || '/passport/w.pdf', 'w.pdf', 'application/pdf', 10)$$, 'a passport for the wizard person');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
@@ -1060,20 +1072,28 @@ select ok(not has_function_privilege('authenticated','public.signing_service(tex
 select ok(not has_table_privilege('authenticated','hr.sign_requests','select'), 'request tables are private');
 select set_config('request.jwt.claim.sub','a0000000-0000-0000-0000-000000000004',true);
 select set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-000000000004","role":"authenticated"}',true);
-select lives_ok($select public.signing_admin('create','d0000000-0000-0000-0000-000000000001',jsonb_build_object('title','Fixture','recipient_name','Asha Patel','recipient_email','asha@example.test','original_hash',repeat('a',64)))$, 'admin creates draft');
+select lives_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000001',jsonb_build_object('title','Fixture','recipient_name','Asha Patel','recipient_email','asha@example.test','original_hash',repeat('a',64)))$$, 'admin creates draft');
 select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'draft','new request is draft');
-select lives_ok($select public.signing_admin('send','d0000000-0000-0000-0000-000000000001',jsonb_build_object('token_hash',repeat('b',64),'delivery_id','d0000000-0000-0000-0000-000000000002'))$,'send claims request');
-select throws_ok($select public.signing_admin('send','d0000000-0000-0000-0000-000000000001','{}')$,'P0001','An email is already being sent','concurrent send refused');
+select lives_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001',jsonb_build_object('token_hash',repeat('b',64),'delivery_id','d0000000-0000-0000-0000-000000000002'))$$,'send claims request');
+select throws_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001','{}')$$,'P0001','An email is already being sent','concurrent send refused');
 select is(public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000099","state":"sent"}')->>'stale','true','stale delivery fenced');
 select public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000002","state":"sent"}');
 select is(public.signing_service('open',repeat('b',64))->>'state','viewed','first open records viewed');
-select throws_ok($select public.signing_service('open',repeat('c',64))$,'P0001','This signing link is invalid or expired','unknown token refused');
-select throws_ok($select public.signing_service('sign',repeat('b',64),null,'{}')$,'P0001','Your full name and agreement are required','missing consent refused');
+select throws_ok($$select public.signing_service('open',repeat('c',64))$$,'P0001','This signing link is invalid or expired','unknown token refused');
+select throws_ok($$select public.signing_service('sign',repeat('b',64),null,'{}')$$,'P0001','Your full name and agreement are required','missing consent refused');
 select public.signing_service('sign',repeat('b',64),null,jsonb_build_object('signer_name','Asha Patel','signed_at',now(),'signed_path','d0000000-0000-0000-0000-000000000001/signed-fixture.pdf','signed_hash',repeat('d',64),'original_hash',repeat('a',64),'consent','I have read this document and agree to its contents. I consent to use my typed full name as my electronic signature.'));
 select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'signed','signature committed');
-select throws_ok($select public.signing_service('sign',repeat('b',64),null,'{}')$,'P0001','This document is already signed','replay refused');
-select throws_ok($select public.signing_admin('void','d0000000-0000-0000-0000-000000000001')$,'P0001','This request is closed','signed document cannot be voided');
+select throws_ok($$select public.signing_service('sign',repeat('b',64),null,'{}')$$,'P0001','This document is already signed','replay refused');
+select throws_ok($$select public.signing_admin('void','d0000000-0000-0000-0000-000000000001')$$,'P0001','This request is closed','signed document cannot be voided');
 select is(public.signing_service('path_referenced',null,null,'{"path":"d0000000-0000-0000-0000-000000000001/signed-fixture.pdf"}'),'true'::jsonb,'committed PDF protected from cleanup');
 select is((select count(*)::int from hr.sign_events where request_id='d0000000-0000-0000-0000-000000000001' and event='signed'),1,'one signature audit event');
+-- Checked categories (20261112100000): a staff document is recorded only for a file the uploader checked as that category.
+reset role;
+insert into t select 'cu1', public.hr_svc_apply('Chi', 'Checked', 'cu.checked@example.test', '0400 000 971')->>'profileId';
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('cu1') || '/passport/unchecked.pdf');
+select throws_ok($$insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date) select a.id, a.profile_id, 'Passport', a.profile_id || '/passport/unchecked.pdf', 'u.pdf', 'application/pdf', 10, current_date + 400 from hr.staff_applications a where a.profile_id = pg_temp.v('cu1')$$, '23514', 'Upload the file in the correct document field so its contents can be checked.', 'a passport whose file was not checked as a passport is refused');
+select is(public.record_validated_document_category('staff-documents', pg_temp.v('cu1') || '/passport/unchecked.pdf', 'Passport'), true, 'the uploader records a receipt for the checked file');
+select lives_ok($$insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date) select a.id, a.profile_id, 'Passport', a.profile_id || '/passport/unchecked.pdf', 'u.pdf', 'application/pdf', 10, current_date + 400 from hr.staff_applications a where a.profile_id = pg_temp.v('cu1')$$, 'the same file is accepted once its receipt exists');
+select is(has_function_privilege('authenticated', 'public.record_validated_document_category(text, text, text)', 'execute'), false, 'browsers cannot issue receipts');
 select * from finish();
 rollback;

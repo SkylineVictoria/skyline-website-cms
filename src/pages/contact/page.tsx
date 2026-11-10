@@ -1,4 +1,3 @@
-import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import Reveal from "@/components/base/Reveal";
 import { breadcrumbSchema } from "@/data/seo";
@@ -24,13 +23,12 @@ export default function ContactPage() {
           ]),
         ]}
       />
-      <PageHero title="Contact" breadcrumb="Contact" />
       {bookingSrc ? (
         <section className="bg-background-100 py-12 md:py-16">
           <div className="site-container max-w-3xl">
             <Reveal className="text-center">
               <p className="font-label text-xs font-semibold uppercase tracking-[0.2em] text-primary-600">Book a call</p>
-              <h2 className="mt-3 font-heading text-2xl font-bold text-foreground-950 md:text-3xl">Pick a time to talk to us</h2>
+              <h1 className="mt-3 font-heading text-2xl font-bold text-foreground-950 md:text-3xl">Pick a time to talk to us</h1>
               <p className="mt-3 text-sm leading-relaxed text-foreground-600">Choose a slot and leave your name, email and phone number. We will call you at that time.</p>
             </Reveal>
             <div className="mt-6 overflow-hidden rounded-card border border-background-200 bg-background-50">

@@ -267,9 +267,9 @@ test("student guest upload checks the category before saving or replacing anythi
   const { runGuestUpload } = await import("../supabase/functions/_shared/guest-upload.ts");
   const cannotRun = () => { throw new Error("An invalid file must not change document storage or state."); };
   const outcome = await runGuestUpload({
-    checkCategory: async ({ category }) => {
+    checkOwnership: async ({ category }) => {
       assert.equal(category, "Visa");
-      return { status: 422, error: "Upload a visa document." };
+      return { ok: false, status: 422, error: "Upload a visa document." };
     },
     existing: cannotRun, countAll: cannotRun, store: cannotRun, insert: cannotRun, discardObject: cannotRun,
     enqueue: cannotRun, dispatch: cannotRun, remove: cannotRun,
@@ -287,4 +287,39 @@ test("guest English evidence stays accepted when field extraction has no usable 
   const checked = publicDocument("ref", { ...row, storage_path: "app/validated-fixture.pdf" });
   assert.equal(checked.mismatch, false);
   assert.equal(checked.detected, "English Test");
+});
+
+test("upload matches the printed first name and surname against the passport", async () => {
+  const { createDocumentCategoryCheck } = await import("../supabase/functions/_shared/document-extraction/classify.ts");
+  const passport_holder = { first_name: "Élodie", surname: "O’Neil" };
+  let holders: Array<{ first_name: string | null; surname: string | null }> = [{ first_name: "Elodie", surname: "O'Neil" }];
+  const check = createDocumentCategoryCheck({ apiKey: "test", model: "test", fetch: async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.store, false);
+    assert.deepEqual(body.input[0].content.map((item: { filename: string }) => item.filename), ["document.pdf", "passport.pdf"]);
+    return Response.json({ status: "completed", output_text: JSON.stringify({ category: "Academic", holders: holders.map((holder) => ({ ...holder, single_name: false })), passport_holder: { ...passport_holder, single_name: false } }) });
+  } });
+  const file = { bytes: pdf, mime: "application/pdf", filename: "sample.pdf" };
+  const request = { ...file, category: "Academic", verifyName: true, passport: file };
+  assert.equal(await check(request), null);
+  for (const person of [
+    { first_name: "Amelia", surname: "O'Neil" },
+    { first_name: "Elodie", surname: "Smith" },
+    { first_name: "Elodie", surname: null },
+    { first_name: null, surname: "O'Neil" },
+  ]) {
+    holders = [person];
+    assert.equal((await check(request))?.status, 422);
+  }
+  holders = [{ first_name: "Elodie", surname: "O'Neil" }, { first_name: "Amelia", surname: "Smith" }];
+  assert.equal((await check(request))?.status, 422, "a bundle containing another person's record is rejected");
+});
+
+test("supporting files require a current passport before provider calls or storage", async () => {
+  const { checkDocumentOwnership } = await import("../supabase/functions/_shared/document-ownership.ts");
+  const admin = { rpc: async () => ({ data: null, error: null }) } as unknown as Parameters<typeof checkDocumentOwnership>[0];
+  const check = checkDocumentOwnership(admin, "staff-documents", async () => { throw new Error("Do not classify without a reference"); });
+  assert.deepEqual(await check({ category: "Visa", bytes: pdf, mime: "application/pdf", filename: "visa.pdf" }, "employee"), {
+    ok: false, status: 422, error: "Upload the passport identity page before uploading other documents.",
+  });
 });

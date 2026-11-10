@@ -38,7 +38,7 @@ export default function EmployeeDocumentsUpload({ employeeId, onUploaded }: { em
 
   const uploadAll = async () => {
     if (busy) return;
-    const todo = pending;
+    const todo = [...pending.filter((item) => item.category === "Passport"), ...pending.filter((item) => item.category !== "Passport")];
     if (!todo.length) { setError("Choose at least one file."); return; }
     if (todo.some((i) => employeeFileProblem(i.file))) { setError("Remove the files marked in red first."); return; }
     if (duplicates.length) { setError(`Each type once per upload: ${duplicates.join(", ")} is chosen for more than one file.`); return; }

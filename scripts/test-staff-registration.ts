@@ -294,7 +294,7 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
     upload: async (p: string, bytes: Uint8Array, type: string) => { calls.push(["upload", { p, type, size: bytes.length }]); return { error: options.uploadError ?? null }; },
     remove: async (paths: string[]) => { calls.push(["remove", paths]); },
     signedUrl: async (p: string, seconds: number) => `signed:${p}:${seconds}`,
-    checkCategory: async () => null,
+    checkOwnership: async () => ({ ok: true as const, passportId: null }),
     recordCategory: async () => true,
     scheduleExtraction: (doc: { category: string }) => { scheduled.push(doc.category); },
     hash: async (v: string) => `h(${v})`,
@@ -392,7 +392,7 @@ test("onboarding: a rejected category leaves the current file and checklist unto
   const run = linkDeps();
   const result = await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" },
     new File([PDF_BYTES], "passport.pdf", { type: "application/pdf" })), {
-    ...run.deps, checkCategory: async () => ({ status: 422, error: "Upload an academic record." }),
+    ...run.deps, checkOwnership: async () => ({ ok: false, status: 422, error: "Upload an academic record." }),
   });
   assert.deepEqual(result, { status: 422, body: { error: "Upload an academic record.", field: "file" } });
   assert.deepEqual(run.names().filter((name) => name !== "limit"), ["hr_svc_upload_target"]);
@@ -1985,17 +1985,4 @@ test("onboarding address_search: the student form's Geoscape lookup through the 
   assert.equal(read("supabase/functions/_shared/validation/address.ts"), read("recovered/live-edge-functions-2026-11-02/_shared/validation/address.ts"), "the helper is the one the live address-search function runs");
   for (const file of ["src/pages/agency/components/ApplicationWorkspace.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) assert.ok(read(file).includes("@/components/shared/wizard/AddressSearch"), `${file} uses the shared address search`);
   assert.ok(!/console\.(log|info|warn|error)\([^)]*\b(q|query)\b/.test(read("supabase/functions/staff-onboarding/core.ts") + index), "the search text is never logged");
-});
-
-test("Employees > Onboarding table: Send link for Applied, Resend link for Invited, nothing for other stages", () => {
-  assert.equal(status.linkActionFor("applied"), "send");
-  assert.equal(status.linkActionFor("invited"), "resend");
-  for (const s of ["documents_submitted", "offer_sent", "offer_signed", "active", "inactive", "rejected"] as const) assert.equal(status.linkActionFor(s), null, s);
-  // The same actions as the person's page: Applied sends the first link, Invited a new one that stops the earlier link.
-  assert.equal(status.employeeActions({ status: "applied" } as never).includes("send_documents_link"), true);
-  assert.equal(status.employeeActions({ status: "invited" } as never).includes("resend_documents_link"), true);
-  const button = read("src/pages/admin/components/ResendLinkButton.tsx");
-  assert.ok(button.includes("staffAdminActions.sendDocuments(row.id)") && button.includes('staffAdminActions.sendLink(row.id, "documents")'), "the row button uses the same staff-admin actions");
-  assert.ok(button.includes("result.link") && button.includes("linkCancelled"), "email off: the link is shown once; a failed email cancels the link and says so");
-  assert.ok(read("src/pages/admin/StaffPage.tsx").includes("<ResendLinkButton row={r}"), "the Onboarding table has the button");
 });

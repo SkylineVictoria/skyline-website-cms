@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createDocumentCategoryCheck } from "../_shared/document-extraction/classify.ts";
+import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import {
@@ -148,14 +149,15 @@ Deno.serve(async (request) => {
       }
       const { data: app } = await admin.from("enrollment_applications").select("tenant_id").eq("id", applicationId).maybeSingle();
       const replaced = body.replaceRef ? await findDocument(body.replaceRef) : null;
+      const checkOwnership = checkDocumentOwnership(admin, "enrollment-documents", checkCategory);
       const port: UploadPort = {
-        checkCategory,
+        checkOwnership: (document) => checkOwnership(document, applicationId),
         existing: async (category) => (await documentRows()).filter((row) => row.category === category)
           .map((row) => ({ id: String(row.id), sha256: String((row.metadata as { contentSha256?: string } | null)?.contentSha256 ?? "") })),
         countAll: async () => (await documentRows()).length,
         store: async (path, data, mime) => !(await admin.storage.from("enrollment-documents").upload(path, data, { upsert: false, contentType: mime })).error,
         insert: async (row) => {
-          if (!(await recordDocumentCategory(admin, "enrollment-documents", row.storagePath, row.category))) return null;
+          if (!(await recordDocumentCategory(admin, "enrollment-documents", row.storagePath, row.category, row.passportId))) return null;
           const { data } = await admin.from("enrollment_application_documents").insert({
             application_id: applicationId, tenant_id: app?.tenant_id ?? null, category: row.category, bucket_name: "enrollment-documents", storage_path: row.storagePath,
             filename: row.filename, mime_type: row.mime, file_size: row.size, uploaded_by: null, guest_link_id: linkId, metadata: queuedMetadata({ contentSha256: row.sha256 }),

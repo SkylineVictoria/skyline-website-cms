@@ -1,4 +1,4 @@
-import { checkedDocumentCategory, hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
+import { checkedDocumentCategory } from "../../../../supabase/functions/_shared/document-category";
 import { uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
 import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -771,8 +771,8 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   if (duplicate) {
     const id = String(duplicate.id);
     const path = String(duplicate.storage_path);
-    if (protectedCategory && !hasValidatedDocumentPath(path)) {
-      // A retry for an older file checks the existing bytes before returning it.
+    if (protectedCategory) {
+      // Check retries against the current passport before returning the saved file.
       await uploadValidatedDocument("enrollment", applicationId, category, file, id);
     }
     return { id, path, category: String(duplicate.category), filename: String(duplicate.filename) };

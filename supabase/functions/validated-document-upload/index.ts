@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { checkedDocumentCategory } from "../_shared/document-category.ts";
 import { createDocumentCategoryCheck } from "../_shared/document-extraction/classify.ts";
+import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { DOCUMENT_MAX_BYTES, documentFileProblem } from "../_shared/validation/person.ts";
 
@@ -44,7 +45,7 @@ Deno.serve(async (request) => {
   if (existingDocumentId && (target !== "enrollment" || !uuid.test(existingDocumentId))) return fail("Choose a valid document.", 400);
   if (file.size === 0 || file.size > DOCUMENT_MAX_BYTES) return fail("The file must be greater than 0 bytes and 10 MB or smaller.", 413);
 
-  let bucketName: string, folder: string;
+  let bucketName: "enrollment-documents" | "staff-documents", folder: string;
   if (target === "enrollment") {
     const { data, error } = await caller.rpc("portal_can_edit_application", { app_id: ownerId });
     if (error || data !== true) return fail("You cannot upload to this application.", 403);
@@ -83,15 +84,16 @@ Deno.serve(async (request) => {
     if (!bytes.every((byte, index) => byte === saved[index])) return fail("The existing document could not be checked.", 409);
     existingPath = document.storage_path;
   }
-  const problem = await checkCategory({ category, bytes, mime: file.type, filename: file.name, australianVisaOnly: target === "enrollment" });
-  if (problem) return fail(problem.error, problem.status);
+  const checkOwnership = checkDocumentOwnership(admin, bucketName, checkCategory);
+  const ownership = await checkOwnership({ category, bytes, mime: file.type, filename: file.name, australianVisaOnly: target === "enrollment" }, ownerId);
+  if (!ownership.ok) return fail(ownership.error, ownership.status);
   if (existingPath) return reply({ path: existingPath });
   const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
   const path = `${folder}/validated-${crypto.randomUUID()}${ext}`;
   const bucket = admin.storage.from(bucketName);
   const { error } = await bucket.upload(path, bytes, { upsert: false, contentType: file.type });
   if (error) return fail("The file could not be uploaded. Please try again.", 503);
-  if (!(await recordDocumentCategory(admin, bucketName, path, category))) {
+  if (!(await recordDocumentCategory(admin, bucketName, path, category, ownership.passportId))) {
     await bucket.remove([path]);
     return fail("The file could not be verified. Please try again.", 503);
   }

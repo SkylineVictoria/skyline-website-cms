@@ -235,3 +235,7 @@ export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): 
   else if (!/^\d{1,2}(\.\d{1,2})?$/.test(input.hoursPerWeek.trim()) || !(hours > 0) || hours > 80) problems.hoursPerWeek = "The hours per week must be between 1 and 80.";
   return problems;
 }
+
+/** HRMS > Employees > Onboarding table: the document link a row can send: the first one (Applied) or a new one replacing the current link (Invited). */
+export const linkActionFor = (status: StaffStatus): "send" | "resend" | null =>
+  status === "applied" ? "send" : status === "invited" ? "resend" : null;

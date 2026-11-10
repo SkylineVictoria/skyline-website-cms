@@ -1962,3 +1962,16 @@ test("onboarding address_search: the student form's Geoscape lookup through the 
   for (const file of ["src/pages/agency/components/ApplicationWorkspace.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) assert.ok(read(file).includes("@/components/shared/wizard/AddressSearch"), `${file} uses the shared address search`);
   assert.ok(!/console\.(log|info|warn|error)\([^)]*\b(q|query)\b/.test(read("supabase/functions/staff-onboarding/core.ts") + index), "the search text is never logged");
 });
+
+test("Employees > Onboarding table: Send link for Applied, Resend link for Invited, nothing for other stages", () => {
+  assert.equal(status.linkActionFor("applied"), "send");
+  assert.equal(status.linkActionFor("invited"), "resend");
+  for (const s of ["documents_submitted", "offer_sent", "offer_signed", "active", "inactive", "rejected"] as const) assert.equal(status.linkActionFor(s), null, s);
+  // The same actions as the person's page: Applied sends the first link, Invited a new one that stops the earlier link.
+  assert.equal(status.employeeActions({ status: "applied" } as never).includes("send_documents_link"), true);
+  assert.equal(status.employeeActions({ status: "invited" } as never).includes("resend_documents_link"), true);
+  const button = read("src/pages/admin/components/ResendLinkButton.tsx");
+  assert.ok(button.includes("staffAdminActions.sendDocuments(row.id)") && button.includes('staffAdminActions.sendLink(row.id, "documents")'), "the row button uses the same staff-admin actions");
+  assert.ok(button.includes("result.link") && button.includes("linkCancelled"), "email off: the link is shown once; a failed email cancels the link and says so");
+  assert.ok(read("src/pages/admin/StaffPage.tsx").includes("<ResendLinkButton row={r}"), "the Onboarding table has the button");
+});

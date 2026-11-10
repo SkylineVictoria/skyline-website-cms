@@ -1,5 +1,4 @@
 import Seo from "@/components/feature/Seo";
-import Reveal from "@/components/base/Reveal";
 import { breadcrumbSchema } from "@/data/seo";
 import { usePublicSite } from "@/hooks/publicSiteContext";
 import { calendlyEmbedSrc } from "@/lib/calendly";
@@ -24,16 +23,17 @@ export default function ContactPage() {
         ]}
       />
       {bookingSrc ? (
-        <section className="bg-background-100 py-12 md:py-16">
-          <div className="site-container max-w-3xl">
-            <Reveal className="text-center">
-              <p className="font-label text-xs font-semibold uppercase tracking-[0.2em] text-primary-600">Book a call</p>
-              <h1 className="mt-3 font-heading text-2xl font-bold text-foreground-950 md:text-3xl">Pick a time to talk to us</h1>
-              <p className="mt-3 text-sm leading-relaxed text-foreground-600">Choose a slot and leave your name, email and phone number. We will call you at that time.</p>
-            </Reveal>
-            <div className="mt-6 overflow-hidden rounded-card border border-background-200 bg-background-50">
-              <iframe title="Book a call" src={bookingSrc} className="h-[720px] w-full border-0" loading="lazy" />
+        <section className="bg-white py-8 md:py-12" aria-labelledby="booking-title">
+          <div className="site-container max-w-6xl">
+            <div className="text-center">
+              <h1 id="booking-title" className="font-heading text-3xl font-bold tracking-tight text-foreground-950 md:text-4xl">Book a call</h1>
+              <p className="mt-2 text-sm text-foreground-600 md:text-base">Choose a time and we’ll call you.</p>
             </div>
+            <iframe
+              title="Schedule a call with Skyline Institute of Technology"
+              src={bookingSrc}
+              className="mt-6 block h-[820px] w-full border-0 sm:h-[720px]"
+            />
           </div>
         </section>
       ) : null}

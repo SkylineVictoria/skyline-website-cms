@@ -1,4 +1,6 @@
 
+import { formatPhone, parseStoredPhone, validateStoredPhone } from "../../supabase/functions/_shared/validation/identifiers";
+
 /** Staff > Employees, simple (20261110170000): types and the checks shared by the form and tests. No network here. */
 
 export type EmployeeStatus = "active" | "inactive";
@@ -61,37 +63,13 @@ export function employeeDocPath(employeeId: string, filename: string, random: st
   return `employees/${employeeId}/${random}-${safe}`;
 }
 
-/* mobile: Australian mobiles only; the database checks the same shape (+614 and 8 digits, 20261110180000) */
+/* mobile: the same rules as the student and agent forms (PhoneInput: country code + number; validateStoredPhone) */
 
-/** An Australian mobile as +614XXXXXXXX from 0412 345 678, +61 412 345 678, 61412345678 or 0061 412 345 678; anything else null. */
-export function toAuMobile(input: unknown): string | null {
-  const raw = String(input ?? "").trim();
-  if (!raw || /[^\d\s()+-]/.test(raw)) return null;
-  const d = raw.replace(/[\s()-]/g, "");
-  if (/^04\d{8}$/.test(d)) return `+61${d.slice(1)}`;
-  if (/^\+614\d{8}$/.test(d)) return d;
-  if (/^614\d{8}$/.test(d)) return `+${d}`;
-  if (/^00614\d{8}$/.test(d)) return `+${d.slice(2)}`;
-  return null;
+/** Why the stored mobile (E.164 from PhoneInput) is not accepted, or undefined. */
+export function mobileProblem(stored: string): string | undefined {
+  if (!parseStoredPhone(stored)?.national) return "Enter the mobile number.";
+  return validateStoredPhone(stored) || undefined;
 }
 
-/** Why the mobile number is not accepted, or undefined. */
-export function mobileProblem(input: string): string | undefined {
-  const raw = input.trim();
-  if (!raw) return "Enter the mobile number.";
-  if (/[^\d\s()+-]/.test(raw)) return "The mobile number can only contain digits, spaces and a leading +.";
-  if (toAuMobile(raw)) return undefined;
-  const d = raw.replace(/[\s()+-]/g, "").replace(/^(00)?61/, "0");
-  if (/^0[2378]\d{8}$/.test(d)) return "That looks like a landline. Enter a mobile number starting with 04.";
-  if (/^04\d*$/.test(d)) return d.length < 10 ? "The mobile number is too short: it has 10 digits (04XX XXX XXX)." : "The mobile number is too long: it has 10 digits (04XX XXX XXX).";
-  return "Enter an Australian mobile number, for example 0412 345 678.";
-}
-
-/** +61412345678 as 0412 345 678 for display; any other value unchanged. */
-export function formatMobile(value: string): string {
-  const m = /^\+614(\d{2})(\d{3})(\d{3})$/.exec(value);
-  return m ? `04${m[1]} ${m[2]} ${m[3]}` : value;
-}
-
-/** Keeps only what a phone number can contain while typing. */
-export const mobileInput = (value: string) => value.replace(/[^\d\s()+-]/g, "").slice(0, 16);
+/** 041 234 5678 for Australia, +91 987 654 321 0 style otherwise (as on student and agent records). */
+export const formatMobile = (value: string) => formatPhone(value);

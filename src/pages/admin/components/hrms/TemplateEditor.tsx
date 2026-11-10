@@ -53,7 +53,7 @@ export default function TemplateEditor({ value, onChange, placeholders, minHeigh
 
   const groups = [...new Set(placeholders.map((p) => p.group))];
   return (
-    <div className="grid gap-3 lg:grid-cols-[1fr_230px]">
+    <div className={placeholders.length ? "grid gap-3 lg:grid-cols-[1fr_230px]" : "grid gap-3"}>
       <div className="min-w-0 rounded-md border border-background-300 bg-background-50">
         <div className="flex flex-wrap items-center gap-1 border-b border-background-200 px-2 py-1.5" role="toolbar" aria-label="Formatting">
           {TOOLS.map((group, g) => (
@@ -72,7 +72,7 @@ export default function TemplateEditor({ value, onChange, placeholders, minHeigh
           onInput={emit} onBlur={emit} onKeyUp={remember} onMouseUp={remember}
           className={`overflow-y-auto bg-white px-5 py-4 outline-none ${TEMPLATE_PROSE}`} style={{ minHeight, maxHeight: "52vh" }} />
       </div>
-      <aside className="rounded-md border border-background-200 bg-background-100 p-3" aria-label="Placeholders">
+      {placeholders.length ? <aside className="rounded-md border border-background-200 bg-background-100 p-3" aria-label="Placeholders">
         <p className="text-[13px] font-semibold text-foreground-900">Placeholders</p>
         <p className="mb-2 text-xs text-foreground-600">Click one to insert it where the cursor is. It is replaced with the person's details when the template is used.</p>
         <div className="max-h-[46vh] space-y-3 overflow-y-auto pr-1">
@@ -93,7 +93,7 @@ export default function TemplateEditor({ value, onChange, placeholders, minHeigh
             </div>
           ))}
         </div>
-      </aside>
+      </aside> : null}
     </div>
   );
 }

@@ -10,7 +10,7 @@
 import type { HrMailConfig } from "../_shared/hr-mail.ts";
 import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
 import { builtInLoginEmail } from "../_shared/hr-mail.ts";
-import { longDate, placeholderLabels, renderMessage, templateValues, type RenderedMessage, type TemplatePerson, type TemplateSource, type TemplateType } from "../_shared/hr-template.ts";
+import { longDate, placeholderLabels, renderMessage, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type RenderedMessage, type TemplatePerson, type TemplateSource, type TemplateType } from "../_shared/hr-template.ts";
 import { letterFileName } from "../_shared/offer-rules.ts";
 //
 // Onboarding flow (2026-11-10): `send_documents` is "Send document link" on the employee page (a Careers applicant is hired for their
@@ -32,7 +32,7 @@ import { letterFileName } from "../_shared/offer-rules.ts";
 // it (with its sha256) through hr_admin_staff_offer_add as the caller; a refusal removes the stored file, and an unsent offer it
 // replaces is deleted. offer_send works like a document link (purpose offer, 30 days). offer_withdraw needs a note.
 
-export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add", "hire", "candidate_file", "send_documents", "offer_generate", "offer_send_login", "resend_login"] as const;
+export const ACTIONS = ["send_invite", "revoke_invite", "reject", "retry_email", "drain", "offer_upload", "offer_send", "offer_withdraw", "activate", "resend_activation", "purge", "add", "hire", "candidate_file", "send_documents", "offer_generate", "offer_send_login", "resend_login", "offer_preview", "invite_login"] as const;
 export type AdminAction = (typeof ACTIONS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -62,6 +62,8 @@ export interface AdminDeps {
   deleteLogin?(userId: string): Promise<void>;
   /** The filled-in letter as a PDF (pdf-lib). */
   letterPdf?(input: { title: string; html: string; footer: string }): Promise<{ bytes: Uint8Array; pages: number }>;
+  /** The first text the PDF font cannot set as typed (folded or printed as "?"), or null: the letter is refused instead of altered. */
+  unsupportedText?(texts: string[]): Promise<string | null>;
   linkUrl(purpose: LinkPurpose, token: string): string;
   /** Auth (service role): the single login for an email, or null. */
   findLogin(email: string): Promise<{ login: LoginInfo | null; error: string | null }>;
@@ -201,28 +203,114 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
     return { ok: true, message: { subject: rendered.subject, text: rendered.text, html: rendered.html } };
   };
 
+  /**
+   * The offer letter for this person, from its template or from the HTML the admin edited for THIS copy (sanitised again here;
+   * a placeholder left in it, or a character the PDF font cannot print, is refused before anything is made). The template is never
+   * changed. The same function serves the preview and the send, so the preview is the letter that goes out.
+   */
+  const prepareLetter = async (templateId: string | null, editedHtml: unknown):
+    Promise<{ ok: true; title: string; html: string; templateHtml: string; edited: boolean; values: Record<string, string>; template: TemplateSource & { id: string; name: string } } | { ok: false; result: AdminResult }> => {
+    if (!templateId) return { ok: false, result: { status: 400, body: { error: "Choose an offer letter template." } } };
+    // Admin, state and everything the letter needs, with the caller's JWT: nothing is rendered or stored otherwise.
+    const context = await deps.adminRpc("hr_admin_offer_letter_context", { p_id: profileId });
+    if (context.error) return { ok: false, result: fromDb(context.error) };
+    const ctx = context.data as { problem: string | null; values: TemplatePerson; templates: Array<TemplateSource & { id: string; type: string; name: string }> };
+    if (ctx.problem) return { ok: false, result: { status: 400, body: { error: ctx.problem } } };
+    const template = ctx.templates.find((t) => t.id === templateId && t.type === "offer_letter");
+    if (!template) return { ok: false, result: { status: 400, body: { error: "That offer letter template was not found. Choose another one." } } };
+    const values = templateValues(ctx.values ?? {});
+    const letter = renderMessage(template, values);
+    const gaps = [...letter.missing, ...letter.unknown];
+    if (gaps.length) {
+      return { ok: false, result: { status: 400, body: { error: `The letter cannot be made yet: ${placeholderLabels(gaps)} ${gaps.length === 1 ? "has" : "have"} no value for this person. Add ${gaps.length === 1 ? "it" : "them"} in the pay details, or change the template.`, missing: gaps } } };
+    }
+    let html = letter.html, edited = false;
+    if (typeof editedHtml === "string" && editedHtml.trim()) {
+      if (editedHtml.length > 200000) return { ok: false, result: { status: 400, body: { error: "The edited letter is too long." } } };
+      html = sanitizeTemplateHtml(editedHtml);
+      const left = templatePlaceholders(html);
+      if (left.length) return { ok: false, result: { status: 400, body: { error: `The edited letter still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`, missing: left } } };
+      if (!templateText(html).trim()) return { ok: false, result: { status: 400, body: { error: "The edited letter is empty." } } };
+      edited = html !== letter.html;
+    }
+    if (deps.unsupportedText) {
+      const bad = await deps.unsupportedText([letter.subject, templateText(html)]);
+      if (bad !== null) {
+        const where = bad === letter.subject ? "the title" : "the letter";
+        return { ok: false, result: { status: 400, body: { error: `Some characters in ${where} cannot be printed in the PDF (the font has no glyph for them). Replace them and try again.`, unsupported: bad.slice(0, 200), code: "unsupported_text" } } };
+      }
+    }
+    return { ok: true, title: letter.subject, html, templateHtml: letter.html, edited, values, template };
+  };
+  const toBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  };
+
   switch (action as AdminAction) {
+    case "offer_preview": {
+      // The letter exactly as the PDF will look (letterhead, fonts, "Offer letter" header), filled in, with the admin's edits if any.
+      if (!deps.letterPdf) return { status: 503, body: { error: "Offer letters cannot be made here." } };
+      const prepared = await prepareLetter(typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null, body.html);
+      if (!prepared.ok) return prepared.result;
+      let pdf: { bytes: Uint8Array; pages: number };
+      try { pdf = await deps.letterPdf({ title: prepared.title, html: prepared.html, footer: prepared.values.company_name }); }
+      catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the text and try again." } }; }
+      return { status: 200, body: { pdfBase64: toBase64(pdf.bytes), pages: pdf.pages, title: prepared.title, html: prepared.html, edited: prepared.edited, templateName: prepared.template.name } };
+    }
+    case "invite_login": {
+      // Staff > Employees > "Send sign-in link" for an ACTIVE employee who never came through onboarding: the login for their email
+      // (found or made, unconfirmed, no password anyone knows) is linked to them and ONE email carries a one-time set-password link.
+      if (!deps.config.siteUrl) return { status: 503, body: { error: "The link cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
+      if (!deps.sendTemplate || !deps.accountUrl || !deps.createLogin || !deps.deleteLogin) return { status: 503, body: { error: "Sign-in links cannot be sent here." } };
+      const before = await deps.adminRpc("hr_admin_emp_get", { p_id: profileId });
+      if (before.error) return fromDb(before.error);
+      const person = before.data as { status?: string; email?: string; firstName?: string; lastName?: string; hasLogin?: boolean; passwordSet?: boolean };
+      if (person.status !== "active") return { status: 400, body: { error: "A sign-in link is for an active employee. People being onboarded get theirs with the offer." } };
+      if (person.hasLogin && person.passwordSet) return { status: 400, body: { error: "This person has already chosen a password. They can use \"Forgot password\" on the login page." } };
+      const email = String(person.email ?? "");
+      const name = [person.firstName, person.lastName].filter(Boolean).join(" ");
+      const trial = await loginEmail("login_link", null, { signing_link: "https://example.invalid", login_url: `${deps.config.siteUrl}/login`, link_expiry: "1 January 2000" });
+      if (!trial.ok) return trial.result;
+      const found = await deps.findLogin(email);
+      if (found.error) return { status: 503, body: { error: "The login could not be checked. Please try again shortly." } };
+      let userId = found.login?.id ?? null;
+      let created = false;
+      if (!userId) {
+        const made = await deps.createLogin(email, name);
+        if (made.error || !made.userId) return { status: 502, body: { error: `The login could not be created (${made.error ?? "error"}). Nothing was sent and nothing was changed.` } };
+        userId = made.userId; created = true;
+      }
+      const needsPassword = !found.login?.confirmed;
+      const link = needsPassword ? await deps.newLink() : null;
+      const linked = await deps.adminRpc("hr_admin_emp_login_invite", { p_id: profileId, p_auth_user_id: userId, p_account_hash: link?.hash ?? null });
+      if (linked.error) { if (created) await deps.deleteLogin(userId).catch(() => undefined); return fromDb(linked.error); }
+      const made = linked.data as { needsPassword: boolean; expiresAt: string | null; invite: { id: string } | null };
+      const url = link ? deps.accountUrl(link.token) : `${deps.config.siteUrl}/login?next=%2Fstaff`;
+      const composed = await loginEmail("login_link", null, { signing_link: url, login_url: `${deps.config.siteUrl}/login`,
+        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + 7 * 86400_000).toISOString()) });
+      const sent = composed.ok ? await deps.sendTemplate({ to: email, message: composed.message, deliveryId: `hr-login-${made.invite?.id ?? deps.newId()}` })
+        : { state: "failed" as const, error: String(composed.result.body.error ?? "the email template could not be filled"), messageId: undefined };
+      await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: "login_link", p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
+        p_payload: { inviteId: made.invite?.id ?? null, expiresAt: made.expiresAt, existingEmployee: true } });
+      if (sent.state === "failed") {
+        if (made.invite) await deps.adminRpc("hr_admin_staff_invite_cancel", { p_id: profileId, p_invite: made.invite.id });
+        return { status: 502, body: { emailSent: false, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; the login stays linked. Use Send sign-in link again.` } };
+      }
+      if (sent.state === "skipped") return { status: 200, body: { emailSent: false, link: url, expiresAt: made.expiresAt, needsPassword, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      return { status: 200, body: { emailSent: true, needsPassword, expiresAt: made.expiresAt } };
+    }
     case "send_documents":
       // "Send document link" on the employee page: the database hires an open job application (as Candidates does) or makes the
       // plain document link; the email, log and cancel rules are send_invite's.
       return sendLinkFlow("documents", "hr_admin_onboarding_documents_invite", { p_id: profileId });
     case "offer_generate": {
-      const templateId = typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null;
-      if (!templateId) return { status: 400, body: { error: "Choose an offer letter template." } };
       if (!deps.letterPdf) return { status: 503, body: { error: "Offer letters cannot be made here." } };
-      // Admin, state and everything the letter needs, with the caller's JWT: nothing is rendered or stored otherwise.
-      const context = await deps.adminRpc("hr_admin_offer_letter_context", { p_id: profileId });
-      if (context.error) return fromDb(context.error);
-      const ctx = context.data as { problem: string | null; values: TemplatePerson; templates: Array<TemplateSource & { id: string; type: string; name: string }> };
-      if (ctx.problem) return { status: 400, body: { error: ctx.problem } };
-      const template = ctx.templates.find((t) => t.id === templateId && t.type === "offer_letter");
-      if (!template) return { status: 400, body: { error: "That offer letter template was not found. Choose another one." } };
-      const values = templateValues(ctx.values ?? {});
-      const letter = renderMessage(template, values);
-      const gaps = [...letter.missing, ...letter.unknown];
-      if (gaps.length) {
-        return { status: 400, body: { error: `The letter cannot be made yet: ${placeholderLabels(gaps)} ${gaps.length === 1 ? "has" : "have"} no value for this person. Add ${gaps.length === 1 ? "it" : "them"} in the pay details, or use another template.`, missing: gaps } };
-      }
+      const prepared = await prepareLetter(typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null, body.html);
+      if (!prepared.ok) return prepared.result;
+      const { template, values } = prepared;
+      const letter = { subject: prepared.title, html: prepared.html };
       let pdf: { bytes: Uint8Array; pages: number };
       try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name }); }
       catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the template and try again." } }; }
@@ -234,11 +322,11 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const stored = await deps.upload(path, pdf.bytes, "application/pdf");
       if (stored.error) return { status: 503, body: { error: "The letter could not be stored. Please try again." } };
       const added = await deps.adminRpc("hr_admin_offer_letter_add", { p_id: profileId, p_path: path, p_filename: letterFileName(letter.subject, values.full_name), p_size: pdf.bytes.length,
-        p_sha256: sha256, p_template: template.id, p_title: letter.subject, p_html: letter.html, p_values: values });
+        p_sha256: sha256, p_template: template.id, p_title: letter.subject, p_html: letter.html, p_values: values, p_edited: prepared.edited, p_template_html: prepared.edited ? prepared.templateHtml : null });
       if (added.error) { await deps.remove([path]); return fromDb(added.error); }
       const result = added.data as { offer: unknown; replacedPath?: string | null };
       if (result.replacedPath) await deps.remove([result.replacedPath]);
-      return { status: 200, body: { offer: result.offer, pages: pdf.pages, title: letter.subject, templateName: template.name } };
+      return { status: 200, body: { offer: result.offer, pages: pdf.pages, title: letter.subject, templateName: template.name, edited: prepared.edited } };
     }
     case "offer_send_login": {
       if (!deps.config.siteUrl) return { status: 503, body: { error: "The offer cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };

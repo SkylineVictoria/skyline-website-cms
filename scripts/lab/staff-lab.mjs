@@ -773,8 +773,9 @@ async function readyForOffer(lab, label) {
   }
   // Onboarding flow (20261111090000): the pay details come before any offer.
   const schedule = psql("select id from hr.pay_schedules where is_active order by name limit 1;");
+  const location = labLocation();
   asAdmin(`select public.hr_admin_onboarding_pay_save('${person.id}', jsonb_build_object('jobTitle', 'Lab Trainer', 'employmentType', 'full_time', 'startDate', (current_date + 30)::text,
-    'payBasis', 'hourly', 'rate', '42.50', 'payScheduleId', '${schedule}', 'hoursPerWeek', '38'));`);
+    'payBasis', 'hourly', 'rate', '42.50', 'payScheduleId', '${schedule}', 'hoursPerWeek', '38', 'locationId', '${location}'));`);
   return { ...person, documentToken: link.token };
 }
 
@@ -1013,7 +1014,9 @@ const sessionCall = async (lab, jwt, body, ip) => {
   const res = await fetch(`${lab.apiUrl}/functions/v1/staff-onboarding`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json", ...(ip ? { "x-forwarded-for": ip } : {}) }, body: JSON.stringify(body) });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 };
-const paySave = (lab, jwt, id, over = {}) => restRpc(lab, jwt, "hr_admin_onboarding_pay_save", { p_id: id, p_details: { jobTitle: "Lab Trainer", employmentType: "full_time",
+// The work location every lab pay form uses (hr.locations, 20261113090000): made once, found again afterwards.
+const labLocation = () => psql("insert into hr.locations(name) values ('Lab Campus') on conflict (lower(btrim(name))) do update set name = excluded.name returning id;");
+const paySave = (lab, jwt, id, over = {}) => restRpc(lab, jwt, "hr_admin_onboarding_pay_save", { p_id: id, p_details: { jobTitle: "Lab Trainer", employmentType: "full_time", locationId: labLocation(),
   startDate: new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10), payBasis: "hourly", rate: "42.50", payScheduleId: psql("select id from hr.pay_schedules where is_active order by name limit 1;"), hoursPerWeek: "38", ...over } });
 
 async function flow() {

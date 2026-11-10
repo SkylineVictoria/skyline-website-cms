@@ -82,6 +82,7 @@ import JobsPage from "@/pages/admin/JobsPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
 import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
+import LocationsPage from "@/pages/admin/LocationsPage";
 import PublicHolidaysPage from "@/pages/admin/PublicHolidaysPage";
 import XeroExportPage from "@/pages/admin/XeroExportPage";
 import { TeamLeavePage, TeamTimesheetsPage } from "@/pages/staff/TeamPage";
@@ -220,6 +221,7 @@ const routes: RouteObject[] = [
           { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
           { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },
           { path: "staff/pay-schedules", element: <RequireAdmin><PaySchedulesPage /></RequireAdmin> },
+          { path: "staff/locations", element: <RequireAdmin><LocationsPage /></RequireAdmin> },
           { path: "staff/holidays", element: <RequireAdmin><PublicHolidaysPage /></RequireAdmin> },
           { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
           { path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin> },

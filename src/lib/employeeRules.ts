@@ -7,9 +7,16 @@ import { bankDigits as digits, bankProblems as sharedBankProblems } from "../../
 export type EmployeeStatus = "active" | "inactive";
 export const EMPLOYEE_STATUS_LABEL: Record<EmployeeStatus, string> = { active: "Active", inactive: "Inactive" };
 
+/** The employment record beside an employee (hr.employment_json): job, type, location (from HRMS > Locations) and pay type. */
+export interface EmployeeEmployment {
+  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "contract" | "casual" | null; joiningDate: string | null;
+  managerId: string | null; managerName: string | null; workLocation: string; locationId: string | null; payType: "fortnightly" | "monthly" | null;
+}
 export interface Employee {
   id: string; firstName: string; lastName: string; email: string; phone: string; status: EmployeeStatus;
   createdAt: string; statusChangedAt: string; hasLogin: boolean; documents: number;
+  /** Whether the linked login has chosen a password (My HR opens only then) and the employment record, if any. */
+  passwordSet?: boolean; employment?: EmployeeEmployment | null;
 }
 export interface EmployeeDocument {
   id: string; category: EmployeeDocCategory; filename: string; mimeType: string; size: number; storagePath: string; uploadedAt: string; removable: boolean;

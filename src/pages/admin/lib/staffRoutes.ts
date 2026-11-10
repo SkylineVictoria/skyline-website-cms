@@ -13,5 +13,7 @@ export const STAFF_HOLIDAYS_PATH = "/admin/staff/holidays";
 export const STAFF_XERO_PATH = "/admin/staff/xero-export";
 // HRMS > Templates (offer letters and onboarding emails; menu row 'staff_templates' of 20261111100000).
 export const STAFF_TEMPLATES_PATH = "/admin/staff/templates";
+// HRMS > Locations (work locations an employment record picks from; menu row 'staff_locations' of 20261113090000).
+export const STAFF_LOCATIONS_PATH = "/admin/staff/locations";
 export const staffEmployeePath = (id: string) => `${STAFF_EMPLOYEES_PATH}/${encodeURIComponent(id)}`;
 export const staffCandidatePath = (id: string) => `${STAFF_CANDIDATES_PATH}/${encodeURIComponent(id)}`;

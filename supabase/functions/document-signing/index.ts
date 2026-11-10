@@ -1,13 +1,20 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
 import { loadLetterhead } from "../_shared/letterhead.ts";
-import { fillSigningTemplate, signingHtml, signingNameValid, signingReceipt, SIGNING_CONSENT } from "../_shared/signing.ts";
+import { fillSigningTemplate, signingHtml, signingNameValid, signingReceipt, signingVariables, SIGNING_CONSENT } from "../_shared/signing.ts";
+import { templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 import { readHrMailConfig, selectHrMailProvider, sendTemplateEmail } from "../_shared/hr-mail.ts";
 import { HR_MAIL_ENV } from "../_shared/hr-mail-drain.ts";
 
 const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Type": "application/json" };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers });
+const toBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hash = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const env: Record<string, string> = { SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "" };
 for (const key of HR_MAIL_ENV) env[key] = Deno.env.get(key) ?? "";
@@ -95,30 +102,70 @@ Deno.serve(async (req) => {
       const result = await caller.rpc("signing_admin", { p_action: operation, p_id: id, p_data: data });
       if (result.error) throw new Error(result.error.message); return result.data;
     };
+    /**
+     * A document from a template: the variables come from the staff member's record (hr_admin_template_values, with the caller's
+     * JWT) when one is chosen, and from the typed values otherwise; a variable without a value stops here, named. The admin may
+     * edit the filled text for THIS copy (no {{variable}} may remain; the template is untouched). Text the PDF font cannot set is
+     * refused. The same preparation serves the preview and the saved draft, so the preview is the document that goes out.
+     */
+    const prepareDocument = async (context: { templates: Array<{ id: string; name: string; title: string; body: string }> }) => {
+      const profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
+      let record: Record<string, string> = {};
+      if (profileId) {
+        const person = await caller.rpc("hr_admin_template_values", { p_id: profileId });
+        if (person.error) throw new Error(person.error.message);
+        record = templateValues((person.data ?? {}) as TemplatePerson);
+      }
+      const name = String(body.recipientName ?? record.full_name ?? "").trim(), email = String(body.recipientEmail ?? record.email ?? "").trim().toLowerCase();
+      if (!signingNameValid(name) || !/^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(email)) throw new Error("Enter the recipient's full name and email.");
+      const template = context.templates.find((t) => t.id === body.templateId);
+      if (!template) throw new Error("Choose a saved template or upload a PDF.");
+      const typed = typeof body.values === "object" && body.values ? body.values as Record<string, unknown> : {};
+      const recordFilled = Object.fromEntries(Object.entries(record).filter(([, v]) => String(v ?? "").trim() !== ""));
+      // A record value wins over a typed one for the same name; a typed value fills what the record lacks.
+      const values: Record<string, unknown> = { ...typed, ...recordFilled, full_name: name, email };
+      const title = fillSigningTemplate(template.title, values);
+      const rendered = fillSigningTemplate(template.body, values);
+      let text = rendered, edited = false;
+      if (typeof body.text === "string" && body.text.trim()) {
+        if (body.text.length > 40000) throw new Error("Keep the document text under 40,000 characters.");
+        const left = signingVariables(body.text);
+        if (left.length) throw new Error(`The edited text still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`);
+        text = body.text.replace(/\r\n/g, "\n"); edited = text !== rendered;
+      }
+      if (!title || title.length > 200 || /[\r\n]/.test(title)) throw new Error("Enter a document title up to 200 characters on one line.");
+      const letterPdf = await letterPdfModule();
+      const bad = await letterPdf.unsupportedText([title, text]);
+      if (bad !== null) throw new Error(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF (the font has no glyph for them): "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
+      const bytes = (await letterPdf.buildLetterPdf({ title, html: signingHtml(text), letterhead: await loadLetterhead(service), kind: "Document" })).bytes;
+      return { profileId, name, email, template, title, rendered, text, edited, values, bytes, variables: signingVariables(`${template.title}\n${template.body}`) };
+    };
     // Authorization before generating or storing files, or sending any mail.
+    if (action === "preview") {
+      const context = await admin("list");
+      const made = await prepareDocument(context);
+      return json({ pdfBase64: toBase64(made.bytes), title: made.title, text: made.text, templateText: made.rendered, edited: made.edited,
+        recipientName: made.name, recipientEmail: made.email, variables: made.variables, templateName: made.template.name });
+    }
     if (action === "create") {
       const context = await admin("list");
-      const name = String(body.recipientName ?? "").trim(), email = String(body.recipientEmail ?? "").trim();
-      if (!signingNameValid(name) || !/^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(email)) throw new Error("Enter the recipient's full name and email.");
-      let title = String(body.title ?? "").trim(), rendered: string | null = null, templateId: string | null = null;
+      let title = String(body.title ?? "").trim(), rendered: string | null = null, templateId: string | null = null, templateText: string | null = null;
+      let name = String(body.recipientName ?? "").trim(), email = String(body.recipientEmail ?? "").trim(), profileId: string | null = null, edited = false;
       let values: Record<string, unknown> = {}; let bytes: Uint8Array;
       if (upload) {
+        if (!signingNameValid(name) || !/^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(email)) throw new Error("Enter the recipient's full name and email.");
+        if (!title || title.length > 200 || /[\r\n]/.test(title)) throw new Error("Enter a document title up to 200 characters on one line.");
+        profileId = typeof body.profileId === "string" && UUID.test(body.profileId) ? body.profileId : null;
         bytes = new Uint8Array(await upload.arrayBuffer());
         const inspected = await (await offerPdfModule()).inspectOfferPdf(bytes); if (!inspected.ok) throw new Error(inspected.error);
       } else {
-        const template = context.templates.find((t: { id: string }) => t.id === body.templateId);
-        if (!template) throw new Error("Choose a saved template or upload a PDF.");
-        values = { ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: name, email };
-        title = fillSigningTemplate(template.title, values);
-        rendered = fillSigningTemplate(template.body, values); templateId = template.id;
-        const letterPdf = await letterPdfModule();
-        if (await letterPdf.unsupportedText([title, rendered])) throw new Error("This template PDF currently supports Latin letters. For other scripts, upload a ready-made PDF.");
-        bytes = (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await loadLetterhead(service), kind: "Document" })).bytes;
+        const made = await prepareDocument(context);
+        ({ title, name, email, profileId, edited, values, bytes } = made);
+        rendered = made.text; templateText = made.rendered; templateId = made.template.id;
       }
-      if (!title || title.length > 200 || /[\r\n]/.test(title)) throw new Error("Enter a document title up to 200 characters on one line.");
       const id = crypto.randomUUID(); await storePdf(`${id}/original.pdf`, bytes);
       const record = await admin("create", id, { title, recipient_name: name, recipient_email: email, template_id: templateId,
-        rendered_text: rendered, field_values: values, original_hash: await hash(bytes) });
+        rendered_text: rendered, field_values: values, original_hash: await hash(bytes), profile_id: profileId, edited, template_text: edited ? templateText : null });
       stagedPath = null;
       return json(record);
     }

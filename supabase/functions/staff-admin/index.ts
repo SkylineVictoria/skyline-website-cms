@@ -93,6 +93,7 @@ Deno.serve(async (req) => {
     deleteLogin: async (userId) => { await service.auth.admin.deleteUser(userId); },
     // The letter carries the Website Settings letterhead (name, logo, colour): the same styling as every Skyline PDF.
     letterPdf: async (input) => (await letterPdfModule()).buildLetterPdf({ ...input, letterhead: await loadLetterhead(service) }),
+    unsupportedText: async (texts) => (await letterPdfModule()).unsupportedText(texts),
     linkUrl: (purpose, token) => linkUrl(config.siteUrl!, purpose, token),
     drain: () => drainHrOutbox(service, env),
     file,

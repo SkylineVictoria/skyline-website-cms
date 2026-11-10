@@ -15,6 +15,7 @@ import { FieldError as SaveError, LinkInvalidError, onboarding, takeLinkToken, t
 import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, taxSuperRows, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
+import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
 import { bankProblems, bsbBank, dateOfBirthRange, formatBsb, type Address, type BankDetails, type BankProblems } from "../../../supabase/functions/_shared/validation/person";
 import {
   SUPER_CHOICE, SUPER_CHOICE_LABEL, TAX_RESIDENCY, TAX_RESIDENCY_LABEL, normalizeStaffField, staffFieldProblem, staffProblems, superFundNeeded,
@@ -667,6 +668,17 @@ function Wizard({ view, token, onChange, onError }: Props) {
               {taxSuperRows(details).map(([label, value]) => row(label, value))}
             </dl>
           </ReviewCard>
+          {view.employment ? (
+            <ReviewCard icon="ri-briefcase-line" title="Your role (as recorded by HR)">
+              <dl className="mt-3 space-y-2" data-testid="staff-review-role">
+                {row("Job title", view.employment.jobTitle)}
+                {row("Work location", view.employment.workLocation)}
+                {row("Job type", view.employment.employmentType ? JOB_TYPE_LABEL[view.employment.employmentType] ?? "" : "")}
+                {row("Pay type", view.employment.payType ? PAY_TYPE_LABEL[view.employment.payType] : "")}
+                {row("Start date", showDate(view.employment.joiningDate))}
+              </dl>
+            </ReviewCard>
+          ) : null}
         </div>
         <ReviewCard icon="ri-file-list-3-line" title="Documents" edit={edits("documents", "Documents")}>
           <div className="mt-3"><Checklist view={view} token={token} onChange={onChange} canReupload={false} /></div>

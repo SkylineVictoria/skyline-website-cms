@@ -45,10 +45,10 @@ export default function SiteFooterView({ model, preview = false }: { model: Foot
         </div>
       ) : null}
 
-      <div className="bg-[#102b46] text-background-100">
-        <div className="site-container grid grid-cols-1 gap-10 py-16 sm:grid-cols-2 lg:grid-cols-12 lg:gap-8">
-          <div className="sm:col-span-2 lg:col-span-3">
-            {model.mainLogo ? <img src={model.mainLogo} alt={model.logoAlt} className="h-14 max-w-full bg-white p-2 object-contain" /> : <p className="font-heading text-base font-bold text-background-50">{model.logoAlt}</p>}
+      <div className="bg-accent-950 text-background-100">
+        <div className="site-container grid grid-cols-1 gap-10 py-14 sm:grid-cols-2 lg:grid-cols-12 lg:gap-8">
+          <div className="sm:col-span-2 lg:col-span-4">
+            {model.mainLogo ? <img src={model.mainLogo} alt={model.logoAlt} className="h-12 w-auto object-contain" /> : <p className="font-heading text-base font-bold text-background-50">{model.logoAlt}</p>}
             <h2 className="mt-6 font-heading text-base font-semibold text-background-50">About Us</h2>
             <p className="mt-3 max-w-md text-sm leading-relaxed text-background-200">{footer.about}</p>
             <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -60,7 +60,7 @@ export default function SiteFooterView({ model, preview = false }: { model: Foot
                   rel="noopener noreferrer"
                   onClick={stay}
                   aria-label={item.label}
-                  className="flex h-9 w-9 items-center justify-center rounded-sm bg-background-50/10 text-background-100 transition-colors hover:bg-primary-500 hover:text-background-50"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-background-50/10 text-background-100 transition-colors hover:bg-primary-500 hover:text-background-50"
                 >
                   <i className={`${item.icon} text-base`} aria-hidden="true" />
                 </a>
@@ -69,8 +69,8 @@ export default function SiteFooterView({ model, preview = false }: { model: Foot
             {model.legal ? <p className="mt-5 font-label text-sm font-semibold tracking-wide text-background-200">{model.legal}</p> : null}
           </div>
 
-          {column(footer.quickLinksTitle, quickLinks, "lg:col-span-3")}
-          {column(footer.studentLinksTitle, studentLinks, quickLinks.length === 0 ? "lg:col-span-3" : "lg:col-span-3")}
+          {column(footer.quickLinksTitle, quickLinks, "lg:col-span-2 lg:col-start-6")}
+          {column(footer.studentLinksTitle, studentLinks, quickLinks.length === 0 ? "lg:col-span-2 lg:col-start-6" : "lg:col-span-2")}
 
           <div className="lg:col-span-3">
             <h2 className="font-heading text-base font-semibold text-background-50">Contact</h2>

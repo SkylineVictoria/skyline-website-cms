@@ -32,6 +32,32 @@ const employeeRulesLib = await load.import<typeof import("../src/lib/employeeRul
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
+const signing = await load.import<typeof import("../supabase/functions/_shared/signing.ts")>("../supabase/functions/_shared/signing.ts");
+test("signing templates require all variables, reject malformed tokens and substitute once", () => {
+  assert.deepEqual(signing.signingVariables("{{full_name}} {{ course }} {{full_name}}"), ["full_name", "course"]);
+  assert.equal(signing.fillSigningTemplate("Dear {{full_name}}", { full_name: "{{salary}}" }), "Dear {{salary}}");
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", {}), /course/);
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", { course: " " }), /course/);
+  assert.throws(() => signing.signingVariables("{{Course Name}}"), /variables/);
+  assert.throws(() => signing.fillSigningTemplate("{{constructor}}", {}), /constructor/);
+  assert.throws(() => signing.fillSigningTemplate("{{course}}", { course: "x".repeat(2001) }), /2,000/);
+});
+test("signing values are plain text and cannot introduce HTML", () => {
+  const text = signing.fillSigningTemplate("Hello {{full_name}}", { full_name: '<script>alert(1)</script>' });
+  assert.equal(signing.signingHtml(text), '<p>Hello &lt;script&gt;alert(1)&lt;/script&gt;</p>');
+  assert.equal(signing.signingNameValid("\n"), false);
+  assert.equal(signing.signingNameValid("Asha\nPatel"), false);
+  assert.equal(signing.signingNameValid("Asha Patel"), true);
+});
+test("signed PDF preserves original pages and appends a readable signature record", async () => {
+  const original = await PdfLib.PDFDocument.create(); original.addPage(); original.addPage();
+  const bytes = await signing.signingReceipt(PdfLib, await original.save(), { id: "synthetic-request", title: "Student agreement", recipientEmail: "student@example.test",
+    signerName: "Asha Patel", signedAt: "2026-11-10T12:00:00Z", sourceHash: "a".repeat(64), consent: signing.SIGNING_CONSENT });
+  const signed = await PdfLib.PDFDocument.load(bytes);
+  assert.ok(signed.getPageCount() > 2);
+  assert.equal(signed.getPage(0).getWidth(), original.getPage(0).getWidth());
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [

@@ -49,3 +49,6 @@ verify_jwt = true
 # Xero Payroll AU push: TYPED STUB (OAuth2 placeholders only). Not activated, not scheduled, no secrets; every call answers 501.
 # HR downloads the CSV from Staff > Xero Export instead. Activation is a separate owner decision (EF_XERO_* secrets).
 verify_jwt = true
+
+[functions.document-signing]
+verify_jwt = true

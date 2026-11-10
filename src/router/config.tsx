@@ -70,6 +70,8 @@ import StudentDetailPage from "@/pages/admin/StudentDetailPage";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import TemplatesPage from "@/pages/admin/TemplatesPage";
+import AdminSigningPage from "@/pages/admin/SigningPage";
+import SigningPage from "@/pages/SigningPage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
@@ -126,6 +128,7 @@ const routes: RouteObject[] = [
   { path: "/staff/apply", element: <Navigate to="/login?mode=enroll&as=staff" replace /> },
   { path: "/staff/onboard", element: <StaffOnboardingPage /> },
   { path: "/staff/offer", element: <StaffOfferPage /> },
+  { path: "/sign", element: <SigningPage /> },
   { path: "/staff/welcome", element: <StaffWelcomePage /> },
   { path: "/staff", element: <StaffHomePage /> },
   // HRMS: a manager's view of their reports (outside the admin shell).
@@ -220,6 +223,7 @@ const routes: RouteObject[] = [
           { path: "staff/holidays", element: <RequireAdmin><PublicHolidaysPage /></RequireAdmin> },
           { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
           { path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin> },
+          { path: "signing", element: <RequireAdmin><AdminSigningPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "candidates", element: <Navigate to="/admin/staff/candidates" replace /> },
           { path: "candidates/:id", element: <LegacyCandidateRedirect /> },

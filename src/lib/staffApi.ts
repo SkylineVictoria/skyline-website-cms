@@ -1,6 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { StaffDocCategory, StaffDocReview, StaffRole, StaffStatus } from "@/lib/staffStatus";
-import type { OrgPerson } from "@/lib/staffOrg";
 
 export type { StaffDocCategory } from "@/lib/staffStatus";
 
@@ -224,18 +223,3 @@ async function adminRpc(name: string, args: Record<string, unknown>, fallback: s
 export const adminDeactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_deactivate", { p_id: id, p_note: note || null }, "That could not be done.");
 export const adminReactivateStaff = (id: string, note: string) => adminRpc("hr_admin_staff_activate", { p_id: id, p_note: note || null }, "That could not be done.");
 export const adminReopenStaff = (id: string, note: string) => adminRpc("hr_staff_reopen", { p_id: id, p_note: note }, "That could not be done.");
-
-/* ------------------------------------------------------------------ org chart (Staff > Employees > Org chart) */
-
-/** Everyone on the org chart (hr_admin_org_chart): active staff, and pipeline records that already have a manager. */
-export async function adminOrgChart(): Promise<OrgPerson[]> {
-  const { data, error } = await supabase.rpc("hr_admin_org_chart");
-  if (error) fail(error, "The org chart could not be loaded.");
-  return (data ?? []) as OrgPerson[];
-}
-
-/** Changes only who the person reports to (null: top of the chart); the other employment details stay as they are. */
-export async function adminSetManager(id: string, managerId: string | null): Promise<void> {
-  const { error } = await supabase.rpc("hr_admin_staff_manager_set", { p_id: id, p_manager: managerId });
-  if (error) fail(error, "The manager could not be changed.");
-}

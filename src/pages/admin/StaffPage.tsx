@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, TextInput } from "@/pages/admin/components/ui";
-import { adminListStaff, adminSetManager, staffAdminActions, type StaffListRow } from "@/lib/staffApi";
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, TextInput } from "@/pages/admin/components/ui";
+import { adminListStaff, staffAdminActions, type StaffListRow } from "@/lib/staffApi";
 import { toE164 } from "@/lib/staffPhone";
 import { useNavigate } from "react-router-dom";
 import { EMPLOYEE_TABS, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeTab, expiryState } from "@/lib/staffStatus";
-import { STAFF_EMPLOYEES_PATH, STAFF_ORG_CHART_PATH, staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
+import { staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
 
 const APPLICATIONS = EMPLOYEE_TABS.find((t) => t.countBadge) ?? EMPLOYEE_TABS[0];
 
@@ -37,7 +37,6 @@ export default function StaffPage() {
     <div>
       <PageHeader breadcrumb="Staff" title="Employees" description="Staff applications and current staff (a Careers applicant is hired from Candidates first). Open one to send the document link, review each document, send and track the offer, and activate the account. Expiring soon means a document expires within 30 days; Email failed means a message to or about them could not be sent."
         actions={<Button onClick={() => setAdding(true)} data-testid="staff-add"><i className="ri-user-add-line" aria-hidden="true" /> Add staff member</Button>} />
-      <EmployeeViewTabs active="list" />
       {adding ? <AddStaffDialog onClose={() => setAdding(false)} /> : null}
       <div role="tablist" aria-label="Employees by status" className="mb-4 flex flex-wrap gap-1 border-b border-background-200">
         {EMPLOYEE_TABS.map((t) => (
@@ -82,18 +81,11 @@ export default function StaffPage() {
   );
 }
 
-/** The List / Org chart switch at the top of Staff > Employees. */
-export function EmployeeViewTabs({ active }: { active: "list" | "org-chart" }) {
-  const navigate = useNavigate();
-  return <SectionTabs tabs={[{ id: "list", label: "List", icon: "ri-list-check" }, { id: "org-chart", label: "Org chart", icon: "ri-organization-chart" }]}
-    active={active} onChange={(id) => navigate(id === "list" ? STAFF_EMPLOYEES_PATH : STAFF_ORG_CHART_PATH)} />;
-}
-
 /**
  * HR-02i "Add staff member": an application on the person's behalf (no resume), then the document link is emailed at once. A failed
  * email leaves the record Applied with the reason on its page (send the link again there); with email off the link is shown there once.
  */
-export function AddStaffDialog({ onClose, manager }: { onClose: () => void; /** From the org chart: who the new person reports to. */ manager?: { id: string; name: string } }) {
+function AddStaffDialog({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "" });
   const [error, setError] = useState("");
@@ -106,15 +98,10 @@ export function AddStaffDialog({ onClose, manager }: { onClose: () => void; /** 
     setBusy(true); setError("");
     try {
       const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: toE164(form.phone)! });
-      // Their record exists now; a failed manager link is set again from the org chart, it never undoes the add.
-      if (manager) { try { await adminSetManager(result.profileId!, manager.id); } catch { /* shown as unplaced on the chart */ } }
       navigate(staffEmployeePath(result.profileId!));
     } catch (e) {
       const profileId = (e as { result?: { profileId?: string } }).result?.profileId;
-      if (profileId) { // created; the email failed: the page shows why
-        if (manager) { try { await adminSetManager(profileId, manager.id); } catch { /* set it again from the org chart */ } }
-        navigate(staffEmployeePath(profileId)); return;
-      }
+      if (profileId) { navigate(staffEmployeePath(profileId)); return; } // created; the email failed: the page shows why
       setError(e instanceof Error ? e.message : "The staff member could not be added.");
     } finally { setBusy(false); }
   };
@@ -122,7 +109,6 @@ export function AddStaffDialog({ onClose, manager }: { onClose: () => void; /** 
     <Modal open title="Add staff member" onClose={onClose}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => void save()} disabled={busy} data-testid="staff-add-confirm">{busy ? "Adding…" : "Add and send the document link"}</Button></>}>
       <div className="space-y-3" data-testid="staff-add-dialog">
-        {manager ? <p className="rounded-md border border-secondary-300 bg-secondary-50 px-3 py-2 text-sm text-foreground-900" data-testid="staff-add-manager">Reports to <strong>{manager.name}</strong></p> : null}
         <p className="text-sm text-foreground-700">Creates their application and emails them a private link (valid 14 days) to add their details and documents. No account is created until you activate them.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="First name" required><TextInput value={form.firstName} onChange={(e) => patch({ firstName: e.target.value })} maxLength={100} data-testid="staff-add-first" /></Field>

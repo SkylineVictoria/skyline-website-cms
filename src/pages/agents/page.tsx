@@ -1,4 +1,3 @@
-import AgentsTable from "@/components/feature/AgentsTable";
 import HtmlContent from "@/components/feature/HtmlContent";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
@@ -6,10 +5,7 @@ import { breadcrumbSchema } from "@/data/seo";
 import { usePublicSite } from "@/hooks/publicSiteContext";
 
 export default function AgentsPage() {
-  const { data, isLive } = usePublicSite();
-  // The Registered Agents table is authored in CMS → Pages → Registered Agents.
-  // Once Supabase is authoritative we render the saved table (so admin edits
-  // appear immediately); otherwise we show the interactive static table.
+  const { data, isLive, status } = usePublicSite();
   const body = data.pages.agents?.body ?? "";
 
   return (
@@ -28,7 +24,7 @@ export default function AgentsPage() {
       <PageHero title="Registered Agents" breadcrumb="Agents" />
       <section className="bg-background-50 py-12 md:py-16">
         <div className="site-container">
-          {isLive && body.trim() ? <HtmlContent html={body} /> : <AgentsTable />}
+          {isLive && body.trim() ? <HtmlContent html={body} /> : <p role="status">{status === "loading" ? "Loading agents…" : "No agent information is currently published."}</p>}
         </div>
       </section>
     </>

@@ -12,9 +12,9 @@ export default function CoursesPage() {
   const urlQuery = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(urlQuery);
   const [activeCategory, setActiveCategory] = useState("All");
-  const { data } = usePublicSite();
-  const courses = data.courses;
-  const visibleCourseCategories = data.courseCategories;
+  const { data, isLive, status } = usePublicSite();
+  const courses = useMemo(() => isLive ? data.courses : [], [data.courses, isLive]);
+  const visibleCourseCategories = isLive ? data.courseCategories : [];
 
   useEffect(() => {
     setQuery(urlQuery);
@@ -53,9 +53,9 @@ export default function CoursesPage() {
       <PageHero
         title="Our Courses"
         breadcrumb="Our Courses"
-        lead="Explore nationally recognised qualifications across automotive, construction, civil construction design, furnishing and business — delivered face-to-face by industry experts."
+        lead="Search our published courses by qualification, code or study area."
       />
-      <section className="bg-background-50 py-12 md:py-16">
+      <section className="bg-[#f5f6f7] py-12 md:py-16">
         <div className="site-container">
           <Reveal>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -65,7 +65,8 @@ export default function CoursesPage() {
                     key={category}
                     type="button"
                     onClick={() => setActiveCategory(category)}
-                    className={`cursor-pointer whitespace-nowrap rounded-full border px-4 py-2 text-xs font-medium transition-colors ${
+                    aria-pressed={activeCategory === category}
+                    className={`cursor-pointer rounded-sm border px-4 py-2 text-xs font-medium transition-colors ${
                       activeCategory === category
                         ? "border-primary-500 bg-primary-500 text-background-50"
                         : "border-background-300 bg-background-50 text-foreground-700 hover:border-primary-300"
@@ -91,7 +92,7 @@ export default function CoursesPage() {
 
           <Reveal>
             <p className="mt-6 text-sm text-foreground-500">
-              Showing {filtered.length} of {courses.length} courses
+              {status === "loading" ? "Loading courses…" : `Showing ${filtered.length} of ${courses.length} courses`}
             </p>
           </Reveal>
 

@@ -34,13 +34,13 @@ export default function BecomeAnAgentPage() {
       <section className="bg-background-50 py-12 md:py-16">
         <div className="site-container grid grid-cols-1 gap-10 lg:grid-cols-12 lg:gap-12">
           <div className="lg:col-span-4">
-            <h2 className="font-heading text-xl font-bold text-foreground-950 md:text-2xl">AGENT APPLICATION FORM</h2>
+            <h2 className="font-heading text-xl font-bold text-[#102b46] md:text-2xl">AGENT APPLICATION FORM</h2>
             <p className="mt-4 text-sm leading-relaxed text-foreground-700 md:text-base">
               Complete the agent application form and our partnerships team will be in touch.
             </p>
 
-            <div className="mt-8 rounded-card border border-background-200 bg-background-50 p-6">
-              <h3 className="font-heading text-base font-semibold text-foreground-950">Agent Declaration</h3>
+            <div className="mt-8 rounded-sm border border-background-200 bg-background-50 p-6">
+              <h3 className="font-heading text-base font-semibold text-[#102b46]">Agent Declaration</h3>
               <ul className="mt-4 space-y-3">
                 {declaration.map((item) => (
                   <li key={item} className="flex items-start gap-3 text-sm leading-relaxed text-foreground-700">

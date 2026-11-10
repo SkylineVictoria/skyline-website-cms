@@ -32,14 +32,14 @@ export default function CareerDetailPage() {
             {job === null && !error ? <p className="mt-4 text-sm text-foreground-700">This job post does not exist or has been removed.</p> : null}
             {job ? (
               <article className="mt-4">
-                <h2 className="font-heading text-xl font-bold text-foreground-950">About the role</h2>
+                <h2 className="font-heading text-xl font-bold text-[#102b46]">About the role</h2>
                 <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-foreground-700 md:text-base">{job.description}</div>
               </article>
             ) : null}
           </div>
           <aside className="lg:col-span-4">
             {job ? (
-              <div className="rounded-card border border-background-200 bg-background-100 p-6">
+              <div className="rounded-sm border border-background-200 bg-background-100 p-6">
                 <dl className="space-y-3 text-sm">
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Employment type</dt><dd className="text-foreground-900">{EMPLOYMENT_TYPE_LABEL[job.employmentType]}</dd></div>
                   <div><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Location</dt><dd className="text-foreground-900">{job.location}</dd></div>

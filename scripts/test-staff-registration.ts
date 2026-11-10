@@ -108,10 +108,7 @@ test("Employees actions follow the status and what exists; each one is a legal m
   for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "rejected", "access_ready"]) {
     assert.ok(staffStatusLib.EMAIL_KIND_LABEL[kind], `email kind ${kind} has a label for the admin`);
   }
-  const detailPage = read("src/pages/admin/StaffDetailPage.tsx");
-  assert.ok(detailPage.includes("staffDocumentUrl(path, 120)"), "files open through 2-minute signed URLs");
-  assert.ok(!/getPublicUrl|\.download\(/.test(detailPage), "no public URLs or raw downloads");
-  assert.ok(detailPage.includes("fresh.profile.status !== detail.profile.status"), "the dialog re-checks the status before acting");
+  // Staff > Employees is the simple Active / Inactive page since 20261110170000 (see "simple employees" below).
   const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
   assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)), "activation checks for an administrator first");
@@ -1179,4 +1176,26 @@ test("resume autofill reads basic contact details and ignores references", async
   const ambiguous = resumeContactFromText("Jane Doe\na@example.test | b@example.test\nMobile: 0412 345 678 / 0400 111 222");
   assert.equal(ambiguous.email, undefined);
   assert.equal(ambiguous.phone, undefined);
+});
+
+test("simple employees: validation, file checks, upload path, two statuses", async () => {
+  const emp = await load.import<typeof import("../src/lib/employeeRules.ts")>("../src/lib/employeeRules.ts");
+  const ok = { firstName: "Mary-Jane", lastName: "O'Neil", email: "mary@example.com", phone: "0412 345 678" };
+  assert.deepEqual(emp.employeeProblems(ok), {});
+  assert.deepEqual(Object.keys(emp.employeeProblems(emp.EMPTY_EMPLOYEE)).sort(), ["email", "firstName", "lastName", "phone"], "every field is required");
+  assert.equal(emp.employeeProblems({ ...ok, firstName: "J0hn" }).firstName, "The first name can only contain letters, spaces, hyphens, apostrophes and full stops.");
+  assert.equal(emp.employeeProblems({ ...ok, lastName: "x".repeat(101) }).lastName, "The last name must be 100 characters or fewer.");
+  assert.equal(emp.employeeProblems({ ...ok, email: "mary@example" }).email, "Enter a valid email address.");
+  assert.ok(emp.employeeProblems({ ...ok, phone: "0412" }).phone?.startsWith("Enter a valid mobile number"));
+  assert.deepEqual(emp.employeeProblems({ ...ok, phone: "+64 21 123 4567" }), {}, "an international number is fine");
+  assert.equal(emp.employeeFileProblem({ type: "application/pdf", size: 1000, name: "a.pdf" }), null);
+  assert.equal(emp.employeeFileProblem({ type: "application/zip", size: 1000, name: "a.zip" }), "Upload a PDF, JPG, PNG or Word file.");
+  assert.equal(emp.employeeFileProblem({ type: "image/png", size: emp.EMPLOYEE_DOC_MAX_BYTES + 1, name: "a.png" }), "The file must be 10 MB or smaller.");
+  assert.equal(emp.employeeDocPath("abc", "../My Passport (1).pdf", "r1"), "employees/abc/r1-My_Passport_1_.pdf", "the file name cannot leave the employee's folder");
+  assert.deepEqual(Object.keys(emp.EMPLOYEE_STATUS_LABEL), ["active", "inactive"], "two statuses only");
+  const sql = read("supabase/migrations/20261110170000_hr_employees_simple.sql");
+  for (const c of emp.EMPLOYEE_DOC_CATEGORIES) assert.ok(sql.includes(`'${c}'`), `the database accepts ${c}`);
+  assert.ok(sql.includes("'Enter a valid email address.'") && sql.includes("drop trigger if exists employment_activation_guard"), "the database validates too and activation needs no login");
+  const page = read("src/pages/admin/StaffDetailPage.tsx");
+  assert.ok(page.includes("employeeDocumentUrl(") && !/getPublicUrl|\.download\(/.test(page), "files open through signed URLs only");
 });

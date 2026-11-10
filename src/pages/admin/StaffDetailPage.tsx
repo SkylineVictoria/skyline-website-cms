@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { Badge, Button, Card, Field, Modal, PageHeader, Select } from "@/pages/admin/components/ui";
+import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
+import EmployeeDocumentsUpload from "@/pages/admin/components/EmployeeDocumentsUpload";
 import {
-  EMPLOYEE_DOC_ACCEPT, EMPLOYEE_DOC_CATEGORIES, EMPLOYEE_STATUS_LABEL, employeeDocumentUrl, employeeFileProblem, formatMobile, getEmployee,
-  removeEmployeeDocument, setEmployeeStatus, uploadEmployeeDocument, type EmployeeDetail, type EmployeeDocCategory,
+  EMPLOYEE_STATUS_LABEL, employeeDocumentUrl, formatMobile, getEmployee, removeEmployeeDocument, setEmployeeStatus, type EmployeeDetail,
 } from "@/lib/employeesApi";
 import { STAFF_EMPLOYEES_PATH } from "@/pages/admin/lib/staffRoutes";
 
@@ -23,10 +23,6 @@ export default function StaffDetailPage() {
   const [editing, setEditing] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [category, setCategory] = useState<EmployeeDocCategory>("Passport");
-  const [file, setFile] = useState<File | null>(null);
-  const [uploadError, setUploadError] = useState("");
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try { setEmployee(await getEmployee(id)); setError(""); }
@@ -40,17 +36,6 @@ export default function StaffDetailPage() {
     try { await work(); setNotice(done); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "That could not be done."); }
     finally { setBusy(false); }
-  };
-
-  const upload = async () => {
-    if (!employee) return;
-    if (!file) { setUploadError("Choose a file."); return; }
-    const problem = employeeFileProblem(file);
-    if (problem) { setUploadError(problem); return; }
-    setUploadError("");
-    await act(() => uploadEmployeeDocument(employee.id, category, file), `${category} uploaded.`);
-    setFile(null);
-    if (fileInput.current) fileInput.current.value = "";
   };
 
   const view = async (path: string) => {
@@ -89,17 +74,7 @@ export default function StaffDetailPage() {
 
       <Card className="mb-4 p-5">
         <h2 className="mb-3 text-base font-semibold text-foreground-950">Documents</h2>
-        <div className="mb-4 grid items-end gap-3 sm:grid-cols-[200px_1fr_auto]" data-testid="employee-upload">
-          <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value as EmployeeDocCategory)}>
-            {EMPLOYEE_DOC_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </Select></Field>
-          <Field label="File" hint="PDF, JPG, PNG or Word, up to 10 MB">
-            <input ref={fileInput} type="file" accept={EMPLOYEE_DOC_ACCEPT} onChange={(e) => { setFile(e.target.files?.[0] ?? null); setUploadError(""); }}
-              className="block w-full text-sm text-foreground-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-background-100 file:px-3 file:py-2 file:text-sm file:font-medium" data-testid="employee-file" />
-          </Field>
-          <Button onClick={() => void upload()} disabled={busy} icon="ri-upload-2-line" data-testid="employee-upload-button">{busy ? "Uploading…" : "Upload"}</Button>
-        </div>
-        {uploadError ? <p role="alert" className="mb-3 text-sm text-primary-700">{uploadError}</p> : null}
+        <EmployeeDocumentsUpload employeeId={employee.id} onUploaded={(message) => { setNotice(message); setError(""); void load(); }} />
         {employee.documentList.length ? (
           <ul className="divide-y divide-background-200 rounded-md border border-background-200" data-testid="employee-documents">
             {employee.documentList.map((d) => (
@@ -114,7 +89,7 @@ export default function StaffDetailPage() {
               </li>
             ))}
           </ul>
-        ) : <p className="text-sm text-foreground-500">No documents yet. Choose a type and a file, then Upload.</p>}
+        ) : <p className="text-sm text-foreground-500">No documents yet. Choose or drop the files above, check each type, then Upload.</p>}
         <p className="mt-2 text-xs text-foreground-500">Uploading a new file of the same type replaces the current one.</p>
       </Card>
 

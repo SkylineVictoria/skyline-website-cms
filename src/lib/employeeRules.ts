@@ -73,3 +73,29 @@ export function mobileProblem(stored: string): string | undefined {
 
 /** 041 234 5678 for Australia, +91 987 654 321 0 style otherwise (as on student and agent records). */
 export const formatMobile = (value: string) => formatPhone(value);
+
+/* several documents at once */
+
+const GUESSES: [RegExp, EmployeeDocCategory][] = [
+  [/passport/i, "Passport"],
+  [/visa|vevo/i, "Visa"],
+  [/driv|licen[cs]e/i, "Driving Licence"],
+  [/\bpte\b|pearson/i, "PTE"],
+  [/ielts|toefl|english/i, "English Certificate"],
+  [/health|insurance|oshc|ovhc|medicare/i, "Health Insurance"],
+  [/resume|\bcv\b|curriculum/i, "Resume"],
+  [/degree|diploma|transcript|academic|certificate|qualification|bachelor|master/i, "Academic"],
+];
+
+/** A document type guessed from the file name; otherwise the first type not used yet in this batch (Passport first). */
+export function guessDocCategory(filename: string, used: readonly string[] = []): EmployeeDocCategory {
+  const name = filename.replace(/[_\-.]+/g, " ");
+  const hit = GUESSES.find(([re]) => re.test(name));
+  if (hit) return hit[1];
+  return EMPLOYEE_DOC_CATEGORIES.find((c) => !used.includes(c)) ?? EMPLOYEE_DOC_CATEGORIES[0];
+}
+
+/** Types chosen for more than one file in the same batch (only the last would stay current). */
+export function duplicateCategories(categories: readonly string[]): string[] {
+  return [...new Set(categories.filter((c, i) => categories.indexOf(c) !== i))];
+}

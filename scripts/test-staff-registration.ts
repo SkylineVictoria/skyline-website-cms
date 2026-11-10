@@ -1205,6 +1205,20 @@ test("simple employees: validation, file checks, upload path, two statuses", asy
   const sql = read("supabase/migrations/20261110170000_hr_employees_simple.sql");
   for (const c of emp.EMPLOYEE_DOC_CATEGORIES) assert.ok(sql.includes(`'${c}'`), `the database accepts ${c}`);
   assert.ok(sql.includes("'Enter a valid email address.'") && sql.includes("drop trigger if exists employment_activation_guard"), "the database validates too and activation needs no login");
+  // Several documents at once: the type is guessed from the file name; each type once per batch.
+  assert.equal(emp.guessDocCategory("John_Passport.pdf"), "Passport");
+  assert.equal(emp.guessDocCategory("visa-grant-notice.pdf"), "Visa");
+  assert.equal(emp.guessDocCategory("drivers licence front.jpg"), "Driving Licence");
+  assert.equal(emp.guessDocCategory("PTE results.pdf"), "PTE");
+  assert.equal(emp.guessDocCategory("IELTS.pdf"), "English Certificate");
+  assert.equal(emp.guessDocCategory("OSHC policy.pdf"), "Health Insurance");
+  assert.equal(emp.guessDocCategory("John CV 2026.docx"), "Resume");
+  assert.equal(emp.guessDocCategory("Bachelor transcript.pdf"), "Academic");
+  assert.equal(emp.guessDocCategory("scan001.jpg", ["Passport"]), "Visa", "an unknown name takes the first type not used yet");
+  assert.deepEqual(emp.duplicateCategories(["Passport", "Visa", "Passport"]), ["Passport"]);
+  assert.deepEqual(emp.duplicateCategories(["Passport", "Visa"]), []);
+  const upload = read("src/pages/admin/components/EmployeeDocumentsUpload.tsx");
+  assert.ok(upload.includes("multiple") && upload.includes("onDrop") && upload.includes("uploadEmployeeDocument("), "several files by picking or dropping, each uploaded on its own");
   const page = read("src/pages/admin/StaffDetailPage.tsx");
   assert.ok(page.includes("employeeDocumentUrl(") && !/getPublicUrl|\.download\(/.test(page), "files open through signed URLs only");
 });

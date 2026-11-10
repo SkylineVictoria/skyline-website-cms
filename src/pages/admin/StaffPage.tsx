@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, PageHeader, TextInput } from "@/pages/admin/components/ui";
 import { HrLink } from "@/pages/admin/components/Recruitment";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
+import ResendLinkButton from "@/pages/admin/components/ResendLinkButton";
 import { EMPLOYEE_STATUS_LABEL, formatMobile, listEmployees, type Employee, type EmployeeStatus } from "@/lib/employeesApi";
 import { adminListStaff, type StaffListRow } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE, type StaffStatus } from "@/lib/staffStatus";
@@ -25,6 +26,8 @@ export default function StaffPage() {
   const [rows, setRows] = useState<Employee[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let current = true;
@@ -39,7 +42,7 @@ export default function StaffPage() {
       }
     }, 150);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [status, search]);
+  }, [status, search, reload]);
 
   return (
     <div>
@@ -54,13 +57,14 @@ export default function StaffPage() {
         </div>
         <div className="w-full sm:w-72"><TextInput type="search" aria-label="Search employees" placeholder="Search name, email or mobile" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
       </div>
+      {notice ? <p role="status" className="mb-4 rounded-md border border-secondary-300 bg-secondary-50 px-3 py-2 text-sm text-foreground-900" data-testid="employees-notice">{notice}</p> : null}
       {error ? <p role="alert" className="mb-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
       {!rows && !error ? <p role="status">Loading employees…</p> : null}
       {onboarding ? (onboarding.length ? (
         <Card className="data-table-frame">
           <table className="data-table w-full text-left text-sm" data-testid={status === "closed" ? "closed-table" : "onboarding-table"}>
             <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
-              {["Name", "Email", "Job", "Documents approved", status === "closed" ? "Status" : "Stage"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
+              {["Name", "Email", "Job", "Documents approved", status === "closed" ? "Status" : "Stage", ...(status === "closed" ? [] : ["Document link"])].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
             </tr></thead>
             <tbody>{onboarding.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`onboarding-row-${r.id}`}>
@@ -69,6 +73,7 @@ export default function StaffPage() {
                 <td data-label="Job" className="px-4 py-3">{[r.jobTitle, r.department].filter(Boolean).join(" · ") || "—"}</td>
                 <td data-label="Documents approved" className="px-4 py-3">{r.docs.approved}/{r.docs.required}{r.docs.rejected ? ` (${r.docs.rejected} rejected)` : ""}</td>
                 <td data-label={status === "closed" ? "Status" : "Stage"} className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[r.status]}>{status === "closed" ? "Rejected / Withdrawn" : STAFF_STATUS_LABEL[r.status]}</Badge>{r.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
+                {status === "closed" ? null : <td data-label="Document link" className="px-4 py-3"><ResendLinkButton row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} /></td>}
               </tr>
             ))}</tbody>
           </table>

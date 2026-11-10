@@ -1194,3 +1194,17 @@ test("jobs and candidates tree: department > job > stage > candidate, and search
   assert.equal(tree.jobBranchMatches(depts[0].jobs[0], "zoe"), false);
   assert.ok(read("src/pages/admin/JobsPage.tsx").includes("<RecruitmentTree byDepartment") && read("src/pages/admin/CandidatesPage.tsx").includes("<RecruitmentTree"), "both pages offer the tree view");
 });
+
+test("resume autofill reads basic contact details and ignores references", async () => {
+  const { resumeContactFromText } = await load.import<typeof import("../src/lib/resumeContact.ts")>("../src/lib/resumeContact.ts");
+  assert.deepEqual(resumeContactFromText([
+    "Curriculum vitae", "Élodie O’Neill", "Trainer", "Email: ELODIE@EXAMPLE.TEST | Mobile: 0412 345 678",
+    "Professional experience", "Contact: references@example.test · 0400 111 222",
+  ].join("\n")), { firstName: "Élodie", lastName: "O’Neill", email: "elodie@example.test", phone: "+61412345678" });
+  assert.deepEqual(resumeContactFromText("Name: Priya\nEmail: priya@example.test\n+91 98765 43210"),
+    { firstName: "Priya", lastName: "", email: "priya@example.test", phone: "+919876543210" });
+  assert.deepEqual(resumeContactFromText("Skills\nTrainer"), { email: undefined, phone: undefined });
+  const ambiguous = resumeContactFromText("Jane Doe\na@example.test | b@example.test\nMobile: 0412 345 678 / 0400 111 222");
+  assert.equal(ambiguous.email, undefined);
+  assert.equal(ambiguous.phone, undefined);
+});

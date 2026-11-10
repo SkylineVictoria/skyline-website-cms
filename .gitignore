@@ -66,3 +66,7 @@ docs/release-evidence/
 # Playwright output
 test-results/
 playwright-report/
+
+# Test artefacts (test:holiday-import once wrote its workbook here)
+/holiday-test.xlsx
+/*.xlsx

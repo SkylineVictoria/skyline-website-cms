@@ -1,5 +1,8 @@
 // Offline checks of src/lib/holidayImport.ts (Public Holidays > Import from Excel). Run: npx jiti scripts/test-holiday-import.ts
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import writeXlsxFile from "write-excel-file/node";
 import { readSheet } from "read-excel-file/node";
 import { holidayDate, parseCsv, parseHolidaySheet, HOLIDAY_TEMPLATE_HEADER } from "../src/lib/holidayImport";
@@ -36,7 +39,10 @@ await check("missing headings", () => {
   assert.match(parseHolidaySheet([]).problems[0], /empty/);
 });
 await check("real xlsx round trip (template layout)", async () => {
-  const file = `${process.env.TMPDIR ?? "."}/holiday-test.xlsx`;
+  // A fresh folder under the OS temp dir (never the repo), removed afterwards even when an assertion fails.
+  const dir = await mkdtemp(join(process.env.TMPDIR || tmpdir(), "skyline-holiday-"));
+  const file = join(dir, "holiday-test.xlsx");
+  try {
   await writeXlsxFile([
     HOLIDAY_TEMPLATE_HEADER.map((value) => ({ value })),
     [{ type: Date, value: new Date("2027-01-26T00:00:00Z"), format: "dd/mm/yyyy" }, { type: String, value: "Australia Day" }, { type: String, value: "No" }, { type: String, value: "VIC" }, null],
@@ -45,5 +51,8 @@ await check("real xlsx round trip (template layout)", async () => {
   const r = parseHolidaySheet((await readSheet(file)) as never);
   assert.deepEqual(r.problems, []);
   assert.deepEqual(r.rows, [{ date: "2027-01-26", name: "Australia Day", isOptional: false, state: "VIC" }, { date: "2027-11-02", name: "Melbourne Cup Day", isOptional: false }]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 console.log(`holiday import: ${passed}/6 passed`);

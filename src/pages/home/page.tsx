@@ -1,148 +1,64 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import Reveal from "@/components/base/Reveal";
-import CoursesCarousel from "@/components/feature/CoursesCarousel";
-import LatestNews from "@/components/feature/LatestNews";
 import Seo from "@/components/feature/Seo";
-import { defaultOgImage, siteDescription } from "@/data/seo";
-import { HOME_COURSE_LIMIT } from "@/config/cmsLimits";
 import { usePublicSite } from "@/hooks/publicSiteContext";
 
-
-const staticHeroImages = [
-  "https://static.readdy.ai/image/7fe129f8d7ac12cdc97a659d50dae110/10672c8cbcfc600c6073bd57b6040721.jpeg",
-  "https://readdy.ai/api/search-image?query=Modern%20Australian%20training%20campus%20courtyard%20with%20diverse%20international%20students%20walking%20and%20talking%2C%20warm%20afternoon%20light%2C%20clean%20architectural%20lines%2C%20editorial%20photography%20with%20soft%20shadows&width=1920&height=1080&seq=skyline-hero-02&orientation=landscape",
-  "https://readdy.ai/api/search-image?query=Bright%20modern%20technical%20workshop%20classroom%20with%20students%20learning%20hands-on%20skills%20and%20an%20instructor%20guiding%20them%2C%20warm%20neutral%20tones%2C%20clean%20professional%20editorial%20photography&width=1920&height=1080&seq=skyline-hero-03&orientation=landscape",
-];
-
-const staticAboutImage = "https://slit.edu.au/wp-content/uploads/2023/05/about_img_02.png";
-
 export default function Home() {
-  const [slide, setSlide] = useState(0);
-  const { data, status } = usePublicSite();
-  const { featuredCourses, courses, settings } = data;
-  const homeCourses = [...featuredCourses, ...courses.filter((course) => !featuredCourses.some((featured) => featured.slug === course.slug))].slice(0, HOME_COURSE_LIMIT);
-  const coursesLoading = status === "loading";
-
-  // Hero and about imagery are CMS-managed (Website Settings → Homepage images)
-  // and fall back to the shipped defaults until the CMS provides values.
-  const heroImages = settings.homeHeroImages.length ? settings.homeHeroImages : staticHeroImages;
-  const aboutImage = settings.homeAboutImage || staticAboutImage;
+  const { data, status, isLive, reload } = usePublicSite();
+  const { settings, courses, studentLinks, footer } = data;
+  const [query, setQuery] = useState("");
+  const published = isLive ? courses : [];
+  const filtered = published.filter((course) => [course.name, course.code, course.category].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
+  const heroImage = published.find((course) => course.image)?.image;
 
   return (
     <>
-      <Seo
-        title="Skyline Institute Of Technology | Melbourne RTO & CRICOS Courses"
-        description={siteDescription}
-        path="/"
-        image={defaultOgImage}
-      />
-      <section className="bg-[#f5f5f7] text-[#1d1d1f]">
-        <div className="mx-auto max-w-[1440px] px-5 pt-14 text-center md:px-12 md:pt-20">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground-500">Skyline Institute of Technology · Melbourne</p>
-            <h1 className="mx-auto mt-5 max-w-5xl font-heading text-[48px] font-semibold leading-[1.02] tracking-[-0.055em] md:text-[84px] lg:text-[104px]">
-              Your future.<br /><span className="text-primary-600">Starts here.</span>
-            </h1>
-            <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-foreground-600 md:text-2xl">
-              Build hands-on skills through vocational courses in Melbourne.
-            </p>
-            <div className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-3">
-              <Link to="/our-courses" className="inline-flex items-center gap-2 rounded-full bg-primary-600 px-7 py-3.5 text-sm font-semibold text-white hover:bg-primary-700">
-                Explore courses <i className="ri-arrow-right-line" aria-hidden="true" />
-              </Link>
-              <Link to="/contact" className="py-3 text-base font-medium text-primary-700 hover:underline underline-offset-4">
-                Book a call
-              </Link>
-            </div>
-          </div>
-          <div>
-            <div className="mt-12 overflow-hidden rounded-t-[28px] bg-white md:mt-16 md:rounded-t-[40px]">
-              <img
-                src={heroImages[slide] ?? heroImages[0]}
-                alt=""
-                className="h-[300px] w-full object-cover object-center md:h-[460px]"
-                fetchPriority="high"
-              />
-            </div>
-            {heroImages.length > 1 ? (
-              <div className="flex justify-center gap-1 py-3" aria-label="Homepage photos" role="group">
-                {heroImages.map((_, index) => (
-                  <button key={index} type="button" onClick={() => setSlide(index)} aria-label={`Show photo ${index + 1}`} aria-pressed={index === slide} className="grid h-8 w-8 place-items-center rounded-full hover:bg-black/5">
-                    <span className={`h-2 w-2 rounded-full ${index === slide ? "bg-primary-600" : "bg-black/20"}`} />
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+      <Seo title={settings.name} description={settings.footerIntro || footer.about} path="/" />
+      <section className="relative overflow-hidden bg-[#102b46] text-white">
+        {heroImage ? <img src={heroImage} alt="" fetchPriority="high" className="absolute inset-0 h-full w-full object-cover object-center opacity-25" /> : null}
+        <div className="absolute inset-0 bg-gradient-to-r from-[#102b46] via-[#102b46]/80 to-transparent" />
+        <div className="site-container relative py-16 md:py-24">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/70">Study with us</p>
+          <h1 className="mt-5 max-w-3xl font-heading text-4xl font-semibold leading-[1.12] tracking-tight md:text-6xl">{settings.name}</h1>
+          {isLive && settings.footerIntro ? <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/80 md:text-lg">{settings.footerIntro}</p> : null}
+          <a href="#courses" className="mt-8 inline-flex items-center gap-5 bg-white px-6 py-3.5 font-semibold text-[#102b46] hover:bg-background-100">Find your course <span aria-hidden="true">→</span></a>
+          {isLive ? <div className="mt-12 flex flex-wrap gap-x-8 gap-y-2 border-t border-white/20 pt-5 text-xs tracking-wide text-white/70">
+            {settings.rto ? <span>RTO {settings.rto}</span> : null}
+            {settings.cricos ? <span>CRICOS {settings.cricos}</span> : null}
+          </div> : null}
         </div>
       </section>
 
-      {coursesLoading || homeCourses.length > 0 ? (
-      <section className="bg-white py-20 md:py-28">
+      <section id="courses" className="scroll-mt-24 bg-[#f5f6f7] py-16 md:py-24" aria-labelledby="courses-heading">
         <div className="site-container">
-          <Reveal className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
-            <div>
-              <h2 className="mt-3 font-heading text-4xl font-semibold tracking-[-0.04em] text-foreground-950 md:text-6xl">Find your next chapter.</h2>
-            </div>
-            <Link
-              to="/our-courses"
-              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-background-300 bg-white px-5 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
-            >
-              View all courses
-              <i className="ri-arrow-right-line" aria-hidden="true" />
-            </Link>
-          </Reveal>
-
-          <div className="mt-10">
-            <CoursesCarousel courses={homeCourses} settings={settings.coursesCarousel} loading={coursesLoading} />
+          <div className="grid gap-8 border-b border-background-300 pb-8 md:grid-cols-2 md:items-end">
+            <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">Our courses</p><h2 id="courses-heading" className="mt-3 font-heading text-3xl font-semibold tracking-tight text-[#102b46] md:text-5xl">Explore your study options</h2></div>
+            <div><label htmlFor="course-search" className="mb-2 block text-sm font-medium text-foreground-700">Search by course, code or study area</label><input id="course-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a course" className="w-full border border-background-300 bg-white px-4 py-3.5 text-base outline-none focus:border-primary-600 focus:ring-2 focus:ring-primary-100" /></div>
           </div>
-        </div>
-      </section>
-
-      ) : null}
-
-      <section className="mx-3 rounded-[28px] bg-[#f5f5f7] py-20 md:mx-6 md:rounded-[40px] md:py-28">
-        <div className="site-container grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
-          <Reveal>
-            <div className="relative overflow-hidden rounded-3xl bg-white">
-              <img
-                src={aboutImage}
-                alt="Skyline Institute of Technology campus and students"
-                className="h-[320px] w-full object-contain object-center md:h-[420px]"
-              />
+          {!isLive ? <div className="py-12 text-foreground-600" role="status">{status === "loading" ? "Loading courses…" : <><p>Course information is currently unavailable.</p><button onClick={reload} className="mt-3 underline">Try again</button></>}</div> : <>
+            <p className="mt-6 text-sm text-foreground-600" aria-live="polite">{filtered.length} {filtered.length === 1 ? "course" : "courses"}</p>
+            <div className="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {filtered.map((course) => <article key={course.slug} className="group flex flex-col bg-white">
+                {course.image ? <Link to={`/courses/${course.slug}`} tabIndex={-1} aria-hidden="true" className="block overflow-hidden"><img src={course.image} alt="" loading="lazy" className="aspect-[16/9] w-full object-cover transition-transform duration-300 motion-safe:group-hover:scale-105" /></Link> : null}
+                <div className="flex flex-1 flex-col border border-background-200 p-6">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary-700">{course.category}</p>
+                  <h3 className="mt-3 font-heading text-xl font-semibold leading-snug text-[#102b46]"><Link to={`/courses/${course.slug}`} className="hover:underline">{course.name}</Link></h3>
+                  {course.summary ? <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-foreground-600">{course.summary}</p> : null}
+                  <div className="mt-auto pt-6"><div className="flex flex-wrap gap-3 border-t border-background-200 pt-4 text-xs text-foreground-600">{course.duration ? <span>{course.duration}</span> : null}{course.mode ? <span>{course.mode}</span> : null}</div><Link to={`/courses/${course.slug}`} className="mt-4 inline-flex items-center gap-3 text-sm font-semibold text-[#102b46]">Course details <span aria-hidden="true">→</span></Link></div>
+                </div>
+              </article>)}
             </div>
-          </Reveal>
-          <Reveal delay={120}>
-            <span className="inline-flex items-center gap-2 font-label text-xs font-semibold uppercase tracking-[0.2em] text-primary-600">
-              <i className="ri-graduation-cap-line text-base" aria-hidden="true" />
-              About Our Institute
-            </span>
-            <h2 className="mt-4 font-heading text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-foreground-950 md:text-6xl">
-              Real skills.<br />New possibilities.
-            </h2>
-            <p className="mt-5 text-base leading-relaxed text-foreground-700">
-              We help students from diverse backgrounds develop practical skills for starting or advancing a career.
-            </p>
-            <Link
-              to="/about-us"
-              className="mt-7 inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-secondary-900 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-secondary-800"
-            >
-              About Skyline
-              <i className="ri-arrow-right-line" aria-hidden="true" />
-            </Link>
-          </Reveal>
+            {!filtered.length ? <p className="py-12 text-foreground-600">{query ? "No courses match your search. Try another course name or study area." : "No courses are currently published."}</p> : null}
+          </>}
         </div>
       </section>
 
-      <section className="mx-3 my-3 rounded-[28px] bg-[#1d1d1f] px-6 py-20 text-center text-white md:mx-6 md:my-6 md:rounded-[40px] md:py-28">
-        <p className="text-sm font-medium text-white/60">Your next step</p>
-        <h2 className="mx-auto mt-4 max-w-3xl font-heading text-4xl font-semibold leading-tight tracking-[-0.04em] md:text-6xl">Big plans?<br />Let’s talk.</h2>
-        <p className="mx-auto mt-5 max-w-md text-lg text-white/70">Explore your study options with the Skyline team.</p>
-        <Link to="/contact" className="mt-8 inline-flex rounded-full bg-white px-7 py-3.5 text-base font-medium text-[#1d1d1f] hover:bg-background-200">Book a call</Link>
-      </section>
-
-      <LatestNews />
+      {isLive && studentLinks.length > 0 ? <section className="bg-white py-16 md:py-20">
+        <div className="site-container grid gap-10 lg:grid-cols-[1fr_2fr]">
+          <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">Student resources</p><h2 className="mt-3 font-heading text-3xl font-semibold text-[#102b46]">Information and support</h2></div>
+          <div className="grid gap-x-8 sm:grid-cols-2">{studentLinks.map((link) => <a key={link.to + link.label} href={link.to} className="flex items-center justify-between gap-4 border-b border-background-300 py-5 text-base font-medium text-[#102b46] hover:text-primary-700">{link.label}<span aria-hidden="true">↗</span></a>)}</div>
+        </div>
+      </section> : null}
     </>
   );
 }

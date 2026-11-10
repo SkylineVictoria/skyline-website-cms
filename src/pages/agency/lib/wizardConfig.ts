@@ -53,9 +53,9 @@ export const WIZARD_STEPS: WizardStep[] = [
   },
   {
     id: "english",
-    title: "English language test",
+    title: "English-language evidence",
     short: "English",
-    subtitle: "Required. Upload the IELTS, PTE, TOEFL or other accepted result.",
+    subtitle: "Required. Upload an IELTS, PTE, TOEFL or other accepted proof of English proficiency.",
     icon: "ri-translate-2",
     category: "English Test",
     noun: "English test",
@@ -184,7 +184,7 @@ export type Registrant = "student" | "staff";
 export const STAFF_WIZARD_STEPS: WizardStep[] = [
   { id: "passport", title: "Passport", short: "Passport", subtitle: "Upload the photo page (PDF, JPG or PNG). We read your name, date of birth, nationality, passport number and its expiry date from it.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
   { id: "visa", title: "Visa", short: "Visa", subtitle: "Upload your visa grant notice or VEVO record. We read the visa subclass and its expiry date from it.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "", required: true },
-  { id: "english", title: "English test result", short: "English", subtitle: "Upload your IELTS, PTE, TOEFL or similar result.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
+  { id: "english", title: "English test result", short: "English", subtitle: "Upload your IELTS, PTE, TOEFL or other accepted proof of English proficiency.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
   { id: "academic", title: "Academic results", short: "Academic", subtitle: "Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
   { id: "licence", title: "Driving licence", short: "Driving licence", subtitle: "Upload your driving licence; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
   { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Upload your health insurance certificate or policy.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "", required: true },

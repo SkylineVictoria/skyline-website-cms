@@ -5,8 +5,8 @@ import { readFile } from "node:fs/promises";
 // proof is scripts/test-document-provider.ts and the native lab, not this check.
 const worker = await readFile("supabase/functions/_shared/document-extraction/openai.ts", "utf8");
 
-assert.match(worker, /inputMime === "application\/pdf"/);
-assert.match(worker, /type: "input_file", filename: request\.filename, file_data: dataUrl/);
+assert.match(worker, /documentInput\(request\.bytes, request\.mimeType, request\.filename, request\.mimeType !== "application\/pdf"\)/);
+assert.match(worker, /type: "input_file", filename, file_data: dataUrl/);
 assert.match(worker, /type: "input_image", image_url: dataUrl, detail: "high"/);
 assert.doesNotMatch(worker, /content: \[\{ type: "input_file", filename: request\.filename, file_data:/);
 

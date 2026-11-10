@@ -1,3 +1,4 @@
+import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, useLayoutEffect } from "react";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
@@ -718,6 +719,11 @@ export default function ApplicationWorkspace({
       const extracted = extraction?.extracted ?? {};
       const usable = status !== "failed" && !extraction?.source?.categoryMismatch && Boolean(extracted.visa_subclass || extracted.visa_grant_number);
       if (!usable) {
+        if (hasValidatedDocumentPath(document.storagePath)) {
+          setVisaMode("manual");
+          setVisaNote("The visa document was saved. Enter any visa details that could not be read.");
+          continue;
+        }
         // Not an Australian visa grant notice or VEVO record that can be read: remove it and offer the choice again.
         void deleteApplicationDocument({ id: document.id, storagePath: document.storagePath })
           .catch(() => undefined)
@@ -927,6 +933,10 @@ export default function ApplicationWorkspace({
       const extracted = extraction?.extracted ?? {};
       const usable = status !== "failed" && !extraction?.source?.categoryMismatch && Boolean(extracted.english_type || extracted.english_score);
       if (!usable) {
+        if (hasValidatedDocumentPath(document.storagePath)) {
+          setEnglishNote("Your English-language evidence was saved. Enter any applicable details below.");
+          continue;
+        }
         // Not an English test result that can be read: remove it so the right document can be uploaded.
         void deleteApplicationDocument({ id: document.id, storagePath: document.storagePath })
           .catch(() => undefined)
@@ -986,7 +996,7 @@ export default function ApplicationWorkspace({
     for (const page of PAGE_DOCUMENTS) {
       if (!section.fields.some((field) => field.name === page.marker)) continue;
       for (const document of attachments) {
-        if (document.category !== page.category) continue;
+        if (document.category !== page.category || hasValidatedDocumentPath(document.storagePath)) continue;
         const status = extractionStatus(document.metadata);
         if (status === "Not requested") continue;
         if (["queued", "processing"].includes(status)) return `${document.filename} is still being read. Wait a moment, or delete it to continue.`;
@@ -1502,7 +1512,7 @@ export default function ApplicationWorkspace({
           <p className="mt-0.5 text-xs text-foreground-600">
             {englishDocuments.length
               ? "The details below were read from this document. Use Edit to correct a field, view or delete the document, or upload a newer result."
-              : "Upload the IELTS, PTE, TOEFL or Cambridge result and the details below are filled in from it. You can also fill them in yourself."}
+              : "Upload an IELTS, PTE, TOEFL or Cambridge result, or other accepted proof of English proficiency. Fill in any applicable details we could not read."}
           </p>
           <div className="mt-3">
             <ApplicationAttachmentField

@@ -223,3 +223,68 @@ test("OpenAI-style results: Visa, English and Academic values reach the wizard f
   const academic = formatExtractionCandidates(buildExtractionEnvelope(createMockProvider(), openAiFields({ academic_institution: "Example University", academic_qualification: "Bachelor", academic_program: "IT", academic_year: "2024", academic_result: "GPA 3.4/4" }), "t").extracted);
   assert.deepEqual(academic, { academic_institution: "Example University", academic_qualification: "Bachelor", academic_program: "IT", academic_year: "2024", academic_result: "GPA 3.4/4" });
 });
+
+test("upload content classification accepts only the requested category", async () => {
+  const { createDocumentCategoryCheck } = await import("../supabase/functions/_shared/document-extraction/classify.ts");
+  let detected = "Passport";
+  const check = createDocumentCategoryCheck({ apiKey: "test", model: "test", fetch: async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.store, false);
+    assert.equal(body.input[0].content[0].filename, "document.pdf");
+    return Response.json({ status: "completed", output_text: JSON.stringify({ category: detected }) });
+  } });
+  const file = { bytes: pdf, mime: "application/pdf", filename: "untrusted-name.pdf" };
+  assert.equal(await check({ ...file, category: "Passport" }), null);
+  for (const category of ["Academic", "Driving Licence", "Visa", "English Test", "Health Insurance"]) {
+    assert.equal((await check({ ...file, category }))?.status, 422);
+  }
+  for (const category of ["Academic", "Driving Licence", "Visa", "Health Insurance"]) {
+    detected = category;
+    assert.equal(await check({ ...file, category }), null);
+  }
+  detected = "Visa";
+  assert.equal((await check({ ...file, category: "Visa", australianVisaOnly: true }))?.status, 422);
+  detected = "Australian Visa";
+  assert.equal(await check({ ...file, category: "Visa", australianVisaOnly: true }), null);
+  assert.equal(await check({ ...file, category: "Visa" }), null);
+  detected = "PTE";
+  for (const category of ["English", "English Test", "English Certificate", "PTE"]) {
+    assert.equal(await check({ ...file, category }), null);
+  }
+  detected = "English Evidence";
+  assert.equal(await check({ ...file, category: "English Test" }), null);
+  assert.equal((await check({ ...file, category: "PTE" }))?.status, 422);
+  detected = "Unclear";
+  assert.equal((await check({ ...file, category: "Passport" }))?.status, 422);
+  detected = "unrecognised-output";
+  assert.equal((await check({ ...file, category: "Passport" }))?.status, 503);
+  assert.equal((await check({ ...file, category: "Passport", bytes: new Uint8Array([1, 2, 3]) }))?.status, 415);
+  const unavailable = createDocumentCategoryCheck({ apiKey: "", model: "" });
+  assert.equal((await unavailable({ ...file, category: "Passport" }))?.status, 503);
+});
+
+test("student guest upload checks the category before saving or replacing anything", async () => {
+  const { runGuestUpload } = await import("../supabase/functions/_shared/guest-upload.ts");
+  const cannotRun = () => { throw new Error("An invalid file must not change document storage or state."); };
+  const outcome = await runGuestUpload({
+    checkCategory: async ({ category }) => {
+      assert.equal(category, "Visa");
+      return { status: 422, error: "Upload a visa document." };
+    },
+    existing: cannotRun, countAll: cannotRun, store: cannotRun, insert: cannotRun, discardObject: cannotRun,
+    enqueue: cannotRun, dispatch: cannotRun, remove: cannotRun,
+  }, { category: "Visa", name: "passport.pdf", mime: "application/pdf", bytes: pdf, sha256: "hash", storagePath: "a/path" });
+  assert.deepEqual(outcome, { ok: false, status: 422, error: "Upload a visa document." });
+});
+
+test("guest English evidence stays accepted when field extraction has no usable score", async () => {
+  const { publicDocument } = await import("../supabase/functions/_shared/guest-link.ts");
+  const row = {
+    category: "English Test", filename: "english-evidence.pdf",
+    metadata: { extraction: { status: "no_fields", source: { documentType: "Other", categoryMismatch: true } } },
+  };
+  assert.equal(publicDocument("ref", row).mismatch, true, "legacy mismatches remain visible");
+  const checked = publicDocument("ref", { ...row, storage_path: "app/validated-fixture.pdf" });
+  assert.equal(checked.mismatch, false);
+  assert.equal(checked.detected, "English Test");
+});

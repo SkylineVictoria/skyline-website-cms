@@ -1,3 +1,5 @@
+import { checkedDocumentCategory } from "../../supabase/functions/_shared/document-category";
+import { uploadValidatedDocument } from "./validatedDocumentUpload";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { bankIsEmpty, employeeDocPath, employeeFileProblem, type EmployeeBank, type EmployeeDetail, type EmployeeDocCategory, type EmployeeForm, type Employee, type EmployeeStatus } from "@/lib/employeeRules";
 
@@ -40,10 +42,15 @@ export const saveEmployeeBank = (id: string, bank: EmployeeBank) =>
 export async function uploadEmployeeDocument(employeeId: string, category: EmployeeDocCategory, file: File): Promise<void> {
   const problem = employeeFileProblem(file);
   if (problem) throw new Error(problem);
-  const path = employeeDocPath(employeeId, file.name, crypto.randomUUID().slice(0, 8));
   const bucket = supabase.storage.from("staff-documents");
-  const { error } = await bucket.upload(path, file, { contentType: file.type, upsert: false });
-  if (error) throw new Error("The file could not be uploaded. Please try again.");
+  let path: string;
+  if (checkedDocumentCategory(category)) {
+    path = await uploadValidatedDocument("employee", employeeId, category, file);
+  } else {
+    path = employeeDocPath(employeeId, file.name, crypto.randomUUID().slice(0, 8));
+    const { error } = await bucket.upload(path, file, { contentType: file.type, upsert: false });
+    if (error) throw new Error("The file could not be uploaded. Please try again.");
+  }
   try {
     await rpc<string>("hr_admin_emp_doc_add", { p_id: employeeId, p_category: category, p_path: path, p_filename: file.name, p_mime: file.type, p_size: file.size }, "The document could not be saved.");
   } catch (e) {

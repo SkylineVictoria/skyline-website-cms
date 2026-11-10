@@ -133,37 +133,6 @@ export function SiteHeaderView({ navigation, settings, preview = false }: { navi
 
   return (
     <header className={`${preview ? "relative" : "sticky top-0 z-50"} w-full`}>
-      <div className="hidden border-b border-background-200 bg-background-100 md:block">
-        <div className="site-container flex items-center justify-between py-2.5">
-          <div className="flex items-center gap-3">
-            {settings.social.map((social) => (
-              <a
-                key={social.label}
-                href={social.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={social.label}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-foreground-600 transition-colors hover:bg-background-200 hover:text-primary-600"
-              >
-                <i className={`${social.icon} text-base`} aria-hidden="true" />
-              </a>
-            ))}
-          </div>
-          <div className="flex items-center gap-6">
-            <a href={settings.phoneHref} className="flex items-center gap-2 text-sm text-foreground-700 hover:text-primary-600">
-              <i className="ri-phone-line text-base text-primary-600" aria-hidden="true" />
-              <span className="font-label text-xs uppercase tracking-wide text-foreground-500">Call Now !</span>
-              <strong className="font-semibold">{settings.phone}</strong>
-            </a>
-            <a href={settings.emailHref} className="flex items-center gap-2 text-sm text-foreground-700 hover:text-primary-600">
-              <i className="ri-mail-line text-base text-primary-600" aria-hidden="true" />
-              <span className="font-label text-xs uppercase tracking-wide text-foreground-500">Email Now</span>
-              <strong className="font-semibold">{settings.email}</strong>
-            </a>
-          </div>
-        </div>
-      </div>
-
       <div
         className="relative border-b border-background-200 bg-background-50/95 backdrop-blur"
         onMouseLeave={() => setCoursesOpen(false)}

@@ -294,6 +294,8 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
     upload: async (p: string, bytes: Uint8Array, type: string) => { calls.push(["upload", { p, type, size: bytes.length }]); return { error: options.uploadError ?? null }; },
     remove: async (paths: string[]) => { calls.push(["remove", paths]); },
     signedUrl: async (p: string, seconds: number) => `signed:${p}:${seconds}`,
+    checkCategory: async () => null,
+    recordCategory: async () => true,
     scheduleExtraction: (doc: { category: string }) => { scheduled.push(doc.category); },
     hash: async (v: string) => `h(${v})`,
     newId: () => "rnd",
@@ -355,9 +357,9 @@ test("onboarding: a file is checked by content, the database approves the type B
   const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(r.status, 200);
   assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
-  assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
+  assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/validated-rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
   const added = run.calls.find(([n]) => n === "hr_svc_document_add")![1] as Record<string, unknown>;
-  assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
+  assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/validated-rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
   assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/old.pdf"]], "the replaced file is deleted");
   assert.deepEqual(run.scheduled, ["Passport"], "a passport is read");
 
@@ -380,10 +382,32 @@ test("onboarding: a file is checked by content, the database approves the type B
   run = linkDeps({ db: { hr_svc_document_add: { error: { code: "22023", message: "The document location is not valid." } } } });
   const noExpiry = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(noExpiry.status, 400);
-  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/rnd.pdf"]], "an unrecorded file is deleted");
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/validated-rnd.pdf"]], "an unrecorded file is deleted");
 
   run = linkDeps();
   assert.equal((await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "next year" }, new File([PDF_BYTES], "p.pdf")), run.deps)).body.field, "expiryDate");
+});
+
+test("onboarding: a rejected category leaves the current file and checklist untouched", async () => {
+  const run = linkDeps();
+  const result = await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" },
+    new File([PDF_BYTES], "passport.pdf", { type: "application/pdf" })), {
+    ...run.deps, checkCategory: async () => ({ status: 422, error: "Upload an academic record." }),
+  });
+  assert.deepEqual(result, { status: 422, body: { error: "Upload an academic record.", field: "file" } });
+  assert.deepEqual(run.names().filter((name) => name !== "limit"), ["hr_svc_upload_target"]);
+  assert.deepEqual(run.scheduled, []);
+});
+
+test("onboarding: a missing category receipt removes only the new object", async () => {
+  const run = linkDeps();
+  const result = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" },
+    new File([PDF_BYTES], "passport.pdf", { type: "application/pdf" })), {
+    ...run.deps, recordCategory: async () => false,
+  });
+  assert.equal(result.status, 503);
+  assert.ok(!run.names().includes("hr_svc_document_add"));
+  assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/validated-rnd.pdf"]]);
 });
 
 test("onboarding: open a file, remove, expiry, re-read and submit go through the link", async () => {

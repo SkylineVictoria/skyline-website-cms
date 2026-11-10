@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
-  PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAt, waitForHrMail,
+  PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAdmin, staffAt, waitForHrMail,
 } from "./support";
 
 // Staff > Employees (HR-02g) in the browser, against the LOCAL lab stack only: the sidebar, tabs, every lifecycle action with its
@@ -214,6 +214,89 @@ test("Add employee: Start onboarding emails the document link, the same email ca
   await expect(page.getByTestId("staff-stage-hint")).toContainText("withdrawn or rejected");
   await expect(page.getByTestId("staff-history")).toContainText("Withdrew before starting");
   await expect(page.getByTestId("staff-action-reopen")).toBeVisible();
+});
+
+test("Employees > Onboarding: every person shows the stepper and the buttons of their stage (manual candidate, Careers applicant, added by an Admin, documents in, offer signed)", async ({ page }) => {
+  test.setTimeout(240_000);
+  const admin = await createAdmin("stages-admin");
+  const adminClient = await signedInClient(admin.email);
+  const job = sql(`insert into hr.jobs(title, description, employment_type, location, department, status) values ('E2E Stages ${Date.now()}', 'Teach.', 'full_time', 'Melbourne', 'Training', 'open') returning id`).split("\n")[0];
+
+  // The three kinds of record that were on file before the flow was released.
+  // 1. A manual candidate (entered by an Admin, no resume), shortlisted.
+  const manual = person("manual");
+  const { data: manualApp, error: manualError } = await adminClient.rpc("hr_admin_candidate_save", { p_id: null, p_job: job, p_person: { firstName: "Mi", lastName: "Manual", email: manual.email, phone: manual.phone }, p_cover_letter: "", p_recruiter_notes: "" });
+  expect(manualError).toBeNull();
+  expect((await adminClient.rpc("hr_admin_candidate_progress", { p_id: manualApp, p_action: "shortlisted", p_interview_at: null, p_interview_notes: null, p_reason: null, p_notify: false })).error).toBeNull();
+  const manualId = sql(`select id from hr.staff_profiles where email = '${manual.email}'`);
+  // 2. A Careers applicant with a resume, shortlisted.
+  const careers = person("careers");
+  const careersId = sql(`select public.hr_svc_apply('Pat', 'Careers', '${careers.email}', '${careers.phone}', '${job}', null)->>'profileId'`);
+  sql(`update hr.staff_applications set resume_path = '${careersId}/resume/cv.pdf', resume_filename = 'cv.pdf', resume_mime = 'application/pdf', resume_size = 10, resume_uploaded_at = now() where profile_id = '${careersId}'`);
+  const careersApp = sql(`select id from hr.job_applications where profile_id = '${careersId}'`);
+  expect((await adminClient.rpc("hr_admin_candidate_progress", { p_id: careersApp, p_action: "shortlisted", p_interview_at: null, p_interview_notes: null, p_reason: null, p_notify: false })).error).toBeNull();
+  // 3. Someone added by an Admin with "Start onboarding" (the document link is already out).
+  const added = person("added2");
+  const addedId = String((await staffAdmin(adminClient, { action: "add", firstName: "Hari", lastName: "Added", email: added.email, phone: added.phone })).profileId);
+  // And two later stages.
+  const docsIn = await staffAt(adminClient, "stagedocs", "documents_submitted");
+  const signed = await staffAt(adminClient, "stagesigned", "offer_signed");
+
+  await signInAsAdmin(page, admin.email);
+  const open = async (email: string, id: string) => {
+    await page.goto("/admin/staff/employees");
+    await page.getByRole("tab", { name: "Onboarding" }).click();
+    await page.getByLabel("Search employees").fill(email);
+    await page.getByTestId(`onboarding-row-${id}`).getByRole("link").click();
+    await expect(page.getByTestId("onboarding-stepper")).toBeVisible();
+    await expect(page.locator("[data-testid^='onboarding-step-']")).toHaveCount(9);
+  };
+  const buttons = async () => (await page.locator("[data-testid^='staff-action-']").allInnerTexts()).filter((t) => !/^Now:/.test(t));
+  const stage = () => page.getByTestId("staff-onboarding-progress");
+
+  await open(manual.email, manualId);
+  await expect(stage()).toHaveAttribute("data-stage", "shortlisted");
+  await expect(page.getByTestId("onboarding-step-shortlisted")).toHaveAttribute("data-state", "current");
+  expect(await buttons()).toEqual(["Send document link", "Withdraw / reject"]);
+  await shot(page, "onboarding-manual-candidate-shortlisted");
+
+  await open(careers.email, careersId);
+  await expect(stage()).toHaveAttribute("data-stage", "shortlisted");
+  expect(await buttons()).toEqual(["Send document link", "Withdraw / reject"]);
+
+  await open(added.email, addedId);
+  await expect(stage()).toHaveAttribute("data-stage", "documents_requested");
+  expect(await buttons()).toEqual(["Resend link", "Revoke link", "Withdraw / reject"]);
+  await expect(page.getByTestId("staff-stage-hint")).toContainText("Link last sent");
+
+  await open(docsIn.email, docsIn.id);
+  await expect(stage()).toHaveAttribute("data-stage", "pay_details");
+  expect(await buttons()).toEqual(["Send offer letter", "Edit pay details", "Withdraw / reject"]);
+
+  await open(signed.email, signed.id);
+  await expect(stage()).toHaveAttribute("data-stage", "offer_signed");
+  expect(await buttons()).toEqual(["Activate employee", "Withdraw / reject"]);
+
+  // The buttons work for the older kinds of record: the manual candidate gets the document link (which hires them for the job)...
+  await open(manual.email, manualId);
+  await page.getByTestId("staff-action-send_documents_link").click();
+  await expect(page.getByTestId("staff-action-hire-note")).toContainText("E2E Stages");
+  await page.getByTestId("staff-decision-confirm").click();
+  await expectStatus(page, "Invited");
+  await expect(stage()).toHaveAttribute("data-stage", "documents_requested");
+  expect(await buttons()).toEqual(["Resend link", "Revoke link", "Withdraw / reject"]);
+  await waitForHrMail(manual.email, /details and documents/i);
+  expect(sql(`select status || '/' || stage from hr.job_applications where id = '${manualApp}'`)).toBe("hired/selected");
+  // ...the Careers applicant can be withdrawn with a reason...
+  await open(careers.email, careersId);
+  await employeeAction(page, "reject", async () => { await page.getByTestId("staff-decision-note").fill("Withdrew"); await page.getByTestId("staff-reject-notify").uncheck(); });
+  await expectStatus(page, "Rejected");
+  // ...and Resend link sends a fresh link to the person added by an Admin.
+  await open(added.email, addedId);
+  const before = (await hrMails(added.email)).length;
+  await employeeAction(page, "resend_documents_link");
+  await expect(page.getByTestId("staff-notice")).toContainText("document link was emailed");
+  await expect.poll(async () => (await hrMails(added.email)).length).toBe(before + 1);
 });
 
 test("HRMS > Templates: create with placeholders, preview with a real employee, duplicate, default, archive; closed to an Editor", async ({ page, browser }) => {

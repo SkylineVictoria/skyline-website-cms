@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(471);
+select plan(549);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -156,9 +156,9 @@ update hr.staff_invites set expires_at = now() + interval '14 days', created_at 
 select ok((select expires_at between now() + interval '13 days' and now() + interval '15 days' from hr.staff_invites where token_hash = pg_temp.h('tok-3')), 'a document link lasts 14 days');
 
 -- ---------------------------------------------------------------- onboarding: details, documents, submit
-select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"first_name":"Ann","last_name":"Applicant","date_of_birth":"1990-05-06","address_street":"1 Example St","address_suburb":"Melbourne","address_state":"VIC","address_postcode":"3000","address_country":"Australia","emergency_name":"Em Contact","emergency_relationship":"Sibling","emergency_phone":"0422 333 444","is_australian_citizen":false}')$$, 'details save through the link');
+select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"first_name":"Ann","last_name":"Applicant","date_of_birth":"1990-05-06","address_street":"1 Example St","address_suburb":"Melbourne","address_state":"VIC","address_postcode":"3000","address_country":"Australia","emergency_name":"Em Contact","emergency_relationship":"Sibling","emergency_phone":"+61 422 333 444","is_australian_citizen":false,"nationality":"Indian","passport_number":"pa 1234567","visa_subclass":"485"}')$$, 'details save through the link');
 select is((select emergency_phone_e164 || '/' || is_australian_citizen from hr.staff_profiles where id = pg_temp.v('a1')), '+61422333444/false', 'emergency phone normalised, citizenship recorded');
-select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"first_name":"bad\u0001"}')$$, '22023', 'Check the first name field.', 'control characters are refused');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"first_name":"bad\u0001"}')$$, '22023', 'The first name must be 100 characters or fewer.', 'control characters are refused');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/passport/p1.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/passport/p2.pdf');
 insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('a1') || '/visa/v.pdf');
@@ -169,9 +169,9 @@ insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', gen_random_uuid() || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'a file outside the person''s folder is refused');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/visa/v.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'the folder must match the document type');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/missing.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, 'P0002', 'The uploaded file was not found.', 'the file must exist');
-select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10)$$, '22023', 'Enter the expiry date of your passport.', 'a passport needs an expiry date');
+select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'A passport is required before you can submit.', 'submit names the passport first');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date - 1)$$, '22023', 'This passport has expired. Upload a current one.', 'an expired passport is refused');
-select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, 'a passport is recorded');
+select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10)$$, 'a passport is recorded without its expiry date (the reader or the person adds it)');
 select is(public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p2.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)->'replacedPaths'->>0, pg_temp.v('a1') || '/passport/p1.pdf', 'a new passport replaces the old one and returns its path for deletion');
 select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Upload your visa.', 'submit needs every required document');
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Visa', pg_temp.v('a1') || '/visa/v.pdf', 'v.pdf', 'application/pdf', 10, current_date + 400)$$, 'visa');
@@ -183,6 +183,8 @@ select is(public.hr_svc_document_remove(pg_temp.h('tok-3'), (select id from hr.s
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Health Insurance', pg_temp.v('a1') || '/health-insurance/h.pdf', 'h.pdf', 'application/pdf', 10, current_date + 300)$$, 'health insurance');
 select is(public.hr_svc_document_for_extraction(pg_temp.h('tok-3'), (select id from hr.staff_documents where storage_path = pg_temp.v('a1') || '/passport/p2.pdf'))->>'category', 'Passport', 'the link holder''s document is offered for reading');
 select throws_ok($$select public.hr_svc_document_for_extraction(pg_temp.h('tok-3'), gen_random_uuid())$$, 'P0002', 'Document not found.', 'another document is not');
+select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Enter your bank details.', 'submit needs the bank details');
+select lives_ok($$select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-3'), '{"accountName":"Ann Applicant","bsb":"062-000","accountNumber":"1234 4321","bankName":"Commonwealth Bank"}')$$, 'the person saves their bank details through the link');
 select lives_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, 'the applicant submits');
 select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'documents_submitted', 'documents_submitted');
 select ok((select used_at is not null from hr.staff_invites where token_hash = pg_temp.h('tok-3')), 'the link is used');
@@ -489,6 +491,16 @@ insert into hr.staff_documents(application_id, profile_id, category, storage_pat
  select a.id, a.profile_id, 'Passport', a.profile_id || '/passport/x.pdf', 'x.pdf', 'application/pdf', 10, current_date + 100 from hr.staff_applications a where a.profile_id = pg_temp.v('x1');
 select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1')), 'done', '{"first_name":"Asha","last_name":"Overwritten","dob":"1999-04-05","passport_number":"X1234567"}')$$, 'a passport reading is recorded');
 select is((select first_name || '/' || last_name || '/' || date_of_birth from hr.staff_profiles where id = pg_temp.v('x1')), 'Asha/Keep/1999-04-05', 'empty details are filled and typed ones are never overwritten');
+select is((select passport_number || '/' || nationality from hr.staff_profiles where id = pg_temp.v('x1')), 'X1234567/', 'the passport number is taken from the reading');
+select is((select expiry_date from hr.staff_documents where profile_id = pg_temp.v('x1')), current_date + 100, 'an expiry date already typed is kept');
+insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size)
+ select a.id, a.profile_id, 'Visa', a.profile_id || '/visa/x.pdf', 'v.pdf', 'application/pdf', 10 from hr.staff_applications a where a.profile_id = pg_temp.v('x1');
+select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1') and category = 'Visa'), 'done', jsonb_build_object('visa_subclass', '485', 'visa_stay_until', (current_date + 500)::text))$$, 'a visa reading is recorded');
+select is((select visa_subclass from hr.staff_profiles where id = pg_temp.v('x1')) || '/' || (select expiry_date from hr.staff_documents where profile_id = pg_temp.v('x1') and category = 'Visa'), '485/' || (current_date + 500), 'the visa subclass and its expiry date are filled from the reading');
+update hr.staff_documents set expiry_date = null where profile_id = pg_temp.v('x1') and category = 'Passport';
+select lives_ok($$select public.hr_staff_document_apply_extraction((select id from hr.staff_documents where profile_id = pg_temp.v('x1') and category = 'Passport'), 'done', jsonb_build_object('passport_expiry', (current_date - 5)::text, 'nationality', 'India'))$$, 'a passport read as expired');
+select is((select expiry_date from hr.staff_documents where profile_id = pg_temp.v('x1') and category = 'Passport'), null, 'a date that has passed is not taken as the expiry date');
+select is((select nationality from hr.staff_profiles where id = pg_temp.v('x1')), 'India', 'the nationality is filled from the reading');
 
 -- ---------------------------------------------------------------- Careers and Candidates on the no-login flow (HR-02i / HR-02j)
 insert into hr.jobs(title, description, employment_type, location, status, department) values ('Trainer (Commercial Cookery)', 'Teach.', 'full_time', 'Melbourne', 'open', 'Training'), ('Closed role', 'Old.', 'part_time', 'Sydney', 'closed', '');
@@ -904,6 +916,111 @@ select is((public.hr_admin_onboarding(pg_temp.v('f2'))->>'closed') || '/' || (pu
  'a withdrawn application keeps the steps it reached and has no current step');
 select is((select e->'detail'->>'note' from jsonb_array_elements(public.hr_admin_onboarding(pg_temp.v('f2'))->'timeline') e where e->>'type' = 'status' and e->>'action' = 'rejected'), 'Took another role', 'the reason is in the history');
 reset role;
+
+-- ---------------------------------------------------------------- onboarding wizard (20261112090000): shared rules, bank details, ticks
+-- The shared person rules in SQL (the same messages as supabase/functions/_shared/validation/person.ts; staff-lab.mjs `wizard` compares both sides).
+select is(hr.v_phone_problem('+61412345678', 'missing'), '', 'an Australian mobile with its country code is valid');
+select is(hr.v_phone_problem('+61 412 345 67', 'missing'), 'Enter a 10-digit Australian number starting with 0, e.g. 041 234 5678.', 'a short Australian number');
+select is(hr.v_phone_problem('0412345678', 'missing'), 'missing', 'a number without a country code is not accepted');
+select is(hr.v_phone_problem('+33123456789', 'missing'), 'missing', 'a country that is not in the shared picker');
+select is(hr.v_phone_problem('+9198765', 'missing'), 'Enter a valid phone number for the selected country.', 'too short for another country');
+select is(hr.v_name_problem('  ', 'first name'), 'Enter your first name.', 'a blank name');
+select is(hr.v_name_problem(repeat('a', 101), 'last name'), 'The last name must be 100 characters or fewer.', 'a name over 100 characters');
+select is(hr.v_dob_problem('', date '2026-11-10'), 'Enter your date of birth.', 'a blank date of birth');
+select is(hr.v_dob_problem('1990-02-30', date '2026-11-10'), 'Enter a real date of birth.', 'a date that does not exist');
+select is(hr.v_dob_problem('2016-11-11', date '2026-11-10'), 'You must be between 10 and 100 years old.', 'one day too young');
+select is(hr.v_dob_problem('2016-11-10', date '2026-11-10') || hr.v_dob_problem('1926-11-10', date '2026-11-10') || hr.v_dob_problem('5/6/1990', date '2026-11-10'), '', 'exactly 10, exactly 100, and day/month/year are accepted');
+select is(hr.v_bank_problem('', '062000', '12345678'), 'Enter the account name.', 'a blank account name');
+select is(hr.v_bank_problem('Jo', '06200', '12345678'), 'The BSB must be 6 digits, for example 062-000.', 'a five-digit BSB');
+select is(hr.v_bank_problem('Jo', '062-000', '123'), 'The account number must be 4 to 10 digits.', 'a three-digit account number');
+select is(hr.v_bank_problem('Jo', '062 000', '1234-5678'), '', 'spaces and hyphens are allowed');
+select is(hr.v_staff_problem('{"address_country":"Australia","address_state":"Punjab","address_postcode":"3000"}', array['address_state','address_postcode'], false)->>'message', 'Choose the state or territory.', 'an Australian address needs an Australian state');
+select is(hr.v_staff_problem('{"address_country":"India","address_state":"Punjab","address_postcode":"144001"}', array['address_state','address_postcode'], true), null, 'another country keeps its own state and postcode');
+select is(hr.v_staff_problem('{"is_australian_citizen":false,"visa_subclass":""}', array['visa_subclass'], true)->>'message', 'Enter your visa type or subclass.', 'a non-citizen needs the visa subclass at submit');
+select is(hr.v_staff_problem('{"is_australian_citizen":true,"visa_subclass":""}', array['visa_subclass'], true), null, 'a citizen does not');
+select is(hr.v_staff_problem('{"first_name":"","passport_number":""}', array['first_name','passport_number'], false), null, 'a draft may leave fields blank');
+select is(hr.v_staff_problem('{"first_name":"","passport_number":""}', array['first_name','passport_number'], true)->>'field', 'first_name', 'the final check reports the first problem in wizard order');
+
+-- Saving through the link: what is typed must be valid; the mobile may be corrected but not to a number in use.
+insert into t select 'w1p', public.hr_svc_apply('Wiz', 'Ard', 'wiz.ard@example.test', '0400 771 951')->>'profileId';
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('w1p') || '/resume/cv.pdf');
+select public.hr_svc_apply_resume(pg_temp.v('w1p'), pg_temp.v('w1p') || '/resume/cv.pdf', 'cv.pdf', 'application/pdf', 100);
+update hr.staff_profiles set status = 'invited' where id = pg_temp.v('w1p');
+insert into hr.staff_invites(profile_id, purpose, token_hash, created_by, expires_at) values (pg_temp.v('w1p'), 'documents', pg_temp.h('tok-wiz'), 'a0000000-0000-0000-0000-000000000004', now() + interval '14 days');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"date_of_birth":"2020-01-01"}')$$, '22023', 'You must be between 10 and 100 years old.', 'the date of birth follows the shared rule');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"emergency_phone":"0422 333 444"}')$$, '22023', 'Enter the emergency contact''s phone number.', 'an emergency phone needs its country code');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"passport_number":"12"}')$$, '22023', 'Enter the passport number: 6 to 12 letters and numbers.', 'the passport number format');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"phone":"+61400000101"}')$$, '23505', 'This number can''t be used. Sign in or contact the administrator.', 'the mobile cannot become one another person uses');
+select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"phone":"+61 400 771 952","date_of_birth":"3/2/1991","address_country":"australia","address_state":"vic","passport_number":"n 1234567"}')$$, 'valid details are saved');
+select is((select phone_e164 || '/' || date_of_birth || '/' || address_state || '/' || passport_number from hr.staff_profiles where id = pg_temp.v('w1p')), '+61400771952/1991-02-03/VIC/N1234567', 'stored normalised: E.164, ISO date, state and passport number in capitals');
+select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-wiz'))$$, '23514', 'Tell us whether you are an Australian citizen.', 'submit reports the first missing detail');
+
+-- Bank details: validated, stored encrypted, shown masked, revealed only to Admins with a history entry; an Editor gets nothing.
+select throws_ok($$select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"0620","accountNumber":"12344321"}')$$, '22023', 'The BSB must be 6 digits, for example 062-000.', 'the link refuses a bad BSB with the shared message');
+select is(public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"062-000","accountNumber":"1234 4321","bankName":"Commonwealth Bank"}')->'bank'->>'accountNumber', '•••• 4321', 'the link answers with the account number masked');
+select is(public.hr_svc_onboarding_open(pg_temp.h('tok-wiz'))->'bank'->>'bsb', '06••••', '...and the BSB masked');
+select is((select (account_name is null and bsb is null and account_number is null)::text from hr.employee_bank where profile_id = pg_temp.v('w1p')), 'true', 'nothing is stored in plain text');
+select is((select (position('12344321' in encode(account_number_enc, 'escape')) = 0 and position('062000' in encode(bsb_enc, 'escape')) = 0 and position('Wiz Ard' in encode(account_name_enc, 'escape')) = 0)::text from hr.employee_bank where profile_id = pg_temp.v('w1p')), 'true', 'the stored values do not contain the numbers or the name');
+select is((select hr.bank_decrypt(account_number_enc) || '/' || hr.bank_decrypt(bsb_enc) from hr.employee_bank where profile_id = pg_temp.v('w1p')), '12344321/062000', 'they decrypt to what was typed');
+select throws_ok($$insert into hr.employee_bank(profile_id, account_name, bsb, account_number, account_name_enc, bsb_enc, account_number_enc) values (pg_temp.v('x1'), 'P', '062000', '1234', 'x', 'x', 'x')$$, '23514', null, 'the table refuses plain-text values');
+select is((select actor_kind || '/' || detail::text from hr.staff_audit where profile_id = pg_temp.v('w1p') and action = 'bank_saved' order by id desc limit 1), 'applicant/{}', 'the save is in the history as the applicant, without any number');
+select is(has_function_privilege('authenticated', 'public.hr_svc_onboarding_bank_save(text, jsonb)', 'execute') or has_function_privilege('anon', 'public.hr_svc_onboarding_bank_save(text, jsonb)', 'execute'), false, 'the link function is for the service role only');
+select is(has_function_privilege('authenticated', 'hr.bank_decrypt(bytea)', 'execute') or has_function_privilege('authenticated', 'hr.bank_key()', 'execute') or has_function_privilege('anon', 'hr.bank_view(uuid, boolean)', 'execute'), false, 'nobody signed in can call the key or the decryption');
+select is(has_table_privilege('authenticated', 'hr.employee_bank', 'select') or has_table_privilege('anon', 'hr.employee_bank', 'select') or has_table_privilege('authenticated', 'hr.staff_section_checks', 'select'), false, 'the tables are closed to browsers');
+insert into auth.users(id, email, email_confirmed_at, raw_user_meta_data, aud, role) values ('a0000000-0000-0000-0000-0000000000e1', 'editor.user@example.test', now(), '{}', 'authenticated', 'authenticated');
+insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values ('hr-test-editor', 'Test Editor', 'editor.user@example.test', 'Editor', 'Active', 'a0000000-0000-0000-0000-0000000000e1', false);
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-0000000000e1';
+select throws_ok($$select public.hr_admin_emp_bank_get(pg_temp.v('w1p'))$$, '42501', 'Only an administrator can do this.', 'an Editor cannot read the bank details, even masked');
+select throws_ok($$select public.hr_admin_emp_bank_reveal(pg_temp.v('w1p'))$$, '42501', 'Only an administrator can do this.', 'an Editor cannot reveal them');
+select throws_ok($$select public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"X","bsb":"062000","accountNumber":"1234"}')$$, '42501', 'Only an administrator can do this.', 'an Editor cannot change them');
+select throws_ok($$select public.hr_admin_onboarding_extras(pg_temp.v('w1p'))$$, '42501', 'Only an administrator can do this.', 'an Editor cannot open the verification ticks');
+select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'bank', true)$$, '42501', 'Only an administrator can do this.', 'an Editor cannot tick a section');
+select throws_ok($$select count(*) from hr.employee_bank$$, '42501', null, 'an Editor cannot read the table');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000006';
+select throws_ok($$select public.hr_admin_emp_bank_reveal(pg_temp.v('w1p'))$$, '42501', 'Only an administrator can do this.', 'another signed-in user cannot reveal them');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_emp_bank_get(pg_temp.v('w1p'))->>'bsb' || ' ' || (public.hr_admin_emp_bank_get(pg_temp.v('w1p'))->>'accountNumber') || ' ' || (public.hr_admin_emp_bank_get(pg_temp.v('w1p'))->>'masked'), '06•••• •••• 4321 true', 'an Admin first sees them masked');
+select is(public.hr_admin_onboarding_extras(pg_temp.v('w1p'))->'bank'->>'accountNumber', '•••• 4321', 'the onboarding page gets them masked too');
+select is(public.hr_admin_emp_bank_reveal(pg_temp.v('w1p'))->>'bsb' || ' ' || (public.hr_admin_emp_bank_reveal(pg_temp.v('w1p'))->>'accountNumber'), '062000 12344321', 'Reveal answers in full');
+reset role;
+select is((select count(*)::int || '/' || min(actor_kind) || '/' || min(actor_id::text) || '/' || min(detail::text) from hr.staff_audit where profile_id = pg_temp.v('w1p') and action = 'bank_revealed'),
+ '2/admin/a0000000-0000-0000-0000-000000000004/{}', 'every reveal is in the history with the Admin who looked, and no number');
+select ok((select bool_or(e->>'action' = 'bank_revealed') from jsonb_array_elements((select public.hr_admin_onboarding(pg_temp.v('w1p')) from (select set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-000000000004', true)) x)->'timeline') e), 'the reveal shows in the person''s timeline');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz Ard","bsb":"062000","accountNumber":"12"}')$$, '22023', 'The account number must be 4 to 10 digits.', 'an Admin''s save follows the same rule');
+select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz Ard","bsb":"733-000","accountNumber":"555666"}')->>'accountNumber', '•••• 66', 'a short account number shows only its last two digits');
+
+-- "Verified by admin" ticks: recorded with who and when, cleared when the section changes.
+select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'passport', true)$$, '23514', 'There is no document to verify yet.', 'a document section needs a document');
+select throws_ok($$select public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'tax', true)$$, '22023', 'Unknown section.', 'only known sections');
+select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'bank', true)->'checks'->'bank'->>'verifiedByName', 'Test Admin', 'the bank details are ticked as verified by the Admin');
+select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'personal', true)->'checks' ?& array['bank', 'personal'], true, 'the personal details too');
+select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{"accountName":"Wiz Ard","bsb":"062000","accountNumber":"87654321"}')->>'accountNumber', '•••• 4321', 'the Admin changes the bank details');
+select is(public.hr_admin_onboarding_extras(pg_temp.v('w1p'))->'checks' ? 'bank', false, 'changing the bank details clears their tick');
+reset role;
+insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('w1p') || '/passport/w.pdf'), ('staff-documents', pg_temp.v('w1p') || '/passport/w2.pdf');
+select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-wiz'), 'Passport', pg_temp.v('w1p') || '/passport/w.pdf', 'w.pdf', 'application/pdf', 10)$$, 'a passport for the wizard person');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'passport', true)->'checks' ? 'passport', true, 'the passport section is ticked');
+reset role;
+select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-wiz'), 'Passport', pg_temp.v('w1p') || '/passport/w2.pdf', 'w2.pdf', 'application/pdf', 10)$$, 'the person uploads a new passport');
+select is((select count(*)::int from hr.staff_section_checks where profile_id = pg_temp.v('w1p') and section = 'passport'), 0, 'a new file clears that section''s tick');
+select is((select string_agg(action, ',' order by id) from hr.staff_audit where profile_id = pg_temp.v('w1p') and action like 'section_%'), 'section_verified,section_verified,section_verified', 'each tick is in the history');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is(public.hr_admin_onboarding_check(pg_temp.v('w1p'), 'personal', false)->'checks' ? 'personal', false, 'a tick can be taken off');
+select is(public.hr_admin_emp_bank_save(pg_temp.v('w1p'), '{}'), null, 'saving blank removes the bank details');
+reset role;
+select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select count(*)::int from hr.staff_audit where profile_id = pg_temp.v('w1p') and action in ('bank_removed', 'section_unverified')), '0/2', 'removed, and both changes are in the history');
+
+-- The Xero timesheet export carries no bank details (it has no place for them); retention removes them.
+select is(hr.xero_csv('[]'::jsonb), 'EmployeeId,EmployeeName,Date,PayItem,Hours,LeaveType' || chr(10), 'the Xero timesheet export has no bank columns');
+select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":"Wiz Ard","bsb":"062-000","accountNumber":"1234 4321"}');
+select hr.staff_anonymise(pg_temp.v('w1p'));
+select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select passport_number || nationality || visa_subclass from hr.staff_profiles where id = pg_temp.v('w1p')), '0/', 'retention removes the bank details and the identity fields');
 
 select * from finish();
 rollback;

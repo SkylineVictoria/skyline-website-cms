@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -90,6 +90,51 @@ export async function shot(page: Page, name: string): Promise<void> {
   if (original) await page.setViewportSize(original);
 }
 
+/**
+ * With E2E_SHOTS_DIR set, saves the markup of one element next to the screenshots (one tag per line), so two runs can be
+ * compared character by character.
+ */
+export async function domSnapshot(page: Page, selector: string, name: string): Promise<void> {
+  const dir = process.env.E2E_SHOTS_DIR;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  const html = await page.locator(selector).first().evaluate((el) => el.outerHTML);
+  writeFileSync(path.join(dir, `dom-${name}.html`), html.split("><").join(">\n<"));
+}
+
+/**
+ * With E2E_SHOTS_DIR set, puts two saved screenshots next to each other (student on the left, staff on the right) in one image,
+ * compare-<name>.png. The screenshots are found by the end of their file name; a missing one skips the picture.
+ */
+export async function sideBySide(page: Page, name: string, title: string, left: string, right: string): Promise<void> {
+  const dir = process.env.E2E_SHOTS_DIR;
+  if (!dir) return;
+  const find = (suffix: string) => readdirSync(dir).filter((file) => file.endsWith(`${suffix}.png`) && !file.startsWith("compare-")).sort().pop();
+  const a = find(left), b = find(right);
+  if (!a || !b) return;
+  const src = (file: string) => `data:image/png;base64,${readFileSync(path.join(dir, file)).toString("base64")}`;
+  const view = await page.context().newPage();
+  await view.setViewportSize({ width: 1600, height: 900 });
+  await view.setContent(`<body style="margin:0;padding:24px;font-family:system-ui,sans-serif;background:#f4f4f5">
+    <h1 style="font-size:20px;margin:0 0 16px">${title}</h1>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
+      <figure style="margin:0"><figcaption style="font-weight:600;margin-bottom:8px">Student wizard</figcaption><img src="${src(a)}" style="width:100%;border:1px solid #d4d4d8"></figure>
+      <figure style="margin:0"><figcaption style="font-weight:600;margin-bottom:8px">Staff onboarding wizard</figcaption><img src="${src(b)}" style="width:100%;border:1px solid #d4d4d8"></figure>
+    </div></body>`);
+  await view.screenshot({ path: path.join(dir, `compare-${name}.png`), fullPage: true });
+  await view.close();
+}
+
+/**
+ * LOCAL ONLY: records a reading for a student application document straight in the lab database (no reader is called), so the
+ * student wizard can be walked through. The test stops the browser's own call to portal-document-extract first.
+ */
+export function markStudentDocumentRead(applicationId: string, category: string, extracted: Record<string, string>): void {
+  const extraction = { status: "unreviewed", extracted, confirmed: {}, source: { engine: "e2e-mock", parser: "document-extraction-v1" } };
+  sql(`update public.enrollment_application_documents set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{extraction}', ${q(JSON.stringify(extraction))}::jsonb)
+    where application_id = '${applicationId}' and category = ${q(category)} and is_current`);
+}
+
 /** The pay details an offer needs (hr_admin_onboarding_pay_save), as the admin form sends them. */
 export async function payDetails(adminClient: SupabaseClient, profileId: string, over: Record<string, string> = {}): Promise<void> {
   const schedule = sql("select id from hr.pay_schedules where is_active order by name limit 1");
@@ -171,7 +216,11 @@ export async function staffAt(adminClient: SupabaseClient, label: string, target
   const p = await applyAsStaff(label);
   await staffAdmin(adminClient, { action: "send_invite", profileId: p.id, purpose: "documents" });
   const token = linkToken((await waitForHrMail(p.email, /details and documents/i)).text);
-  await onboard({ action: "save", t: token, patch: { first_name: "E2E", last_name: label, date_of_birth: "1990-05-06", address_street: "1 E2E St", address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "0422 333 444", is_australian_citizen: true } });
+  const saved = await onboard({ action: "save", t: token, patch: { first_name: "E2E", last_name: label, date_of_birth: "1990-05-06", address_street: "1 E2E St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000",
+    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444", is_australian_citizen: true, nationality: "Australian", passport_number: "PE1234567" } });
+  if (saved.status !== 200) throw new Error(`details: ${JSON.stringify(saved.body)}`);
+  const bank = await onboard({ action: "bank_save", t: token, bank: { accountName: `E2E ${label}`, bsb: "062-000", accountNumber: "1234 4321" } });
+  if (bank.status !== 200) throw new Error(`bank details: ${JSON.stringify(bank.body)}`);
   for (const [category, expiryDate] of [["Passport", inDays(1500)], ["Academic", ""], ["Health Insurance", inDays(300)]]) {
     const r = await onboard({ action: "upload", t: token, category, expiryDate }, { bytes: PDF, name: `${category}.pdf` });
     if (r.status !== 200) throw new Error(`upload ${category}: ${JSON.stringify(r.body)}`);
@@ -272,26 +321,70 @@ export async function candidateAction(page: Page, action: string, fill?: () => P
 export async function journeyFromDocumentLink(visitor: Page, office: Page, baseURL: string, who: { email: string; profileId: string; fullName: string; street: string; jobTitle?: string }): Promise<void> {
   const token = linkToken((await waitForHrMail(who.email, /details and documents/i)).text);
 
-  // The applicant fills in details and uploads documents on /staff/onboard (no login), then submits.
+  // The applicant's wizard on /staff/onboard (no login): documents first, details read from them, the rest typed, bank details, review.
   await visitor.goto(`/staff/onboard#t=${token}`);
-  await expect(visitor.getByTestId("staff-tab-details")).toBeVisible();
+  await expect(visitor.getByTestId("staff-step-documents")).toBeVisible();
   expect(visitor.url()).not.toContain(token);
-  await visitor.getByTestId("staff-date_of_birth").fill("1991-02-03");
+  await shot(visitor, "staff-wizard-documents");
+  await visitor.getByTestId("staff-citizen-yes").click();
+  await expect(visitor.getByTestId("staff-required-summary")).toContainText("Passport, Academic results, Health insurance (0 of 3 uploaded)");
+  for (const slug of ["passport", "academic", "health-insurance"]) {
+    await visitor.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: PDF });
+    await expect.poll(() => sql(`select count(*) from hr.staff_documents d where d.profile_id = '${who.profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
+  }
+  await expect(visitor.getByTestId("staff-doc-passport")).toContainText("Done ✓");
+  await expect(visitor.getByTestId("staff-required-summary")).toContainText("3 of 3 uploaded");
+  await shot(visitor, "staff-wizard-documents-uploaded");
+  await visitor.getByTestId("staff-next").click();
+
+  // Check details: read from the passport (the lab reader answers a fixed passport), each with where it came from.
+  await expect(visitor.getByTestId("staff-step-prefill")).toBeVisible();
+  await expect(visitor.getByTestId("staff-date_of_birth")).toHaveValue("1985-02-03");
+  await expect(visitor.getByTestId("staff-source-date_of_birth")).toContainText("From your passport");
+  await expect(visitor.getByTestId("staff-passport_number")).toHaveValue("PA1234567");
+  await expect(visitor.getByTestId("staff-nationality")).toHaveValue("New Zealander");
+  await expect(visitor.getByTestId("staff-expiry-passport")).toHaveValue("2033-01-01");
+  // The name they applied with is kept; the passport's different name is pointed out for checking.
+  await expect(visitor.getByTestId("staff-source-first_name")).toContainText('does not match your passport, which shows "PASSPORT"');
+  await shot(visitor, "staff-wizard-check-details");
+  await visitor.getByTestId("staff-next").click();
+  await expect(visitor.getByTestId("staff-step-notice")).toContainText("Enter a current expiry date for your health insurance.");
+  await visitor.getByTestId("staff-expiry-health-insurance").fill(inDays(300));
+  await expect.poll(() => sql(`select count(*) from hr.staff_documents where profile_id = '${who.profileId}' and category = 'Health Insurance' and is_current and expiry_date is not null`)).toBe("1");
+  await visitor.getByTestId("staff-next").click();
+
+  // Personal details: the address search (the student form's Geoscape lookup; the lab answers fixed addresses), then the emergency contact.
+  await expect(visitor.getByTestId("staff-step-personal")).toBeVisible();
+  await visitor.locator("#address-search").fill("12 Smith St Mel");
+  await expect(visitor.locator("#address-search-results").getByRole("option").first()).toContainText("12 Smith St, Melbourne VIC 3000");
+  await shot(visitor, "staff-wizard-address-search");
+  await visitor.locator("#address-search-results").getByRole("option").first().click();
+  await expect(visitor.getByTestId("staff-address_street")).toHaveValue("12 Smith St");
+  await expect(visitor.getByTestId("staff-address_suburb")).toHaveValue("Melbourne");
+  await expect(visitor.getByTestId("staff-address_state")).toHaveValue("VIC");
+  await expect(visitor.getByTestId("staff-address_postcode")).toHaveValue("3000");
   await visitor.getByTestId("staff-address_street").fill(who.street);
-  await visitor.getByTestId("staff-address_country").fill("Australia");
   await visitor.getByTestId("staff-emergency_name").fill("Em Contact");
   await visitor.getByTestId("staff-emergency_relationship").fill("Sibling");
-  await visitor.getByTestId("staff-emergency_phone").fill("+61 422 333 444");
-  await visitor.getByTestId("staff-citizen-yes").click();
+  await visitor.locator("#staff-emergency_phone").fill("0422333444");
   await visitor.getByTestId("staff-next").click();
-  for (const [slug, expiry] of [["passport", inDays(1500)], ["academic", ""], ["health-insurance", inDays(300)]]) {
-    const step = visitor.getByTestId(`staff-doc-${slug}`);
-    if (expiry) await visitor.getByTestId(`staff-expiry-${slug}`).fill(expiry);
-    await step.locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: PDF });
-    await expect.poll(() => sql(`select count(*) from hr.staff_documents d join hr.staff_profiles p on p.id = d.profile_id where p.id = '${who.profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
-  }
+
+  // Bank details: saved on Continue, shown back masked.
+  await expect(visitor.getByTestId("staff-step-bank")).toBeVisible();
+  await visitor.getByTestId("staff-bank-accountName").fill(who.fullName);
+  await visitor.getByTestId("staff-bank-bsb").fill("062000");
+  await visitor.getByTestId("staff-bank-accountNumber").fill("12344321");
+  await expect(visitor.getByTestId("staff-bank-name")).toContainText("Commonwealth Bank");
+  await shot(visitor, "staff-wizard-bank");
   await visitor.getByTestId("staff-next").click();
-  await shot(visitor, "person-documents-ready-to-submit");
+
+  // Review and submit.
+  await expect(visitor.getByTestId("staff-step-review")).toBeVisible();
+  await expect(visitor.getByTestId("staff-problems")).toContainText("All required fields are complete.");
+  await expect(visitor.getByTestId("staff-review-bank")).toContainText("•••• 4321");
+  await expect(visitor.getByTestId("staff-review-bank")).not.toContainText("12344321");
+  expect(sql(`select address_street || '/' || address_state || '/' || emergency_phone_e164 from hr.staff_profiles where id = '${who.profileId}'`)).toBe(`${who.street}/VIC/+61422333444`);
+  await shot(visitor, "staff-wizard-review");
   await visitor.getByTestId("staff-submit").click();
   await expect(visitor.getByTestId("staff-onboard-submitted")).toBeVisible();
   await waitForHrMail("hr.one@lab.example.test", /has uploaded documents/);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, useLayoutEffect } from "react";
-import AddressSearch from "@/pages/agency/components/AddressSearch";
+import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
 import CourseSearchField from "@/pages/agency/components/CourseSearchField";
 import { validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";

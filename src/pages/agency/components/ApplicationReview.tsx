@@ -1,3 +1,4 @@
+import { EditSectionButton, ReviewMissing } from "@/components/shared/wizard/ReviewParts";
 import type { AppSection } from "@/data/applicationForms";
 import { sectionHeading } from "@/components/feature/applicationFieldHelpers";
 import type { DraftValues } from "@/lib/applicationDraft";
@@ -210,17 +211,7 @@ export default function ApplicationReview({
   /** Missing items read "SECTION: Field"; find the page by its heading. */
   const pageOfMissing = (item: string) => sections.findIndex((section, index) => item.startsWith(`${sectionHeading(section.title, index)}: `));
   const editButton = (page: number, label: string) =>
-    readOnly || page < 0 ? null : (
-      <button
-        type="button"
-        onClick={() => onEditSection(page)}
-        aria-label={`Edit ${label}`}
-        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 bg-background-50 px-2 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50"
-      >
-        <i className="ri-pencil-line" aria-hidden="true" />
-        Edit
-      </button>
-    );
+    readOnly || page < 0 ? null : <EditSectionButton label={label} onClick={() => onEditSection(page)} />;
 
   const readyToSubmit = missing.length === 0 && consent.method !== "" && consent.confirmed && consent.authorised;
   const declarationName = val("declaration_name");
@@ -247,41 +238,7 @@ export default function ApplicationReview({
         </div>
       </div>
 
-      {missing.length > 0 ? (
-        <div className="rounded-card border border-primary-200 bg-primary-50 p-5">
-          <p className="flex items-center gap-2 text-sm font-semibold text-primary-900">
-            <i className="ri-error-warning-line" aria-hidden="true" />
-            {missing.length} required item{missing.length === 1 ? "" : "s"} still need attention
-          </p>
-          <ul className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {missing.map((item) => {
-              const page = pageOfMissing(item);
-              return (
-                <li key={item} className="text-xs text-primary-900">
-                  {readOnly || page < 0 ? (
-                    <span className="flex items-start gap-2">
-                      <i className="ri-arrow-right-s-line mt-px" aria-hidden="true" />
-                      {item}
-                    </span>
-                  ) : (
-                    <button type="button" onClick={() => onEditSection(page)} className="flex cursor-pointer items-start gap-2 text-left underline-offset-2 hover:underline">
-                      <i className="ri-arrow-right-s-line mt-px" aria-hidden="true" />
-                      {item}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : (
-        <div className="rounded-card border border-accent-200 bg-accent-50 p-4">
-          <p className="flex items-center gap-2 text-sm font-semibold text-accent-900">
-            <i className="ri-checkbox-circle-line" aria-hidden="true" />
-            All required fields are complete.
-          </p>
-        </div>
-      )}
+      <ReviewMissing items={missing.map((item) => { const page = pageOfMissing(item); return { text: item, onOpen: readOnly || page < 0 ? undefined : () => onEditSection(page) }; })} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {GROUPS.map((group) => (

@@ -12,6 +12,10 @@
 //   node scripts/lab/staff-lab.mjs retention the real pg_cron job deletes the files of applications rejected long ago (HR-02h)
 //   node scripts/lab/staff-lab.mjs flow     end-to-end checks of the onboarding flow: document link, review, pay details, offer letter from a
 //                                           template, offer + one-time set-password link, own offer before Active, sign, activate, failed-email undo
+//   node scripts/lab/staff-lab.mjs wizard   the onboarding wizard: the shared rules give the same answer in the browser module and in the database (one
+//                                           list of inputs through both), existing bank details were encrypted by the migration, upload first > reading >
+//                                           details > bank details (masked) > submit, Admin reveal (logged) and ticks, an Editor gets nothing, and the
+//                                           bank numbers are in no log and no email
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
@@ -21,6 +25,8 @@
 // Secrets: only the local stack's own demo keys are used; supabase/functions/.env is never copied.
 // Email: the functions send through the Postmark adapter, redirected (local only, EF_POSTMARK_API_URL) to a mock Postmark server
 // that this script runs on port 57390 while a check command runs; nothing reaches Postmark.
+// Address search: staff-onboarding's address_search calls Geoscape, redirected (local only, EF_ADDRESS_SEARCH_API_URL) to a mock on port
+// 57392 that answers two fixed addresses, nothing for a query with "nowhere" and a fault for one with "outage"; nothing reaches Geoscape.
 // Document reading: staff-onboarding's reader calls OpenAI, redirected (local only, EF_OPENAI_API_URL) to a mock on port 57391
 // that answers a fixed passport (name, middle name, date of birth); nothing reaches OpenAI.
 import http from "node:http";
@@ -38,6 +44,7 @@ const PORTS = { shadow: 57320, api: 57321, db: 57322, studio: 57323, mail: 57324
 const SITE = "http://127.0.0.1:57330";
 const MOCK_POSTMARK_PORT = 57390;
 const MOCK_OPENAI_PORT = 57391;
+const MOCK_GEOSCAPE_PORT = 57392;
 const LAB_SECRETS = {
   EF_CAPTCHA_SECRET_KEY: "local-mock",
   EF_NOTIFICATION_EMAIL_ENABLED: "true",
@@ -49,9 +56,14 @@ const LAB_SECRETS = {
   OPENAI_API_KEY: "lab-openai-key",
   OPENAI_DOCUMENT_MODEL: "lab-reader",
   EF_OPENAI_API_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}`,
+  // Address search (Geoscape): the lab key and a mock on port 57392; nothing reaches Geoscape.
+  EF_ADDRESS_SEARCH_GEOSCAPE_KEY: "lab-geoscape-key",
+  EF_ADDRESS_SEARCH_API_URL: `http://host.docker.internal:${MOCK_GEOSCAPE_PORT}`,
 };
 /** What the mock reader "reads" from every passport. */
-const MOCK_PASSPORT = { first_name: "PASSPORT", middle_name: "Mock", last_name: "READER", dob: "1985-02-03", passport_number: "PA1234567", passport_expiry: "2033-01-01" };
+const MOCK_PASSPORT = { first_name: "PASSPORT", middle_name: "Mock", last_name: "READER", dob: "1985-02-03", passport_number: "PA1234567", passport_expiry: "2033-01-01", nationality: "New Zealander" };
+/** ...and from every visa. */
+const MOCK_VISA = { visa_subclass: "485", visa_stay_until: "2031-03-04", visa_grant_number: "0012345678901" };
 const EXCLUDE = "studio,imgproxy,logflare,vector,supavisor,realtime,postgres-meta";
 
 // LAB ONLY stand-ins for hosted state the repo cannot replay (file name = position in the migration order). Never shipped.
@@ -81,6 +93,11 @@ begin
  alter table hr.staff_profiles enable trigger staff_status_guard;
  insert into hr.staff_applications(profile_id) values (v_profile);
 end $$;
+`,
+  // LAB FIXTURE (onboarding wizard): bank details saved in plain text before 20261112090000, so the replay proves the migration
+  // encrypts what is already there and empties the plain columns.
+  "20261112085959_lab_fixture_plain_bank.sql": `insert into hr.employee_bank(profile_id, account_name, bsb, account_number, bank_name)
+ select id, 'Lab JobApplied', '033000', '987654321', 'Westpac' from hr.staff_profiles where email = 'lab.jobapplied@example.test' on conflict (profile_id) do nothing;
 `,
 };
 
@@ -345,7 +362,7 @@ const stopMockPostmark = () => new Promise((r) => (postmark.server ? postmark.se
 
 /* ------------------------------------------------------------------ mock OpenAI reader (runs inside the check commands) */
 // Answers the Responses API shape the shared adapter parses. The field list comes from the request's own JSON schema, so it
-// follows the adapter. A passport gets MOCK_PASSPORT; any other category answers with no fields.
+// follows the adapter. A passport gets MOCK_PASSPORT, a visa MOCK_VISA; any other category answers with no fields.
 const reader = { calls: 0, server: null };
 function startMockReader() {
   return new Promise((resolve, reject) => {
@@ -359,7 +376,7 @@ function startMockReader() {
         reader.calls++;
         const names = body.text?.format?.schema?.properties?.fields?.required ?? [];
         const category = (String(body.instructions ?? "").match(/in this (.+?) document\./) ?? [])[1] ?? "Other";
-        const fields = Object.fromEntries(names.map((n) => [n, category === "Passport" ? (MOCK_PASSPORT[n] ?? null) : null]));
+        const fields = Object.fromEntries(names.map((n) => [n, category === "Passport" ? (MOCK_PASSPORT[n] ?? null) : category === "Visa" ? (MOCK_VISA[n] ?? null) : null]));
         const result = { document_type: category, category_mismatch: false, fields, evidence: [] };
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, output_text: JSON.stringify(result), usage: {} }));
@@ -370,6 +387,33 @@ function startMockReader() {
   });
 }
 const stopMockReader = () => new Promise((r) => (reader.server ? reader.server.close(() => r()) : r()));
+
+/* ------------------------------------------------------------------ mock Geoscape (address search) */
+// Answers the Verify Autocomplete shape the shared helper parses ({ results: [{ formatted }], attribution }) when the lab key is
+// sent the way the helper sends it (raw in Authorization). "nowhere" in the query: no results; "outage": a provider fault.
+const geoscape = { calls: 0, queries: [], server: null };
+function startMockGeoscape() {
+  return new Promise((resolve, reject) => {
+    geoscape.server = http.createServer((req, res) => {
+      const parts = [];
+      req.on("data", (c) => parts.push(c));
+      req.on("end", () => {
+        let body = {};
+        try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
+        if (req.url !== "/v1/verify/autocomplete/AU" || req.headers.authorization !== LAB_SECRETS.EF_ADDRESS_SEARCH_GEOSCAPE_KEY) { res.writeHead(401); return res.end("{}"); }
+        geoscape.calls++;
+        geoscape.queries.push(String(body.query ?? ""));
+        if (/outage/i.test(String(body.query))) { res.writeHead(500); return res.end("{}"); }
+        const results = /nowhere/i.test(String(body.query)) ? [] : [{ formatted: "12 SMITH ST, MELBOURNE VIC 3000" }, { formatted: "UNIT 3, 12 SMITH ST, CARLTON VIC 3053" }];
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ results, attribution: "Lab mock" }));
+      });
+    });
+    geoscape.server.on("error", reject);
+    geoscape.server.listen(MOCK_GEOSCAPE_PORT, "0.0.0.0", () => resolve());
+  });
+}
+const stopMockGeoscape = () => new Promise((r) => (geoscape.server ? geoscape.server.close(() => r()) : r()));
 /** Waits until the document's reading has finished and returns its status. */
 async function readingDone(docId) {
   let status = "";
@@ -462,7 +506,11 @@ async function onboard() {
   check("the applicant view carries no login id", !JSON.stringify(opened.body).includes("auth_user_id"));
 
   const details = { first_name: "Lab", last_name: "Onboard", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne", address_state: "VIC", address_postcode: "3000",
-    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "0422 333 444", is_australian_citizen: false };
+    address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444", is_australian_citizen: false,
+    nationality: "Indian", passport_number: "N1234567", visa_subclass: "485" };
+  const noCode = await onboardCall(lab, { action: "save", t: link.token, patch: { emergency_phone: "0422 333 444" } });
+  check("a phone without its country code is refused on its field, with the shared message", noCode.status === 400 && noCode.body.field === "emergency_phone"
+    && noCode.body.error === "Enter the emergency contact's phone number.", JSON.stringify(noCode.body));
   const saved = await onboardCall(lab, { action: "save", t: link.token, patch: details });
   check("personal details save through the link", saved.status === 200 && saved.body.view?.profile?.emergency_phone_e164 === "+61422333444", JSON.stringify(saved.body).slice(0, 200));
 
@@ -481,8 +529,11 @@ async function onboard() {
   check("every stored file is in the person's own folder", psql(`select count(*) from hr.staff_documents where profile_id = '${person.id}' and is_current and storage_path like '${person.id}/%';`) === "6"
     && psql(`select count(*) from storage.objects o join hr.staff_documents d on d.storage_path = o.name where d.profile_id = '${person.id}' and d.is_current;`) === "6");
   const noExpiry = await onboardCall(lab, { action: "upload", t: link.token, category: "Visa", expiryDate: "" }, pdf("visa2.pdf"));
-  check("a visa without an expiry date is refused and its file removed", noExpiry.status === 400
-    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/visa/%';`) === "1", JSON.stringify(noExpiry.body));
+  check("a visa may be uploaded without its expiry date; it replaces the earlier file", noExpiry.status === 200
+    && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/visa/%';`) === "1", JSON.stringify(noExpiry.body).slice(0, 200));
+  const visa2 = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Visa' and is_current;`);
+  check("...the reader fills the visa's expiry date and subclass from the document", (await readingDone(visa2)) === "done"
+    && psql(`select expiry_date from hr.staff_documents where id = '${visa2}';`) === MOCK_VISA.visa_stay_until, psql(`select extraction_status || ' ' || coalesce(expiry_date::text, 'none') from hr.staff_documents where id = '${visa2}';`));
 
   const passportId = psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = 'Passport' and is_current;`);
   const url = await onboardCall(lab, { action: "view_url", t: link.token, id: passportId });
@@ -509,7 +560,7 @@ async function onboard() {
   const preLink = await newLink();
   asAdmin(`select public.hr_admin_staff_invite('${pre.id}', 'documents', '${preLink.hash}');`);
   const before = reader.calls;
-  const prePassport = await onboardCall(lab, { action: "upload", t: preLink.token, category: "Passport", expiryDate: future(6) }, pdf("my-passport.pdf"));
+  const prePassport = await onboardCall(lab, { action: "upload", t: preLink.token, category: "Passport", expiryDate: "" }, pdf("my-passport.pdf"));
   const preDoc = psql(`select id from hr.staff_documents where profile_id = '${pre.id}' and category = 'Passport' and is_current;`);
   const preReading = await readingDone(preDoc);
   const preView = await onboardCall(lab, { action: "open", t: preLink.token });
@@ -518,6 +569,8 @@ async function onboard() {
     && psql(`select date_of_birth || '|' || middle_name from hr.staff_profiles where id = '${pre.id}';`) === "1985-02-03|Mock", `${preReading} ${psql(`select date_of_birth || '|' || middle_name from hr.staff_profiles where id = '${pre.id}';`)}`);
   check("...the read first/last name and date of birth reach the onboarding page, and the applied name is kept", readDoc?.extracted?.first_name === "PASSPORT" && readDoc?.extracted?.last_name === "READER"
     && readDoc?.extracted?.dob === "1985-02-03" && psql(`select first_name || '|' || last_name from hr.staff_profiles where id = '${pre.id}';`) === "Lab|prefill", JSON.stringify(readDoc?.extracted ?? {}).slice(0, 200));
+  check("...and the passport number, nationality and the passport's expiry date (no date was typed)", psql(`select passport_number || '|' || nationality from hr.staff_profiles where id = '${pre.id}';`) === "PA1234567|New Zealander"
+    && psql(`select expiry_date from hr.staff_documents where id = '${preDoc}';`) === MOCK_PASSPORT.passport_expiry, psql(`select passport_number || '|' || nationality from hr.staff_profiles where id = '${pre.id}';`));
   const callsBefore = reader.calls;
   const foreignRead = await onboardCall(lab, { action: "extract", t: preLink.token, id: otherId });
   check("another person's document cannot be read with this link (nothing sent to the reader)", foreignRead.status >= 400 && foreignRead.status < 500 && reader.calls === callsBefore, JSON.stringify(foreignRead.body));
@@ -529,6 +582,14 @@ async function onboard() {
   const removed = await onboardCall(lab, { action: "remove", t: link.token, id: academic });
   check("removing a file deletes it from storage", removed.status === 200 && psql(`select count(*) from storage.objects o join hr.staff_documents d on d.storage_path = o.name where d.id = '${academic}';`) === "0");
 
+  const noBank = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit is refused until the bank details are in", noBank.status === 400 && noBank.body.error === "Enter your bank details.", JSON.stringify(noBank.body));
+  const badBank = await onboardCall(lab, { action: "bank_save", t: link.token, bank: { accountName: "Lab Onboard", bsb: "0620", accountNumber: "7700112233" } });
+  check("a wrong BSB is refused on its field and the number is not repeated back", badBank.status === 400 && badBank.body.field === "bsb" && !JSON.stringify(badBank.body).includes("7700112233"), JSON.stringify(badBank.body));
+  const bank = await onboardCall(lab, { action: "bank_save", t: link.token, bank: { accountName: "Lab Onboard", bsb: "062-000", accountNumber: "7700 112 233", bankName: "Commonwealth Bank" } });
+  check("the bank details save through the link and come back masked", bank.status === 200 && bank.body.view?.bank?.bsb === "06••••" && bank.body.view?.bank?.accountNumber === "•••• 2233"
+    && !JSON.stringify(bank.body).includes("7700112233"), JSON.stringify(bank.body.view?.bank ?? bank.body));
+  check("...stored encrypted: no plain column, and the stored bytes do not contain the number", psql(`select (account_number is null and bsb is null and account_name is null)::text || '/' || (position('7700112233' in encode(account_number_enc, 'escape')) = 0)::text || '/' || hr.bank_decrypt(account_number_enc) from hr.employee_bank where profile_id = '${person.id}';`) === "true/true/7700112233");
   const submitted = await onboardCall(lab, { action: "submit", t: link.token });
   check("submit: documents_submitted and the link turns read-only", submitted.status === 200 && submitted.body.view?.readOnly === true
     && psql(`select status from hr.staff_profiles where id = '${person.id}';`) === "documents_submitted", JSON.stringify(submitted.body).slice(0, 200));
@@ -571,8 +632,12 @@ select public.hr_admin_staff_invite_revoke('${person.id}');`);
 async function completeDocuments(lab, token) {
   const pdfFile = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
   const year = new Date().getFullYear();
-  await onboardCall(lab, { action: "save", t: token, patch: { first_name: "Lab", last_name: "Mail", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_country: "Australia",
-    emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "0422 333 444", is_australian_citizen: false } });
+  const saved = await onboardCall(lab, { action: "save", t: token, patch: { first_name: "Lab", last_name: "Mail", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne",
+    address_state: "VIC", address_postcode: "3000", address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444",
+    is_australian_citizen: false, nationality: "Indian", passport_number: "N1234567", visa_subclass: "485" } });
+  if (saved.status !== 200) throw new Error(`details failed: ${JSON.stringify(saved.body)}`);
+  const bank = await onboardCall(lab, { action: "bank_save", t: token, bank: { accountName: "Lab Mail", bsb: "062-000", accountNumber: "1234 4321" } });
+  if (bank.status !== 200) throw new Error(`bank details failed: ${JSON.stringify(bank.body)}`);
   for (const [category, expiryDate] of [["Passport", `${year + 5}-06-30`], ["Visa", `${year + 2}-06-30`], ["English", ""], ["Academic", ""], ["Health Insurance", `${year + 1}-06-30`]]) {
     const r = await onboardCall(lab, { action: "upload", t: token, category, expiryDate }, pdfFile(`${category}.pdf`));
     if (r.status !== 200) throw new Error(`upload ${category} failed: ${JSON.stringify(r.body)}`);
@@ -1128,6 +1193,259 @@ async function flow() {
   psql(`update hr.templates set body_html = '${seededLetter.replace(/'/g, "''")}' where id = '${letterTemplate}';`);
 }
 
+/* ------------------------------------------------------------------ onboarding wizard */
+
+const LAB_EDITOR = { id: "1ab00000-0000-4000-8000-0000000000e1", email: "lab.editor@example.test", password: "lab-editor-password-1" };
+/** A CMS Editor (not an Admin) with a password in the lab (idempotent). */
+async function editorToken(lab) {
+  if (psql(`select count(*) from auth.users where id = '${LAB_EDITOR.id}';`) === "0") {
+    const res = await fetch(`${lab.apiUrl}/auth/v1/admin/users`, { method: "POST", headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: LAB_EDITOR.id, email: LAB_EDITOR.email, password: LAB_EDITOR.password, email_confirm: true }) });
+    if (!res.ok) throw new Error(`could not create the lab editor: ${res.status} ${await res.text()}`);
+  }
+  psql(`insert into public.cms_users(id, name, email, role, status, auth_user_id, must_change_password) values ('lab-editor', 'Lab Editor', '${LAB_EDITOR.email}', 'Editor', 'Active', '${LAB_EDITOR.id}', false) on conflict (id) do nothing;`);
+  const session = await signIn(lab, LAB_EDITOR.email, LAB_EDITOR.password);
+  if (!session.body.access_token) throw new Error(`lab editor sign-in failed: ${JSON.stringify(session.body)}`);
+  return session.body.access_token;
+}
+
+/** One list of inputs for the shared rules. The same list goes through the TypeScript module and through the database. */
+const RULE_VECTORS = {
+  today: "2026-11-10",
+  phones: ["+61412345678", "+61 412 345 678", "  +61412345678  ", "+6141234567", "+610412345678", "+61", "+", "", "0412345678", "abc", "+33123456789", "+9779812345678", "+97798", "+8801712345678",
+    "+14155550123", "+1415555", "+141555", "+447700900123", "+919876543210", "+91987", "+639171234567", "+94712345678", "+923001234567", "+9198765432101234"],
+  names: ["", " ", "Jo", " Jo ", "x".repeat(100), "x".repeat(101), "Jo\u0001", "Jo\u007f", "O'Brien-Smith"],
+  dobs: ["", "1990-05-06", "1990-02-30", "2016-11-10", "2016-11-11", "1926-11-10", "1926-11-09", "5/6/1990", "05.06.1990", "31-12-1999", "32/12/1999", "1990-5-6", "abc", "0000-01-01", "29/02/2000", "29/02/2001", " 1990-05-06 "],
+  // 29 February as "today": the limits roll over the way the browser's Date does.
+  leapToday: "2028-02-29", leapDobs: ["2018-02-28", "2018-03-01", "2018-03-02", "1928-02-29", "1928-02-28"],
+  banks: [["", "", ""], ["Jo", "", ""], ["Jo", "062000", ""], ["Jo", "062-000", "1234 5678"], ["Jo", "06200", "12345678"], ["Jo", "0620000", "12345678"], ["Jo", "062000", "123"],
+    ["Jo", "062000", "12345678901"], ["x".repeat(101), "062000", "1234"], [" Jo ", " 062 000 ", "12-34-56"], ["Jo\u0001", "062000", "1234"]],
+  staff: (() => {
+    const base = { is_australian_citizen: false, first_name: "Jo", middle_name: "", last_name: "Journey", date_of_birth: "1990-05-06", phone: "+61412345678", address_street: "1 Lab St", address_line2: "",
+      address_suburb: "Melbourne", address_country: "Australia", address_state: "VIC", address_postcode: "3000", emergency_name: "Em", emergency_phone: "+61422333444", emergency_relationship: "Sibling",
+      nationality: "Indian", passport_number: "N1234567", visa_subclass: "485", visa_conditions: "" };
+    const all = Object.keys(base);
+    const blank = Object.fromEntries(all.map((k) => [k, k === "is_australian_citizen" ? null : ""]));
+    const cases = [];
+    const add = (details, keys, final) => cases.push({ details, keys, final });
+    add(base, all, true); add(base, all, false); add(blank, all, true); add(blank, all, false);
+    add({ ...base, is_australian_citizen: true, visa_subclass: "" }, all, true);
+    add({ ...base, visa_subclass: "" }, all, true);
+    add({ ...base, is_australian_citizen: null }, all, true);
+    for (const [key, values] of Object.entries({
+      first_name: ["", "x".repeat(101), "Jo\u0001"], middle_name: ["x".repeat(101)], last_name: [""], date_of_birth: ["", "2020-01-01", "1990-02-30", "3/2/1991"], phone: ["", "0412345678", "+6141"],
+      address_street: ["", "x".repeat(201)], address_line2: ["x".repeat(201)], address_suburb: ["", "x".repeat(201)], address_country: ["", "x".repeat(201)], address_state: ["", "vic", "Punjab"],
+      address_postcode: ["", "30", "30000", "abcd"], emergency_name: ["", "x".repeat(121)], emergency_phone: ["", "0422333444", "+6142"], emergency_relationship: ["", "x".repeat(61)],
+      nationality: ["", "x".repeat(101)], passport_number: ["", "12", "pa 1234567", "ABCDEFGHIJKLM", "N12345!7"], visa_subclass: ["", "x".repeat(101)], visa_conditions: ["8105\nNo other limits", "x".repeat(501), "a\u0001b"],
+    })) for (const value of values) for (const final of [false, true]) add({ ...base, [key]: value }, [key], final);
+    for (const final of [false, true]) {
+      add({ ...base, address_country: "India", address_state: "Punjab", address_postcode: "144001" }, ["address_state", "address_postcode"], final);
+      add({ ...base, address_country: "India", address_state: "", address_postcode: "x".repeat(21) }, ["address_state", "address_postcode"], final);
+      add({ ...base, address_country: "AU", address_state: "nsw", address_postcode: "2000" }, ["address_country", "address_state", "address_postcode"], final);
+    }
+    return cases;
+  })(),
+};
+
+/** Runs RULE_VECTORS through the shared TypeScript module (jiti, a temp file outside the repo) and returns one answer per input. */
+function tsAnswers() {
+  const runner = path.join(WORK, "rule-vectors.mts");
+  const url = (rel) => new URL(`file:///${path.join(REPO, rel).replace(/\\/g, "/")}`).href;
+  fs.writeFileSync(runner, `import * as person from ${JSON.stringify(url("supabase/functions/_shared/validation/person.ts"))};
+import * as staff from ${JSON.stringify(url("supabase/functions/_shared/validation/staff-onboarding.ts"))};
+const v = ${JSON.stringify(RULE_VECTORS)};
+const today = new Date(v.today + "T00:00:00Z"), leap = new Date(v.leapToday + "T00:00:00Z");
+const first = (p) => { const order = ["accountName", "bsb", "accountNumber"].find((k) => p[k]); return order ? p[order] : ""; };
+const out = [
+  ...v.phones.map((x) => person.phoneProblem(x, "MISSING")),
+  ...v.names.map((x) => person.nameProblem(x, "first name")),
+  ...v.dobs.map((x) => person.dateOfBirthProblem(x, today)),
+  ...v.leapDobs.map((x) => person.dateOfBirthProblem(x, leap)),
+  ...v.banks.map(([a, b, c]) => first(person.bankProblems({ accountName: a, bsb: b, accountNumber: c }))),
+  ...v.staff.map((c) => { const p = staff.staffProblems(c.details, c.keys, c.final, today)[0]; return p ? p.field + "|" + p.message : "ok"; }),
+  person.maskBsb("062-000"), person.maskAccountNumber("7700112233"), person.maskAccountNumber("555666"),
+];
+console.log(JSON.stringify(out));
+`);
+  const res = run("npx", ["jiti", runner]);
+  if (res.code !== 0) throw new Error(`the rule runner failed:\n${res.out}`);
+  return JSON.parse(res.out.trim().split(/\r?\n/).pop());
+}
+
+/** The same inputs through the database's copy of the rules (hr.v_*). */
+function sqlAnswers() {
+  const lit = (value) => `(${"'" + JSON.stringify(value).replace(/'/g, "''") + "'"}::jsonb #>> '{}')`;
+  const v = RULE_VECTORS;
+  const rows = [
+    ...v.phones.map((x) => `select hr.v_phone_problem(${lit(x)}, 'MISSING')`),
+    ...v.names.map((x) => `select hr.v_name_problem(${lit(x)}, 'first name')`),
+    ...v.dobs.map((x) => `select hr.v_dob_problem(${lit(x)}, date '${v.today}')`),
+    ...v.leapDobs.map((x) => `select hr.v_dob_problem(${lit(x)}, date '${v.leapToday}')`),
+    ...v.banks.map(([a, b, c]) => `select hr.v_bank_problem(${lit(a)}, ${lit(b)}, ${lit(c)})`),
+    ...v.staff.map((c) => `select coalesce((r->>'field') || '|' || (r->>'message'), 'ok') from (select hr.v_staff_problem('${JSON.stringify(c.details).replace(/'/g, "''")}'::jsonb, array[${c.keys.map((k) => `'${k}'`).join(",")}]::text[], ${c.final}, date '${v.today}') as r) x`),
+  ];
+  // One row per input, numbered, so an empty answer ("") keeps its line.
+  const out = psql(rows.map((q, i) => `select ${i} || E'\\t' || (${q.replace(/^select /, "select ")});`.replace(/\(select /, "(select ")).join("\n"));
+  const answers = out.split(/\r?\n/).map((line) => line.slice(line.indexOf("\t") + 1));
+  return answers;
+}
+
+async function wizard() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+
+  // 1. One list of inputs, two implementations, the same answers.
+  const ts = tsAnswers();
+  const masks = ts.splice(-3);
+  const sql = sqlAnswers();
+  const labels = [...RULE_VECTORS.phones.map((x) => `phone ${JSON.stringify(x)}`), ...RULE_VECTORS.names.map((x) => `name ${JSON.stringify(x.slice(0, 20))}`), ...RULE_VECTORS.dobs.map((x) => `date of birth ${JSON.stringify(x)}`),
+    ...RULE_VECTORS.leapDobs.map((x) => `date of birth ${x} on 29 Feb`), ...RULE_VECTORS.banks.map((x) => `bank ${JSON.stringify(x.map((y) => y.slice(0, 12)))}`),
+    ...RULE_VECTORS.staff.map((c) => `${c.final ? "final" : "draft"} [${c.keys.length > 3 ? "all fields" : c.keys.join(",")}] ${c.keys.length > 3 ? "" : JSON.stringify(c.keys.map((k) => String(c.details[k]).slice(0, 14)))}`)];
+  const differ = labels.map((label, i) => ({ label, ts: ts[i], sql: sql[i] })).filter((r) => r.ts !== r.sql);
+  check(`the shared rules answer the same in the browser module and in the database (${labels.length} inputs: phones, names, dates of birth, bank details, wizard fields)`, ts.length === labels.length && sql.length === labels.length && differ.length === 0,
+    differ.slice(0, 6).map((r) => `${r.label}: module "${r.ts}" / database "${r.sql}"`).join(" ;; ") || `${ts.length}/${sql.length}/${labels.length}`);
+  check(`...and both sides refuse and accept: ${ts.filter((a) => a === "" || a === "ok").length} valid, ${ts.filter((a) => a !== "" && a !== "ok").length} with a message`, ts.some((a) => a === "") && ts.some((a) => a.length > 3));
+
+  // 2. Bank details that were saved in plain text before the migration are encrypted, and read back unchanged.
+  check("the migration encrypted the bank details that were already there, and emptied the plain columns",
+    psql(`select (b.account_name is null and b.bsb is null and b.account_number is null)::text || '/' || hr.bank_decrypt(b.account_name_enc) || '/' || hr.bank_decrypt(b.bsb_enc) || '/' || hr.bank_decrypt(b.account_number_enc)
+      from hr.employee_bank b join hr.staff_profiles p on p.id = b.profile_id where p.email = 'lab.jobapplied@example.test';`) === "true/Lab JobApplied/033000/987654321");
+  check("the key is in the Vault, not in a table or a setting", psql("select count(*) from vault.secrets where name = 'hr_bank_details_key';") === "1"
+    && psql("select count(*) from pg_settings where name ilike '%bank%';") === "0");
+
+  // 3. Upload first, then the reading fills the details.
+  const person = await freshApplicant(lab, "wizard");
+  const link = await newLink();
+  asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'documents', '${link.hash}');`);
+  const pdf = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const untyped = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "" }, { blob: new Blob([PDF]), name: "passport.pdf" });
+  check("a file with no declared type is refused with the student wizard's message", untyped.status === 400 && untyped.body.error === "Only PDF, JPG, and PNG documents are supported.", JSON.stringify(untyped.body));
+  const wrongContent = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "" }, { blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "application/pdf" }), name: "passport.pdf" });
+  check("a file whose content is not what it says is refused with the student wizard's message", wrongContent.status === 400 && wrongContent.body.error === "The selected file does not match its declared document type.", JSON.stringify(wrongContent.body));
+  await onboardCall(lab, { action: "save", t: link.token, patch: { is_australian_citizen: false } });
+  for (const category of ["Passport", "Visa", "English", "Academic", "Health Insurance"]) {
+    const r = await onboardCall(lab, { action: "upload", t: link.token, category, expiryDate: "" }, pdf(`${category}.pdf`));
+    if (r.status !== 200) check(`upload ${category} without an expiry date`, false, JSON.stringify(r.body));
+  }
+  const docId = (category) => psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = '${category}' and is_current;`);
+  const read = [await readingDone(docId("Passport")), await readingDone(docId("Visa"))];
+  const view = (await onboardCall(lab, { action: "open", t: link.token })).body.view;
+  const doc = (category) => view.documents.find((d) => d.category === category);
+  check("five documents upload without a single date typed, and the passport and visa are read", view.documents.length === 5 && read.join() === "done,done", read.join());
+  check("the reading fills date of birth, nationality, passport number and visa subclass; the applied name is kept", view.profile.date_of_birth === MOCK_PASSPORT.dob && view.profile.nationality === MOCK_PASSPORT.nationality
+    && view.profile.passport_number === MOCK_PASSPORT.passport_number && view.profile.visa_subclass === MOCK_VISA.visa_subclass && view.profile.first_name === "Lab",
+    JSON.stringify({ dob: view.profile.date_of_birth, nat: view.profile.nationality, pp: view.profile.passport_number, visa: view.profile.visa_subclass, first: view.profile.first_name }));
+  check("...and the passport and visa expiry dates; the page is given what was read (for the 'from your passport' notes and the name check)", doc("Passport").expiryDate === MOCK_PASSPORT.passport_expiry
+    && doc("Visa").expiryDate === MOCK_VISA.visa_stay_until && doc("Passport").extracted.first_name === "PASSPORT" && doc("Health Insurance").expiryDate === null, JSON.stringify([doc("Passport").expiryDate, doc("Visa").expiryDate]));
+
+  // 4. What the documents could not give: checked on the field, saved normalised.
+  const early = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit before the details are complete names the first missing one", early.status === 400 && early.body.error === "Enter the street address.", JSON.stringify(early.body));
+  const state = await onboardCall(lab, { action: "save", t: link.token, patch: { address_country: "Australia", address_state: "Punjab" } });
+  check("an Australian address refuses a state that is not Australian, on its field", state.status === 400 && state.body.field === "address_state" && state.body.error === "Choose the state or territory.", JSON.stringify(state.body));
+  const taken = await onboardCall(lab, { action: "save", t: link.token, patch: { phone: psql("select phone_e164 from hr.staff_profiles where email = 'lab.jobapplied@example.test';") } });
+  check("the mobile cannot be changed to another person's number (neutral message)", taken.status === 400 && taken.body.error === "This number can't be used. Sign in or contact the administrator.", JSON.stringify(taken.body));
+  const mobile = `+6148${String(Date.now()).slice(-7)}`;
+  const saved = await onboardCall(lab, { action: "save", t: link.token, patch: { phone: mobile, address_street: " 9 Wizard Way ", address_suburb: "Carlton", address_country: "Australia", address_state: "vic", address_postcode: "3053",
+    emergency_name: "Em Contact", emergency_phone: "+61 422 333 444", emergency_relationship: "Sibling" } });
+  check("the remaining details save: mobile corrected, state in capitals, text trimmed", saved.status === 200 && saved.body.view?.profile?.phone_e164 === mobile && saved.body.view?.profile?.address_state === "VIC"
+    && saved.body.view?.profile?.address_street === "9 Wizard Way" && saved.body.view?.profile?.emergency_phone_e164 === "+61422333444", JSON.stringify(saved.body).slice(0, 200));
+  // Address search: the student form's Geoscape lookup, reached with the private link instead of a login.
+  const QUERY = "77 Wizardtest Rd";
+  const found = await onboardCall(lab, { action: "address_search", t: link.token, q: QUERY });
+  check("the address search answers through the private link, in the student form's shape", found.status === 200 && found.body.ok === true
+    && JSON.stringify(found.body.suggestions?.[0]) === JSON.stringify({ line: "12 Smith St", line2: "", suburb: "Melbourne", state: "VIC", postcode: "3000", country: "Australia" })
+    && found.body.suggestions?.[1]?.line2 === "Unit 3", JSON.stringify(found.body).slice(0, 300));
+  check("...the lookup was made on the server with the function's key (the browser never sees it)", geoscape.queries.includes(QUERY) && !JSON.stringify(found.body).includes(LAB_SECRETS.EF_ADDRESS_SEARCH_GEOSCAPE_KEY));
+  const before = geoscape.calls;
+  const short = await onboardCall(lab, { action: "address_search", t: link.token, q: "12 " });
+  check("fewer than four characters makes no lookup", short.status === 200 && short.body.suggestions?.length === 0 && geoscape.calls === before);
+  const none = await onboardCall(lab, { action: "address_search", t: link.token, q: "1 Nowhere St" });
+  check("no match is an empty list", none.status === 200 && none.body.ok === true && none.body.suggestions?.length === 0);
+  const outage = await onboardCall(lab, { action: "address_search", t: link.token, q: "1 Outage St" });
+  check("a provider fault answers 'unavailable' (the page falls back to typing), with no detail", outage.status === 503 && outage.body.unavailable === true && Object.keys(outage.body).sort().join() === "ok,unavailable", JSON.stringify(outage.body));
+  const guess = await onboardCall(lab, { action: "address_search", t: (await newLink()).token, q: QUERY }, null, "203.0.113.78");
+  const noToken = await onboardCall(lab, { action: "address_search", q: QUERY }, null, "203.0.113.79");
+  check("without this person's link there is no search (403), and no lookup is made", guess.status === 403 && noToken.status === 403 && geoscape.queries.filter((q) => q === QUERY).length === 1, `${guess.status} ${noToken.status}`);
+  const noDate = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit asks for the one date the reader does not give (health insurance)", noDate.status === 400 && noDate.body.error === "Enter a current expiry date for your health insurance.", JSON.stringify(noDate.body));
+  const dated = await onboardCall(lab, { action: "expiry", t: link.token, id: docId("Health Insurance"), expiryDate: `${new Date().getFullYear() + 1}-06-30` });
+  check("the health insurance date is typed", dated.status === 200);
+
+  // 5. Bank details: through the link, masked on the way back, encrypted at rest.
+  const ACCOUNT = "7700998877";
+  const noBank = await onboardCall(lab, { action: "submit", t: link.token });
+  check("submit is refused until the bank details are in", noBank.status === 400 && noBank.body.error === "Enter your bank details.", JSON.stringify(noBank.body));
+  const bank = await onboardCall(lab, { action: "bank_save", t: link.token, bank: { accountName: "Lab Wizard", bsb: "062-000", accountNumber: "7700 998 877", bankName: "Commonwealth Bank" } });
+  check("the person saves their bank details; the answer shows BSB 06•••• and account •••• 8877", bank.status === 200 && bank.body.view?.bank?.bsb === masks[0] && bank.body.view?.bank?.accountNumber === "•••• 8877"
+    && !JSON.stringify(bank.body).includes(ACCOUNT), JSON.stringify(bank.body.view?.bank ?? bank.body));
+  check("the browser's masks are the database's", masks.join() === "06••••,•••• 2233,•••• 66" && psql(`select left('062000', 2) || '••••'`) === masks[0], masks.join());
+  check("at rest: no plain text, the bytes do not contain the number, and they decrypt to it", psql(`select (account_number is null and bsb is null and account_name is null)::text || '/' || (position('${ACCOUNT}' in encode(account_number_enc, 'escape')) = 0)::text || '/' || hr.bank_decrypt(account_number_enc)
+    from hr.employee_bank where profile_id = '${person.id}';`) === `true/true/${ACCOUNT}`);
+  const submitted = await onboardCall(lab, { action: "submit", t: link.token });
+  check("everything complete: submit succeeds and the link turns read-only", submitted.status === 200 && submitted.body.view?.readOnly === true && psql(`select status from hr.staff_profiles where id = '${person.id}';`) === "documents_submitted", JSON.stringify(submitted.body).slice(0, 200));
+  const afterSearch = await onboardCall(lab, { action: "address_search", t: link.token, q: "77 Wizardtest Rd" });
+  check("after submit the link no longer searches addresses", afterSearch.status === 400 && geoscape.queries.filter((q) => q === "77 Wizardtest Rd").length === 1, JSON.stringify(afterSearch.body));
+  const afterBank = await onboardCall(lab, { action: "bank_save", t: link.token, bank: { accountName: "Lab Wizard", bsb: "062000", accountNumber: "11112222" } });
+  check("the bank details cannot be changed through the link after submit", afterBank.status === 400 && psql(`select hr.bank_decrypt(account_number_enc) from hr.employee_bank where profile_id = '${person.id}';`) === ACCOUNT, JSON.stringify(afterBank.body));
+  const stranger = await newLink();
+  check("another link (not this person's) reaches nothing", (await onboardCall(lab, { action: "bank_save", t: stranger.token, bank: { accountName: "X", bsb: "062000", accountNumber: "11112222" } }, null, "203.0.113.77")).status === 403);
+
+  // 6. Administrators: masked, an audited Reveal, ticks; an Editor and a visitor get nothing.
+  const masked = await restRpc(lab, jwt, "hr_admin_emp_bank_get", { p_id: person.id });
+  check("an Admin sees the bank details masked", masked.status === 200 && masked.body?.bsb === "06••••" && masked.body?.accountNumber === "•••• 8877" && masked.body?.masked === true && !JSON.stringify(masked.body).includes(ACCOUNT), JSON.stringify(masked.body));
+  const revealsBefore = psql(`select count(*) from hr.staff_audit where profile_id = '${person.id}' and action = 'bank_revealed';`);
+  const revealed = await restRpc(lab, jwt, "hr_admin_emp_bank_reveal", { p_id: person.id });
+  check("Reveal shows them in full to an Admin", revealed.status === 200 && revealed.body?.bsb === "062000" && revealed.body?.accountNumber === ACCOUNT, JSON.stringify(revealed.body).replace(ACCOUNT, "<number>"));
+  check("...and is written to the history with the Admin and the time, never the number", revealsBefore === "0"
+    && psql(`select count(*) || '/' || min(actor_kind) || '/' || min(actor_id::text) || '/' || min(detail::text) from hr.staff_audit where profile_id = '${person.id}' and action = 'bank_revealed';`) === `1/admin/${LAB_ADMIN.id}/{}`);
+  const timeline = await restRpc(lab, jwt, "hr_admin_onboarding", { p_id: person.id });
+  check("the reveal and the applicant's save show in the person's history", (timeline.body?.timeline ?? []).some((e) => e.action === "bank_revealed" && e.actorName) && (timeline.body?.timeline ?? []).some((e) => e.action === "bank_saved"),
+    JSON.stringify((timeline.body?.timeline ?? []).filter((e) => String(e.action).startsWith("bank"))));
+  const editorJwt = await editorToken(lab);
+  const refusals = [];
+  for (const [name, args] of [["hr_admin_emp_bank_get", { p_id: person.id }], ["hr_admin_emp_bank_reveal", { p_id: person.id }], ["hr_admin_emp_bank_save", { p_id: person.id, p_bank: { accountName: "X", bsb: "062000", accountNumber: "1234" } }],
+    ["hr_admin_onboarding_extras", { p_id: person.id }], ["hr_admin_onboarding_check", { p_id: person.id, p_section: "bank", p_verified: true }]]) {
+    const r = await restRpc(lab, editorJwt, name, args);
+    refusals.push(`${r.status}:${r.body?.code ?? ""}`);
+    if (JSON.stringify(r.body ?? "").includes(ACCOUNT)) refusals.push("LEAK");
+  }
+  check("an Editor is refused every bank and verification call (403, 42501)", refusals.every((r) => r === "403:42501"), refusals.join(" "));
+  const visitor = await restRpc(lab, lab.anonKey, "hr_admin_emp_bank_reveal", { p_id: person.id });
+  const linkFn = await restRpc(lab, jwt, "hr_svc_onboarding_bank_save", { p_token_hash: link.hash, p_bank: {} });
+  const table = await fetch(`${lab.apiUrl}/rest/v1/employee_bank?select=*`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${editorJwt}`, "accept-profile": "hr" } });
+  check("a visitor cannot reveal, a signed-in user cannot call the link function, and the table is not served", visitor.status >= 401 && visitor.status <= 403 && linkFn.status >= 401 && linkFn.status <= 404 && table.status >= 400,
+    `${visitor.status} ${linkFn.status} ${table.status}`);
+  check("an Editor's attempts left no reveal in the history", psql(`select count(*) from hr.staff_audit where profile_id = '${person.id}' and action = 'bank_revealed';`) === "1");
+  const ticked = await restRpc(lab, jwt, "hr_admin_onboarding_check", { p_id: person.id, p_section: "bank", p_verified: true });
+  const tickedPassport = await restRpc(lab, jwt, "hr_admin_onboarding_check", { p_id: person.id, p_section: "passport", p_verified: true });
+  check("an Admin ticks the bank details and the passport as verified (who and when recorded)", ticked.status === 200 && ticked.body?.checks?.bank?.verifiedByName === "Lab Admin" && Boolean(tickedPassport.body?.checks?.passport?.verifiedAt), JSON.stringify(tickedPassport.body?.checks ?? tickedPassport.body));
+  const changed = await restRpc(lab, jwt, "hr_admin_emp_bank_save", { p_id: person.id, p_bank: { accountName: "Lab Wizard", bsb: "733-000", accountNumber: "555666" } });
+  const extras = await restRpc(lab, jwt, "hr_admin_onboarding_extras", { p_id: person.id });
+  check("an Admin changes the bank details: masked answer (two digits of a short number), and the bank tick is cleared", changed.status === 200 && changed.body?.accountNumber === masks[2] && !extras.body?.checks?.bank && Boolean(extras.body?.checks?.passport), JSON.stringify([changed.body, extras.body?.checks]));
+  const detail = await restRpc(lab, jwt, "hr_admin_staff_detail", { p_id: person.id });
+  check("the Admin's page gets what was read from each document, and never the bank numbers", (detail.body?.documents ?? []).find((d) => d.category === "Passport")?.extracted?.passport_number === MOCK_PASSPORT.passport_number
+    && detail.body?.profile?.passport_number === MOCK_PASSPORT.passport_number && !JSON.stringify(detail.body).includes(ACCOUNT) && !JSON.stringify(timeline.body).includes(ACCOUNT));
+
+  // 7. Review and the next stage still work: approving every document moves the stepper on.
+  asAdmin(`select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d where d.profile_id = '${person.id}' and d.is_current;`);
+  const stage = await restRpc(lab, jwt, "hr_admin_onboarding", { p_id: person.id });
+  const summary = psql(`select (hr.staff_doc_summary('${person.id}')->>'approved') || '/' || (hr.staff_doc_summary('${person.id}')->>'required');`);
+  check("Documents approved 5/5 and the stage moves to Documents approved, as before", summary === "5/5" && stage.body?.stage === "documents_approved", `${summary} ${stage.body?.stage}`);
+
+  // 8. Nothing sensitive in the function logs, the database log, the email outbox or the mock mail server.
+  await new Promise((r) => setTimeout(r, 1500));
+  const logs = ["supabase_edge_runtime_skyline-staff-lab", DB_CONTAINER, "supabase_rest_skyline-staff-lab", "supabase_kong_skyline-staff-lab"].map((c) => {
+    const res = spawnSync("docker", ["logs", "--since", "30m", c], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    const text = `${res.stdout}${res.stderr}`;
+    return `${c.replace("supabase_", "").replace("_skyline-staff-lab", "")}:${[ACCOUNT, "7700 998 877", "555666", "Wizardtest"].filter((n) => text.includes(n)).length}:${text.length > 0 ? "read" : "empty"}`;
+  });
+  check("the bank numbers and the address searches are in no log (edge functions, database, API, gateway)", logs.every((l) => l.split(":")[1] === "0"), logs.join(" "));
+  check("...and in no queued or sent email", psql(`select count(*) from hr.staff_emails where payload::text like '%${ACCOUNT}%' or payload::text like '%555666%';`) === "0" && !JSON.stringify(postmark.messages).includes(ACCOUNT));
+  check("...and in no address: the page calls carry the link token and the bank details in the request body only", !/[?&](t|bsb|account)/i.test(`${lab.apiUrl}/functions/v1/staff-onboarding`));
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -1145,7 +1463,7 @@ function sqlSuites() {
 
 const command = process.argv[2] ?? "up";
 try {
-  if (["apply", "onboard", "emails", "offer", "activate", "retention", "flow", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); }
+  if (["apply", "onboard", "emails", "offer", "activate", "retention", "flow", "wizard", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); await startMockGeoscape(); }
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
@@ -1154,6 +1472,7 @@ try {
   else if (command === "activate") await activate();
   else if (command === "retention") await retention();
   else if (command === "flow") await flow();
+  else if (command === "wizard") await wizard();
   else if (command === "e2e") {
     const lab = readLab();
     const env = { ...process.env, E2E_SUPABASE_URL: lab.apiUrl, E2E_SUPABASE_ANON_KEY: lab.anonKey, E2E_SUPABASE_SERVICE_KEY: lab.serviceKey, E2E_MAIL_URL: lab.mailUrl,
@@ -1163,11 +1482,11 @@ try {
   }
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | flow | e2e | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | flow | wizard | e2e | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
-  await stopMockPostmark(); await stopMockReader();
+  await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape();
   process.exit(2);
 }
-await stopMockPostmark(); await stopMockReader();
+await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape();
 if (failures) { console.log(`${failures} check(s) failed.`); process.exit(1); }

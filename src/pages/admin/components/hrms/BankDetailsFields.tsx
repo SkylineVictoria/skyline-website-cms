@@ -5,7 +5,7 @@ import type { EmployeeBank } from "@/lib/employeesApi";
 export default function BankDetailsFields({ value, problems, disabled, onChange }: {
   value: EmployeeBank; problems: Partial<Record<keyof EmployeeBank, string>>; disabled?: boolean; onChange: (next: EmployeeBank) => void;
 }) {
-  const field = (key: keyof Omit<EmployeeBank, "updatedAt">, label: string, props: Record<string, unknown>) => (
+  const field = (key: "accountName" | "bankName" | "bsb" | "accountNumber", label: string, props: Record<string, unknown>) => (
     <div>
       <Field label={label}>
         <TextInput value={value[key] ?? ""} disabled={disabled} aria-invalid={Boolean(problems[key])} data-testid={`bank-${key}`}

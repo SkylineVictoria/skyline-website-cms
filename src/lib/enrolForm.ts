@@ -4,8 +4,11 @@
  */
 
 import { validateAbn } from "../../supabase/functions/_shared/validation/abn";
-import { parseStoredPhone, validateStoredPhone } from "../../supabase/functions/_shared/validation/identifiers";
+import { CONTROL, dateOfBirthProblem, emailProblem, mobileProblem, nameProblem, parseDateOfBirth } from "../../supabase/functions/_shared/validation/person";
 import { passwordProblem } from "./passwords";
+
+// Email, name, mobile and date-of-birth rules are the shared ones (also used by the staff onboarding wizard).
+export { dateOfBirthProblem, dateOfBirthRange, emailProblem, mobileProblem, parseDateOfBirth, validEmail } from "../../supabase/functions/_shared/validation/person";
 
 export type EnrolKind = "student" | "agent" | "staff";
 
@@ -22,88 +25,9 @@ export interface AgentEnrolForm { businessName: string; abn: string; contactName
 export const EMPTY_STUDENT_ENROL: StudentEnrolForm = { firstName: "", lastName: "", email: "", mobile: "", dateOfBirth: "", course: "", referralCode: "", agreed: false, password: "" };
 export const EMPTY_AGENT_ENROL: AgentEnrolForm = { businessName: "", abn: "", contactName: "", email: "", phone: "", agreed: false };
 
-const EMAIL = /^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/;
-// eslint-disable-next-line no-control-regex -- control characters are never valid in names
-const CONTROL = /[\u0000-\u001f\u007f]/;
-
-/**
- * A real-looking address: one @, a name of allowed characters that does not start or end with a dot and has no "..",
- * and a domain of dot-separated labels (letters, digits, inner hyphens) ending in a 2+ letter extension (.com, .com.au).
- */
-export function validEmail(value: string): boolean {
-  const email = value.trim().toLowerCase();
-  if (!email || email.length > 254 || CONTROL.test(email) || !EMAIL.test(email)) return false;
-  const at = email.lastIndexOf("@");
-  const local = email.slice(0, at), domain = email.slice(at + 1);
-  if (email.indexOf("@") !== at || !local || local.length > 64) return false;
-  if (!/^[a-z0-9!#$%&'*+/=?^_`{|}~.-]+$/.test(local) || local.startsWith(".") || local.endsWith(".") || local.includes("..")) return false;
-  const labels = domain.split(".");
-  if (labels.length < 2 || !/^[a-z]{2,}$/.test(labels[labels.length - 1])) return false;
-  return labels.every((label) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
-}
-
-/** What is wrong with an email, or "" when it is fine. */
-export function emailProblem(value: string): string {
-  if (!value.trim()) return "Enter your email address.";
-  return validEmail(value) ? "" : "Enter a valid email address, like name@company.com.au.";
-}
-
-function nameProblem(value: string, what: string): string {
-  const name = value.trim();
-  if (!name) return `Enter your ${what}.`;
-  if (CONTROL.test(name) || name.length > 100) return `The ${what} must be 100 characters or fewer.`;
-  return "";
-}
-
-/**
- * The mobile as the shared country-code phone field stores it (E.164, e.g. +61412345678 or +919876543210), the same
- * format every other student mobile is saved in. "" when valid, otherwise what is wrong.
- */
-export function mobileProblem(e164: string): string {
-  const value = e164.trim();
-  if (!value || !value.startsWith("+") || !parseStoredPhone(value)?.national) return "Enter your mobile number.";
-  return validateStoredPhone(value);
-}
-
-/** The date-of-birth limits, as YYYY-MM-DD, for the date picker's min and max. */
 /** The one-time code emailed when a student claims a record their agent or SLIT created: 6 digits (up to 10 if SLIT lengthens it). */
 export function codeProblem(raw: string): string {
   return /^\d{6,10}$/.test(raw.replace(/\s/g, "")) ? "" : "Enter the 6-digit code from the email.";
-}
-
-export function dateOfBirthRange(today: Date = new Date()): { min: string; max: string } {
-  const iso = (years: number) => new Date(Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate())).toISOString().slice(0, 10);
-  return { min: iso(100), max: iso(10) };
-}
-
-/** "" when the date of birth is usable, otherwise a message that says which rule failed. */
-export function dateOfBirthProblem(raw: string, today: Date = new Date()): string {
-  const text = raw.trim();
-  if (!text) return "Enter your date of birth.";
-  if (parseDateOfBirth(text, today)) return "";
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
-  const [year, month, day] = iso ? [+iso[1], +iso[2], +iso[3]] : dmy ? [+dmy[3], +dmy[2], +dmy[1]] : [0, 0, 0];
-  const date = new Date(Date.UTC(year, month - 1, day));
-  const real = year > 0 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-  return real ? "You must be between 10 and 100 years old." : "Enter a real date of birth.";
-}
-
-/** DD/MM/YYYY (or YYYY-MM-DD) to an ISO date; null when it is not a real date or not 10 to 100 years ago. */
-export function parseDateOfBirth(raw: string, today: Date = new Date()): string | null {
-  const text = raw.trim();
-  let year: number, month: number, day: number;
-  const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  if (dmy) { day = Number(dmy[1]); month = Number(dmy[2]); year = Number(dmy[3]); }
-  else if (iso) { year = Number(iso[1]); month = Number(iso[2]); day = Number(iso[3]); }
-  else return null;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  const youngest = new Date(Date.UTC(today.getUTCFullYear() - 10, today.getUTCMonth(), today.getUTCDate()));
-  const oldest = new Date(Date.UTC(today.getUTCFullYear() - 100, today.getUTCMonth(), today.getUTCDate()));
-  if (date > youngest || date < oldest) return null;
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 /** The same ABN check the Edge Function runs; "" when valid, otherwise what is wrong. */

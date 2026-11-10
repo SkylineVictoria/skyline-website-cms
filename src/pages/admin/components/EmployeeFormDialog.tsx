@@ -3,7 +3,7 @@ import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import BankDetailsFields from "@/pages/admin/components/hrms/BankDetailsFields";
 import {
-  EMPTY_BANK, EMPTY_EMPLOYEE, bankIsEmpty, bankProblems, employeeProblems, getEmployeeBank, saveEmployee, saveEmployeeBank,
+  EMPTY_BANK, EMPTY_EMPLOYEE, bankIsEmpty, bankProblems, employeeProblems, saveEmployee, saveEmployeeBank,
   type EmployeeBank, type EmployeeForm,
 } from "@/lib/employeesApi";
 import { staffAdminActions } from "@/lib/staffApi";
@@ -35,13 +35,8 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   // Once the person is saved, a retry (e.g. after a bank details error) edits them instead of adding them twice.
   const [savedId, setSavedId] = useState<string | null>(id ?? null);
 
-  useEffect(() => {
-    if (!id) return;
-    let current = true;
-    void getEmployeeBank(id).then((b) => { if (current) { setBank(b ?? EMPTY_BANK); setBankLoaded(true); } },
-      () => { if (current) setBankLoaded(true); });
-    return () => { current = false; };
-  }, [id]);
+  // Saved bank details are shown masked and changed on the "Bank details" card (with its audited Reveal), never loaded into this form.
+  useEffect(() => { if (id) setBankLoaded(true); }, [id]);
 
   const patch = (next: Partial<EmployeeForm>) => {
     const value = { ...form, ...next };
@@ -53,7 +48,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
     e.preventDefault();
     if (busy) return;
     const found = employeeProblems(form);
-    const foundBank = bankProblems(bank);
+    const foundBank = id ? {} : bankProblems(bank);
     setTouched(true); setProblems(found); setBankIssues(foundBank); setError("");
     if (Object.keys(found).length || Object.keys(foundBank).length) return;
     setBusy(true);
@@ -78,7 +73,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
         if (!id) message = "Employee added as Active. Upload their documents below.";
       }
       setSavedId(personId);
-      if (id ? bankLoaded : !bankIsEmpty(bank)) {
+      if (!id && !bankIsEmpty(bank)) {
         try { await saveEmployeeBank(personId, bank); }
         catch (err) { setError(`${id ? "Details" : "The employee"} saved, but the bank details were not: ${err instanceof Error ? err.message : "please try again"}.`); return; }
       }
@@ -130,7 +125,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
         </div>
         <fieldset className="rounded-md border border-background-200 p-3" data-testid="employee-bank">
           <legend className="px-1 text-[13px] font-semibold text-foreground-900">Bank details (for pay) <span className="font-normal text-foreground-500">optional</span></legend>
-          {!bankLoaded ? <p role="status" className="text-sm">Loading bank details…</p> : (
+          {id ? <p className="text-sm text-foreground-700" data-testid="employee-bank-elsewhere">Saved bank details are shown masked on the employee's page. Change them there with “Edit” on the Bank details card.</p> : (
             <BankDetailsFields value={bank} problems={bankIssues} disabled={busy}
               onChange={(next) => { setBank(next); if (touched) setBankIssues(bankProblems(next)); }} />
           )}

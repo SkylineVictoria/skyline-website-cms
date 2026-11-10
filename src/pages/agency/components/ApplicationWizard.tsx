@@ -3,6 +3,7 @@ import {
   deleteApplicationDocument,
   flushApplicationEdits,
   getApplication,
+  getDocumentSignedUrl,
   listApplicationDocuments,
   listInstitutionCourses,
   queueDocumentExtraction,
@@ -15,7 +16,8 @@ import {
 import { portalCourseOptions, resolveCourseOption } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
-import { normalizeUsi, parseStoredPhone, validateStoredPhone, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
+import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
+import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
   WIZARD_STEPS,
   wizardExtractionState,
@@ -26,7 +28,9 @@ import {
 } from "@/pages/agency/lib/wizardConfig";
 import { formatExtractionCandidates } from "@/pages/agency/lib/documentExtraction";
 import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
-import WizardDocumentStep from "@/pages/agency/components/WizardDocumentStep";
+import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
+import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
+import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -437,10 +441,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       values.usi_number = usi;
     } else if (target.id === "emergency") {
       const phone = String(new FormData(questionFormRef.current ?? undefined).get("ec_phone") ?? "").trim();
-      if (!filled("ec_name")) errors.ec_name = "Enter the emergency contact's name.";
-      if (!phone.startsWith("+") || !parseStoredPhone(phone)?.national) errors.ec_phone = "Enter the emergency contact's phone number.";
-      else if (validateStoredPhone(phone)) errors.ec_phone = validateStoredPhone(phone);
-      if (!filled("ec_relationship")) errors.ec_relationship = "Enter how they are related to the student.";
+      // The shared rule (also the staff onboarding wizard's): name, phone with its country code, relationship.
+      const problems = emergencyContactProblems({ name: answers.ec_name ?? "", phone, relationship: answers.ec_relationship ?? "" }, "the student");
+      if (problems.name) errors.ec_name = problems.name;
+      if (problems.phone) errors.ec_phone = problems.phone;
+      if (problems.relationship) errors.ec_relationship = problems.relationship;
       values.ec_name = filled("ec_name");
       values.ec_phone = phone;
       values.ec_relationship = filled("ec_relationship");
@@ -503,8 +508,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The document notices below belong to document screens only.
   const onDocStep = !question;
 
-  const primaryClass =
-    "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60";
+  const primaryClass = WIZARD_PRIMARY_CLASS;
 
   /* --------------------------------------------------------------- render */
 
@@ -544,6 +548,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         onRetryDoc={(doc) => void handleRetryDoc(doc)}
         onDismissDoc={(doc) => setDismissed((prev) => new Set(prev).add(doc.id))}
         onRemoveDoc={handleRemoveDoc}
+        signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
         logView={
           role === "slit_admin"
             ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
@@ -554,224 +559,142 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-foreground-950/55 p-3 backdrop-blur-sm sm:items-center sm:p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="wizard-title"
-    >
-      <div className="relative my-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-background-200 p-5 md:p-6">
-          <div className="flex items-start gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-background-50">
-              <i className="ri-magic-line text-xl" aria-hidden="true" />
-            </span>
-            <div>
-              <h2 id="wizard-title" className="font-heading text-lg font-bold text-foreground-950">
-                Add New Form &mdash; document wizard
-              </h2>
-              <p className="mt-0.5 text-sm leading-relaxed text-foreground-600">
-                Upload documents to prefill the application, then continue to the full form. {agencyName}
-              </p>
-            </div>
-          </div>
+    <WizardShell
+      title={"Add New Form \u2014 document wizard"}
+      subtitle={`Upload documents to prefill the application, then continue to the full form. ${agencyName}`}
+      onClose={onCancel}
+      closeLabel="Cancel and close the wizard"
+      stepper={
+        <WizardStepper
+          items={[...WIZARD_STEPS, ...WIZARD_QUESTIONS].map((item) => ({ id: item.id, short: item.short, icon: item.icon, busy: "category" in item && stepBusy(item) }))}
+          current={step}
+          onSelect={goTo}
+        />
+      }
+      footerStart={
+        <>
           <button
             type="button"
             onClick={onCancel}
-            aria-label="Cancel and close the wizard"
-            className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-foreground-500 transition-colors hover:bg-background-100 hover:text-foreground-800"
+            className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-foreground-500 transition-colors hover:text-foreground-800"
           >
-            <i className="ri-close-line text-lg" aria-hidden="true" />
+            <i className="ri-close-line" aria-hidden="true" />
+            Cancel
           </button>
-        </div>
-
-        {/* Step indicator */}
-        <div className="flex flex-wrap gap-2 border-b border-background-200 px-5 py-3.5 md:px-6">
-          {[...WIZARD_STEPS, ...WIZARD_QUESTIONS].map((item, index) => {
-            const active = index === step;
-            const done = index < step;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => goTo(index)}
-                className={`flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                  active
-                    ? "border-primary-300 bg-primary-50 text-primary-700"
-                    : done
-                      ? "border-background-200 bg-background-100 text-foreground-600"
-                      : "border-background-200 bg-background-50 text-foreground-400"
-                }`}
-              >
-                {"category" in item && stepBusy(item) ? (
-                  <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-                ) : (
-                  <i className={done ? "ri-check-line" : item.icon} aria-hidden="true" />
-                )}
-                {item.short}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Body */}
-        <div className="max-h-[62vh] overflow-y-auto p-5 md:p-6">{body()}</div>
-
-        {/* Footer */}
-        <div className="flex flex-col gap-3 border-t border-background-200 p-5 sm:flex-row sm:items-center sm:justify-between md:px-6">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-foreground-500 transition-colors hover:text-foreground-800"
-            >
-              <i className="ri-close-line" aria-hidden="true" />
-              Cancel
-            </button>
-            {step > 0 && ready ? (
+          {step > 0 && ready ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={finishing} /> : null}
+        </>
+      }
+      footerEnd={
+        ready ? (
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+            {onDocStep && !hasFile && !blockedByPassport && !current.required ? (
               <button
                 type="button"
-                onClick={() => goTo(step - 1)}
-                disabled={finishing}
-                className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-background-300 px-3.5 py-2 text-sm font-semibold text-foreground-700 transition-colors hover:bg-background-100 disabled:opacity-50"
+                onClick={() => goTo(step + 1)}
+                className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700"
               >
-                <i className="ri-arrow-left-line" aria-hidden="true" />
-                Back
+                {current.skipLabel}
               </button>
             ) : null}
-          </div>
-
-          {ready ? (
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
-              {onDocStep && !hasFile && !blockedByPassport && !current.required ? (
-                <button
-                  type="button"
-                  onClick={() => goTo(step + 1)}
-                  className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700"
-                >
-                  {current.skipLabel}
-                </button>
-              ) : null}
-              {question && !isLast ? (
-                <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers} className={primaryClass}>
-                  {savingAnswers ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
-                </button>
-              ) : isLast ? (
-                <>
-                  {finishing ? (
-                    <button type="button" onClick={() => void complete()} className="cursor-pointer text-xs font-semibold text-primary-700 underline">
-                      Continue now
-                    </button>
-                  ) : null}
-                  <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
-                    {finishing ? (
-                      <>
-                        <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-                        Finishing&hellip;
-                      </>
-                    ) : (
-                      <>
-                        Finish
-                        <i className="ri-arrow-right-circle-line" aria-hidden="true" />
-                      </>
-                    )}
+            {question && !isLast ? (
+              <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers} className={primaryClass}>
+                {savingAnswers ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
+              </button>
+            ) : isLast ? (
+              <>
+                {finishing ? (
+                  <button type="button" onClick={() => void complete()} className="cursor-pointer text-xs font-semibold text-primary-700 underline">
+                    Continue now
                   </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
-                  Next
-                  <i className="ri-arrow-right-line" aria-hidden="true" />
+                ) : null}
+                <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
+                  {finishing ? (
+                    <>
+                      <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
+                      Finishing&hellip;
+                    </>
+                  ) : (
+                    <>
+                      Finish
+                      <i className="ri-arrow-right-circle-line" aria-hidden="true" />
+                    </>
+                  )}
                 </button>
-              )}
-            </div>
+              </>
+            ) : (
+              <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
+                Next
+                <i className="ri-arrow-right-line" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        ) : null
+      }
+      notices={
+        <>
+          {onDocStep && blockedByPassport && !passportExpired && !locked ? (
+            <WizardNotice tone="info">A current passport is required. Upload it to continue.</WizardNotice>
           ) : null}
-        </div>
 
-        {onDocStep && blockedByPassport && !passportExpired && !locked ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p className="flex items-start gap-2 text-sm text-foreground-600">
-              <i className="ri-information-line mt-0.5" aria-hidden="true" />
-              A current passport is required. Upload it to continue.
-            </p>
-          </div>
-        ) : null}
+          {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked ? (
+            <WizardNotice tone="info">{current.title} is required. Upload it to continue.</WizardNotice>
+          ) : null}
 
-        {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p className="flex items-start gap-2 text-sm text-foreground-600">
-              <i className="ri-information-line mt-0.5" aria-hidden="true" />
-              {current.title} is required. Upload it to continue.
-            </p>
-          </div>
-        ) : null}
-
-        {onDocStep && rejectedHere && stepCheck ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p role="alert" className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              <i className="ri-error-warning-line mt-0.5" aria-hidden="true" />
+          {onDocStep && rejectedHere && stepCheck ? (
+            <WizardNotice tone="error">
               {rejectedHere.error
                 ? `${rejectedHere.filename} is not ${stepCheck.what} but could not be removed (${rejectedHere.error}). Delete it, then upload the proper document.`
                 : `${rejectedHere.filename} is not ${stepCheck.what}, so it was not kept. Please upload the proper document.`}
-            </p>
-          </div>
-        ) : null}
+            </WizardNotice>
+          ) : null}
 
-        {onDocStep && slowHere.length > 0 && !locked ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p role="status" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <i className="ri-time-line mt-0.5" aria-hidden="true" />
+          {onDocStep && slowHere.length > 0 && !locked ? (
+            <WizardNotice tone="warn">
               {`${slowHere[0].filename} is taking longer than usual to read. If it is not ${stepCheck?.what ?? `your ${current.noun}`}, delete it and upload the proper document; otherwise wait, and Next unlocks once it is read.`}
-            </p>
-          </div>
-        ) : null}
+            </WizardNotice>
+          ) : null}
 
-        {onDocStep && current.id === "licence" && rejectedLicence ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p role="alert" className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              <i className="ri-error-warning-line mt-0.5" aria-hidden="true" />
+          {onDocStep && current.id === "licence" && rejectedLicence ? (
+            <WizardNotice tone="error">
               {rejectedLicence.error
                 ? `${rejectedLicence.filename} is not an Australian licence but could not be removed (${rejectedLicence.error}). Delete it.`
                 : `${rejectedLicence.filename} is not an Australian driving licence, so it was not kept. Only an Australian licence is accepted; or finish without one and search the address on the form.`}
-            </p>
-          </div>
-        ) : null}
+            </WizardNotice>
+          ) : null}
 
-        {onDocStep && blockedByPassport && passportExpired && !locked ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <p role="alert" className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              <i className="ri-error-warning-line mt-0.5" aria-hidden="true" />
+          {onDocStep && blockedByPassport && passportExpired && !locked ? (
+            <WizardNotice tone="error">
               {expiredPassport?.error
-                ? `${expiredPassport.filename} has expired but could not be removed (${expiredPassport.error}). Delete it, then upload the student’s current passport.`
-                : `${expiredPassport?.filename ?? "This passport"} expired${expiredPassport?.date ? ` on ${formatExpiryDate(expiredPassport.date)}` : ""} and was not saved. Upload the student’s current passport to continue.`}
-            </p>
-          </div>
-        ) : null}
+                ? `${expiredPassport.filename} has expired but could not be removed (${expiredPassport.error}). Delete it, then upload the student\u2019s current passport.`
+                : `${expiredPassport?.filename ?? "This passport"} expired${expiredPassport?.date ? ` on ${formatExpiryDate(expiredPassport.date)}` : ""} and was not saved. Upload the student\u2019s current passport to continue.`}
+            </WizardNotice>
+          ) : null}
 
-        {finishError ? (
-          <div className="border-t border-background-200 px-5 py-3 md:px-6">
-            <PortalError message={finishError} onRetry={() => setFinishing(true)} />
-          </div>
-        ) : null}
+          {finishError ? (
+            <div className="border-t border-background-200 px-5 py-3 md:px-6">
+              <PortalError message={finishError} onRetry={() => setFinishing(true)} />
+            </div>
+          ) : null}
 
-        {ready ? (
-          <div className="border-t border-background-200 px-5 py-3 text-center md:px-6">
-            <p className="text-[11px] text-foreground-400">
-              Nothing is submitted from this wizard. Documents are stored privately against this draft; the student
-              application is submitted only from the full form after review.
-            </p>
-          </div>
-        ) : null}
-
-        {locked ? (
-          <div className="absolute inset-0 z-10 flex cursor-wait items-center justify-center rounded-xl bg-background-50/70" role="status" aria-live="polite">
-            <span className="flex items-center gap-2 rounded-md border border-background-200 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-800 shadow-sm">
-              <i className="ri-loader-4-line animate-spin text-primary-600" aria-hidden="true" />
-              {stepPending.some((item) => !item.error) ? `Uploading your ${current.noun}…` : removingExpired ? "Passport expired, removing it…" : removingWrong ? `This is not ${stepCheck?.what ?? `your ${current.noun}`}, removing it…` : `Reading your ${current.noun}…`}
-            </span>
-          </div>
-        ) : null}
-      </div>
-    </div>
+          {ready ? (
+            <div className="border-t border-background-200 px-5 py-3 text-center md:px-6">
+              <p className="text-[11px] text-foreground-400">
+                Nothing is submitted from this wizard. Documents are stored privately against this draft; the student
+                application is submitted only from the full form after review.
+              </p>
+            </div>
+          ) : null}
+        </>
+      }
+      overlay={
+        locked ? (
+          <WizardLock>
+            {stepPending.some((item) => !item.error) ? `Uploading your ${current.noun}\u2026` : removingExpired ? "Passport expired, removing it\u2026" : removingWrong ? `This is not ${stepCheck?.what ?? `your ${current.noun}`}, removing it\u2026` : `Reading your ${current.noun}\u2026`}
+          </WizardLock>
+        ) : null
+      }
+    >
+      {body()}
+    </WizardShell>
   );
 }

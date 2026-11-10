@@ -3,19 +3,20 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
 import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
-  type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow, type StaffOnboarding,
+  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
+  type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow, type StaffOnboarding,
 } from "@/lib/staffApi";
 import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
 import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
 import SendOfferDialog from "@/pages/admin/components/hrms/SendOfferDialog";
-import { accountText, timelineText } from "@/pages/admin/lib/onboardingText";
+import { EXTRACTED_LABEL, SECTION, accountText, timelineText } from "@/pages/admin/lib/onboardingText";
+import { READABLE_CATEGORIES } from "@/lib/staffOnboardingWizard";
 import { money } from "@/lib/hrTime";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
 import {
-  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, ONBOARDING_STAGE_HINT, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist,
+  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, ONBOARDING_STAGE_HINT, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist, staffDocSlug,
   type EmployeeAction, type StaffDocCategory, type StaffRole,
 } from "@/lib/staffStatus";
 
@@ -33,6 +34,10 @@ import {
  * login state, history). Only the action that fits the stage is offered: Send document link > review documents > Add pay details
  * > Send offer letter (a template, previewed, emailed with the person's sign-in link) > Activate. Rejecting a document can email
  * the reason with a re-upload link at once. The history lists every action with who did it and when.
+ *
+ * Onboarding wizard (2026-11-10): what the reader took from each document is listed beside it; every section (personal details, each
+ * document type, bank details) has a "Verified by admin" tick that is recorded with who and when and cleared when that section's
+ * document or bank details change; the bank details are masked until an Admin presses Reveal (which is recorded too).
  */
 const STAGE_LABEL = { screening: "Screening", shortlisted: "Shortlisted", interview: "Interview", selected: "Selected" } as const;
 
@@ -62,10 +67,45 @@ const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleSt
 
 type Preview = { title: string; url: string; kind: "pdf" | "image" | "other" };
 
+/** The "Verified by admin" tick of one section, with who ticked it and when. */
+function SectionCheck({ section, check, busy, onToggle }: { section: OnboardingSection; check?: OnboardingCheck; busy: boolean; onToggle: (verified: boolean) => void }) {
+  return (
+    <label className={`flex cursor-pointer flex-wrap items-center gap-2 text-xs ${check ? "font-semibold text-accent-900" : "text-foreground-700"}`} data-testid={`staff-check-${section}`} data-verified={check ? "yes" : "no"}>
+      <input type="checkbox" className="h-4 w-4" checked={Boolean(check)} disabled={busy} aria-label={`${SECTION[section]} verified by admin`} onChange={(e) => onToggle(e.target.checked)} />
+      <span>Verified by admin</span>
+      {check ? <span className="font-normal text-foreground-600">{check.verifiedByName}, {new Date(check.verifiedAt).toLocaleString()}</span> : null}
+    </label>
+  );
+}
+
+/** What the reader took from a document, beside it; or why there is nothing. */
+function ExtractedDetails({ doc }: { doc: StaffDocument }) {
+  const entries = Object.entries(doc.extracted ?? {}).filter(([, value]) => String(value ?? "").trim() !== "");
+  if (doc.extractionStatus === "done" && entries.length) {
+    return (
+      <div className="mt-2 rounded-md bg-background-100 px-3 py-2" data-testid={`staff-doc-extracted-${doc.id}`}>
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-foreground-500">Read from the document</p>
+        <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+          {entries.map(([key, value]) => (
+            <div key={key} className="flex justify-between gap-3"><dt className="text-foreground-500">{EXTRACTED_LABEL[key] ?? key.replace(/_/g, " ")}</dt><dd className="min-w-0 break-words text-right font-medium text-foreground-900">{String(value)}</dd></div>
+          ))}
+        </dl>
+      </div>
+    );
+  }
+  const text = !READABLE_CATEGORIES.includes(doc.category) ? "This document type is not read automatically: check it by eye."
+    : doc.extractionStatus === "pending" || doc.extractionStatus === "processing" ? "Not read yet."
+      : doc.extractionStatus === "failed" ? `Reading failed${doc.extractionError ? `: ${doc.extractionError}` : "."}`
+        : doc.extractionStatus === "unavailable" ? "Automatic reading is switched off." : "Nothing could be read from this file.";
+  return <p className="mt-1 text-xs text-foreground-500" data-testid={`staff-doc-extracted-${doc.id}`}>{text}</p>;
+}
+
 export default function StaffOnboardingDetail() {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
   const [flow, setFlow] = useState<StaffOnboarding | null>(null);
+  const [extras, setExtras] = useState<OnboardingExtras | null>(null);
+  const [checkBusy, setCheckBusy] = useState("");
   const [payOpen, setPayOpen] = useState(false);
   const [offerOpen, setOfferOpen] = useState<"send" | "resend" | null>(null);
   const [emailReject, setEmailReject] = useState(true);
@@ -90,8 +130,8 @@ export default function StaffOnboardingDetail() {
 
   const load = useCallback(async () => {
     try {
-      const [next, progress] = await Promise.all([adminStaffDetail(id), adminOnboarding(id)]);
-      setDetail(next); setFlow(progress); setError(""); return next;
+      const [next, progress, more] = await Promise.all([adminStaffDetail(id), adminOnboarding(id), adminOnboardingExtras(id)]);
+      setDetail(next); setFlow(progress); setExtras(more); setError(""); return next;
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be loaded."); return null; }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -183,6 +223,15 @@ export default function StaffOnboardingDetail() {
     finally { setDocBusy(""); }
   };
 
+  /** Ticks or unticks a section as verified; the history (who and when) is refreshed with it. */
+  const verify = async (section: OnboardingSection, verified: boolean) => {
+    setCheckBusy(section); setError("");
+    try { setExtras(await adminOnboardingCheck(id, section, verified)); setFlow(await adminOnboarding(id)); }
+    catch (e) { setError(e instanceof Error ? e.message : "The tick could not be saved."); }
+    finally { setCheckBusy(""); }
+  };
+  const tick = (section: OnboardingSection) => <SectionCheck section={section} check={extras?.checks[section]} busy={checkBusy === section} onToggle={(verified) => void verify(section, verified)} />;
+
   const retry = async (email: StaffEmail) => {
     setRetrying(email.id); setError(""); setNotice("");
     try { await staffAdminActions.retryEmail(email.id); await load(); setNotice("The email was queued again and sent."); }
@@ -271,6 +320,8 @@ export default function StaffOnboardingDetail() {
             <Row label="Email">{profile.email}</Row><Row label="Mobile">{profile.phone_e164}</Row>
             <Row label="Date of birth">{profile.date_of_birth}</Row><Row label="Address">{address}</Row>
             <Row label="Australian citizen">{profile.is_australian_citizen === null ? "" : profile.is_australian_citizen ? "Yes" : "No"}</Row>
+            <Row label="Nationality">{profile.nationality}</Row><Row label="Passport number">{profile.passport_number}</Row>
+            {profile.is_australian_citizen === false || profile.visa_subclass ? <Row label="Visa">{[profile.visa_subclass, profile.visa_conditions].filter(Boolean).join(" · ")}</Row> : null}
             <Row label="Emergency contact">{[profile.emergency_name, profile.emergency_relationship, profile.emergency_phone_e164].filter(Boolean).join(" · ")}</Row>
             <Row label="Applied">{when(profile.created_at)}</Row>
             <Row label="Documents submitted">{when(application.submitted_at)}</Row>
@@ -285,6 +336,7 @@ export default function StaffOnboardingDetail() {
             <Row label="Login"><span data-testid="staff-login-state">{flow ? accountText(flow.account, when) : detail.hasAccount ? "Yes" : "None yet"}</span></Row>
             <Row label="Admin console access">{detail.hasCmsAccess ? "Yes (Admin)" : "No"}</Row>
           </dl>
+          <div className="mt-4 border-t border-background-200 pt-3">{tick("personal")}</div>
           {liveLinks.length ? (
             <div className="mt-4 border-t border-background-200 pt-3 text-xs text-foreground-600" data-testid="staff-live-link">
               {liveLinks.filter((l) => l.purpose !== "offer").map((l) => <p key={l.id}>Live {l.purpose === "account" ? "sign-in" : l.purpose === "reupload" ? "re-upload" : "document"} link until {new Date(l.expiresAt).toLocaleDateString()}{l.lastSeenAt ? ` · last opened ${when(l.lastSeenAt)}` : " · not opened yet"}</p>)}
@@ -316,10 +368,11 @@ export default function StaffOnboardingDetail() {
                         </span>
                       </div>
                       {d.status === "rejected" && d.reviewNote ? <p className="mt-1 text-xs text-primary-900">Note: {d.reviewNote}</p> : null}
-                      {d.extractionStatus === "done" ? <p className="mt-1 text-xs text-foreground-600">Read from the document: {[d.extracted.passport_number && `number ${d.extracted.passport_number}`, d.extracted.passport_expiry && `expires ${d.extracted.passport_expiry}`, d.extracted.dob && `born ${d.extracted.dob}`].filter(Boolean).join(" · ") || "details filled"}</p> : null}
+                      <ExtractedDetails doc={d} />
                     </li>
                   ))}
                 </ul>
+                {item.files > 0 ? <div className="mt-2">{tick(staffDocSlug(item.kind.category) as OnboardingSection)}</div> : null}
               </li>
             ))}
           </ul>
@@ -363,7 +416,7 @@ export default function StaffOnboardingDetail() {
         </div></Card>
       ) : null}
 
-      <BankDetailsCard profileId={profile.id} />
+      <BankDetailsCard profileId={profile.id} footer={extras?.bank ? tick("bank") : undefined} onChanged={() => void load()} />
       {profile.status === "active" || profile.status === "inactive" ? <PaySetupCard profileId={profile.id} hasEmployment={Boolean(employment)} /> : null}
 
       {detail.jobApplications.length ? (

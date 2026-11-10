@@ -6,6 +6,17 @@
 // anything is stored, and the database says whether this link may upload that document type BEFORE the file is written.
 import { STAFF_READER_CATEGORY } from "./reader.ts";
 import { OFFER_CONSENT, type Signature } from "../_shared/offer-pdf.ts";
+import { DOCUMENT_MAX_BYTES, DOCUMENT_MIME, bankDigits, bankProblems, documentFileProblem, sniffDocumentKind } from "../_shared/validation/person.ts";
+import { EMPTY_STAFF_DETAILS, STAFF_FIELDS, normalizeStaffField, staffProblems, type StaffDetails, type StaffField, type StaffTextField } from "../_shared/validation/staff-onboarding.ts";
+//
+// Onboarding wizard (2026-11-10): `save` and `bank_save` check what was typed with the SAME rules the page uses
+// (_shared/validation: person.ts and staff-onboarding.ts) and answer with the same message and the field it belongs to; the
+// database repeats them. A file is checked by the shared document rule (size, declared type, content). Bank details travel only
+// in the request body, are never logged or echoed in an error, and come back masked.
+// `address_search`: Australian address suggestions for the wizard's address box. The student form asks the address-search
+// function, which answers signed-in portal people only; a staff applicant has no login, so the same Geoscape lookup
+// (_shared/validation/address.ts, the same key on the server) is reached here with the private link instead. Only an open
+// (not yet submitted) documents link may search, 40 searches a minute per link. The query and the results are never logged.
 //
 // Offer by link (HR-02e; /staff/offer#t=, purpose offer): offer_open, offer_view_url (offer, or the signed copy afterwards) and
 // offer_sign. Signing re-checks the link, downloads the offer and compares it with the sha256 recorded at upload, adds the
@@ -23,12 +34,15 @@ export const LINK_INVALID = "This link is not valid any more. Ask us for a new o
 export const NO_OFFER = "There is no offer letter for your account right now.";
 export const PASSWORD_MIN = 12;
 export const PASSWORD_MAX = 72;
-export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = DOCUMENT_MAX_BYTES;
 export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;
 /** Invalid-link answers allowed per caller IP in BAD_LINK_WINDOW seconds before that IP is refused for every action. */
 export const BAD_LINK_LIMIT = 20;
 export const BAD_LINK_WINDOW = 600;
-export const ACTIONS = ["open", "save", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "account_open", "account_setup", "my_document_url"] as const;
+/** Address searches per link per minute, and the shortest text worth a search (both as in the address-search function). */
+export const ADDRESS_SEARCH_LIMIT = 40;
+export const ADDRESS_SEARCH_MIN = 4;
+export const ACTIONS = ["open", "save", "bank_save", "address_search", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "account_open", "account_setup", "my_document_url"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
 export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null;
@@ -52,6 +66,8 @@ export interface OnboardingDeps {
   sha256(bytes: Uint8Array): Promise<string>;
   stampOffer(original: Uint8Array, signature: Signature): Promise<Uint8Array>;
   now(): Date;
+  /** The Geoscape lookup (searchAddresses with the function's key). Absent or failing: the page falls back to typing. */
+  searchAddress?(query: string): Promise<{ kind: "ok"; suggestions: unknown[]; attribution: string } | { kind: "unavailable"; reason: string }>;
   /** Auth admin: sets the password the person chose and confirms their email. Never logged. */
   setPassword?(userId: string, password: string): Promise<{ error: string | null }>;
 }
@@ -79,16 +95,32 @@ function fromDb(error: { code?: string; message?: string }): OnboardingResult {
   return { status: 500, body: { error: "Something went wrong. Please try again shortly." } };
 }
 
-/** The file kind from its CONTENT (and a matching name): PDF, PNG or JPEG only. */
-export function sniffDocument(filename: string, bytes: Uint8Array): { mime: string; ext: string } | null {
-  const ext = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
-  const pdf = bytes.length > 5 && String.fromCharCode(...bytes.subarray(0, 5)) === "%PDF-";
-  const png = bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
-  const jpg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (pdf && ext === "pdf") return { mime: "application/pdf", ext: "pdf" };
-  if (png && ext === "png") return { mime: "image/png", ext: "png" };
-  if (jpg && (ext === "jpg" || ext === "jpeg")) return { mime: "image/jpeg", ext: "jpg" };
-  return null;
+/** The file kind from its CONTENT (the shared rule): PDF, PNG or JPEG only. */
+export function sniffDocument(_filename: string, bytes: Uint8Array): { mime: string; ext: string } | null {
+  const kind = sniffDocumentKind(bytes.subarray(0, 8));
+  return kind ? { mime: DOCUMENT_MIME[kind], ext: kind } : null;
+}
+
+/**
+ * The details as the page holds them: every known key of the patch as text (null = blank), the citizenship answer as a boolean
+ * or null. Unknown keys are dropped; a wrong type is a problem.
+ */
+function readPatch(patch: Record<string, unknown>): { details: StaffDetails; keys: StaffField[] } | { problem: string; field: string } {
+  const details: StaffDetails = { ...EMPTY_STAFF_DETAILS };
+  const keys: StaffField[] = [];
+  for (const field of STAFF_FIELDS) {
+    if (!(field in patch)) continue;
+    const value = patch[field];
+    if (field === "is_australian_citizen") {
+      if (value !== null && typeof value !== "boolean") return { problem: "Tell us whether you are an Australian citizen.", field };
+      details.is_australian_citizen = value as boolean | null;
+    } else {
+      if (value !== null && typeof value !== "string") return { problem: `Check the ${field.replace(/_/g, " ")} field.`, field };
+      details[field as StaffTextField] = (value as string | null) ?? "";
+    }
+    keys.push(field);
+  }
+  return { details, keys };
 }
 
 export function safeDocumentName(name: string): string {
@@ -137,9 +169,16 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
     if (typeof req.token !== "string" || !TOKEN.test(req.token)) return linkInvalid();
     link = await deps.hash(req.token);
   }
-  const perLink = action === "upload" ? 60 : 600;
-  if (!(await deps.takeRateLimit(`staff-onboarding:link:${action === "upload" ? "upload" : "any"}:${link}`, perLink, 3600))) {
-    return { status: 429, body: { error: "Please wait a while before trying again." }, headers: { "Retry-After": "3600" } };
+  if (action === "address_search") {
+    // Its own allowance (the student search's: 40 a minute), so typing an address never uses up the link's other calls.
+    if (!(await deps.takeRateLimit(`staff-onboarding:link:address:${link}`, ADDRESS_SEARCH_LIMIT, 60))) {
+      return { status: 429, body: { ok: false, error: "Too many address searches. Please wait a moment." }, headers: { "Retry-After": "60" } };
+    }
+  } else {
+    const perLink = action === "upload" ? 60 : 600;
+    if (!(await deps.takeRateLimit(`staff-onboarding:link:${action === "upload" ? "upload" : "any"}:${link}`, perLink, 3600))) {
+      return { status: 429, body: { error: "Please wait a while before trying again." }, headers: { "Retry-After": "3600" } };
+    }
   }
   const call = async (name: string, args: Record<string, unknown> = {}) => deps.rpc(name, { p_token_hash: link, ...args });
   const view = async (name: string, args: Record<string, unknown> = {}): Promise<OnboardingResult> => {
@@ -190,7 +229,47 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
     case "save": {
       const patch = req.fields.patch;
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) return bad("Nothing to save.");
-      return view("hr_svc_onboarding_save", { p_patch: patch });
+      const read = readPatch(patch as Record<string, unknown>);
+      if ("problem" in read) return bad(read.problem, read.field);
+      if (!read.keys.length) return bad("Nothing to save.");
+      // The address and visa rules look at the country and the citizenship answer already saved, when the patch does not carry them.
+      const details = read.details;
+      if (!read.keys.includes("address_country") || !read.keys.includes("is_australian_citizen")) {
+        const current = await call("hr_svc_onboarding_open");
+        if (current.error) return fromDb(current.error);
+        const profile = ((current.data as { profile?: Record<string, unknown> } | null)?.profile ?? {}) as Record<string, unknown>;
+        if (!read.keys.includes("address_country")) details.address_country = String(profile.address_country ?? "");
+        if (!read.keys.includes("is_australian_citizen")) details.is_australian_citizen = typeof profile.is_australian_citizen === "boolean" ? profile.is_australian_citizen : null;
+      }
+      const problem = staffProblems(details, read.keys, false, deps.now())[0];
+      if (problem) return bad(problem.message, problem.field);
+      const clean: Record<string, string | boolean | null> = {};
+      for (const key of read.keys) clean[key] = key === "is_australian_citizen" ? details.is_australian_citizen : normalizeStaffField(key, details, deps.now());
+      return view("hr_svc_onboarding_save", { p_patch: clean });
+    }
+    case "address_search": {
+      // The link must be this person's open documents link (the database says so on every call).
+      const opened = await call("hr_svc_onboarding_open");
+      if (opened.error) return fromDb(opened.error);
+      const state = (opened.data ?? {}) as { readOnly?: boolean; mode?: string };
+      if (state.readOnly !== false || state.mode !== "documents") return bad("This has already been sent and can no longer be changed.");
+      const q = typeof req.fields.q === "string" ? req.fields.q.trim().slice(0, 200) : "";
+      if (q.length < ADDRESS_SEARCH_MIN) return { status: 200, body: { ok: true, suggestions: [] } };
+      const found = deps.searchAddress ? await deps.searchAddress(q).catch(() => ({ kind: "unavailable" as const, reason: "error" })) : { kind: "unavailable" as const, reason: "not_configured" };
+      // A provider fault or exhausted quota: "unavailable", and the page falls back to typing. Never the reason, the key or the query.
+      if (found.kind === "unavailable") return { status: 503, body: { ok: false, unavailable: true } };
+      return { status: 200, body: { ok: true, suggestions: found.suggestions, attribution: found.attribution } };
+    }
+    case "bank_save": {
+      const raw = req.fields.bank;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad("Enter your bank details.");
+      const input = raw as Record<string, unknown>;
+      const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
+      const bank = { accountName: text("accountName").trim(), bsb: bankDigits(text("bsb")), accountNumber: bankDigits(text("accountNumber")) };
+      const problems = bankProblems(bank);
+      const first = (["accountName", "bsb", "accountNumber"] as const).find((key) => problems[key]);
+      if (first) return bad(problems[first]!, first);
+      return view("hr_svc_onboarding_bank_save", { p_bank: { ...bank, bankName: text("bankName").trim().slice(0, 100) } });
     }
     case "expiry": {
       const id = docId();
@@ -233,10 +312,13 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       if (replaces && !UUID.test(replaces)) return bad("Document not found.");
       const file = req.file;
       if (!file) return bad("Choose a file to upload.", "file");
-      if (file.size < 1 || file.size > MAX_DOCUMENT_BYTES) return bad("The file must be 10 MB or smaller.", "file");
+      // The shared document rule: size, then name and declared type, then content (the same three messages as the page).
+      const early = documentFileProblem(file);
+      if (early) return bad(early, "file");
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const kind = sniffDocument(file.name, bytes);
-      if (!kind) return bad("Upload a PDF, JPG or PNG file.", "file");
+      const problem = documentFileProblem(file, bytes.subarray(0, 8));
+      const kind = problem ? null : sniffDocument(file.name, bytes);
+      if (problem || !kind) return bad(problem || "Only PDF, JPG, and PNG documents are supported.", "file");
       // The database decides first whether this link may upload this type now; nothing is stored when it may not.
       const target = await call("hr_svc_upload_target", { p_category: category, p_replaces: replaces || null });
       if (target.error) return fromDb(target.error);

@@ -133,6 +133,8 @@ export interface PendingUpload {
   category: string;
   file: File;
   error?: string;
+  /** 0 to 1 while the file uploads, when the uploader reports it (staff onboarding); the row then shows a progress bar. */
+  progress?: number;
 }
 
 export interface WizardMeta {
@@ -174,17 +176,18 @@ export function formatBytes(bytes: number): string {
 export type Registrant = "student" | "staff";
 
 /**
- * Staff document screens (staff self-registration), in wizard order. `category` is the hr.staff_documents category; which are
- * required and which take an expiry date comes from src/lib/staffStatus.ts (staffDocKinds), mirroring the database. Visa and
- * English are required only for non-citizens; Driving Licence is optional; Academic takes several files.
+ * Staff document screens (the onboarding wizard's "Upload your documents"), in order. `category` is the hr.staff_documents
+ * category; which are required and which carry an expiry date comes from src/lib/staffStatus.ts (staffDocKinds), mirroring the
+ * database. Visa and English are required only for non-citizens; Driving Licence is optional; Academic takes several files.
+ * The page puts "Required." in front of a required type's line. Expiry dates are read from the document or typed on the next step.
  */
 export const STAFF_WIZARD_STEPS: WizardStep[] = [
-  { id: "passport", title: "Passport", short: "Passport", subtitle: "Required. Upload the biodata page (PDF, JPG or PNG) and enter its expiry date. We read it to fill in your name and date of birth.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
-  { id: "visa", title: "Visa", short: "Visa", subtitle: "Required unless you are an Australian citizen. Upload your visa grant notice or VEVO record and enter its expiry date.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "", required: true },
-  { id: "english", title: "English test result", short: "English", subtitle: "Required unless you are an Australian citizen. Upload your IELTS, PTE, TOEFL or similar result. The expiry date is optional.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
-  { id: "academic", title: "Academic results", short: "Academic", subtitle: "Required. Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
-  { id: "licence", title: "Driving licence", short: "Driving licence", subtitle: "Optional. Upload your driving licence and enter its expiry date; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
-  { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Required. Upload your health insurance certificate or policy and enter its expiry date.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "", required: true },
+  { id: "passport", title: "Passport", short: "Passport", subtitle: "Upload the photo page (PDF, JPG or PNG). We read your name, date of birth, nationality, passport number and its expiry date from it.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
+  { id: "visa", title: "Visa", short: "Visa", subtitle: "Upload your visa grant notice or VEVO record. We read the visa subclass and its expiry date from it.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "", required: true },
+  { id: "english", title: "English test result", short: "English", subtitle: "Upload your IELTS, PTE, TOEFL or similar result.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
+  { id: "academic", title: "Academic results", short: "Academic", subtitle: "Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
+  { id: "licence", title: "Driving licence", short: "Driving licence", subtitle: "Upload your driving licence; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
+  { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Upload your health insurance certificate or policy.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "", required: true },
 ];
 
 export const wizardStepsFor = (registrant: Registrant): WizardStep[] => (registrant === "staff" ? STAFF_WIZARD_STEPS : WIZARD_STEPS);

@@ -24,6 +24,11 @@ const mailLib = await load.import<typeof import("../supabase/functions/_shared/n
 const offerPdf = await load.import<typeof import("../supabase/functions/_shared/offer-pdf.ts")>("../supabase/functions/_shared/offer-pdf.ts");
 const drainLib = await load.import<typeof import("../supabase/functions/_shared/hr-mail-drain.ts")>("../supabase/functions/_shared/hr-mail-drain.ts");
 const staffAdmin = await load.import<typeof import("../supabase/functions/staff-admin/core.ts")>("../supabase/functions/staff-admin/core.ts");
+const person = await load.import<typeof import("../supabase/functions/_shared/validation/person.ts")>("../supabase/functions/_shared/validation/person.ts");
+const staffRules = await load.import<typeof import("../supabase/functions/_shared/validation/staff-onboarding.ts")>("../supabase/functions/_shared/validation/staff-onboarding.ts");
+const wizardLib = await load.import<typeof import("../src/lib/staffOnboardingWizard.ts")>("../src/lib/staffOnboardingWizard.ts");
+const enrolLib = await load.import<typeof import("../src/lib/enrolForm.ts")>("../src/lib/enrolForm.ts");
+const employeeRulesLib = await load.import<typeof import("../src/lib/employeeRules.ts")>("../src/lib/employeeRules.ts");
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
@@ -347,7 +352,7 @@ test("onboarding: rate limits per caller and per link fail closed", async () => 
 
 test("onboarding: a file is checked by content, the database approves the type BEFORE it is stored, and leftovers are removed", async () => {
   let run = linkDeps();
-  const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf")), run.deps);
+  const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(r.status, 200);
   assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
   assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
@@ -357,7 +362,7 @@ test("onboarding: a file is checked by content, the database approves the type B
   assert.deepEqual(run.scheduled, ["Passport"], "a passport is read");
 
   run = linkDeps();
-  await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" }, new File([PNG_BYTES], "results.png")), run.deps);
+  await onboard.handleOnboarding(linkRequest("upload", { category: "Academic" }, new File([PNG_BYTES], "results.png", { type: "image/png" })), run.deps);
   assert.deepEqual(run.scheduled, [], "academic results are not read automatically");
 
   for (const [label, file] of [["exe renamed", new File([new Uint8Array([0x4d, 0x5a, 1, 2])], "p.pdf")], ["png named pdf", new File([PNG_BYTES], "p.pdf")], ["gif", new File([new TextEncoder().encode("GIF89a....")], "p.gif")], ["empty", new File([], "p.pdf")], ["too big", new File([PDF_BYTES, new Uint8Array(onboard.MAX_DOCUMENT_BYTES)], "p.pdf")]] as const) {
@@ -368,12 +373,12 @@ test("onboarding: a file is checked by content, the database approves the type B
   }
 
   run = linkDeps({ db: { hr_svc_upload_target: { error: { code: "23514", message: "Only a rejected document can be replaced." } } } });
-  const refused = await onboard.handleOnboarding(linkRequest("upload", { category: "Visa" }, new File([PDF_BYTES], "v.pdf")), run.deps);
+  const refused = await onboard.handleOnboarding(linkRequest("upload", { category: "Visa" }, new File([PDF_BYTES], "v.pdf", { type: "application/pdf" })), run.deps);
   assert.deepEqual([refused.status, refused.body.error], [400, "Only a rejected document can be replaced."]);
   assert.ok(!run.names().includes("upload"), "a refused type is never stored");
 
-  run = linkDeps({ db: { hr_svc_document_add: { error: { code: "22023", message: "Enter the expiry date of your passport." } } } });
-  const noExpiry = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf")), run.deps);
+  run = linkDeps({ db: { hr_svc_document_add: { error: { code: "22023", message: "The document location is not valid." } } } });
+  const noExpiry = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, new File([PDF_BYTES], "p.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(noExpiry.status, 400);
   assert.deepEqual(run.calls.at(-1), ["remove", ["p-1/passport/rnd.pdf"]], "an unrecorded file is deleted");
 
@@ -600,25 +605,52 @@ test("staff-register creates no login and keeps no password code", () => {
 const docs = (today: string) => [
   { category: "Passport", expiryDate: "2031-01-01" }, { category: "Visa", expiryDate: "2030-01-01" }, { category: "English", expiryDate: null },
   { category: "Academic", expiryDate: null }, { category: "Academic", expiryDate: null }, { category: "Health Insurance", expiryDate: today },
-];
-const complete = { firstName: "Tara", lastName: "Trainer", dateOfBirth: "1990-05-06", addressStreet: "1 Example St", addressCountry: "Australia", emergencyName: "Em", emergencyRelationship: "Sibling", emergencyPhone: "+61422333444", isAustralianCitizen: false as boolean | null, documents: docs("2026-11-09") };
+].map((d, i) => ({ ...d, id: `d${i}`, extractionStatus: "pending" as const, extracted: {} }));
+const completeDetails = {
+  is_australian_citizen: false as boolean | null, first_name: "Tara", middle_name: "", last_name: "Trainer", date_of_birth: "1990-05-06", phone: "+61400000111",
+  address_street: "1 Example St", address_line2: "", address_suburb: "Melbourne", address_country: "Australia", address_state: "VIC", address_postcode: "3000",
+  emergency_name: "Em", emergency_phone: "+61422333444", emergency_relationship: "Sibling", nationality: "Indian", passport_number: "PA1234567", visa_subclass: "485", visa_conditions: "",
+};
 
-test("submit needs citizenship, every required document and current expiry dates", () => {
+test("submit needs the details, citizenship, every required document with a current expiry date, and the bank details", () => {
+  const now = new Date("2026-11-09T02:00:00Z");
   const today = "2026-11-09";
-  const without = (category: string) => complete.documents.filter((d) => d.category !== category);
-  assert.deepEqual(status.submitProblems(complete, today), []);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Passport") }, today), ["Upload your passport."]);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Visa") }, today), ["Upload your visa."]);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: without("English") }, today), ["Upload your English test result."]);
-  assert.deepEqual(status.submitProblems({ ...complete, isAustralianCitizen: true, documents: without("Visa").filter((d) => d.category !== "English") }, today), [], "a citizen needs no visa and no English result");
-  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Academic") }, today), ["Upload your academic results."]);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: without("Health Insurance") }, today), ["Upload your health insurance."]);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: docs("2026-11-08") }, today), ["Enter a current expiry date for your health insurance."]);
-  assert.deepEqual(status.submitProblems({ ...complete, documents: [...without("English"), { category: "English", expiryDate: "2026-01-01" }] }, today), ["Enter a current expiry date for your English test result."], "an English date is optional, but a past one blocks");
-  assert.deepEqual(status.submitProblems({ ...complete, documents: [...complete.documents, { category: "Driving Licence", expiryDate: "2020-01-01" }] }, today), [], "the optional licence never blocks submit");
-  assert.ok(status.submitProblems({ ...complete, isAustralianCitizen: null }, today).includes("Tell us whether you are an Australian citizen."));
-  assert.ok(!status.submitProblems({ ...complete }, today).some((p) => /role/i.test(p)), "no role is asked of an applicant");
-  assert.ok(status.submitProblems({ firstName: "", lastName: "", dateOfBirth: null, addressStreet: "", addressCountry: "", emergencyName: "", emergencyRelationship: "", emergencyPhone: null, isAustralianCitizen: null, documents: [] }, today).length >= 9);
+  const all = docs(today);
+  const without = (category: string) => all.filter((d) => d.category !== category);
+  const texts = (details = completeDetails, documents = all, bank = true) => wizardLib.wizardProblems(details, documents, bank, now).map((p) => p.text);
+  assert.deepEqual(texts(), []);
+  assert.deepEqual(texts(completeDetails, without("Passport")), ["A passport is required before you can submit."]);
+  assert.deepEqual(texts(completeDetails, without("Visa")), ["Upload your visa."]);
+  assert.deepEqual(texts(completeDetails, without("English")), ["Upload your English test result."]);
+  assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: true, visa_subclass: "" }, without("Visa").filter((d) => d.category !== "English")), [], "a citizen needs no visa, no English result and no visa subclass");
+  assert.deepEqual(texts(completeDetails, without("Academic")), ["Upload your academic results."]);
+  assert.deepEqual(texts(completeDetails, without("Health Insurance")), ["Upload your health insurance."]);
+  assert.deepEqual(texts(completeDetails, docs("2026-11-08")), ["Enter a current expiry date for your health insurance."]);
+  assert.deepEqual(texts(completeDetails, [...without("English"), { ...all[2], expiryDate: "2026-01-01" }]), ["Enter a current expiry date for your English test result."]);
+  assert.deepEqual(texts(completeDetails, [...without("Passport"), { ...all[0], expiryDate: null }]), ["Enter a current expiry date for your passport."], "a passport uploaded without its date still needs one before Submit");
+  assert.deepEqual(texts(completeDetails, [...all, { ...all[0], id: "lic", category: "Driving Licence", expiryDate: "2020-01-01" }]), [], "the optional licence never blocks Submit");
+  assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: null }), ["Tell us whether you are an Australian citizen."]);
+  assert.deepEqual(texts(completeDetails, all, false), ["Enter your bank details."]);
+  assert.ok(!texts().some((p) => /role/i.test(p)), "no role is asked of an applicant");
+  const blank = wizardLib.wizardProblems({ ...staffRules.EMPTY_STAFF_DETAILS }, [], false, now);
+  assert.deepEqual(blank.map((p) => p.text), [
+    "Tell us whether you are an Australian citizen.", "Enter your first name.", "Enter your last name.", "Enter your date of birth.", "Enter your mobile number.",
+    "Enter the street address.", "Enter the suburb or city.", "Enter the country.", "Enter the emergency contact's name.", "Enter the emergency contact's phone number.",
+    "Enter how they are related to you.", "Enter your nationality.", "Enter your passport number.",
+    "A passport is required before you can submit.", "Upload your visa.", "Upload your English test result.", "Upload your academic results.", "Upload your health insurance.",
+    "Enter your bank details.",
+  ], "everything missing, in the order the database checks it");
+  // Each problem belongs to the step that fixes it; a step is complete (ticked) once it has none.
+  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal", "bank"]);
+  assert.equal(wizardLib.stepComplete("documents", blank), false);
+  assert.equal(wizardLib.stepComplete("review", []), true);
+  assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, all, false, now)), false);
+  // The address belongs to Personal details, or to Check details when an Australian licence gave it.
+  const licence = { id: "lic", category: "Driving Licence", expiryDate: "2030-01-01", extractionStatus: "done" as const, extracted: { au_street: "9 Licence Rd" } };
+  assert.equal(wizardLib.wizardProblems({ ...completeDetails, address_suburb: "" }, all, true, now)[0].step, "personal");
+  assert.equal(wizardLib.wizardProblems({ ...completeDetails, address_suburb: "" }, [...all, licence], true, now)[0].step, "prefill");
+  assert.ok(wizardLib.stepFields("prefill", true).includes("address_street") && !wizardLib.stepFields("personal", true).includes("address_street"));
+  assert.ok(wizardLib.stepFields("personal", false).includes("address_street") && !wizardLib.stepFields("prefill", false).includes("address_street"));
 });
 
 test("the document rules match the database", () => {
@@ -1663,4 +1695,270 @@ test("onboarding pages are wired: stepper, stage actions, templates, set-passwor
   }
   const m3 = read("supabase/migrations/20261111110000_hr_offer_login.sql");
   assert.ok(m3.includes("interval '7 days'") && !/password\s+text|encrypted_password/i.test(m3), "the link lasts 7 days and the database never holds a password");
+});
+
+/* ------------------------------------------------------------------ onboarding wizard: one set of rules for students and staff */
+
+test("shared rules: the student forms and the staff wizard call the same functions", () => {
+  // Students: enrolForm.ts only re-exports the shared module (no second copy of a rule).
+  assert.equal(enrolLib.emailProblem, person.emailProblem);
+  assert.equal(enrolLib.mobileProblem, person.mobileProblem);
+  assert.equal(enrolLib.dateOfBirthProblem, person.dateOfBirthProblem);
+  assert.equal(enrolLib.parseDateOfBirth, person.parseDateOfBirth);
+  assert.equal(enrolLib.validEmail, person.validEmail);
+  for (const file of ["src/lib/enrolForm.ts", "src/pages/agency/components/ApplicationWizard.tsx", "src/pages/agency/lib/portalApplications.ts", "src/lib/employeeRules.ts", "src/lib/staffOnboardingApi.ts",
+    "src/pages/staff/StaffOnboardingPage.tsx", "supabase/functions/staff-onboarding/core.ts"]) {
+    assert.match(read(file), /_shared\/validation\/(person|staff-onboarding)/, `${file} uses the shared rules`);
+  }
+  // Both wizards are built from the same components.
+  for (const file of ["src/pages/agency/components/ApplicationWizard.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) {
+    const text = read(file);
+    for (const part of ["WizardShell", "WizardStepper"]) assert.ok(text.includes(`@/components/shared/wizard/${part}`), `${file} uses the shared ${part}`);
+  }
+  assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("@/components/shared/wizard/WizardDocumentStep"));
+  assert.ok(read("src/components/shared/wizard/DocumentWizard.tsx").includes("@/components/shared/wizard/WizardDocumentStep"), "staff uploads use the student upload screen");
+  for (const file of ["src/pages/agency/components/WizardQuestionStep.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) {
+    assert.ok(read(file).includes("@/components/shared/wizard/EmergencyContactFields"), `${file} uses the shared emergency contact`);
+  }
+  assert.ok(!existsSync(path.resolve("src/pages/agency/components/WizardDocumentStep.tsx")) && !existsSync(path.resolve("src/pages/agency/components/DocumentWizard.tsx")), "no second copy is left behind");
+});
+
+test("shared rules: phone, email, name, date of birth, emergency contact, address and files", () => {
+  // Phone: the country-code field's value (E.164) with one of the picker's nine countries.
+  assert.equal(person.phoneProblem("+61412345678", "missing"), "");
+  assert.equal(person.phoneProblem("", "missing"), "missing");
+  assert.equal(person.phoneProblem("0412345678", "missing"), "missing", "no country code");
+  assert.equal(person.phoneProblem("+33123456789", "missing"), "missing", "a country that is not offered");
+  assert.equal(person.phoneProblem("+6141234567", "missing"), "Enter a 10-digit Australian number starting with 0, e.g. 041 234 5678.");
+  assert.equal(person.phoneProblem("+9198765", "missing"), "Enter a valid phone number for the selected country.");
+  assert.equal(person.mobileProblem(""), "Enter your mobile number.");
+  // Email and name.
+  assert.equal(person.emailProblem(""), "Enter your email address.");
+  assert.equal(person.emailProblem("a@b"), "Enter a valid email address, like name@company.com.au.");
+  assert.equal(person.emailProblem("Name@Company.com.au"), "");
+  assert.equal(person.nameProblem(" ", "first name"), "Enter your first name.");
+  assert.equal(person.nameProblem("x".repeat(101), "last name"), "The last name must be 100 characters or fewer.");
+  // Date of birth: 10 to 100 years old, a real date, ISO or day/month/year.
+  const today = new Date("2026-11-10T03:00:00Z");
+  assert.equal(person.dateOfBirthProblem("", today), "Enter your date of birth.");
+  assert.equal(person.dateOfBirthProblem("1990-02-30", today), "Enter a real date of birth.");
+  assert.equal(person.dateOfBirthProblem("2016-11-11", today), "You must be between 10 and 100 years old.");
+  assert.equal(person.dateOfBirthProblem("2016-11-10", today) + person.dateOfBirthProblem("1926-11-10", today) + person.dateOfBirthProblem("5/6/1990", today), "");
+  assert.deepEqual(person.dateOfBirthRange(today), { min: "1926-11-10", max: "2016-11-10" });
+  // Emergency contact: the student wording is unchanged; staff are addressed as "you".
+  assert.deepEqual(person.emergencyContactProblems({ name: "", phone: "", relationship: "" }), {
+    name: "Enter the emergency contact's name.", phone: "Enter the emergency contact's phone number.", relationship: "Enter how they are related to the student." });
+  assert.equal(person.emergencyContactProblems({ name: "Em", phone: "+61422333444", relationship: "" }, "you").relationship, "Enter how they are related to you.");
+  assert.deepEqual(person.emergencyContactProblems({ name: "Em", phone: "+61422333444", relationship: "Sibling" }), {});
+  assert.equal(person.emergencyContactProblems({ name: "Em", phone: "+6142", relationship: "Sibling" }).phone, "Enter a 10-digit Australian number starting with 0, e.g. 041 234 5678.");
+  // Address: Australia needs a state from the list and a 4-digit postcode.
+  const address = { street: "1 Example St", line2: "", suburb: "Melbourne", state: "vic", postcode: "3000", country: "Australia" };
+  assert.deepEqual(person.addressProblems(address), {});
+  assert.deepEqual(person.addressProblems({ ...address, state: "Punjab", postcode: "30" }), { state: "Choose the state or territory.", postcode: "Enter the 4-digit postcode." });
+  assert.deepEqual(person.addressProblems({ ...address, country: "India", state: "Punjab", postcode: "144001" }), {});
+  assert.deepEqual(person.addressProblems({ street: "", line2: "", suburb: "", state: "", postcode: "", country: "" }), { street: "Enter the street address.", suburb: "Enter the suburb or city.", country: "Enter the country." });
+  // Files: size, then name and declared type, then content; the messages are the student wizard's.
+  const pdf = new Uint8Array(PDF_BYTES.subarray(0, 8)), png = PNG_BYTES.subarray(0, 8);
+  assert.equal(person.documentFileProblem({ name: "p.pdf", size: 100, type: "application/pdf" }, pdf), "");
+  assert.equal(person.documentFileProblem({ name: "p.jpeg", size: 100, type: "image/jpeg" }, new Uint8Array([0xff, 0xd8, 0xff, 0xe0])), "");
+  assert.equal(person.documentFileProblem({ name: "p.pdf", size: 0, type: "application/pdf" }, pdf), "Each document must be a PDF, JPG, or PNG no larger than 10 MB.");
+  assert.equal(person.documentFileProblem({ name: "p.pdf", size: person.DOCUMENT_MAX_BYTES + 1, type: "application/pdf" }), "Each document must be a PDF, JPG, or PNG no larger than 10 MB.");
+  assert.equal(person.documentFileProblem({ name: "p.gif", size: 100, type: "image/gif" }), "Only PDF, JPG, and PNG documents are supported.");
+  assert.equal(person.documentFileProblem({ name: "p.pdf", size: 100, type: "" }), "Only PDF, JPG, and PNG documents are supported.");
+  assert.equal(person.documentFileProblem({ name: "p.pdf", size: 100, type: "application/pdf" }, png), "The selected file does not match its declared document type.");
+  assert.equal(person.DOCUMENT_MAX_BYTES, 10 * 1024 * 1024);
+  assert.equal(onboard.MAX_DOCUMENT_BYTES, person.DOCUMENT_MAX_BYTES, "the function's limit is the shared one");
+});
+
+test("shared rules: bank details (staff only) and how they are shown", () => {
+  assert.deepEqual(person.bankProblems({ accountName: "", bsb: "", accountNumber: "" }), {
+    accountName: "Enter the account name.", bsb: "The BSB must be 6 digits, for example 062-000.", accountNumber: "The account number must be 4 to 10 digits." });
+  assert.deepEqual(person.bankProblems({ accountName: "Jo Journey", bsb: "062-000", accountNumber: "1234 4321" }), {});
+  assert.equal(person.bankProblems({ accountName: "x".repeat(101), bsb: "062000", accountNumber: "1234" }).accountName, "The account name must be 100 characters or fewer.");
+  assert.equal(person.bankProblems({ accountName: "Jo", bsb: "06200", accountNumber: "1234" }).bsb, "The BSB must be 6 digits, for example 062-000.");
+  assert.equal(person.bankProblems({ accountName: "Jo", bsb: "062000", accountNumber: "12345678901" }).accountNumber, "The account number must be 4 to 10 digits.");
+  assert.equal(person.formatBsb("062000"), "062-000");
+  assert.equal(person.maskBsb("062-000"), "06••••");
+  assert.equal(person.maskAccountNumber("1234 4321"), "•••• 4321");
+  assert.equal(person.maskAccountNumber("555666"), "•••• 66", "a short number shows only two digits");
+  assert.equal(person.bsbBank("062-000"), "Commonwealth Bank");
+  assert.equal(person.bsbBank("733000"), "Westpac");
+  assert.equal(person.bsbBank("999999"), "", "an unknown code names no bank");
+  assert.equal(person.bsbBank("0620"), "");
+  // The Add / Edit employee form keeps its "all blank is fine" rule on top of the shared one.
+  assert.deepEqual(employeeRulesLib.bankProblems({ accountName: "", bsb: "", accountNumber: "", bankName: "" }), {});
+  assert.deepEqual(employeeRulesLib.bankProblems({ accountName: "Jo", bsb: "1", accountNumber: "12345678", bankName: "" }), { bsb: "The BSB must be 6 digits, for example 062-000." });
+  // The database repeats the messages.
+  const sql = read("supabase/migrations/20261112090000_hr_onboarding_wizard.sql");
+  for (const message of ["Enter the account name.", "The account name must be 100 characters or fewer.", person.BSB_MESSAGE, person.ACCOUNT_NUMBER_MESSAGE,
+    "Enter a 10-digit Australian number starting with 0, e.g. 041 234 5678.", "Enter a valid phone number for the selected country.", "You must be between 10 and 100 years old.", "Enter a real date of birth.",
+    "Choose the state or territory.", "Enter the 4-digit postcode.", "Enter how they are related to you.", person.PASSPORT_NUMBER_MESSAGE, "Enter your visa type or subclass.",
+    person.DOCUMENT_SIZE_MESSAGE, person.DOCUMENT_TYPE_MESSAGE]) {
+    assert.ok(sql.includes(message.replace(/'/g, "''")), `the database has "${message}"`);
+  }
+  assert.ok(/pgp_sym_encrypt/.test(sql) && /hr_bank_details_key/.test(sql) && /employee_bank_no_plain_text/.test(sql), "bank details are stored encrypted, the plain columns locked");
+  assert.ok(!/raise (notice|log|warning)[^;]*(bsb|account)/i.test(sql), "the migration never prints a bank value");
+});
+
+test("staff wizard rules: a draft takes blanks, the final check needs everything, in wizard order", () => {
+  const details = { ...staffRules.EMPTY_STAFF_DETAILS };
+  const now = new Date("2026-11-10T03:00:00Z");
+  assert.deepEqual(staffRules.staffProblems(details, staffRules.STAFF_FIELDS, false, now), [{ field: "phone", message: "Enter your mobile number." }], "only the mobile may never be blank");
+  assert.deepEqual(staffRules.staffProblems({ ...details, first_name: "x".repeat(101), date_of_birth: "2020-01-01", emergency_phone: "0422", passport_number: "12" }, ["first_name", "date_of_birth", "emergency_phone", "passport_number"], false, now), [
+    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 10 and 100 years old." },
+    { field: "emergency_phone", message: "Enter the emergency contact's phone number." }, { field: "passport_number", message: "Enter the passport number: 6 to 12 letters and numbers." }]);
+  assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia", address_state: "Punjab" }, false, now), "Choose the state or territory.");
+  assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia" }, false, now), "", "blank is fine in a draft");
+  assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia" }, true, now), "Choose the state or territory.");
+  assert.equal(staffRules.staffFieldProblem("visa_subclass", { ...details, is_australian_citizen: false }, true, now), "Enter your visa type or subclass.");
+  assert.equal(staffRules.staffFieldProblem("visa_subclass", { ...details, is_australian_citizen: true }, true, now), "");
+  assert.equal(staffRules.staffFieldProblem("visa_conditions", { ...details, visa_conditions: "8105\nNo other limits" }, true, now), "", "work conditions may run over lines");
+  assert.equal(staffRules.staffFieldProblem("middle_name", details, true, now), "", "a middle name is never required");
+  // What is stored: trimmed, the date as ISO, an Australian state and the passport number in capitals.
+  const typed = { ...details, date_of_birth: " 3/2/1991 ", address_country: "Australia", address_state: "vic", passport_number: " pa 1234567 ", first_name: "  Jo " };
+  assert.deepEqual(["date_of_birth", "address_state", "passport_number", "first_name"].map((k) => staffRules.normalizeStaffField(k as never, typed, now)), ["1991-02-03", "VIC", "PA1234567", "Jo"]);
+  assert.equal(staffRules.normalizeStaffField("address_state", { ...typed, address_country: "India", address_state: "Punjab" }, now), "Punjab");
+  assert.deepEqual([...staffRules.STAFF_STEP_FIELDS.documents, ...staffRules.STAFF_STEP_FIELDS.prefill, ...staffRules.STAFF_STEP_FIELDS.personal].sort(), [...staffRules.STAFF_FIELDS].sort(), "every field belongs to exactly one step");
+});
+
+test("onboarding save: checked with the shared rules before the database, answered with the field; stored normalised", async () => {
+  let run = linkDeps();
+  let r = await onboard.handleOnboarding(linkRequest("save", { patch: { date_of_birth: "2020-01-01" } }), run.deps);
+  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 10 and 100 years old.", "date_of_birth"]);
+  assert.ok(!run.names().includes("hr_svc_onboarding_save"), "nothing invalid reaches the database");
+  for (const [patch, field, message] of [
+    [{ emergency_phone: "0422 333 444" }, "emergency_phone", "Enter the emergency contact's phone number."],
+    [{ phone: "" }, "phone", "Enter your mobile number."],
+    [{ passport_number: "12" }, "passport_number", "Enter the passport number: 6 to 12 letters and numbers."],
+    [{ first_name: 5 }, "first_name", "Check the first name field."],
+    [{ is_australian_citizen: "yes" }, "is_australian_citizen", "Tell us whether you are an Australian citizen."],
+    [{ address_country: "Australia", address_postcode: "30" }, "address_postcode", "Enter the 4-digit postcode."],
+  ] as const) {
+    run = linkDeps();
+    r = await onboard.handleOnboarding(linkRequest("save", { patch }), run.deps);
+    assert.deepEqual([r.status, r.body.field, r.body.error], [400, field, message], JSON.stringify(patch));
+    assert.ok(!run.names().includes("hr_svc_onboarding_save"));
+  }
+  // The state rule looks at the country already saved when the patch does not carry it.
+  run = linkDeps({ db: { hr_svc_onboarding_open: { data: { profile: { address_country: "Australia", is_australian_citizen: false } } } } });
+  r = await onboard.handleOnboarding(linkRequest("save", { patch: { address_state: "Punjab" } }), run.deps);
+  assert.deepEqual([r.status, r.body.field], [400, "address_state"]);
+  run = linkDeps({ db: { hr_svc_onboarding_open: { data: { profile: { address_country: "Australia", is_australian_citizen: false } } } } });
+  r = await onboard.handleOnboarding(linkRequest("save", { patch: { address_state: "vic", date_of_birth: "3/2/1991", passport_number: "pa 1234567", first_name: " Jo ", is_australian_citizen: true, hacker: "x" } }), run.deps);
+  assert.equal(r.status, 200);
+  assert.deepEqual((run.calls.find(([n]) => n === "hr_svc_onboarding_save")![1] as { p_patch: unknown }).p_patch,
+    { is_australian_citizen: true, first_name: "Jo", date_of_birth: "1991-02-03", address_state: "VIC", passport_number: "PA1234567" }, "normalised, in wizard order, unknown keys dropped");
+  run = linkDeps();
+  assert.deepEqual([(await onboard.handleOnboarding(linkRequest("save", { patch: { hacker: "x" } }), run.deps)).body.error], ["Nothing to save."]);
+});
+
+test("onboarding bank_save: the shared rule, the field named, the numbers never echoed", async () => {
+  assert.ok((onboard.ACTIONS as readonly string[]).includes("bank_save"));
+  let run = linkDeps();
+  let r = await onboard.handleOnboarding(linkRequest("bank_save", { bank: { accountName: "Jo Journey", bsb: "0620", accountNumber: "98765432" } }), run.deps);
+  assert.deepEqual([r.status, r.body.field, r.body.error], [400, "bsb", "The BSB must be 6 digits, for example 062-000."]);
+  assert.ok(!JSON.stringify(r.body).includes("98765432") && !JSON.stringify(r.body).includes("0620"), "a refusal never repeats what was typed");
+  assert.ok(!run.names().includes("hr_svc_onboarding_bank_save"));
+  run = linkDeps();
+  r = await onboard.handleOnboarding(linkRequest("bank_save", { bank: { accountName: "", bsb: "", accountNumber: "" } }), run.deps);
+  assert.deepEqual([r.status, r.body.field, r.body.error], [400, "accountName", "Enter the account name."]);
+  for (const bank of [null, "x", [1], undefined]) assert.equal((await onboard.handleOnboarding(linkRequest("bank_save", { bank }), linkDeps().deps)).body.error, "Enter your bank details.");
+  run = linkDeps();
+  r = await onboard.handleOnboarding(linkRequest("bank_save", { bank: { accountName: " Jo Journey ", bsb: "062-000", accountNumber: "9876 5432", bankName: "Commonwealth Bank", extra: "x" } }), run.deps);
+  assert.equal(r.status, 200);
+  assert.deepEqual(run.calls.find(([n]) => n === "hr_svc_onboarding_bank_save")![1], { p_token_hash: `h(${LINK})`, p_bank: { accountName: "Jo Journey", bsb: "062000", accountNumber: "98765432", bankName: "Commonwealth Bank" } });
+  run = linkDeps({ db: { hr_svc_onboarding_bank_save: { error: { code: "28000", message: "x" } } } });
+  r = await onboard.handleOnboarding(linkRequest("bank_save", { bank: { accountName: "Jo", bsb: "062000", accountNumber: "98765432" } }), run.deps);
+  assert.deepEqual([r.status, r.body.code], [403, "link_invalid"], "a dead link gets the neutral answer here too");
+  // Nothing in the function writes a bank value to a log.
+  const source = read("supabase/functions/staff-onboarding/core.ts") + read("supabase/functions/staff-onboarding/index.ts");
+  assert.ok(!/console\.(log|info|warn|error)\([^)]*(bank|bsb|account)/i.test(source), "no bank value is logged");
+});
+
+test("onboarding upload: the shared document messages, by size, declared type and content", async () => {
+  const send = (file: File) => onboard.handleOnboarding(linkRequest("upload", { category: "Passport" }, file), linkDeps().deps);
+  assert.deepEqual([(await send(new File([], "p.pdf", { type: "application/pdf" }))).body.error], [person.DOCUMENT_SIZE_MESSAGE]);
+  assert.deepEqual([(await send(new File([new TextEncoder().encode("GIF89a....")], "p.gif", { type: "image/gif" }))).body.error], [person.DOCUMENT_TYPE_MESSAGE]);
+  assert.deepEqual([(await send(new File([PDF_BYTES], "p.pdf"))).body.error], [person.DOCUMENT_TYPE_MESSAGE], "a file with no declared type is refused, as in the student wizard");
+  assert.deepEqual([(await send(new File([PNG_BYTES], "p.pdf", { type: "application/pdf" }))).body.error], [person.DOCUMENT_CONTENT_MESSAGE]);
+  const run = linkDeps();
+  const ok = await onboard.handleOnboarding(linkRequest("upload", { category: "Visa" }, new File([PDF_BYTES], "visa.pdf", { type: "application/pdf" })), run.deps);
+  assert.equal(ok.status, 200);
+  assert.equal((run.calls.find(([n]) => n === "hr_svc_document_add")![1] as { p_expiry: unknown }).p_expiry, null, "a file may be uploaded without its expiry date");
+});
+
+test("wizard: where each pre-filled value came from, what could not be read, and what does not match", () => {
+  const today = "2026-11-10";
+  const passport = { id: "p", category: "Passport", expiryDate: null, extractionStatus: "done" as const,
+    extracted: { first_name: "TARA", last_name: "TRAINER", dob: "1990-05-06", passport_number: "PA 1234567", passport_expiry: "2031-01-01", nationality: "" , citizenship: "Indian" } };
+  const note = (field: string, value: string, documents = [passport]) => wizardLib.prefillNote(field as never, value, documents as never, today);
+  assert.deepEqual(note("first_name", "Tara"), { kind: "match", text: "From your passport" }, "upper and lower case are the same name");
+  assert.deepEqual(note("date_of_birth", "1990-05-06"), { kind: "match", text: "From your passport" });
+  assert.deepEqual(note("passport_number", "pa1234567"), { kind: "match", text: "From your passport" });
+  assert.deepEqual(note("nationality", "Indian"), { kind: "match", text: "From your passport" }, "the citizenship is used when the nationality was not read");
+  assert.deepEqual(note("last_name", "Teacher"), { kind: "differs", text: 'This does not match your passport, which shows "TRAINER". Check which is right.', suggestion: "TRAINER" });
+  assert.deepEqual(note("date_of_birth", ""), { kind: "differs", text: 'Your passport shows "06/05/1990".', suggestion: "1990-05-06" });
+  assert.deepEqual(note("middle_name", ""), { kind: "unread", text: "We could not read this from your passport. Please type it." });
+  assert.equal(note("middle_name", "Typed"), null, "a typed value with nothing read against it has no note");
+  assert.deepEqual(note("expiry:Passport", "2031-01-01"), { kind: "match", text: "From your passport" });
+  assert.equal(note("expiry:Passport", "", [{ ...passport, extracted: { passport_expiry: "2020-01-01" } }])!.kind, "expired");
+  assert.deepEqual(note("first_name", "Tara", [{ ...passport, extractionStatus: "processing" as const }]), { kind: "reading", text: "Reading your passport…" });
+  assert.equal(note("first_name", "", [{ ...passport, extractionStatus: "unavailable" as const, extracted: {} }])!.kind, "unread", "with reading switched off the field is simply typed");
+  assert.equal(note("first_name", "Tara", []), null, "no document, no note");
+  assert.equal(note("visa_subclass", "485", [{ id: "v", category: "Visa", expiryDate: null, extractionStatus: "done" as const, extracted: { visa_subclass: "485" } }])!.text, "From your visa");
+  assert.equal(note("address_street", "9 Licence Rd", [{ id: "l", category: "Driving Licence", expiryDate: null, extractionStatus: "done" as const, extracted: { au_street: "9 Licence Rd" } }])!.text, "From your driving licence");
+  assert.equal(note("emergency_name", "Em"), null, "fields no document can give have no note");
+  assert.equal(wizardLib.readerDate("03/02/1991"), "1991-02-03");
+  assert.equal(wizardLib.isBeingRead({ ...passport, extractionStatus: "pending" as const }), true);
+  assert.equal(wizardLib.isBeingRead({ ...passport, category: "Academic", extractionStatus: "pending" as const }), false, "academic results are never read");
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "review"]);
+  // What the server sends becomes the wizard's fields.
+  const details = wizardLib.detailsOf({ first_name: "Jo", phone_e164: "+61400000111", emergency_phone_e164: null, is_australian_citizen: true, date_of_birth: null, passport_number: "N1234567" });
+  assert.deepEqual([details.first_name, details.phone, details.emergency_phone, details.is_australian_citizen, details.date_of_birth, details.passport_number], ["Jo", "+61400000111", "", true, "", "N1234567"]);
+});
+
+test("onboarding address_search: the student form's Geoscape lookup through the private link, typing as the fallback", async () => {
+  assert.ok((onboard.ACTIONS as readonly string[]).includes("address_search"));
+  const open = { hr_svc_onboarding_open: { data: { readOnly: false, mode: "documents" } } };
+  const pick = { line: "12 Smith St", line2: "", suburb: "Melbourne", state: "VIC", postcode: "3000", country: "Australia" };
+  const withSearch = (options: Parameters<typeof linkDeps>[0], answer: unknown, seen: string[] = []) => {
+    const run = linkDeps(options);
+    return { ...run, seen, deps: { ...run.deps, searchAddress: async (q: string) => { seen.push(q); if (answer === "throw") throw new Error("boom"); return answer as never; } } };
+  };
+  let run = withSearch({ db: open }, { kind: "ok", suggestions: [pick], attribution: "x" });
+  let r = await onboard.handleOnboarding(linkRequest("address_search", { q: "  12 Smith St Mel  " }), run.deps);
+  assert.deepEqual([r.status, r.body], [200, { ok: true, suggestions: [pick], attribution: "x" }]);
+  assert.deepEqual(run.seen, ["12 Smith St Mel"], "the trimmed text is searched once");
+  assert.ok(run.calls.some(([n, b]) => n === "limit" && String(b).startsWith("staff-onboarding:link:address:")), "address searches have their own allowance");
+  assert.ok(!run.calls.some(([n, b]) => n === "limit" && String(b).startsWith("staff-onboarding:link:any:")), "...and do not use up the link's other calls");
+  // Too short: no lookup. No function key, a provider fault or a crash: "unavailable" and nothing else.
+  run = withSearch({ db: open }, { kind: "ok", suggestions: [pick], attribution: "" });
+  r = await onboard.handleOnboarding(linkRequest("address_search", { q: "12 " }), run.deps);
+  assert.deepEqual([r.status, r.body, run.seen], [200, { ok: true, suggestions: [] }, []]);
+  for (const answer of [{ kind: "unavailable", reason: "provider_status_429" }, "throw"]) {
+    run = withSearch({ db: open }, answer);
+    r = await onboard.handleOnboarding(linkRequest("address_search", { q: "12 Smith St" }), run.deps);
+    assert.deepEqual([r.status, r.body], [503, { ok: false, unavailable: true }], "no reason, key or query in the answer");
+  }
+  const bare = linkDeps({ db: open });
+  assert.equal((await onboard.handleOnboarding(linkRequest("address_search", { q: "12 Smith St" }), bare.deps)).status, 503, "not configured is unavailable too");
+  // Only this person's open documents link: a dead link is 403, a submitted or re-upload link is refused, and nothing is searched.
+  run = withSearch({ db: { hr_svc_onboarding_open: { error: { code: "28000", message: "x" } } } }, { kind: "ok", suggestions: [pick], attribution: "" });
+  r = await onboard.handleOnboarding(linkRequest("address_search", { q: "12 Smith St" }), run.deps);
+  assert.deepEqual([r.status, r.body.code, run.seen], [403, "link_invalid", []]);
+  for (const state of [{ readOnly: true, mode: "documents" }, { readOnly: false, mode: "reupload" }]) {
+    run = withSearch({ db: { hr_svc_onboarding_open: { data: state } } }, { kind: "ok", suggestions: [pick], attribution: "" });
+    r = await onboard.handleOnboarding(linkRequest("address_search", { q: "12 Smith St" }), run.deps);
+    assert.deepEqual([r.status, run.seen], [400, []], JSON.stringify(state));
+  }
+  run = withSearch({ db: open, limit: (b) => !b.startsWith("staff-onboarding:link:address:") }, { kind: "ok", suggestions: [pick], attribution: "" });
+  r = await onboard.handleOnboarding(linkRequest("address_search", { q: "12 Smith St" }), run.deps);
+  assert.deepEqual([r.status, r.headers?.["Retry-After"], run.seen], [429, "60", []], "40 a minute per link, as in the student function");
+  assert.equal(onboard.ADDRESS_SEARCH_LIMIT, 40);
+  // The same helper, key name and endpoint as the live address-search function; the browser uses the same search box.
+  const index = read("supabase/functions/staff-onboarding/index.ts");
+  assert.ok(index.includes('from "../_shared/validation/address.ts"') && index.includes("EF_ADDRESS_SEARCH_GEOSCAPE_KEY") && index.includes("isLocalSupabaseUrl(SUPABASE_URL)"));
+  assert.equal(read("supabase/functions/_shared/validation/address.ts"), read("recovered/live-edge-functions-2026-11-02/_shared/validation/address.ts"), "the helper is the one the live address-search function runs");
+  for (const file of ["src/pages/agency/components/ApplicationWorkspace.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) assert.ok(read(file).includes("@/components/shared/wizard/AddressSearch"), `${file} uses the shared address search`);
+  assert.ok(!/console\.(log|info|warn|error)\([^)]*\b(q|query)\b/.test(read("supabase/functions/staff-onboarding/core.ts") + index), "the search text is never logged");
 });

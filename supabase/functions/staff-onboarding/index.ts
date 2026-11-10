@@ -9,6 +9,9 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
 import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
 import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
+import { DOCUMENT_SIZE_MESSAGE } from "../_shared/validation/person.ts";
+import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
+import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import * as PdfLib from "npm:pdf-lib@1.17.1";
 import { stampSignedOffer } from "../_shared/offer-pdf.ts";
@@ -22,6 +25,14 @@ const mailEnv: Record<string, string> = { SUPABASE_URL };
 for (const name of HR_MAIL_ENV) mailEnv[name] = Deno.env.get(name) ?? "";
 const fetchForReader = readerFetch({ SUPABASE_URL, EF_OPENAI_API_URL: Deno.env.get("EF_OPENAI_API_URL") ?? "" });
 for (const name of ["EF_DOCUMENT_EXTRACTION_PROVIDER", "EF_DOCUMENT_EXTRACTION_ROUTES", "EF_AZURE_DOCUMENT_ENDPOINT", "EF_AZURE_DOCUMENT_API_KEY", "EF_AZURE_DOCUMENT_MODEL", "EF_AZURE_DOCUMENT_MODEL_MAP", "EF_AZURE_DOCUMENT_API_VERSION"]) providerConfig[name] = Deno.env.get(name) ?? "";
+
+// The address search uses the SAME key and helper as the address-search function (the student form's): the key stays on the server.
+const ADDRESS_KEY = Deno.env.get("EF_ADDRESS_SEARCH_GEOSCAPE_KEY") ?? "";
+// LAB ONLY: EF_ADDRESS_SEARCH_API_URL sends the lookup to a mock, and only when SUPABASE_URL is local; otherwise plain fetch.
+const ADDRESS_MOCK = (Deno.env.get("EF_ADDRESS_SEARCH_API_URL") ?? "").trim().replace(/\/+$/, "");
+const addressFetch: typeof fetch = ADDRESS_MOCK && isLocalSupabaseUrl(SUPABASE_URL)
+  ? ((input: string | URL | Request, init?: RequestInit) => fetch(String(input) === GEOSCAPE_URL ? `${ADDRESS_MOCK}/v1/verify/autocomplete/AU` : input, init)) as typeof fetch
+  : fetch;
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -43,7 +54,7 @@ Deno.serve(async (req) => {
   const configuration = backendConfiguration(SUPABASE_URL, SERVICE_KEY);
   if (configuration) return json(configuration, 503);
   const length = Number(req.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(length) || length > MAX_REQUEST_BYTES) return json({ error: "The file must be 10 MB or smaller.", field: "file" }, 413);
+  if (!Number.isFinite(length) || length > MAX_REQUEST_BYTES) return json({ error: DOCUMENT_SIZE_MESSAGE, field: "file" }, 413);
 
   let action = "", token: unknown = null, file: File | null = null;
   let fields: Record<string, unknown> = {};
@@ -112,6 +123,7 @@ Deno.serve(async (req) => {
     sha256: async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)))].map((x) => x.toString(16).padStart(2, "0")).join(""),
     stampOffer: (original, signature) => stampSignedOffer(PdfLib, original, signature),
     now: () => new Date(),
+    searchAddress: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
     setPassword: async (userId, password) => {
       const { error } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
       return { error: error ? error.message : null };

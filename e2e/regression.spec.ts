@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT } from "./env";
-import { PASSWORD, createAdmin, latestLink, person, resetRateLimits, signInThroughTheForm, signedInClient, sql } from "./support";
+import { PASSWORD, PDF, createAdmin, domSnapshot, latestLink, markStudentDocumentRead, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
 test.describe.configure({ mode: "serial" });
@@ -84,4 +84,78 @@ test("the admin staff invitation still works: invite, mail, sign in", async ({ p
   await expect(page).toHaveURL(/\/admin/);
   // Invited staff never appear in, or get, a staff (hr) record.
   expect(sql(`select count(*) from hr.staff_profiles where email = '${invitee.email}'`)).toBe("0");
+});
+
+// The student "Add New Form" document wizard shares its shell, stepper, upload step, phone field and emergency contact with the
+// staff onboarding wizard (src/components/shared/wizard). With E2E_SHOTS_DIR set, this walk saves screenshots and the dialog's
+// markup at fixed points, so a run before a change and a run after it can be compared. No reader is called: the browser's request
+// to portal-document-extract is answered here and each reading is recorded in the lab database.
+test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("wizard-student");
+  await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator("#enrol-mobile").fill(student.local);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  await page.getByRole("button", { name: "Yes, start my application" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  await expect(page.locator("#wizard-title")).toBeVisible();
+  const wizard = page.getByRole("dialog");
+  const next = wizard.getByRole("button", { name: "Next" });
+  await expect(wizard.getByText("Upload file")).toBeVisible();
+  await shot(page, "student-wizard-upload");
+  await domSnapshot(page, '[role="dialog"]', "student-wizard-upload");
+
+  let applicationId = "";
+  const upload = async (category: string, file: string, read: Record<string, string>) => {
+    await wizard.locator('input[type="file"]').first().setInputFiles({ name: file, mimeType: "application/pdf", buffer: PDF });
+    await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where filename = '${file}' and category = '${category}' and is_current`)).not.toBe("0");
+    applicationId ||= sql(`select application_id from public.enrollment_application_documents where filename = '${file}' order by created_at desc limit 1`);
+    markStudentDocumentRead(applicationId, category, read);
+    await expect(wizard.getByText("Done ✓")).toBeVisible();
+  };
+  await upload("Passport", `passport-${student.local}.pdf`, { first_name: "WIZARD", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PA1234567", passport_expiry: "2034-01-01", nationality: "India" });
+  await expect(next).toBeEnabled();
+  await shot(page, "student-wizard-uploaded");
+  await next.click();
+  await upload("Visa", `visa-${student.local}.pdf`, { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
+  await next.click();
+  await upload("English Test", `english-${student.local}.pdf`, { english_type: "IELTS Academic", english_score: "7.0" });
+  await next.click();
+  await upload("Academic", `academic-${student.local}.pdf`, { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });
+  await next.click();
+  await wizard.getByRole("button", { name: "Continue without licence" }).click();
+  await wizard.locator("#wizard-language_other").fill("Hindi");
+  await next.click();
+  await wizard.locator("#wizard-usi_number").fill("ABC234DEF5");
+  await next.click();
+
+  // Emergency contact: the same fields, messages and phone rules as the staff wizard.
+  await expect(wizard.locator("#wizard-ec_name")).toBeVisible();
+  await shot(page, "student-wizard-emergency");
+  await domSnapshot(page, '[role="dialog"]', "student-wizard-emergency");
+  await next.click();
+  await expect(wizard.getByText("Enter the emergency contact's name.")).toBeVisible();
+  await expect(wizard.getByText("Enter the emergency contact's phone number.")).toBeVisible();
+  await expect(wizard.getByText("Enter how they are related to the student.")).toBeVisible();
+  await shot(page, "student-wizard-emergency-required");
+  await domSnapshot(page, '[role="dialog"]', "student-wizard-emergency-required");
+  await wizard.locator("#wizard-ec_name").fill("Em Contact");
+  await wizard.locator("#wizard-ec_relationship").fill("Sibling");
+  await wizard.locator("#wizard-ec_phone").fill("0412");
+  await wizard.locator("#wizard-ec_phone").blur();
+  await next.click();
+  await expect(wizard.getByText("Enter a 10-digit Australian number starting with 0, e.g. 041 234 5678.").first()).toBeVisible();
+  await shot(page, "student-wizard-emergency-phone");
+  await domSnapshot(page, '[role="dialog"]', "student-wizard-emergency-phone");
+  await wizard.locator("#wizard-ec_phone").fill("0422333444");
+  await next.click();
+  await expect(wizard.locator("#wizard-course")).toBeVisible();
+  // A valid number passes: the wizard moved on to the course screen.
 });

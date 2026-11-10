@@ -1,21 +1,12 @@
-import { PhoneInput } from "@/components/feature/applicationInputs";
+import EmergencyContactFields from "@/components/shared/wizard/EmergencyContactFields";
+import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import { nextIntakes } from "@/pages/agency/lib/portalSections";
 import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 
-const INPUT = "w-full rounded-md border border-background-300 bg-background-50 px-3.5 py-2.5 text-sm text-foreground-950 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
-const LABEL = "mb-1.5 block text-[13px] font-medium text-foreground-800";
-
-function Label({ htmlFor, children }: { htmlFor: string; children: string }) {
-  return <label htmlFor={htmlFor} className={LABEL}>{children} <span className="text-primary-600">*</span></label>;
-}
-
-function FieldError({ text }: { text?: string }) {
-  return text ? <p role="alert" className="mt-1 text-xs font-medium text-red-700">{text}</p> : null;
-}
-
 /**
  * One answer screen. Inputs are plain form controls named after the application fields; the wizard reads them from the
- * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation.
+ * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
+ * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
 export default function WizardQuestionStep({ question, answers, errors, courseOptions, onChange }: {
   question: WizardQuestion;
@@ -26,13 +17,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   onChange: (name: string, value: string) => void;
 }) {
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
-    <div>
-      <Label htmlFor={`wizard-${name}`}>{label}</Label>
-      <input id={`wizard-${name}`} name={name} value={answers[name] ?? ""} maxLength={props.maxLength ?? 200} placeholder={props.placeholder} autoComplete="off"
-        aria-invalid={Boolean(errors[name])} className={INPUT}
-        onChange={(e) => onChange(name, props.upper ? e.target.value.toUpperCase() : e.target.value)} />
-      <FieldError text={errors[name]} />
-    </div>
+    <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
+      placeholder={props.placeholder} upper={props.upper} onChange={(value) => onChange(name, value)} />
   );
 
   return (
@@ -62,15 +48,10 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
       {question.id === "usi" ? text("usi_number", "USI number", { placeholder: "10 characters, e.g. ABC234DEF5", maxLength: 10, upper: true }) : null}
 
       {question.id === "emergency" ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">{text("ec_name", "Full name", { maxLength: 120 })}</div>
-          <div>
-            <Label htmlFor="wizard-ec_phone">Phone number</Label>
-            <PhoneInput id="wizard-ec_phone" name="ec_phone" value={answers.ec_phone ?? ""} required placeholder="041 234 5678" />
-            <FieldError text={errors.ec_phone} />
-          </div>
-          {text("ec_relationship", "Relationship to the student", { placeholder: "e.g. Father", maxLength: 60 })}
-        </div>
+        <EmergencyContactFields idPrefix="wizard-" names={{ name: "ec_name", phone: "ec_phone", relationship: "ec_relationship" }} who="the student"
+          values={{ name: answers.ec_name ?? "", phone: answers.ec_phone ?? "", relationship: answers.ec_relationship ?? "" }}
+          errors={{ name: errors.ec_name, phone: errors.ec_phone, relationship: errors.ec_relationship }}
+          onChange={(field, value) => onChange(field === "name" ? "ec_name" : "ec_relationship", value)} />
       ) : null}
 
       {question.id === "course" ? (

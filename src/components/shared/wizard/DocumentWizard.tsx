@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Field, TextInput } from "@/pages/admin/components/ui";
-import WizardDocumentStep from "@/pages/agency/components/WizardDocumentStep";
+import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import type { PendingUpload, WizardDoc, WizardExtractionState, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { checklist, expiryState, todayIso, type ChecklistItem, type DocumentKind, type ReviewState } from "@/lib/documentChecklist";
 
 /**
  * DocumentWizard: a document-collection screen driven by a step config and an adapter, so it does not know whose documents
- * it holds or where they are stored. The staff workspace uses it today (Documents step and the post-submit checklist); the
- * student ApplicationWizard can move onto it later (docs/TASKS.md HR-01).
+ * it holds or where they are stored. Each document type is one shared WizardDocumentStep (the student wizard's upload screen).
+ * Staff onboarding uses it for "Upload your documents" and for the checklist after Submit.
  *
  *   - `steps`: what to ask for, in order. Each pairs a DocumentKind (required, expiry rule, multiple files) with the
  *     WizardStep text and icon shown by the existing WizardDocumentStep.
@@ -25,7 +25,8 @@ export interface WizardDocument {
 export interface DocumentWizardStep { kind: DocumentKind; step: WizardStep }
 
 export interface DocumentAdapter {
-  upload: (kind: DocumentKind, file: File, expiryDate: string | null, replaces?: string) => Promise<void>;
+  /** `onProgress` (0 to 1) is called while the file uploads, when the uploader can tell. */
+  upload: (kind: DocumentKind, file: File, expiryDate: string | null, replaces?: string, onProgress?: (fraction: number) => void) => Promise<void>;
   remove: (doc: WizardDocument) => Promise<void>;
   signedUrl: (doc: WizardDocument) => Promise<string>;
   /** Optional: correct the expiry date of a file already uploaded. */
@@ -40,8 +41,12 @@ const toStepDoc = (d: WizardDocument): WizardDoc => ({ id: d.id, category: d.cat
 
 /* ------------------------------------------------------------------ collecting documents */
 
-export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc", notice }: {
+export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc", notice, askExpiry = true, dropzone, camera }: {
   steps: readonly DocumentWizardStep[]; documents: readonly WizardDocument[]; adapter: DocumentAdapter; testIdPrefix?: string; notice?: string;
+  /** False: files are uploaded without an expiry date (it is read from the document or typed on a later screen). */
+  askExpiry?: boolean;
+  /** Passed to every upload area: drag and drop, and "Take a photo" on phones. */
+  dropzone?: boolean; camera?: boolean;
 }) {
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
@@ -51,7 +56,8 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
   const upload = async (kind: DocumentKind, file: File, key = `${kind.category}-${Date.now()}-${file.name}`) => {
     setPending((list) => [...list.filter((p) => p.key !== key), { key, category: kind.category, file }]);
     try {
-      await adapter.upload(kind, file, kind.expiry === "none" ? null : expiry[kind.category] || null);
+      const progress = (fraction: number) => setPending((list) => list.map((p) => (p.key === key ? { ...p, progress: fraction } : p)));
+      await adapter.upload(kind, file, kind.expiry === "none" || !askExpiry ? null : expiry[kind.category] || null, undefined, progress);
       setPending((list) => list.filter((p) => p.key !== key));
     } catch (e) { setPending((list) => list.map((p) => (p.key === key ? { ...p, error: e instanceof Error ? e.message : "The upload failed." } : p))); }
   };
@@ -59,7 +65,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
   const pick = (kind: DocumentKind, files: FileList | null) => {
     const list = Array.from(files ?? []);
     if (!list.length) return;
-    if (kind.expiry === "required" && !expiry[kind.category]) { setExpiryError((e) => ({ ...e, [kind.category]: "Enter the expiry date first." })); return; }
+    if (askExpiry && kind.expiry === "required" && !expiry[kind.category]) { setExpiryError((e) => ({ ...e, [kind.category]: "Enter the expiry date first." })); return; }
     setExpiryError((e) => ({ ...e, [kind.category]: "" }));
     for (const file of kind.multiple ? list : list.slice(0, 1)) void upload(kind, file);
   };
@@ -81,7 +87,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
         return (
           <div key={kind.category} data-testid={`${testIdPrefix}-doc-${slug(kind.category)}`}>
             {!kind.required ? <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Optional</p> : null}
-            {kind.expiry !== "none" ? (
+            {askExpiry && kind.expiry !== "none" ? (
               <div className="mb-3 max-w-xs">
                 <Field label={`${kind.label} expiry date`} required={kind.expiry === "required"}
                   hint={current ? "Saved with the uploaded file." : kind.expiry === "required" ? "Enter it before you upload." : "Optional."}>
@@ -91,7 +97,7 @@ export function DocumentWizard({ steps, documents, adapter, testIdPrefix = "doc"
                 {expiryError[kind.category] ? <p role="alert" className="mt-1 text-xs text-primary-900">{expiryError[kind.category]}</p> : null}
               </div>
             ) : null}
-            <WizardDocumentStep step={step}
+            <WizardDocumentStep step={step} dropzone={dropzone} camera={camera}
               docs={documents.filter((d) => d.category === kind.category).map(toStepDoc)}
               pending={pending.filter((p) => p.category === kind.category)} dismissed={dismissed}
               onPickFiles={(files) => pick(kind, files)}

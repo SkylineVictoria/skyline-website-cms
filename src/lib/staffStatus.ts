@@ -166,31 +166,7 @@ export function staffChecklist(docs: DocLike[], isAustralianCitizen: boolean | n
   return checklist(staffDocKinds(isAustralianCitizen, docs), docs, today);
 }
 
-/** Everything the applicant needs before Submit, in the order the wizard shows it. Mirrors hr_svc_onboarding_submit. */
-export interface StaffSubmitInput {
-  firstName: string; lastName: string; dateOfBirth: string | null; addressStreet: string; addressCountry: string;
-  emergencyName: string; emergencyRelationship: string; emergencyPhone: string | null;
-  isAustralianCitizen: boolean | null; documents: Array<{ category: string; expiryDate: string | null }>;
-}
-const MISSING: Partial<Record<StaffDocCategory, string>> = {
-  Passport: "Upload your passport.", Visa: "Upload your visa.", English: "Upload your English test result.", Academic: "Upload your academic results.", "Health Insurance": "Upload your health insurance.",
-};
-export function submitProblems(input: StaffSubmitInput, today = todayIso()): string[] {
-  const problems: string[] = [];
-  if (!input.firstName.trim() || !input.lastName.trim()) problems.push("Enter your first and last name.");
-  if (!input.dateOfBirth) problems.push("Enter your date of birth.");
-  if (!input.addressStreet.trim() || !input.addressCountry.trim()) problems.push("Enter your address.");
-  if (!input.emergencyName.trim() || !input.emergencyRelationship.trim() || !input.emergencyPhone) problems.push("Enter an emergency contact: name, relationship and phone.");
-  if (input.isAustralianCitizen === null) problems.push("Tell us whether you are an Australian citizen.");
-  for (const category of requiredStaffCategories(input.isAustralianCitizen)) {
-    const mine = input.documents.filter((d) => d.category === category);
-    if (!mine.length) problems.push(MISSING[category] ?? `Upload your ${STAFF_DOC_LABEL[category].toLowerCase()}.`);
-    else if (mine.some((d) => (!d.expiryDate && staffDocNeedsExpiry(category)) || expiryState(d.expiryDate, today) === "expired")) {
-      problems.push(`Enter a current expiry date for your ${category === "English" ? "English test result" : category.toLowerCase()}.`);
-    }
-  }
-  return problems;
-}
+// What the applicant still needs before Submit is in src/lib/staffOnboardingWizard.ts (wizardProblems), which mirrors hr_svc_onboarding_submit.
 
 /** Badge tone per status (admin lists). */
 export const STAFF_STATUS_TONE: Record<StaffStatus, "muted" | "warn" | "secondary" | "success" | "primary" | "accent"> = {

@@ -1,5 +1,6 @@
 
 import { formatPhone, parseStoredPhone, validateStoredPhone } from "../../supabase/functions/_shared/validation/identifiers";
+import { bankDigits as digits, bankProblems as sharedBankProblems } from "../../supabase/functions/_shared/validation/person";
 
 /** Staff > Employees, simple (20261110170000): types and the checks shared by the form and tests. No network here. */
 
@@ -100,27 +101,22 @@ export function duplicateCategories(categories: readonly string[]): string[] {
   return [...new Set(categories.filter((c, i) => categories.indexOf(c) !== i))];
 }
 
-/* bank details (20261110220000 hr.employee_bank): Australian account for pay. The database checks the same rules. */
+/* bank details (hr.employee_bank; stored encrypted since 20261112090000). The rules are the shared ones (bankProblems in
+   supabase/functions/_shared/validation/person.ts), which the database repeats with the same messages. */
 
-export interface EmployeeBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt?: string }
+/** masked: true when the BSB and account number are shown masked (06••••, •••• 4321), as an administrator first sees them. */
+export interface EmployeeBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt?: string; masked?: boolean }
 export const EMPTY_BANK: EmployeeBank = { accountName: "", bsb: "", accountNumber: "", bankName: "" };
-const digits = (v: string) => v.replace(/[\s-]/g, "");
 
-/** True when nothing was typed (the bank details are optional). */
+/** True when nothing was typed (on Add / Edit employee the bank details are optional). */
 export const bankIsEmpty = (b: EmployeeBank) => !b.accountName.trim() && !digits(b.bsb) && !digits(b.accountNumber) && !b.bankName.trim();
 
 /** Field problems of the bank details; empty when they can be saved (or are all blank). */
 export function bankProblems(b: EmployeeBank): Partial<Record<keyof EmployeeBank, string>> {
   if (bankIsEmpty(b)) return {};
-  const out: Partial<Record<keyof EmployeeBank, string>> = {};
-  const name = b.accountName.trim();
-  if (!name) out.accountName = "Enter the account name.";
-  else if (name.length > 100) out.accountName = "The account name must be 100 characters or fewer.";
-  if (!/^\d{6}$/.test(digits(b.bsb))) out.bsb = "The BSB must be 6 digits, for example 062-000.";
-  if (!/^\d{4,10}$/.test(digits(b.accountNumber))) out.accountNumber = "The account number must be 4 to 10 digits.";
+  const out: Partial<Record<keyof EmployeeBank, string>> = sharedBankProblems(b);
   if (b.bankName.trim().length > 100) out.bankName = "The bank name must be 100 characters or fewer.";
   return out;
 }
 
-/** 062000 → 062-000 (as printed on Australian bank statements). */
-export const formatBsb = (v: string) => { const d = digits(v); return /^\d{6}$/.test(d) ? `${d.slice(0, 3)}-${d.slice(3)}` : v; };
+export { bsbBank, formatBsb } from "../../supabase/functions/_shared/validation/person";

@@ -48,11 +48,33 @@ export function timelineText(e: OnboardingTimelineEntry): { text: string; note?:
     case "pay_details_added": return { text: `Pay details saved${d.jobTitle ? `: ${String(d.jobTitle)}` : ""}${d.startDate ? `, starting ${new Date(`${String(d.startDate)}T00:00:00`).toLocaleDateString("en-AU")}` : ""}` };
     case "pay_saved": return { text: "Pay setup saved" };
     case "bank_saved": return { text: "Bank details saved" };
+    case "bank_removed": return { text: "Bank details removed" };
+    case "bank_revealed": return { text: "Bank details revealed (viewed in full)" };
+    case "section_verified": return { text: `Verified: ${SECTION[String(d.section)] ?? String(d.section ?? "a section")}` };
+    case "section_unverified": return { text: `Verification removed: ${SECTION[String(d.section)] ?? String(d.section ?? "a section")}` };
     case "role_granted": return { text: `Role granted: ${d.role === "admin" ? "Admin" : "Trainer"}` };
     case "role_revoked": return { text: `Role removed: ${d.role === "admin" ? "Admin" : "Trainer"}` };
     default: return { text: e.action.replace(/_/g, " ") };
   }
 }
+
+/** The sections an administrator ticks as verified (hr.staff_section_checks). */
+export const SECTION: Record<string, string> = {
+  personal: "Personal details", bank: "Bank details", passport: "Passport", visa: "Visa", english: "English test result", academic: "Academic results",
+  "driving-licence": "Driving licence", "health-insurance": "Health insurance",
+};
+
+/** What the reader took from a document, as the administrator reads it (the reader's field names). */
+export const EXTRACTED_LABEL: Record<string, string> = {
+  first_name: "First name", middle_name: "Middle name", last_name: "Last name", dob: "Date of birth", gender: "Gender", nationality: "Nationality",
+  citizenship: "Citizenship", issuing_country: "Issuing country", birth_country: "Country of birth", passport_number: "Passport number",
+  passport_expiry: "Passport expiry", holds_visa: "Holds a visa", visa_subclass: "Visa subclass", visa_grant_date: "Granted", visa_stay_until: "Stay until",
+  visa_grant_number: "Grant number", english_type: "Test", english_score: "Overall score", english_components: "Components", english_date: "Test date",
+  english_reference: "Reference", address_type: "Address type", au_street: "Street", au_line2: "Line 2", au_suburb: "Suburb", au_state: "State", au_zip: "Postcode",
+  au_country: "Country", ov_street: "Street (overseas)", ov_line2: "Line 2 (overseas)", ov_suburb: "City (overseas)", ov_state: "State (overseas)",
+  ov_zip: "Postcode (overseas)", ov_country: "Country (overseas)", academic_institution: "Institution", academic_qualification: "Qualification",
+  academic_program: "Program", academic_year: "Year", academic_result: "Result",
+};
 
 /** The "Login" line on the employee page. Never shows a link or a password: only what state the login is in. */
 export function accountText(account: OnboardingAccount | null | undefined, when: (iso: string | null | undefined) => string): string {

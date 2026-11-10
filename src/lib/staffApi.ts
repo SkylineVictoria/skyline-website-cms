@@ -9,6 +9,8 @@ export interface StaffProfile {
   id: string; first_name: string; middle_name: string; last_name: string; date_of_birth: string | null; email: string; phone_e164: string;
   address_street: string; address_line2: string; address_suburb: string; address_state: string; address_postcode: string; address_country: string;
   emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; is_australian_citizen: boolean | null;
+  /** Read from the documents or typed in the onboarding wizard (20261112090000). */
+  nationality: string; passport_number: string; visa_subclass: string; visa_conditions: string;
   status: StaffStatus; created_at: string; updated_at: string;
 }
 export interface StaffApplicationRow { id: string; requested_role: StaffRole | null; submitted_at: string | null; review_note: string; reviewed_at: string | null }
@@ -265,6 +267,29 @@ export async function adminOnboarding(id: string): Promise<StaffOnboarding> {
   const { data, error } = await supabase.rpc("hr_admin_onboarding", { p_id: id });
   if (error) fail(error, "The onboarding progress could not be loaded.");
   return data as StaffOnboarding;
+}
+
+/**
+ * What an administrator sees on top of the onboarding record (hr_admin_onboarding_extras): the bank details MASKED, and the
+ * "verified by admin" tick of each section (personal, bank, and one per document type by its slug: passport, visa, english,
+ * academic, driving-licence, health-insurance).
+ */
+export type OnboardingSection = "personal" | "bank" | "passport" | "visa" | "english" | "academic" | "driving-licence" | "health-insurance";
+export interface OnboardingCheck { verifiedAt: string; verifiedByName: string }
+export interface OnboardingExtras {
+  bank: { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt: string; masked: boolean } | null;
+  checks: Partial<Record<OnboardingSection, OnboardingCheck>>;
+}
+export async function adminOnboardingExtras(id: string): Promise<OnboardingExtras> {
+  const { data, error } = await supabase.rpc("hr_admin_onboarding_extras", { p_id: id });
+  if (error) fail(error, "The verification ticks could not be loaded.");
+  return data as OnboardingExtras;
+}
+/** Ticks or unticks a section as verified (written to the history with who and when). */
+export async function adminOnboardingCheck(id: string, section: OnboardingSection, verified: boolean): Promise<OnboardingExtras> {
+  const { data, error } = await supabase.rpc("hr_admin_onboarding_check", { p_id: id, p_section: section, p_verified: verified });
+  if (error) fail(error, "The tick could not be saved.");
+  return data as OnboardingExtras;
 }
 
 /** The pay details form (hr_admin_onboarding_pay_save): everything the offer letter and payroll need, validated again by the database. */

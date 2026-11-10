@@ -26,9 +26,11 @@ export const saveEmployee = (id: string | null, form: EmployeeForm) =>
 export const setEmployeeStatus = (id: string, status: EmployeeStatus) =>
   rpc<void>("hr_admin_emp_set_status", { p_id: id, p_status: status }, "The status could not be changed.");
 
-/** Bank details for pay (20261110220000; Admin only). null when none are saved. */
+/** Bank details for pay (Admin only), MASKED: BSB 06••••, account •••• 4321. null when none are saved. */
 export const getEmployeeBank = (id: string) => rpc<EmployeeBank | null>("hr_admin_emp_bank_get", { p_id: id }, "The bank details could not be loaded.");
-/** Saves the bank details; all fields blank removes them. */
+/** The bank details in full (Admin only). Every call is written to the person's history: who looked and when. */
+export const revealEmployeeBank = (id: string) => rpc<EmployeeBank>("hr_admin_emp_bank_reveal", { p_id: id }, "The bank details could not be shown.");
+/** Saves the bank details (stored encrypted; the answer is masked); all fields blank removes them. */
 export const saveEmployeeBank = (id: string, bank: EmployeeBank) =>
   rpc<EmployeeBank | null>("hr_admin_emp_bank_save", { p_id: id, p_bank: bankIsEmpty(bank) ? {} : {
     accountName: bank.accountName.trim(), bsb: bank.bsb.replace(/[\s-]/g, ""), accountNumber: bank.accountNumber.replace(/[\s-]/g, ""), bankName: bank.bankName.trim() } },

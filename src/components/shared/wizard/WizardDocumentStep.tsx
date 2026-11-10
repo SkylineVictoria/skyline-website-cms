@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { expiryMessage, expiryTone, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
 import { formatBytes, type PendingUpload, type WizardDoc, type WizardStep } from "@/pages/agency/lib/wizardConfig";
-import { getDocumentSignedUrl } from "@/pages/agency/lib/portalApplications";
+import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
+
+/**
+ * One document screen of a wizard: the upload area, then one row per file with what is happening to it (uploading, being read,
+ * done, failed with Retry), View and Delete. Used by the student "Add New Form" wizard and by staff onboarding.
+ * Opt-in extras (staff onboarding switches them on; without them the screen is exactly the student one):
+ *   dropzone: files can be dragged onto the screen;  camera: a "Take a photo" button on phones and tablets;
+ *   a PendingUpload with `progress` (0 to 1) shows a progress bar while it uploads.
+ */
 
 interface Props {
   step: WizardStep;
@@ -18,8 +26,12 @@ interface Props {
   onRemoveDoc: (doc: WizardDoc) => Promise<void>;
   /** Records the view first where access is audited (SLIT staff); a failure blocks opening the file. */
   logView?: (doc: WizardDoc) => Promise<void>;
-  /** Where a stored file is opened from. Defaults to the student application documents; staff pass their own private bucket. */
-  signedUrl?: (doc: WizardDoc) => Promise<string>;
+  /** A short-lived link to open a stored file (each caller knows its own private bucket). */
+  signedUrl: (doc: WizardDoc) => Promise<string>;
+  /** Files can be dragged onto this screen. */
+  dropzone?: boolean;
+  /** Offers "Take a photo" on phones and tablets (the device camera, saved as a JPG). */
+  camera?: boolean;
 }
 
 const CHIP = "rounded-md border border-background-200 bg-background-50 px-3 py-2 text-xs text-foreground-700";
@@ -46,7 +58,8 @@ function ErrorActions({ message, onRetry, onManual }: { message: string; onRetry
   );
 }
 
-export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl }: Props) {
+export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl, dropzone, camera }: Props) {
+  const [dragging, setDragging] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<WizardDoc | null>(null);
   const [removing, setRemoving] = useState("");
   const [removeError, setRemoveError] = useState("");
@@ -69,7 +82,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
     setRemoveError("");
     try {
       if (logView) await logView(doc);
-      const url = signedUrl ? await signedUrl(doc) : await getDocumentSignedUrl(doc.storagePath, 300);
+      const url = await signedUrl(doc);
       const isPdf = /\.pdf$/i.test(doc.filename);
       // View only: hide the browser PDF viewer's download and print toolbar.
       setPreview({ doc, url: isPdf ? `${url}#toolbar=0&navpanes=0` : url, isPdf });
@@ -94,8 +107,22 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
     }
   };
 
+  const drop = dropzone ? {
+    onDragOver: (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); if (!dragging) setDragging(true); },
+    onDragLeave: (event: DragEvent<HTMLDivElement>) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); },
+    onDrop: (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); if (!uploading && event.dataTransfer.files.length) onPickFiles(event.dataTransfer.files); },
+  } : {};
+  const cameraButton = camera ? (
+    <label className="mt-2 hidden w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700 [@media(pointer:coarse)]:flex">
+      <i className="ri-camera-line text-lg" aria-hidden="true" />
+      Take a photo
+      <input type="file" accept="image/jpeg,image/png" capture="environment" disabled={uploading} data-testid="wizard-camera"
+        onChange={(event) => { onPickFiles(event.target.files); event.target.value = ""; }} className="sr-only" />
+    </label>
+  ) : null;
+
   return (
-    <div className="space-y-4">
+    <div className={dragging ? "space-y-4 rounded-md ring-2 ring-primary-400 ring-offset-4" : "space-y-4"} {...drop}>
       <div className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background-100 text-primary-600">
           <i className={`${step.icon} text-xl`} aria-hidden="true" />
@@ -118,7 +145,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
             {step.multiple ? "Add more files" : "Replace file"}
           <input
             type="file"
-            accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+            accept={DOCUMENT_ACCEPT}
             multiple={step.multiple}
             disabled={uploading}
             onChange={(event) => {
@@ -136,7 +163,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
           {step.multiple ? "Upload files" : "Upload file"}
           <input
             type="file"
-            accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+            accept={DOCUMENT_ACCEPT}
             multiple={step.multiple}
             disabled={uploading}
             onChange={(event) => {
@@ -146,8 +173,9 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
             className="sr-only"
           />
         </label>
+        {cameraButton}
         <p className="mt-2 text-center text-[11px] text-foreground-400">
-          PDF, JPG or PNG &middot; up to 10 MB each &middot; stored privately
+          PDF, JPG or PNG &middot; up to 10 MB each &middot; stored privately{dropzone ? " \u00b7 or drag a file here" : null}
         </p>
       </div>
       )}
@@ -162,8 +190,13 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
                   <span className="truncate">{item.file.name}</span>
                   <span className="shrink-0 text-foreground-400">{formatBytes(item.file.size)}</span>
                 </span>
-                {item.error ? null : <span className="shrink-0 text-foreground-500">Uploading&hellip;</span>}
+                {item.error ? null : <span className="shrink-0 text-foreground-500">Uploading&hellip;{typeof item.progress === "number" ? ` ${Math.round(item.progress * 100)}%` : null}</span>}
               </div>
+              {!item.error && typeof item.progress === "number" ? (
+                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-background-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(item.progress * 100)} aria-label={`Uploading ${item.file.name}`}>
+                  <div className="h-full rounded-full bg-primary-500 transition-[width]" style={{ width: `${Math.round(item.progress * 100)}%` }} />
+                </div>
+              ) : null}
               {item.error ? <ErrorActions message={item.error} onRetry={() => onRetryUpload(item)} onManual={() => onDropUpload(item)} /> : null}
             </li>
           ))}

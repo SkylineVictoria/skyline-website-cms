@@ -1,6 +1,8 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { StaffDocCategory, StaffStatus } from "@/lib/staffStatus";
 import type { StaffDocSummary, StaffDocument } from "@/lib/staffApi";
+import { documentFileProblem } from "../../supabase/functions/_shared/validation/person";
+import type { AddressLookup, AddressPick } from "@/components/shared/wizard/AddressSearch";
 
 /**
  * Browser calls for staff onboarding by emailed link (no login). The link token is the only credential: it arrives in the URL
@@ -13,11 +15,16 @@ export interface OnboardingProfile {
   first_name: string; middle_name: string; last_name: string; date_of_birth: string | null; email: string; phone_e164: string;
   address_street: string; address_line2: string; address_suburb: string; address_state: string; address_postcode: string; address_country: string;
   emergency_name: string; emergency_relationship: string; emergency_phone_e164: string | null; is_australian_citizen: boolean | null;
+  nationality: string; passport_number: string; visa_subclass: string; visa_conditions: string;
 }
+/** The person's bank details as the server gives them back: the BSB and account number are always masked (06••••, •••• 4321). */
+export interface OnboardingBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt: string; masked: boolean }
 export interface OnboardingView {
   profile: OnboardingProfile; status: StaffStatus; mode: "documents" | "reupload"; readOnly: boolean; expiresAt: string;
-  documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary;
+  documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary; bank: OnboardingBank | null;
 }
+/** A refused save or upload: the message and, when the server names it, the field it belongs to. */
+export class FieldError extends Error { field?: string; constructor(message: string, field?: string) { super(message); this.field = field; } }
 
 export class LinkInvalidError extends Error {}
 /** The signed-in person has no offer out right now (withdrawn, or not sent yet). */
@@ -42,21 +49,49 @@ async function invoke(body: Record<string, unknown> | FormData): Promise<Record<
   if (error) {
     let message = error.message;
     let code: string | undefined;
+    let field: string | undefined;
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
       try {
-        const parsed = (await context.clone().json()) as { error?: string; code?: string };
+        const parsed = (await context.clone().json()) as { error?: string; code?: string; field?: string };
         if (parsed?.error) message = parsed.error;
         code = parsed?.code;
+        field = parsed?.field;
       } catch { /* keep the generic message */ }
     }
     if (code === "link_invalid") throw new LinkInvalidError(message);
     if (code === "no_offer") throw new NoOfferError(message);
-    throw new Error(message || "Something went wrong. Please try again.");
+    throw new FieldError(message || "Something went wrong. Please try again.", field);
   }
   return (data ?? {}) as Record<string, unknown>;
 }
 const viewOf = (r: Record<string, unknown>) => r.view as OnboardingView;
+
+/**
+ * An upload with its progress (fetch cannot report it): the same function, the same answer. The link token travels in the form
+ * body like every other call; nothing about the file or the person goes into the address.
+ */
+function uploadWithProgress(body: FormData, onProgress?: (fraction: number) => void): Promise<Record<string, unknown>> {
+  const url = import.meta.env.VITE_PUBLIC_SUPABASE_URL as string | undefined;
+  const anon = import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY as string | undefined;
+  if (!onProgress || !url || !anon || typeof XMLHttpRequest === "undefined") return invoke(body);
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${url}/functions/v1/staff-onboarding`);
+    request.setRequestHeader("apikey", anon);
+    request.setRequestHeader("Authorization", `Bearer ${anon}`);
+    request.upload.onprogress = (event) => { if (event.lengthComputable && event.total > 0) onProgress(Math.min(event.loaded / event.total, 1)); };
+    request.onerror = () => reject(new Error("The upload failed. Check your connection and try again."));
+    request.onload = () => {
+      let parsed: { error?: string; code?: string; field?: string } & Record<string, unknown> = {};
+      try { parsed = JSON.parse(request.responseText) as typeof parsed; } catch { /* not JSON */ }
+      if (request.status >= 200 && request.status < 300) { resolve(parsed); return; }
+      if (parsed.code === "link_invalid") reject(new LinkInvalidError(parsed.error ?? "This link is not valid any more."));
+      else reject(new FieldError(parsed.error || "The upload failed. Please try again.", parsed.field));
+    };
+    request.send(body);
+  });
+}
 
 export const onboarding = {
   open: async (t: string) => viewOf(await invoke({ action: "open", t })),
@@ -66,8 +101,27 @@ export const onboarding = {
   extract: async (t: string, id: string) => viewOf(await invoke({ action: "extract", t, id })),
   submit: async (t: string) => viewOf(await invoke({ action: "submit", t })),
   viewUrl: async (t: string, id: string) => String((await invoke({ action: "view_url", t, id })).url ?? ""),
-  upload: async (t: string, category: StaffDocCategory, file: File, expiryDate: string | null, replaces?: string) => {
-    if (file.size <= 0 || file.size > 10 * 1024 * 1024) throw new Error("The file must be 10 MB or smaller.");
+  /**
+   * Australian address suggestions for the wizard's address box, through the private link (the same Geoscape lookup the student
+   * form uses, reached on the server). Any failure answers "unavailable": the box says so and the address is typed by hand.
+   */
+  addressSearch: async (t: string, q: string, signal: AbortSignal): Promise<AddressLookup> => {
+    const url = import.meta.env.VITE_PUBLIC_SUPABASE_URL as string | undefined;
+    const anon = import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY as string | undefined;
+    if (!url || !anon) return { kind: "unavailable" };
+    const response = await fetch(`${url}/functions/v1/staff-onboarding`, {
+      method: "POST", signal, headers: { apikey: anon, Authorization: `Bearer ${anon}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "address_search", t, q }),
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; suggestions?: AddressPick[] } | null;
+    if (!response.ok || !body?.ok || !Array.isArray(body.suggestions)) return { kind: "unavailable" };
+    return { kind: "ok", suggestions: body.suggestions };
+  },
+  /** The person's own bank details. They go in the request body only, and come back masked. */
+  saveBank: async (t: string, bank: { accountName: string; bsb: string; accountNumber: string; bankName: string }) => viewOf(await invoke({ action: "bank_save", t, bank })),
+  upload: async (t: string, category: StaffDocCategory, file: File, expiryDate: string | null, replaces?: string, onProgress?: (fraction: number) => void) => {
+    // The shared document rule (size, declared type, content), before anything leaves the device; the function checks again.
+    const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
+    if (problem) throw new FieldError(problem, "file");
     const body = new FormData();
     body.set("action", "upload");
     body.set("t", t);
@@ -75,7 +129,7 @@ export const onboarding = {
     body.set("expiryDate", expiryDate ?? "");
     body.set("replaces", replaces ?? "");
     body.set("file", file, file.name);
-    return viewOf(await invoke(body));
+    return viewOf(await uploadWithProgress(body, onProgress));
   },
 };
 

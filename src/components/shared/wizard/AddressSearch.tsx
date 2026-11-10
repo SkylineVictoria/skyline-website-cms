@@ -7,7 +7,10 @@ export interface AddressPick { line: string; line2: string; suburb: string; stat
 const MIN_QUERY = 4;
 const DEBOUNCE_MS = 300;
 
-type Lookup = { kind: "ok"; suggestions: AddressPick[] } | { kind: "unavailable" };
+export type AddressLookup = { kind: "ok"; suggestions: AddressPick[] } | { kind: "unavailable" };
+type Lookup = AddressLookup;
+/** How a search is made. The default asks the address-search function with the signed-in person's session. */
+export type AddressSearchFn = (q: string, signal: AbortSignal) => Promise<AddressLookup>;
 
 /**
  * Called directly rather than through the shared client: that client adds an x-tenant-domain header which the
@@ -32,8 +35,13 @@ async function lookup(q: string, signal: AbortSignal): Promise<Lookup> {
 
 const format = (pick: AddressPick) => [pick.line2, pick.line, `${pick.suburb} ${pick.state} ${pick.postcode}`].filter(Boolean).join(", ");
 
-/** Search box above the street field: picking a result fills street, line 2, suburb, state and postcode. */
-export default function AddressSearch({ disabled, onPick, onUnavailable }: { disabled?: boolean; onPick: (pick: AddressPick) => void; onUnavailable?: () => void }) {
+/**
+ * Search box above the street field: picking a result fills street, line 2, suburb, state and postcode. Used by the student
+ * application form (signed in: the address-search function) and by staff onboarding (no login: `search` asks the
+ * staff-onboarding function with the private link). Both reach the same Geoscape lookup on the server; the key never
+ * reaches the browser. When the lookup fails the box says so and the address is typed by hand.
+ */
+export default function AddressSearch({ disabled, onPick, onUnavailable, search = lookup }: { disabled?: boolean; onPick: (pick: AddressPick) => void; onUnavailable?: () => void; search?: AddressSearchFn }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<AddressPick[]>([]);
   const [open, setOpen] = useState(false);
@@ -43,6 +51,8 @@ export default function AddressSearch({ disabled, onPick, onUnavailable }: { dis
   // Held in a ref so a new callback from the parent never restarts a search.
   const unavailableRef = useRef(onUnavailable);
   useEffect(() => { unavailableRef.current = onUnavailable; }, [onUnavailable]);
+  const searchRef = useRef(search);
+  useEffect(() => { searchRef.current = search; }, [search]);
 
   useEffect(() => {
     const q = query.trim();
@@ -50,7 +60,7 @@ export default function AddressSearch({ disabled, onPick, onUnavailable }: { dis
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setStatus("searching");
-      lookup(q, controller.signal)
+      searchRef.current(q, controller.signal)
         .then((result) => {
           if (result.kind === "unavailable") { setResults([]); setStatus("unavailable"); unavailableRef.current?.(); return; }
           setResults(result.suggestions);

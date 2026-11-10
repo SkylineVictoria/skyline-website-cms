@@ -1,3 +1,4 @@
+import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
 import type { ApplicationStatus } from "@/pages/agency/lib/portalData";
@@ -714,21 +715,12 @@ export async function listAssignableAgents(agencyId?: string): Promise<AgentOpti
 
 /* ------------------------------------------- Wizard: documents + drafts */
 
-export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export { DOCUMENT_MAX_BYTES as MAX_DOCUMENT_BYTES } from "../../../../supabase/functions/_shared/validation/person";
 
-const DOCUMENT_TYPES: Record<string, string[]> = {
-  "application/pdf": ["%PDF-"],
-  "image/png": ["\u0089PNG"],
-  "image/jpeg": ["\u00ff\u00d8\u00ff"],
-  "image/jpg": ["\u00ff\u00d8\u00ff"],
-};
-
+/** Size, declared type and content of a picked file: the shared rule (also the staff onboarding wizard's and its Edge Function's). */
 async function validateDocumentFile(file: File): Promise<void> {
-  if (file.size <= 0 || file.size > MAX_DOCUMENT_BYTES) throw new Error("Each document must be a PDF, JPG, or PNG no larger than 10 MB.");
-  if (!/\.(pdf|png|jpe?g)$/i.test(file.name) || !DOCUMENT_TYPES[file.type]) throw new Error("Only PDF, JPG, and PNG documents are supported.");
-  const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
-  const signature = String.fromCharCode(...header);
-  if (!DOCUMENT_TYPES[file.type].some((prefix) => signature.startsWith(prefix))) throw new Error("The selected file does not match its declared document type.");
+  const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
+  if (problem) throw new Error(problem);
 }
 
 export interface UploadDocumentInput {

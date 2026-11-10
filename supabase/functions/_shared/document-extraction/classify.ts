@@ -29,24 +29,18 @@ English Evidence: an IELTS, TOEFL, Cambridge, OET or other formal English profic
 Health Insurance: a health insurance policy, coverage certificate or insurance membership evidence issued by the insurer. A medical record or bill is Other.
 Do not return document numbers, excerpts or other personal data.`;
 
-const nameSchema = { type: "object", additionalProperties: false, required: ["first_name", "surname", "single_name"], properties: {
-  first_name: { type: ["string", "null"] }, surname: { type: ["string", "null"] }, single_name: { type: "boolean" },
-} };
-const nameInstructions = `Classify the first attachment only. Extract the first given name and surname of the named subject of each distinct record in that attachment as holders. Use labelled name fields, or the clearly printed full name when name order is unambiguous. Keep compound first given names. Ignore middle names, issuers, sponsors, parents, signatories and representatives. Use null when a field is absent or ambiguous. Set single_name to true only when the document clearly identifies a single-name holder. In that case put the printed name in first_name and null in surname. A missing or unreadable surname does not establish a single-name holder. If any distinct record has no clear named holder, include a holder with null first_name. If a reference attachment is supplied, confirm it is a passport biographical page and return its holder as passport_holder. Otherwise set passport_holder to null. Extract each attachment independently. Never infer or copy a name between attachments.`;
-const nameUnreadable: DocumentCategoryProblem = { status: 422, error: "We couldn't read the document holder's name. Upload a clear copy showing the full name." };
-const nameMismatch: DocumentCategoryProblem = { status: 422, error: "The name on this document doesn't match the passport. Upload a document belonging to the passport holder." };
+const printedNameSchema = { type: ["string", "null"] };
+const nameInstructions = `Classify the first attachment only. For each distinct record in it, return the readable name of the named document subject as printed, including any given, middle or family names that can be read, in their printed order. A surname is optional. Ignore issuers, sponsors, parents, signatories and representatives. If a distinct record has no readable subject name, return null for that record. For passport_first_name, read the first given name from the reference passport biographical page if supplied, or from the first attachment if it is a passport and there is no reference. Keep compound first given names. Use null if the passport or its first given name is unreadable or ambiguous. Read each attachment independently. Never infer, expand initials, translate or copy a name between attachments.`;
+const nameUnreadable: DocumentCategoryProblem = { status: 422, error: "We couldn't read the document holder's name. Upload a clear copy showing their name." };
+const nameMismatch: DocumentCategoryProblem = { status: 422, error: "The passport's first name wasn't found in the document holder's name. Upload a document belonging to the passport holder." };
 
-function normaliseName(value: unknown): string {
-  if (typeof value !== "string") return "";
-  return value.normalize("NFKD").toLowerCase().replace(/[\p{M}\p{Pd}\p{White_Space}'’]/gu, "");
+function nameWords(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value.normalize("NFKD").toLowerCase().replace(/\p{M}/gu, "").match(/\p{L}+/gu) ?? [];
 }
 
-function readName(value: unknown): { first: string; surname: string } | null {
-  if (!value || typeof value !== "object" || !("first_name" in value) || !("surname" in value)) return null;
-  if (!("single_name" in value) || typeof value.single_name !== "boolean") return null;
-  const first = normaliseName(value.first_name), surname = normaliseName(value.surname);
-  const validSurname = value.single_name ? value.surname === null : /^\p{L}+$/u.test(surname);
-  return /^\p{L}+$/u.test(first) && validSurname ? { first, surname } : null;
+function includesFirstName(holder: string[], firstName: string[]): boolean {
+  return holder.some((_, start) => firstName.every((word, offset) => holder[start + offset] === word));
 }
 
 export function createDocumentCategoryCheck(options: { apiKey: string; model: string; fetch?: typeof fetch }): CheckDocumentCategory {
@@ -62,7 +56,7 @@ export function createDocumentCategoryCheck(options: { apiKey: string; model: st
       return { status: 415, error: "Upload a readable PDF, JPG, PNG, or supported Word document." };
     }
     if (!options.apiKey.trim() || !options.model.trim()) return unavailable;
-    let result: { category?: unknown; holders?: unknown; passport_holder?: unknown };
+    let result: { category?: unknown; holders?: unknown; passport_first_name?: unknown };
     try {
       const extension = word ? filename.split(".").at(-1)!.toLowerCase() : sniffDocumentKind(header);
       const content = [
@@ -85,10 +79,10 @@ export function createDocumentCategoryCheck(options: { apiKey: string; model: st
           instructions: verifyName ? `${instructions}\n${nameInstructions}` : instructions,
           input: [{ role: "user", content }],
           text: { format: { type: "json_schema", name: "document_category_v1", strict: true, schema: {
-            type: "object", additionalProperties: false, required: verifyName ? ["category", "holders", "passport_holder"] : ["category"],
+            type: "object", additionalProperties: false, required: verifyName ? ["category", "holders", "passport_first_name"] : ["category"],
             properties: { category: { type: "string", enum: detectedTypes }, ...(verifyName ? {
-              holders: { type: "array", items: nameSchema },
-              passport_holder: { anyOf: [nameSchema, { type: "null" }] },
+              holders: { type: "array", items: printedNameSchema },
+              passport_first_name: printedNameSchema,
             } : {}) },
           } } },
         }),
@@ -106,12 +100,11 @@ export function createDocumentCategoryCheck(options: { apiKey: string; model: st
     const correctCategory = detected === expected || (expected === "English Evidence" && detected === "PTE") || (expected === "Visa" && detected === "Australian Visa");
     if (!correctCategory) return { status: 422, error: `This file does not match the ${expected === "Australian Visa" ? expected : category} requirement. Upload the correct document.` };
     if (!verifyName) return null;
-    const holders = Array.isArray(result.holders) ? result.holders.map(readName) : [];
-    if (!holders.length || holders.some((holder) => !holder)) return nameUnreadable;
-    if (!passport) return category === "Passport" && holders.length === 1 ? null : nameUnreadable;
-    const reference = readName(result.passport_holder);
-    if (!reference) return { status: 422, error: "We couldn't read the name on the current passport. Upload a clear passport identity page." };
-    if (holders.some((holder) => holder?.first !== reference.first || holder.surname !== reference.surname)) return nameMismatch;
+    const holders = Array.isArray(result.holders) ? result.holders.map(nameWords) : [];
+    if (!holders.length || holders.some((holder) => !holder.length) || (category === "Passport" && holders.length !== 1)) return nameUnreadable;
+    const firstName = nameWords(result.passport_first_name);
+    if (!firstName.length) return { status: 422, error: "We couldn't read the first given name on the passport. Upload a clear passport identity page." };
+    if (holders.some((holder) => !includesFirstName(holder, firstName))) return nameMismatch;
     return null;
   };
 }

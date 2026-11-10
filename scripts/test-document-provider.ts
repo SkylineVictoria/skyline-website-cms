@@ -289,30 +289,37 @@ test("guest English evidence stays accepted when field extraction has no usable 
   assert.equal(checked.detected, "English Test");
 });
 
-test("upload matches the printed first name and surname against the passport", async () => {
+test("the passport first name may occur anywhere in each document holder's printed name", async () => {
   const { createDocumentCategoryCheck } = await import("../supabase/functions/_shared/document-extraction/classify.ts");
-  const passport_holder = { first_name: "Élodie", surname: "O’Neil" };
-  let holders: Array<{ first_name: string | null; surname: string | null }> = [{ first_name: "Elodie", surname: "O'Neil" }];
+  let passport_first_name = "Élodie";
+  let holders: Array<string | null> = [];
   const check = createDocumentCategoryCheck({ apiKey: "test", model: "test", fetch: async (_url, init) => {
     const body = JSON.parse(String(init?.body));
     assert.equal(body.store, false);
     assert.deepEqual(body.input[0].content.map((item: { filename: string }) => item.filename), ["document.pdf", "passport.pdf"]);
-    return Response.json({ status: "completed", output_text: JSON.stringify({ category: "Academic", holders: holders.map((holder) => ({ ...holder, single_name: false })), passport_holder: { ...passport_holder, single_name: false } }) });
+    return Response.json({ status: "completed", output_text: JSON.stringify({ category: "Academic", holders, passport_first_name }) });
   } });
   const file = { bytes: pdf, mime: "application/pdf", filename: "sample.pdf" };
   const request = { ...file, category: "Academic", verifyName: true, passport: file };
-  assert.equal(await check(request), null);
-  for (const person of [
-    { first_name: "Amelia", surname: "O'Neil" },
-    { first_name: "Elodie", surname: "Smith" },
-    { first_name: "Elodie", surname: null },
-    { first_name: null, surname: "O'Neil" },
-  ]) {
-    holders = [person];
-    assert.equal((await check(request))?.status, 422);
+  for (const name of ["Elodie Smith", "Smith, ELODIE", "J. Elodie Smith", "Elodie"]) {
+    holders = [name];
+    assert.equal(await check(request), null, name);
   }
-  holders = [{ first_name: "Elodie", surname: "O'Neil" }, { first_name: "Amelia", surname: "Smith" }];
-  assert.equal((await check(request))?.status, 422, "a bundle containing another person's record is rejected");
+  for (const name of ["Amelia O'Neil", "Melodie Smith", null]) {
+    holders = [name];
+    assert.equal((await check(request))?.status, 422, name ?? "Unreadable name");
+  }
+  holders = ["Elodie Smith", "Amelia O'Neil"];
+  assert.equal((await check(request))?.status, 422, "each separate record needs a match");
+
+  passport_first_name = "Anne-Marie";
+  holders = ["Smith Anne Marie"];
+  assert.equal(await check(request), null);
+  holders = ["Smith Marie Anne"];
+  assert.equal((await check(request))?.status, 422);
+  passport_first_name = "Ann";
+  holders = ["Joanne Smith"];
+  assert.equal((await check(request))?.status, 422, "a substring inside another name is not a match");
 });
 
 test("supporting files require a current passport before provider calls or storage", async () => {

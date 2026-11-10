@@ -199,6 +199,14 @@ async function up() {
 }
 
 const PDF = new TextEncoder().encode("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+// Document category checks (20261112100000 / staff-onboarding v7): the function asks the reader what each uploaded file IS before it is
+// accepted. The lab's files carry the answer as a PDF comment ("%lab-category:Passport"), which the mock reader reads back; a file
+// without it is "Unclear" (refused), as a real unreadable file would be.
+const DETECTED_TYPE = { passport: "Passport", visa: "Australian Visa", english: "English Evidence", pte: "PTE", academic: "Academic", transcript: "Academic", results: "Academic",
+  licence: "Driving Licence", license: "Driving Licence", oshc: "Health Insurance", health: "Health Insurance", insurance: "Health Insurance" };
+const detectedTypeOf = (name) => DETECTED_TYPE[Object.keys(DETECTED_TYPE).find((k) => String(name).toLowerCase().includes(k)) ?? ""] ?? "Other";
+const labPdf = (name) => new TextEncoder().encode(`%PDF-1.4\n%lab-category:${detectedTypeOf(name)}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n`);
+const labPng = (name) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, ...new TextEncoder().encode(`%lab-category:${detectedTypeOf(name)}`)]);
 let failures = 0;
 function check(label, ok, detail = "") { console.log(`${ok ? "PASS" : "FAIL"} ${label}${ok || !detail ? "" : ` -- ${detail}`}`); if (!ok) failures++; }
 
@@ -374,12 +382,21 @@ function startMockReader() {
         try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
         if (req.url !== "/v1/responses" || req.headers.authorization !== `Bearer ${LAB_SECRETS.OPENAI_API_KEY}`) { res.writeHead(401); return res.end("{}"); }
         reader.calls++;
+        if (body.text?.format?.name === "document_category_v1") {
+          // What is this file? The lab's files say so in a comment; anything else is unreadable.
+          const first = body.input?.[0]?.content?.[0] ?? {};
+          const dataUrl = String(first.file_data ?? first.image_url ?? "");
+          const content = Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64").toString("latin1");
+          const category = (content.match(/%lab-category:([A-Za-z ]+)/) ?? [])[1]?.trim() ?? "Unclear";
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, status: "completed", output_text: JSON.stringify({ category }), usage: {} }));
+        }
         const names = body.text?.format?.schema?.properties?.fields?.required ?? [];
         const category = (String(body.instructions ?? "").match(/in this (.+?) document\./) ?? [])[1] ?? "Other";
         const fields = Object.fromEntries(names.map((n) => [n, category === "Passport" ? (MOCK_PASSPORT[n] ?? null) : category === "Visa" ? (MOCK_VISA[n] ?? null) : null]));
         const result = { document_type: category, category_mismatch: false, fields, evidence: [] };
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, output_text: JSON.stringify(result), usage: {} }));
+        res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, status: "completed", output_text: JSON.stringify(result), usage: {} }));
       });
     });
     reader.server.on("error", reject);
@@ -514,8 +531,8 @@ async function onboard() {
   const saved = await onboardCall(lab, { action: "save", t: link.token, patch: details });
   check("personal details save through the link", saved.status === 200 && saved.body.view?.profile?.emergency_phone_e164 === "+61422333444", JSON.stringify(saved.body).slice(0, 200));
 
-  const pdf = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
-  const png = { blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])], { type: "image/png" }), name: "results.png" };
+  const pdf = (name) => ({ blob: new Blob([labPdf(name)], { type: "application/pdf" }), name });
+  const png = { blob: new Blob([labPng("results.png")], { type: "image/png" }), name: "results.png" };
   const fake = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "2031-01-01" }, { blob: new Blob([new Uint8Array([0x4d, 0x5a, 0, 0])]), name: "passport.pdf" });
   check("a renamed non-PDF is refused and nothing is stored", fake.status === 400 && psql(`select count(*) from storage.objects where bucket_id = 'staff-documents' and name like '${person.id}/passport/%';`) === "0", JSON.stringify(fake.body));
   const future = (years) => `${new Date().getFullYear() + years}-06-30`;
@@ -630,7 +647,7 @@ select public.hr_admin_staff_invite_revoke('${person.id}');`);
 
 /** Details and every required document (non-citizen) through a link, ready to submit. */
 async function completeDocuments(lab, token) {
-  const pdfFile = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const pdfFile = (name) => ({ blob: new Blob([labPdf(name)], { type: "application/pdf" }), name });
   const year = new Date().getFullYear();
   const saved = await onboardCall(lab, { action: "save", t: token, patch: { first_name: "Lab", last_name: "Mail", date_of_birth: "1990-05-06", address_street: "1 Lab St", address_suburb: "Melbourne",
     address_state: "VIC", address_postcode: "3000", address_country: "Australia", emergency_name: "Em", emergency_relationship: "Sibling", emergency_phone: "+61 422 333 444",
@@ -1015,7 +1032,7 @@ const sessionCall = async (lab, jwt, body, ip) => {
   return { status: res.status, body: await res.json().catch(() => ({})) };
 };
 // The work location every lab pay form uses (hr.locations, 20261113090000): made once, found again afterwards.
-const labLocation = () => psql("insert into hr.locations(name) values ('Lab Campus') on conflict (lower(btrim(name))) do update set name = excluded.name returning id;");
+const labLocation = () => psql("with l as (insert into hr.locations(name) values ('Lab Campus') on conflict (lower(btrim(name))) do update set name = excluded.name returning id) select id from l;");
 const paySave = (lab, jwt, id, over = {}) => restRpc(lab, jwt, "hr_admin_onboarding_pay_save", { p_id: id, p_details: { jobTitle: "Lab Trainer", employmentType: "full_time", locationId: labLocation(),
   startDate: new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10), payBasis: "hourly", rate: "42.50", payScheduleId: psql("select id from hr.pay_schedules where is_active order by name limit 1;"), hoursPerWeek: "38", ...over } });
 
@@ -1060,7 +1077,7 @@ async function flow() {
     rejected.status === 200 && again.status === 200 && againMail?.subject === "Please upload a document again" && /Passport: The photo page is cut off/.test(againMail?.text ?? "") && againToken.length > 20 && againToken !== docToken,
     `${rejected.status} ${again.status} ${againMail?.subject}`);
   const year = new Date().getFullYear();
-  const replaced = await onboardCall(lab, { action: "upload", t: againToken, category: "Passport", expiryDate: `${year + 6}-06-30`, replaces: passport }, { blob: new Blob([PDF], { type: "application/pdf" }), name: "Passport-new.pdf" });
+  const replaced = await onboardCall(lab, { action: "upload", t: againToken, category: "Passport", expiryDate: `${year + 6}-06-30`, replaces: passport }, { blob: new Blob([labPdf("passport")], { type: "application/pdf" }), name: "Passport-new.pdf" });
   const resubmitted = await onboardCall(lab, { action: "submit", t: againToken });
   check("the person replaces it through the link and submits again", replaced.status === 200 && resubmitted.status === 200 && stage(person.id) === "documents_submitted", `${replaced.status} ${JSON.stringify(replaced.body)} ${resubmitted.status}`);
   for (const id of psql(`select id from hr.staff_documents where profile_id = '${person.id}' and is_current;`).split("\n").filter(Boolean)) {
@@ -1333,7 +1350,7 @@ async function wizard() {
   const person = await freshApplicant(lab, "wizard");
   const link = await newLink();
   asAdmin(`select public.hr_admin_staff_invite('${person.id}', 'documents', '${link.hash}');`);
-  const pdf = (name) => ({ blob: new Blob([PDF], { type: "application/pdf" }), name });
+  const pdf = (name) => ({ blob: new Blob([labPdf(name)], { type: "application/pdf" }), name });
   const untyped = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "" }, { blob: new Blob([PDF]), name: "passport.pdf" });
   check("a file with no declared type is refused with the student wizard's message", untyped.status === 400 && untyped.body.error === "Only PDF, JPG, and PNG documents are supported.", JSON.stringify(untyped.body));
   const wrongContent = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "" }, { blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "application/pdf" }), name: "passport.pdf" });

@@ -4,7 +4,7 @@ import { Badge, Button, Card, Field, Modal, PageHeader, Select } from "@/pages/a
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import {
-  EMPLOYEE_DOC_ACCEPT, EMPLOYEE_DOC_CATEGORIES, EMPLOYEE_STATUS_LABEL, employeeDocumentUrl, employeeFileProblem, getEmployee,
+  EMPLOYEE_DOC_ACCEPT, EMPLOYEE_DOC_CATEGORIES, EMPLOYEE_STATUS_LABEL, employeeDocumentUrl, employeeFileProblem, formatMobile, getEmployee,
   removeEmployeeDocument, setEmployeeStatus, uploadEmployeeDocument, type EmployeeDetail, type EmployeeDocCategory,
 } from "@/lib/employeesApi";
 import { STAFF_EMPLOYEES_PATH } from "@/pages/admin/lib/staffRoutes";
@@ -82,7 +82,7 @@ export default function StaffDetailPage() {
         <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div><dt className="text-xs uppercase text-foreground-500">Status</dt><dd className="mt-1"><Badge tone={active ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[employee.status]}</Badge></dd></div>
           <div><dt className="text-xs uppercase text-foreground-500">Email</dt><dd className="mt-1 break-all">{employee.email}</dd></div>
-          <div><dt className="text-xs uppercase text-foreground-500">Mobile</dt><dd className="mt-1">{employee.phone}</dd></div>
+          <div><dt className="text-xs uppercase text-foreground-500">Mobile</dt><dd className="mt-1">{formatMobile(employee.phone)}</dd></div>
           <div><dt className="text-xs uppercase text-foreground-500">Added</dt><dd className="mt-1">{date(employee.createdAt)}</dd></div>
         </dl>
       </Card>

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
-import { EMPTY_EMPLOYEE, employeeProblems, saveEmployee, type EmployeeForm } from "@/lib/employeesApi";
+import { EMPTY_EMPLOYEE, employeeProblems, formatMobile, mobileInput, saveEmployee, type EmployeeForm } from "@/lib/employeesApi";
 
 type Problems = Partial<Record<keyof EmployeeForm, string>>;
 
@@ -8,7 +8,7 @@ type Problems = Partial<Record<keyof EmployeeForm, string>>;
 export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   id?: string; initial?: EmployeeForm; onClose: () => void; onSaved: (id: string) => void;
 }) {
-  const [form, setForm] = useState<EmployeeForm>(initial ?? EMPTY_EMPLOYEE);
+  const [form, setForm] = useState<EmployeeForm>(initial ? { ...initial, phone: formatMobile(initial.phone) } : EMPTY_EMPLOYEE);
   const [problems, setProblems] = useState<Problems>({});
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState("");
@@ -34,7 +34,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   const field = (key: keyof EmployeeForm, label: string, props: Record<string, unknown>) => (
     <div>
       <Field label={label} required>
-        <TextInput value={form[key]} onChange={(e) => patch({ [key]: e.target.value })} aria-invalid={Boolean(problems[key])} data-testid={`employee-${key}`} {...props} />
+        <TextInput value={form[key]} onChange={(e) => patch({ [key]: key === "phone" ? mobileInput(e.target.value) : e.target.value })} aria-invalid={Boolean(problems[key])} data-testid={`employee-${key}`} {...props} />
       </Field>
       {problems[key] ? <p role="alert" className="mt-1 text-xs text-primary-700">{problems[key]}</p> : null}
     </div>
@@ -51,7 +51,8 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
           {field("lastName", "Last name", { maxLength: 100, autoComplete: "off" })}
         </div>
         {field("email", "Email", { type: "email", maxLength: 254, autoComplete: "off", inputMode: "email" })}
-        {field("phone", "Mobile", { type: "tel", maxLength: 20, autoComplete: "off", inputMode: "tel", placeholder: "0412 345 678" })}
+        {field("phone", "Mobile", { type: "tel", maxLength: 16, autoComplete: "off", inputMode: "tel", placeholder: "0412 345 678" })}
+        <p className="-mt-2 text-xs text-foreground-500">Australian mobile: 04XX XXX XXX or +61 4XX XXX XXX.</p>
         {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
       </form>
     </Modal>

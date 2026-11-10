@@ -1186,8 +1186,21 @@ test("simple employees: validation, file checks, upload path, two statuses", asy
   assert.equal(emp.employeeProblems({ ...ok, firstName: "J0hn" }).firstName, "The first name can only contain letters, spaces, hyphens, apostrophes and full stops.");
   assert.equal(emp.employeeProblems({ ...ok, lastName: "x".repeat(101) }).lastName, "The last name must be 100 characters or fewer.");
   assert.equal(emp.employeeProblems({ ...ok, email: "mary@example" }).email, "Enter a valid email address.");
-  assert.ok(emp.employeeProblems({ ...ok, phone: "0412" }).phone?.startsWith("Enter a valid mobile number"));
-  assert.deepEqual(emp.employeeProblems({ ...ok, phone: "+64 21 123 4567" }), {}, "an international number is fine");
+  for (const [input, e164] of [["0412 345 678", "+61412345678"], ["+61 412 345 678", "+61412345678"], ["61412345678", "+61412345678"], ["0061 412-345-678", "+61412345678"], ["(04) 1234 5678", "+61412345678"]] as const) {
+    assert.equal(emp.toAuMobile(input), e164, input);
+    assert.deepEqual(emp.employeeProblems({ ...ok, phone: input }), {}, input);
+  }
+  for (const input of ["0412", "04123456789", "+64 21 123 4567", "1234567890", "0412abc678", "+610412345678", "0312345678"]) assert.equal(emp.toAuMobile(input), null, input);
+  assert.equal(emp.mobileProblem(""), "Enter the mobile number.");
+  assert.equal(emp.mobileProblem("0412 abc"), "The mobile number can only contain digits, spaces and a leading +.");
+  assert.equal(emp.mobileProblem("0398765432"), "That looks like a landline. Enter a mobile number starting with 04.");
+  assert.equal(emp.mobileProblem("+61 3 9876 5432"), "That looks like a landline. Enter a mobile number starting with 04.");
+  assert.equal(emp.mobileProblem("0412 345"), "The mobile number is too short: it has 10 digits (04XX XXX XXX).");
+  assert.equal(emp.mobileProblem("0412 345 6789"), "The mobile number is too long: it has 10 digits (04XX XXX XXX).");
+  assert.equal(emp.mobileProblem("+64 21 123 4567"), "Enter an Australian mobile number, for example 0412 345 678.");
+  assert.equal(emp.formatMobile("+61412345678"), "0412 345 678");
+  assert.equal(emp.mobileInput("04a12-345 678x"), "0412-345 678", "letters cannot be typed");
+  assert.ok(read("supabase/migrations/20261110180000_hr_employee_au_mobile.sql").includes("v_phone !~ '^\\+614\\d{8}$'"), "the database accepts Australian mobiles only");
   assert.equal(emp.employeeFileProblem({ type: "application/pdf", size: 1000, name: "a.pdf" }), null);
   assert.equal(emp.employeeFileProblem({ type: "application/zip", size: 1000, name: "a.zip" }), "Upload a PDF, JPG, PNG or Word file.");
   assert.equal(emp.employeeFileProblem({ type: "image/png", size: emp.EMPLOYEE_DOC_MAX_BYTES + 1, name: "a.png" }), "The file must be 10 MB or smaller.");

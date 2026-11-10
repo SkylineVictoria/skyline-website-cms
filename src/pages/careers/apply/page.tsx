@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
@@ -7,6 +7,7 @@ import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptc
 import { COVER_LETTER_MAX, EMPLOYMENT_TYPE_LABEL, JOB_FILE_ACCEPT, applyProblems, jobApplyPath, jobFileProblem, jobPath } from "@/lib/jobs";
 import { getJob, type Job } from "@/lib/jobsApi";
 import { applyAsStaff } from "@/lib/staffApi";
+import { readResumeContact, type ResumeContact } from "@/lib/resumeContact";
 import { toE164 } from "@/lib/staffPhone";
 
 /**
@@ -33,6 +34,9 @@ export default function CareerApplyPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [resume, setResume] = useState<File | null>(null);
+  const [suggestedPhone, setSuggestedPhone] = useState("");
+  const [resumeRead, setResumeRead] = useState<"idle" | "reading" | "found" | "manual">("idle");
+  const edited = useRef(new Set<keyof ResumeContact>());
   const [coverLetter, setCoverLetter] = useState("");
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [agreed, setAgreed] = useState(false);
@@ -48,15 +52,43 @@ export default function CareerApplyPage() {
     return () => { cancelled = true; };
   }, [id]);
 
+  useEffect(() => {
+    if (!resume) return;
+    const controller = new AbortController();
+    const applySuggestions = (details: ResumeContact) => {
+      const updates = [
+        ["firstName", setFirstName], ["lastName", setLastName], ["email", setEmail], ["phone", setSuggestedPhone],
+      ] as const;
+      const eligible = updates.filter(([key]) => !edited.current.has(key));
+      for (const [key, set] of eligible) set(details[key] ?? "");
+      setResumeRead(eligible.some(([key]) => details[key]) ? "found" : "manual");
+    };
+    const timeout = window.setTimeout(() => { controller.abort(); applySuggestions({}); }, 5000);
+    void readResumeContact(resume, controller.signal).catch(() => ({})).then((details) => {
+      if (!controller.signal.aborted) applySuggestions(details);
+    }).finally(() => window.clearTimeout(timeout));
+    return () => { window.clearTimeout(timeout); controller.abort(); };
+  }, [resume]);
+
   const pickFile = (key: "resume" | "coverLetterFile", file: File | null) => {
     const p = file ? jobFileProblem(file) : "";
     setErrors((e) => ({ ...e, [key]: p }));
-    if (key === "resume") setResume(p ? null : file); else setCoverFile(p ? null : file);
+    if (key === "resume") {
+      const next = p ? null : file;
+      if (!edited.current.has("firstName")) setFirstName("");
+      if (!edited.current.has("lastName")) setLastName("");
+      if (!edited.current.has("email")) setEmail("");
+      if (!edited.current.has("phone")) setSuggestedPhone("");
+      setResumeRead(next ? "reading" : "idle");
+      setResume(next);
+    } else {
+      setCoverFile(p ? null : file);
+    }
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!job || busy) return;
+    if (!job || busy || resumeRead === "reading") return;
     const mobile = String(new FormData(event.currentTarget).get("job-mobile") ?? "");
     const next: Record<string, string> = {};
     if (!firstName.trim()) next.firstName = "Enter your first name.";
@@ -103,17 +135,23 @@ export default function CareerApplyPage() {
       <Card>
         <form onSubmit={(e) => void submit(e)} noValidate className="space-y-4" data-testid="job-apply-form">
           {errors.form ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{errors.form}</p> : null}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div><label className={label} htmlFor="job-first">First name <span className="text-primary-600">*</span></label><input id="job-first" className={input} value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" maxLength={100} data-testid="job-apply-first-name" />{problem(errors.firstName)}</div>
-            <div><label className={label} htmlFor="job-last">Last name <span className="text-primary-600">*</span></label><input id="job-last" className={input} value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="family-name" maxLength={100} data-testid="job-apply-last-name" />{problem(errors.lastName)}</div>
-          </div>
-          <div><label className={label} htmlFor="job-email">Email <span className="text-primary-600">*</span></label><input id="job-email" type="email" className={input} value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" data-testid="job-apply-email" />{problem(errors.email)}</div>
-          <div><label className={label} htmlFor="job-mobile">Mobile <span className="text-primary-600">*</span></label><PhoneInput id="job-mobile" name="job-mobile" required placeholder="041 234 5678" />{problem(errors.phone)}</div>
           <div>
             <label className={label} htmlFor="job-resume">Resume (PDF or Word .docx, 5 MB) <span className="text-primary-600">*</span></label>
             <input id="job-resume" type="file" accept={JOB_FILE_ACCEPT} onChange={(e) => pickFile("resume", e.target.files?.[0] ?? null)} className="block w-full text-sm" data-testid="job-apply-resume" />
             {problem(errors.resume)}
+            <p className="mt-2 text-sm text-foreground-600" role="status">
+              {resumeRead === "reading" ? "Reading contact details from your resume…"
+                : resumeRead === "found" ? "Check the details filled from your resume and correct anything missing or inaccurate."
+                : resumeRead === "manual" ? "You can enter any remaining contact details below."
+                : "Choose your resume to fill in your contact details automatically."}
+            </p>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div><label className={label} htmlFor="job-first">First name <span className="text-primary-600">*</span></label><input id="job-first" className={input} value={firstName} onChange={(e) => { edited.current.add("firstName"); setFirstName(e.target.value); }} autoComplete="given-name" maxLength={100} data-testid="job-apply-first-name" />{problem(errors.firstName)}</div>
+            <div><label className={label} htmlFor="job-last">Last name <span className="text-primary-600">*</span></label><input id="job-last" className={input} value={lastName} onChange={(e) => { edited.current.add("lastName"); setLastName(e.target.value); }} autoComplete="family-name" maxLength={100} data-testid="job-apply-last-name" />{problem(errors.lastName)}</div>
+          </div>
+          <div><label className={label} htmlFor="job-email">Email <span className="text-primary-600">*</span></label><input id="job-email" type="email" className={input} value={email} onChange={(e) => { edited.current.add("email"); setEmail(e.target.value); }} autoComplete="email" data-testid="job-apply-email" />{problem(errors.email)}</div>
+          <div onInput={() => { edited.current.add("phone"); }} onChangeCapture={() => { edited.current.add("phone"); }}><label className={label} htmlFor="job-mobile">Mobile <span className="text-primary-600">*</span></label><PhoneInput key={suggestedPhone} id="job-mobile" name="job-mobile" value={suggestedPhone} required placeholder="041 234 5678" />{problem(errors.phone)}</div>
           <div>
             <label className={label} htmlFor="job-letter">Cover letter (optional)</label>
             <textarea id="job-letter" rows={6} maxLength={COVER_LETTER_MAX} className={input} value={coverLetter} onChange={(e) => setCoverLetter(e.target.value)} data-testid="job-apply-cover-letter" />
@@ -132,7 +170,7 @@ export default function CareerApplyPage() {
           {problem(errors.agreed)}
           <StaffCaptcha onToken={setCaptchaToken} resetKey={captchaReset} />
           {problem(errors.captcha)}
-          <button type="submit" className={`${button} w-full`} disabled={busy || !captchaConfigured} data-testid="job-apply-submit">{busy ? "Sending…" : "Send application"}</button>
+          <button type="submit" className={`${button} w-full`} disabled={busy || !captchaConfigured || resumeRead === "reading"} data-testid="job-apply-submit">{busy ? "Sending…" : "Send application"}</button>
         </form>
       </Card>
     );

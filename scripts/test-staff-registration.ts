@@ -108,10 +108,7 @@ test("Employees actions follow the status and what exists; each one is a legal m
   for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "rejected", "access_ready"]) {
     assert.ok(staffStatusLib.EMAIL_KIND_LABEL[kind], `email kind ${kind} has a label for the admin`);
   }
-  const detailPage = read("src/pages/admin/StaffDetailPage.tsx");
-  assert.ok(detailPage.includes("staffDocumentUrl(path, 120)"), "files open through 2-minute signed URLs");
-  assert.ok(!/getPublicUrl|\.download\(/.test(detailPage), "no public URLs or raw downloads");
-  assert.ok(detailPage.includes("fresh.profile.status !== detail.profile.status"), "the dialog re-checks the status before acting");
+  // Staff > Employees is the simple Active / Inactive page since 20261110170000 (see "simple employees" below).
   const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const fn = sql.slice(sql.indexOf("function public.hr_admin_staff_activate_account"));
   assert.ok(/hr\.require_admin\(\)/.test(fn.slice(0, 400)), "activation checks for an administrator first");
@@ -1144,34 +1141,6 @@ test("candidate_file: an open manual candidate only, checked by content, stored 
   assert.equal(staffAdmin.ACTIONS.includes("hire" as never) && staffAdmin.ACTIONS.includes("candidate_file" as never), true);
 });
 
-test("org chart: the tree, cycles, who can manage whom and search", async () => {
-  const org = await load.import<typeof import("../src/lib/staffOrg.ts")>("../src/lib/staffOrg.ts");
-  type P = import("../src/lib/staffOrg.ts").OrgPerson;
-  const p = (id: string, name: string, managerId: string | null, jobTitle = "", status: P["status"] = "active"): P =>
-    ({ id, name, email: `${id}@example.test`, status, role: null, jobTitle, department: "", employmentType: null, workLocation: "", managerId });
-  const people = [p("ceo", "Ann CEO", null, "Chief Executive Officer"), p("hod", "Bob Head", "ceo", "Head of Department"), p("t2", "Zed Trainer", "hod", "Trainer"),
-    p("t1", "Amy Trainer", "hod", "Trainer"), p("adm", "Cat Admin", "ceo"), p("new", "Nia New", "hod", "", "invited"), p("lost", "Lost Person", "gone")];
-  const tree = org.buildOrgTree(people);
-  assert.deepEqual(tree.map((n) => n.person.id), ["ceo", "lost"], "a manager who is not on the chart puts the person at the top");
-  assert.equal(tree[0].teamSize, 5, "the team size counts everyone below");
-  assert.deepEqual(tree[0].children.find((c) => c.person.id === "hod")!.children.map((c) => c.person.name), ["Amy Trainer", "Nia New", "Zed Trainer"], "children sorted by name");
-  const loop = org.buildOrgTree([p("a", "A", "b"), p("b", "B", "a")]);
-  assert.equal(loop.reduce((n, x) => n + 1 + x.teamSize, 0), 2, "nobody disappears in a cycle");
-  assert.deepEqual([...org.teamOf(people, "hod")].sort(), ["hod", "new", "t1", "t2"]);
-  assert.equal(org.placeProblem(people, "hod", "t1"), "That person already reports to them. Move them first, or choose someone else.");
-  assert.equal(org.placeProblem(people, "hod", "hod"), "A person cannot be their own manager.");
-  assert.equal(org.placeProblem(people, "t1", "new"), "Choose an active employee as the manager.", "the same rule as the database");
-  assert.equal(org.placeProblem(people, "t1", "adm"), null);
-  assert.equal(org.placeProblem(people, "t1", null), null, "top of the chart is always allowed");
-  assert.deepEqual(org.managerChain(people, "t1").map((x) => x.id), ["ceo", "hod"]);
-  assert.deepEqual(org.nodesWithTeams(tree), ["ceo", "hod"]);
-  assert.equal(org.orgMatches(tree[0], "amy"), true, "a match below keeps the branch");
-  assert.equal(org.orgMatches(tree[0].children.find((c) => c.person.id === "adm")!, "trainer"), false);
-  const sql = read("supabase/migrations/20261110100000_staff_org_chart.sql");
-  assert.ok(sql.includes("with recursive chain") && sql.includes("cannot be their own manager") && sql.includes("Choose an active employee as the manager."), "the database refuses cycles, self-management and inactive managers");
-  assert.ok(read("src/router/config.tsx").includes('path: "staff/employees/org-chart"'), "the org chart is routed under Employees");
-});
-
 test("jobs and candidates tree: department > job > stage > candidate, and search", async () => {
   const tree = await load.import<typeof import("../src/lib/recruitmentTree.ts")>("../src/lib/recruitmentTree.ts");
   type J = import("../src/lib/jobsApi.ts").AdminJob;
@@ -1193,4 +1162,53 @@ test("jobs and candidates tree: department > job > stage > candidate, and search
   assert.equal(tree.jobBranchMatches(trainer, "education"), true);
   assert.equal(tree.jobBranchMatches(depts[0].jobs[0], "zoe"), false);
   assert.ok(read("src/pages/admin/JobsPage.tsx").includes("<RecruitmentTree byDepartment") && read("src/pages/admin/CandidatesPage.tsx").includes("<RecruitmentTree"), "both pages offer the tree view");
+});
+
+test("resume autofill reads basic contact details and ignores references", async () => {
+  const { resumeContactFromText } = await load.import<typeof import("../src/lib/resumeContact.ts")>("../src/lib/resumeContact.ts");
+  assert.deepEqual(resumeContactFromText([
+    "Curriculum vitae", "Élodie O’Neill", "Trainer", "Email: ELODIE@EXAMPLE.TEST | Mobile: 0412 345 678",
+    "Professional experience", "Contact: references@example.test · 0400 111 222",
+  ].join("\n")), { firstName: "Élodie", lastName: "O’Neill", email: "elodie@example.test", phone: "+61412345678" });
+  assert.deepEqual(resumeContactFromText("Name: Priya\nEmail: priya@example.test\n+91 98765 43210"),
+    { firstName: "Priya", lastName: "", email: "priya@example.test", phone: "+919876543210" });
+  assert.deepEqual(resumeContactFromText("Skills\nTrainer"), { email: undefined, phone: undefined });
+  const ambiguous = resumeContactFromText("Jane Doe\na@example.test | b@example.test\nMobile: 0412 345 678 / 0400 111 222");
+  assert.equal(ambiguous.email, undefined);
+  assert.equal(ambiguous.phone, undefined);
+});
+
+test("simple employees: validation, file checks, upload path, two statuses", async () => {
+  const emp = await load.import<typeof import("../src/lib/employeeRules.ts")>("../src/lib/employeeRules.ts");
+  const ok = { firstName: "Mary-Jane", lastName: "O'Neil", email: "mary@example.com", phone: "0412 345 678" };
+  assert.deepEqual(emp.employeeProblems(ok), {});
+  assert.deepEqual(Object.keys(emp.employeeProblems(emp.EMPTY_EMPLOYEE)).sort(), ["email", "firstName", "lastName", "phone"], "every field is required");
+  assert.equal(emp.employeeProblems({ ...ok, firstName: "J0hn" }).firstName, "The first name can only contain letters, spaces, hyphens, apostrophes and full stops.");
+  assert.equal(emp.employeeProblems({ ...ok, lastName: "x".repeat(101) }).lastName, "The last name must be 100 characters or fewer.");
+  assert.equal(emp.employeeProblems({ ...ok, email: "mary@example" }).email, "Enter a valid email address.");
+  for (const [input, e164] of [["0412 345 678", "+61412345678"], ["+61 412 345 678", "+61412345678"], ["61412345678", "+61412345678"], ["0061 412-345-678", "+61412345678"], ["(04) 1234 5678", "+61412345678"]] as const) {
+    assert.equal(emp.toAuMobile(input), e164, input);
+    assert.deepEqual(emp.employeeProblems({ ...ok, phone: input }), {}, input);
+  }
+  for (const input of ["0412", "04123456789", "+64 21 123 4567", "1234567890", "0412abc678", "+610412345678", "0312345678"]) assert.equal(emp.toAuMobile(input), null, input);
+  assert.equal(emp.mobileProblem(""), "Enter the mobile number.");
+  assert.equal(emp.mobileProblem("0412 abc"), "The mobile number can only contain digits, spaces and a leading +.");
+  assert.equal(emp.mobileProblem("0398765432"), "That looks like a landline. Enter a mobile number starting with 04.");
+  assert.equal(emp.mobileProblem("+61 3 9876 5432"), "That looks like a landline. Enter a mobile number starting with 04.");
+  assert.equal(emp.mobileProblem("0412 345"), "The mobile number is too short: it has 10 digits (04XX XXX XXX).");
+  assert.equal(emp.mobileProblem("0412 345 6789"), "The mobile number is too long: it has 10 digits (04XX XXX XXX).");
+  assert.equal(emp.mobileProblem("+64 21 123 4567"), "Enter an Australian mobile number, for example 0412 345 678.");
+  assert.equal(emp.formatMobile("+61412345678"), "0412 345 678");
+  assert.equal(emp.mobileInput("04a12-345 678x"), "0412-345 678", "letters cannot be typed");
+  assert.ok(read("supabase/migrations/20261110180000_hr_employee_au_mobile.sql").includes("v_phone !~ '^\\+614\\d{8}$'"), "the database accepts Australian mobiles only");
+  assert.equal(emp.employeeFileProblem({ type: "application/pdf", size: 1000, name: "a.pdf" }), null);
+  assert.equal(emp.employeeFileProblem({ type: "application/zip", size: 1000, name: "a.zip" }), "Upload a PDF, JPG, PNG or Word file.");
+  assert.equal(emp.employeeFileProblem({ type: "image/png", size: emp.EMPLOYEE_DOC_MAX_BYTES + 1, name: "a.png" }), "The file must be 10 MB or smaller.");
+  assert.equal(emp.employeeDocPath("abc", "../My Passport (1).pdf", "r1"), "employees/abc/r1-My_Passport_1_.pdf", "the file name cannot leave the employee's folder");
+  assert.deepEqual(Object.keys(emp.EMPLOYEE_STATUS_LABEL), ["active", "inactive"], "two statuses only");
+  const sql = read("supabase/migrations/20261110170000_hr_employees_simple.sql");
+  for (const c of emp.EMPLOYEE_DOC_CATEGORIES) assert.ok(sql.includes(`'${c}'`), `the database accepts ${c}`);
+  assert.ok(sql.includes("'Enter a valid email address.'") && sql.includes("drop trigger if exists employment_activation_guard"), "the database validates too and activation needs no login");
+  const page = read("src/pages/admin/StaffDetailPage.tsx");
+  assert.ok(page.includes("employeeDocumentUrl(") && !/getPublicUrl|\.download\(/.test(page), "files open through signed URLs only");
 });

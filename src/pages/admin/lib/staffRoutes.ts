@@ -13,4 +13,3 @@ export const STAFF_HOLIDAYS_PATH = "/admin/staff/holidays";
 export const STAFF_XERO_PATH = "/admin/staff/xero-export";
 export const staffEmployeePath = (id: string) => `${STAFF_EMPLOYEES_PATH}/${encodeURIComponent(id)}`;
 export const staffCandidatePath = (id: string) => `${STAFF_CANDIDATES_PATH}/${encodeURIComponent(id)}`;
-export const STAFF_ORG_CHART_PATH = "/admin/staff/employees/org-chart";

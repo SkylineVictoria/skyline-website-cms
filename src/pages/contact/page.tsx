@@ -1,17 +1,9 @@
-import EnquiryForm, { type FormField } from "@/components/feature/EnquiryForm";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import Reveal from "@/components/base/Reveal";
 import { breadcrumbSchema } from "@/data/seo";
 import { usePublicSite } from "@/hooks/publicSiteContext";
 import { calendlyEmbedSrc } from "@/lib/calendly";
-
-const contactFields: FormField[] = [
-  { name: "name", label: "Your Name", type: "text", required: true, placeholder: "Your Name" },
-  { name: "email", label: "Your Email", type: "email", required: true, placeholder: "Your Email" },
-  { name: "phone", label: "Phone No", type: "tel", required: true, placeholder: "Phone No" },
-  { name: "message", label: "Message", type: "textarea", required: true, placeholder: "Message" },
-];
 
 type ContactCard = { title: string; subtitle: string; href?: string; icon: string; external?: boolean };
 
@@ -96,21 +88,8 @@ export default function ContactPage() {
         </div>
       </section>
 
-      <section className="bg-background-100 pb-12 md:pb-16">
-        <div className="site-container max-w-3xl">
-          <EnquiryForm
-            formId="skyline-contact-form"
-            submitAddr="https://readdy.ai/api/form/db31smmoc082o2i1kl80"
-            title="Inquiry"
-            description="Send us a message and our team will get back to you."
-            submitLabel="Submit"
-            fields={contactFields}
-          />
-        </div>
-      </section>
-
       {bookingSrc ? (
-        <section className="bg-background-100 pb-12 md:pb-16">
+        <section className="bg-background-100 py-12 md:py-16">
           <div className="site-container max-w-3xl">
             <Reveal className="text-center">
               <p className="font-label text-xs font-semibold uppercase tracking-[0.2em] text-primary-600">Book a call</p>
@@ -123,20 +102,6 @@ export default function ContactPage() {
           </div>
         </section>
       ) : null}
-
-      <section className="bg-background-100 pb-16 md:pb-24">
-        <div className="site-container">
-          <div className="overflow-hidden rounded-card border border-background-200 bg-background-50">
-            <iframe
-              title={settings.address}
-              src={settings.mapEmbedSrc}
-              className="h-[320px] w-full border-0 md:h-[420px]"
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-          </div>
-        </div>
-      </section>
     </>
   );
 }

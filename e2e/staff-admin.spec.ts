@@ -18,12 +18,13 @@ test("Staff is its own sidebar group with Candidates, Employees and Jobs; the ol
   await page.goto(`/admin/staff/${someone.id}`);
   await expect(page).toHaveURL(new RegExp(`/admin/staff/employees/${someone.id}$`));
   await expect(page.getByText(someone.email).first()).toBeVisible();
-  const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "Staff" }) }).first();
+  const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "HRMS" }) }).first();
   await expect(sidebar.locator('a[href="/admin/staff/employees"]')).toHaveText("Employees");
   await expect(sidebar.locator('a[href="/admin/staff/candidates"]')).toHaveText("Candidates");
-  await expect(sidebar.locator('a[href="/admin/jobs"]')).toHaveText("Jobs");
+  // Jobs lives under Website (20261110200000).
+  expect(sql(`select parent_id || '/' || label from public.admin_menu_items where route = '/admin/jobs'`)).toBe("website/Jobs");
   expect(sql(`select parent_id || '/' || label || '/' || route from public.admin_menu_items where id = 'agency_staff'`)).toBe("staff/Employees//admin/staff/employees");
-  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("staff_candidates,agency_staff,agency_jobs,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("staff_candidates,agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero");
   await page.goto("/admin/candidates");
   await expect(page).toHaveURL(/\/admin\/staff\/candidates$/);
   await page.goto(`/admin/employees/${someone.id}`);

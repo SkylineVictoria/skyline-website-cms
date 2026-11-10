@@ -29,7 +29,7 @@ export default function LeaveAdminPage() {
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Leave" description="Requests are approved by the person's manager or HR, never by the person themselves. Balances come from the ledger: accruals when a period is locked, leave taken, and HR adjustments." />
+      <PageHeader breadcrumb="HRMS" title="Leave" description="Requests are approved by the person's manager or HR, never by the person themselves. Balances come from the ledger: accruals when a period is locked, leave taken, and HR adjustments." />
       <SectionTabs tabs={TABS} active={tab} onChange={(id) => setParams(id === "approvals" ? {} : { tab: id })} />
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
       {tab === "approvals" ? <LeaveApprovals refreshKey={refresh} /> : null}

@@ -28,7 +28,7 @@ export default function StaffPage() {
 
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Employees" description="Add an employee with their name, email and mobile; they are Active straight away. Open an employee to upload their documents or make them inactive."
+      <PageHeader breadcrumb="HRMS" title="Employees" description="Add an employee with their name, email and mobile; they are Active straight away. Open an employee to upload their documents or make them inactive."
         actions={<Button onClick={() => setAdding(true)} icon="ri-user-add-line" data-testid="employee-add">Add employee</Button>} />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div role="tablist" aria-label="Filter by status" className="inline-flex rounded-md border border-background-300 p-0.5">

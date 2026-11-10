@@ -82,7 +82,7 @@ export default function CandidatesPage() {
   }, [treeView, job, state, search, offset]);
 
   return <div>
-    <PageHeader breadcrumb="Staff" title="Candidates" description="Careers applications and candidates entered by hand, in one pipeline: screening, shortlist, interview, selected, then hire (the document link) or decline."
+    <PageHeader breadcrumb="HRMS" title="Candidates" description="Careers applications and candidates entered by hand, in one pipeline: screening, shortlist, interview, selected, then hire (the document link) or decline."
       actions={<Button disabled={!jobs.length} onClick={() => setAdding(true)} icon="ri-add-line" data-testid="candidate-add">Add candidate</Button>} />
     <SectionTabs tabs={[{ id: "list", label: "List", icon: "ri-list-check" }, { id: "tree", label: "Tree", icon: "ri-node-tree" }]} active={treeView ? "tree" : "list"} onChange={setView} />
     <div className="mb-4 grid gap-2 sm:grid-cols-3">
@@ -202,7 +202,7 @@ export function CandidateDetailPage() {
   if (row.stage === "selected") actions.push("hired");
   actions.push("declined", "withdrawn");
   return <div>
-    <PageHeader breadcrumb="Staff / Candidates" title={hrName(row)} description={row.jobTitle}
+    <PageHeader breadcrumb="HRMS / Candidates" title={hrName(row)} description={row.jobTitle}
       actions={<><CandidateBadge row={row} /><Button variant="outline" onClick={() => {
         setEditing(true);
         void adminListJobs().then(setJobs, (e: Error) => setError(e.message));

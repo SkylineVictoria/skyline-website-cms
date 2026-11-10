@@ -45,7 +45,7 @@ export default function StaffDetailPage() {
 
   if (!employee) {
     return <div>
-      <PageHeader breadcrumb="Staff" title="Employee" />
+      <PageHeader breadcrumb="HRMS" title="Employee" />
       {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : <p role="status">Loading…</p>}
       <p className="mt-4"><Link to={STAFF_EMPLOYEES_PATH} className="text-sm font-medium text-primary-700 hover:underline">Back to Employees</Link></p>
     </div>;
@@ -54,7 +54,7 @@ export default function StaffDetailPage() {
   const active = employee.status === "active";
   return (
     <div>
-      <PageHeader breadcrumb="Staff › Employees" title={fullName(employee)}
+      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)}
         actions={<>
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>
           <Button variant="outline" onClick={() => setConfirmStatus(true)} data-testid="employee-status">{active ? "Make inactive" : "Make active"}</Button>

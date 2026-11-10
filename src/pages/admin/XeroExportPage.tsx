@@ -58,7 +58,7 @@ export default function XeroExportPage() {
   const ready = Boolean(period && period.status === "locked" && readiness && readiness.employees.length && readiness.employees.every((e) => e.approved && e.xeroEmployeeId));
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Xero export" description="Approved hours, leave and public holidays per pay period for Xero Payroll AU (pay items Ordinary, Overtime, Public Holiday and each leave type, one line per employee per day). Payroll itself is calculated in Xero." />
+      <PageHeader breadcrumb="HRMS" title="Xero export" description="Approved hours, leave and public holidays per pay period for Xero Payroll AU (pay items Ordinary, Overtime, Public Holiday and each leave type, one line per employee per day). Payroll itself is calculated in Xero." />
       {error ? <p role="alert" className={`mb-4 ${ALERT}`} data-testid="xero-error">{error}</p> : null}
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`} data-testid="xero-notice">{notice}</p> : null}
       {team.schedules.length ? (

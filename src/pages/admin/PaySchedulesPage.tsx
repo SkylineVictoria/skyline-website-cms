@@ -46,7 +46,7 @@ export default function PaySchedulesPage() {
   if (!schedules || !settings) return <AdminLoading label="Loading pay schedules…" />;
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Pay schedules" description="Pay periods for Xero Payroll AU. Fortnightly periods run Monday to Sunday from the anchor Monday; monthly periods are calendar months. Periods are generated a year ahead and topped up daily."
+      <PageHeader breadcrumb="HRMS" title="Pay schedules" description="Pay periods for Xero Payroll AU. Fortnightly periods run Monday to Sunday from the anchor Monday; monthly periods are calendar months. Periods are generated a year ahead and topped up daily."
         actions={<Button onClick={() => { setEditing({ id: null, name: "", frequency: "fortnightly", anchorDate: "", payDateOffsetDays: "0", isActive: true }); setDialogError(""); }} data-testid="schedule-new">New schedule</Button>} />
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`} data-testid="schedule-notice">{notice}</p> : null}

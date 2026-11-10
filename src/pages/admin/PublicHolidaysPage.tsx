@@ -53,7 +53,7 @@ export default function PublicHolidaysPage() {
   const reviewCount = rows?.filter((r) => r.status === "review").length ?? 0;
   return (
     <div>
-      <PageHeader breadcrumb="Staff" title="Public holidays" description="Victorian public holidays. Full-time and part-time staff are paid their ordinary hours for a confirmed holiday that falls on one of their usual work days. Seeded dates wait at Review until HR confirms them; the Friday before the AFL Grand Final is added by hand each year."
+      <PageHeader breadcrumb="HRMS" title="Public holidays" description="Victorian public holidays. Full-time and part-time staff are paid their ordinary hours for a confirmed holiday that falls on one of their usual work days. Seeded dates wait at Review until HR confirms them; the Friday before the AFL Grand Final is added by hand each year."
         actions={<>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} data-testid="holiday-year">{[thisYear - 1, thisYear, thisYear + 1, thisYear + 2].map((y) => <option key={y} value={y}>{y}</option>)}</Select>
           {reviewCount ? <Button variant="outline" disabled={busy === "all"} onClick={() => void confirmAll()} data-testid="holiday-confirm-all">Confirm all {reviewCount}</Button> : null}

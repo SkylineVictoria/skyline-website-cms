@@ -57,3 +57,9 @@ verify_jwt = true
 # Victorian public holidays from data.gov.au (Nager.Date as fallback) into hr.public_holidays: the weekly pg_cron job (service-role
 # key from Vault) and "Sync now" (admin JWT). The database decides who may run it (hr_holiday_sync_begin); never deletes a row.
 verify_jwt = true
+
+[functions.integrations-admin]
+verify_jwt = true
+
+[functions.integrations-webhook]
+verify_jwt = false # Stripe HMAC signature verification in the handler; no user JWT exists on provider deliveries.

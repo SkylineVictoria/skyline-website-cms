@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { Badge, Button, EmptyState, Field, PageHeader, SectionTabs, Select, TextInput } from "./components/ui";
 import ComposeRequest from "./components/signing/ComposeRequest";
 import RequestDetail from "./components/signing/RequestDetail";
@@ -25,8 +26,15 @@ function EnvelopeSigningPage() {
   const [context, setContext] = useState<SigningContext>({ templates: [], requests: [] });
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)) === "templates" ? "templates" : "requests"); const [status, setStatus] = useState(() => { const v = (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)); return v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"; });
-  useEffect(() => { const sync = () => { const v = (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)); setTab(v === "templates" ? "templates" : "requests"); setStatus(v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"); }; window.addEventListener("popstate", sync); return () => window.removeEventListener("popstate", sync); }, []);
+  // React Router changes client-side routes without a popstate event. Read the
+  // current route directly so sidebar links always select the right view.
+  const location = useLocation();
+  const routeView = new URLSearchParams(location.search).get("view") ?? location.pathname.split("/").at(-1) ?? "";
+  const routeTab = routeView === "templates" ? "templates" : "requests";
+  const routeStatus = Object.prototype.hasOwnProperty.call(SIGNING_STATUS, routeView) ? routeView : "all";
+  const [tab, setTab] = useState(routeTab);
+  const [status, setStatus] = useState(routeStatus);
+  useEffect(() => { setTab(routeTab); setStatus(routeStatus); }, [routeTab, routeStatus]);
   const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [subject, setSubject] = useState("");
   const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SigningTemplate | "new" | null>(null);

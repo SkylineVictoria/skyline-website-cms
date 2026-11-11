@@ -21,7 +21,14 @@ Phase order (ADR-012, 2026-10-26): 5 Azure, 6 RTO administration, 7 Postmark, 8 
 | 11 Performance, security, observability, deploy | 4 | 0 | 4 | PENDING |
 | **Total** | **56** | **42** | **14** | |
 
-**Next eligible: P09-01** (Phase 8b is complete except P08-08, BLOCKED on PRISMS API access). P05-04 live run needs explicit owner approval and a hosted release.
+**Next eligible: P09-02** (P09-01 DONE locally, not released; Phase 8b is complete except P08-08, BLOCKED on PRISMS API access). P05-04 live run needs explicit owner approval and a hosted release.
+
+## Handoff (2026-11-11 evening)
+
+- Released (hosted = live/main at this commit): all 217 repo migrations applied (highest 20261113210000; incl. 20261111131056 and PR #31's 20261111143429, both applied by other sessions), every repo Edge Function deployed (versions in SUPABASE.md "Release status"), frontend on Vercel READY (57b6710 and later). `db push --dry-run` from this commit: up to date, 0 migrations.
+- Backups: 15-minute checkpoint PASS again (175 at 15:34Z; it had failed from 13:40Z and had not passed since 2026-11-09 15:32Z). Restore test PASS on checkpoint 174 (staff records, signed PDFs). Other sessions release straight to hosted: after each hosted migration add `{name, version}` to `docs/release-evidence/close-20261026/hosted-refreshed.json` or the checkpoint fails at "history".
+- Local only, NOT released: P09-01 (branch `p09-01-public-assistant-tenant` on remote `live`, one commit on top of this one): migration 20261113220000 + public-assistant / public-assistant-index changes + tests. Release order in SUPABASE.md "Public assistant per tenant"; needs the owner's approval.
+- Next steps: (1) owner approval to release P09-01, then merge its branch; (2) P09-02 is next eligible; (3) `test:document-provider` has 2 pre-existing External Integrations failures (navigation, OAuth refresh) for that work stream; (4) owner to decide on 62 enrollment files whose applications no longer exist (unreadable by design; kept); (5) owner browser items: leaked-password protection, copy Vault `hr_bank_details_key`, Turnstile 400020 hostname, Auth Invite template, staff sign-in links, real course intakes, admin smoke tests (template save / preview / sign, intakes screen, offer email).
 
 ## Phases 1-4 (DONE)
 

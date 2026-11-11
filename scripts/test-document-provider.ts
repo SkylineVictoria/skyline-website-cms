@@ -389,6 +389,6 @@ test('OAuth refresh rotates provider credentials without exposing secrets or rac
  const config=(name:string)=>name.endsWith('CLIENT_ID')?'synthetic-id':name.endsWith('CLIENT_SECRET')?'synthetic-secret':'https://crm.example/admin/integrations/credentials';
  assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z'});
  assert.equal(saved,1);assert.equal(JSON.parse(stored).refresh_token,'new-refresh');
- await assert.rejects(accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),/oauth_refresh_busy/);
- assert.equal(acquired,2);
+ assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'2026-11-11T12:00:00Z'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z'});
+ assert.equal(acquired,1,'fresh access tokens do not start a second refresh');
 });

@@ -226,6 +226,7 @@ const routes: RouteObject[] = [
           { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
           { path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin> },
           { path: "signing", element: <RequireAdmin><AdminSigningPage /></RequireAdmin> },
+          { path: "signing/:view", element: <RequireAdmin><AdminSigningPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },
           { path: "candidates", element: <Navigate to="/admin/staff/candidates" replace /> },
           { path: "candidates/:id", element: <LegacyCandidateRedirect /> },

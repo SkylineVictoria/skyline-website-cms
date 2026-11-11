@@ -10,7 +10,14 @@ import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningE
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
+import { isTokenFieldLabel } from "../_shared/template-variables.ts";
+
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
+/** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
+// deno-lint-ignore no-explicit-any
+export const isSectioned = (t: Record<string, any>) => t.kind === "text" && (t.bracket_variables === true || !!String(t.header_html ?? "").trim() || !!String(t.footer_html ?? "").trim());
+/** A field made from the template's own tokens ([Student Initial], an unknown [token]), with where the renderer placed it. */
+export interface GeneratedField { label: string; type: "text" | "initials"; page: number; x: number; y: number; w: number; h: number }
 import type { EmailProvider } from "../_shared/notification/delivery.ts";
 import { outcomeState, type HrMailConfig } from "../_shared/hr-mail.ts";
 
@@ -50,6 +57,7 @@ const LINK_INVALID = "This signing link is invalid or expired.";
 const letterPdfModule = () => import("../_shared/offer-letter-pdf.ts");
 const offerPdfModule = () => import("../_shared/offer-pdf.ts");
 const signingPdfModule = () => import("../_shared/signing-pdf.ts");
+const documentPdfModule = () => import("../_shared/document-pdf.ts");
 const safeName = (title: string) => (title.replace(/[^A-Za-z0-9 ._-]/g, "").trim().slice(0, 80) || "document");
 
 export async function handleSigning(call: SigningCall, ports: SigningPorts): Promise<unknown> {
@@ -96,6 +104,14 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (body.agreed !== true || !signingNameValid(name)) throw new SigningError("Enter your full name and tick the agreement.");
         const kind = ["typed", "drawn", "uploaded"].includes(String(body.signatureKind)) ? String(body.signatureKind) : "typed";
         const values = body.values && typeof body.values === "object" ? body.values as Record<string, unknown> : {};
+        // A token that appears more than once is one answer: the signing page shows one input for it, so every copy carries the same text.
+        const answers = new Map<string, string>();
+        for (const f of (record.fields ?? []) as Array<{ id: string; type: string; label: string }>) {
+          if (f.type !== "text" || !isTokenFieldLabel(f.label)) continue;
+          const answer = String(values[f.id] ?? "").trim();
+          if (answers.has(f.label) && answers.get(f.label) !== answer) throw new SigningError(`Give one answer for ${f.label}: it appears more than once in the document.`);
+          answers.set(f.label, answer);
+        }
         const [pdf, letter] = await Promise.all([signingPdfModule(), letterPdfModule()]);
         let image: string | null = null, signatureHash: string;
         if (kind === "typed") signatureHash = await sha256Hex(new TextEncoder().encode(name));
@@ -164,8 +180,31 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const fill = (source: string) => sample ? sampleFill(source, values) : fillSigningTemplate(source, values);
       const title = fill(String(template.title ?? ""));
       const senderFields = (Array.isArray(template.fields) ? template.fields : []).map((f: Record<string, unknown>) => f.role === "sender" ? { ...f, value: String(f.value ?? "").trim() ? fill(String(f.value)).trim() : "" } : f);
-      if (template.kind === "pdf") return { title, rendered: null as string | null, templateText: null as string | null, edited: false, isHtml: false, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields };
+      const none: GeneratedField[] = [];
+      if (template.kind === "pdf") return { title, rendered: null as string | null, templateText: null as string | null, edited: false, isHtml: false, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields, generated: none };
       const letterPdf = await letterPdfModule();
+      if (isSectioned(template)) {
+        // TPL-02: header, body and footer; {{placeholders}} filled first (escaped), then the [Variable] tokens by the registry while the PDF
+        // is laid out. The administrator may edit the body of THIS copy; the header, the footer and the template are untouched.
+        const strings = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+        const fillHtml = (html: unknown) => typeof html === "string" && html.trim() ? fillHtmlVariables(html, strings, { sample }) : "";
+        const ownBody = fillHtml(typeof template.body_html === "string" && template.body_html.trim() ? template.body_html : signingHtml(String(template.body ?? "")));
+        let bodyHtml = ownBody;
+        if (typeof editedHtml === "string" && editedHtml.trim()) {
+          if (editedHtml.length > 400000) throw new SigningError("Keep the edited document under 400,000 characters.");
+          const left = signingVariables(editedHtml);
+          if (left.length) throw new SigningError(`The edited text still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`);
+          bodyHtml = editedHtml;
+        }
+        const doc = await documentPdfModule();
+        const made = await doc.buildDocumentPdf({ title, header: fillHtml(template.header_html), body: bodyHtml, footer: fillHtml(template.footer_html), values: strings, brackets: template.bracket_variables === true, sample });
+        if (!sample && made.missing.length) {
+          const names = made.missing.map((n) => `[${n}]`).join(", ");
+          throw new SigningError(`The document cannot be made yet: ${names} ${made.missing.length === 1 ? "has" : "have"} no value. Add ${made.missing.length === 1 ? "it" : "them"} on the record, type ${made.missing.length === 1 ? "it" : "them"} here, or change the template.`);
+        }
+        if (!sample && made.unsupported) throw new SigningError(`Some characters cannot be printed in the PDF: "${made.unsupported.slice(0, 40)}". Replace them, or upload a ready-made PDF.`);
+        return { title, rendered: bodyHtml, templateText: ownBody, edited: bodyHtml !== ownBody, isHtml: true, bytes: made.bytes, fields: senderFields, generated: made.fields as GeneratedField[] };
+      }
       const bodyHtml = typeof template.body_html === "string" && template.body_html.trim() ? String(template.body_html) : null;
       if (bodyHtml) {
         // A rich template (the HRMS letters, one table since 20261113170000): the signing variables ({{employee.name}}, {{salary}}) are filled
@@ -188,7 +227,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
         const bad = await letterPdf.unsupportedText([title, templateText(html)]);
         if (bad !== null) throw new SigningError(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF: "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
-        return { title, rendered: html, templateText: made.html, edited: html !== made.html, isHtml: true, bytes: (await letterPdf.buildLetterPdf({ title, html, letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
+        return { title, rendered: html, templateText: made.html, edited: html !== made.html, isHtml: true, bytes: (await letterPdf.buildLetterPdf({ title, html, letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields, generated: none };
       }
       // The administrator may edit the filled text of THIS copy (text templates; the template is untouched): no {{variable}} may remain.
       let text: string | null = null;
@@ -201,7 +240,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const plain = fill(String(template.body ?? "")), rendered = text ?? plain;
       const bad = await letterPdf.unsupportedText([title, rendered]);
       if (bad !== null) throw new SigningError(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF: "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
-      return { title, rendered, templateText: plain, edited: rendered !== plain, isHtml: false, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
+      return { title, rendered, templateText: plain, edited: rendered !== plain, isHtml: false, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields, generated: none };
     };
     /** The record's values: the signing names (student.*, employee.*, agent.*) and, for an employee, the letter names of HRMS Templates ({{job_title}}…). */
     const subjectValues = async (type: unknown, id: unknown) => {
@@ -254,7 +293,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const made = await templateDocument(template, values, true);
       const sender = made.fields.filter((f: Record<string, unknown>) => f.role === "sender").map((f: Record<string, unknown>) => ({ ...f, recipient_id: null, done: true })) as unknown as import("../_shared/signing-pdf.ts").StampField[];
       const bytes = sender.length ? await (await signingPdfModule()).stampDocument(made.bytes, { reference: "PREVIEW", title: made.title, fields: sender, recipients: [] }) : made.bytes;
-      return { title: made.title, pdfBase64: toBase64(bytes), variables: templateVariables(template as never), values };
+      return { title: made.title, pdfBase64: toBase64(bytes), variables: templateVariables(template as never), values, signerFields: made.generated };
     }
     if (action === "template_url") {
       const context = await admin("list");
@@ -297,6 +336,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         const printed = made.fields.filter((f: Record<string, unknown>) => f.role === "sender" && f.value).map((f: Record<string, unknown>) => ({ ...f, recipient_id: null, done: true })) as unknown as import("../_shared/signing-pdf.ts").StampField[];
         if (printed.length) bytes = await (await signingPdfModule()).stampDocument(bytes, { reference: "", title, fields: printed, recipients: [] });
         fields = made.fields.filter((f: Record<string, unknown>) => recipients.some((r) => r.role === f.role));
+        // TPL-02: [Student Initial] on every page and every [token] the signer answers belong to the first signer (the student, the employee).
+        if (made.generated.length) {
+          const first = [...recipients].sort((a, b) => a.order - b.order)[0];
+          fields = [...fields, ...made.generated.map((f) => ({ type: f.type, role: first.role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: true, label: f.label }))];
+        }
         options.signing_mode = body.signingMode ? options.signing_mode : template.signing_mode;
         options.expiry_days = body.expiryDays ?? template.expiry_days; options.reminder_days = body.reminderDays ?? template.reminder_days;
       }

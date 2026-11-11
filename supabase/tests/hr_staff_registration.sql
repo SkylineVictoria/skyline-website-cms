@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(664);
+select plan(689);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -1240,5 +1240,49 @@ select throws_ok($$insert into hr.staff_documents(application_id, profile_id, ca
 select is(public.record_validated_document_category('staff-documents', pg_temp.v('cu1') || '/passport/unchecked.pdf', 'Passport'), true, 'the uploader records a receipt for the checked file');
 select lives_ok($$insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, expiry_date) select a.id, a.profile_id, 'Passport', a.profile_id || '/passport/unchecked.pdf', 'u.pdf', 'application/pdf', 10, current_date + 400 from hr.staff_applications a where a.profile_id = pg_temp.v('cu1')$$, 'the same file is accepted once its receipt exists');
 select is(has_function_privilege('authenticated', 'public.record_validated_document_category(text, text, text)', 'execute'), false, 'browsers cannot issue receipts');
+
+-- ---------------------------------------------------------------- TPL-02 document templates: header / body / footer, presets, [Variables] (20261113190000)
+reset role;
+select is((select count(*)::int from hr.sign_templates where header_html is not null or footer_html is not null or bracket_variables), 0, 'TPL-02: every template made before keeps its body, with an empty header and footer and no [variables]');
+select is(has_function_privilege('authenticated', 'hr.signing_admin_core(text, uuid, jsonb)', 'execute'), false, 'TPL-02: only the wrapper calls the released signing_admin');
+select is(has_function_privilege('authenticated', 'public.signing_admin(text, uuid, jsonb)', 'execute') and not has_function_privilege('anon', 'public.signing_admin(text, uuid, jsonb)', 'execute'), true, 'TPL-02: the wrapper keeps the grants (authenticated, not anon)');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000003';
+select throws_ok($$select public.signing_admin('part_list')$$, '42501', 'Only an administrator can do this.', 'TPL-02: presets are for administrators only');
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+insert into t select 'part1', public.signing_admin('part_save', null, '{"kind":"header","name":"SLIT letterhead","html":"<table style=\"border:none\"><tr><td>SLIT</td><td style=\"text-align:right\">RTO 45989</td></tr></table>"}')->>'id';
+select ok(pg_temp.v('part1') is not null, 'TPL-02: a header preset is saved');
+select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"slit LETTERHEAD","html":"<p>x</p>"}')$$, '23505', 'A header preset with this name already exists', 'TPL-02: preset names are unique per kind (any case)');
+select lives_ok($$select public.signing_admin('part_save', null, '{"kind":"footer","name":"SLIT letterhead","html":"<p>Page [Page Number] Student Initial [Student Initial]</p>"}')$$, 'TPL-02: a footer may share a header''s name');
+select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Bad","html":"<p>x</p><script>alert(1)</script>"}')$$, '22023', 'The template contains content that is not allowed (scripts, frames, forms or embedded objects).', 'TPL-02: no script in a preset');
+select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Linked","html":"<img src=\"https://evil.example/logo.png\">"}')$$, '22023', 'Pictures must be uploaded into the template (PNG or JPEG), not linked from another site.', 'TPL-02: no linked picture');
+select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Handler","html":"<p onmouseover=\"x()\">x</p>"}')$$, '22023', 'The template contains content that is not allowed (event handlers).', 'TPL-02: no event handler');
+select is(jsonb_array_length(public.signing_admin('part_list')), 2, 'TPL-02: both presets are listed');
+insert into t select 'tpl-doc', public.signing_admin('template_save', null, '{"name":"Letter of offer","title":"Letter of offer and written agreement","kind":"text","audience":"student","category":"enrolment_agreement","body_html":"<p>Dear [Student Name], guardian [Guardian Name].</p>","body":"Dear [Student Name], guardian [Guardian Name].","header_html":"<p>HEAD</p>","footer_html":"<p>Page [Page Number] [Student Initial]</p>","bracket_variables":true}')->>'id';
+select is((public.signing_admin('template_save', pg_temp.v('tpl-doc'), '{"name":"Letter of offer","title":"Letter of offer and written agreement","kind":"text","audience":"student","category":"enrolment_agreement","body_html":"<p>Dear [Student Name], guardian [Guardian Name].</p>","header_html":"<p>HEAD 2</p>"}')->>'version'), '2', 'TPL-02: a new header is a new version');
+reset role;
+select is((select header_html || '|' || footer_html || '|' || bracket_variables from hr.sign_templates where id = pg_temp.v('tpl-doc')), '<p>HEAD 2</p>|<p>Page [Page Number] [Student Initial]</p>|true', 'TPL-02: a save that leaves the footer out keeps it');
+select is((select snapshot->>'header_html' || '|' || (snapshot->>'bracket_variables') from hr.sign_template_versions where template_id = pg_temp.v('tpl-doc') and version = 1), '<p>HEAD</p>|true', 'TPL-02: each version keeps its header and footer');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((public.signing_admin('template_restore', pg_temp.v('tpl-doc'), '{"version":1}')->>'header_html'), '<p>HEAD</p>', 'TPL-02: restoring a version restores its header');
+insert into t select 'tpl-copy', public.signing_admin('template_duplicate', pg_temp.v('tpl-doc'))->>'id';
+select throws_ok($$select public.signing_admin('template_save', null, '{"name":"Staff letter","title":"Offer","kind":"text","audience":"employee","category":"offer_letter","body_html":"<p>Dear {{first_name}}</p>","header_html":"<p>HEAD</p>"}')$$, '22023',
+ 'A header, a footer and [variables] are for document templates, not for HRMS letters, emails or PDF templates', 'TPL-02: HRMS letters keep their {{placeholders}} and the shared letterhead');
+select throws_ok($$select public.signing_admin('template_save', null, '{"name":"Bad doc","title":"Bad","kind":"text","category":"other","body_html":"<p>x</p><iframe src=\"https://x\"></iframe>","bracket_variables":true}')$$, '22023',
+ 'The template contains content that is not allowed (scripts, frames, forms or embedded objects).', 'TPL-02: the body is checked too');
+select lives_ok($$select public.signing_admin('create', 'd0000000-0000-0000-0000-0000000000c1', jsonb_build_object('title', 'Letter of offer', 'template_id', pg_temp.v('tpl-doc'), 'original_hash', repeat('c', 64),
+ 'recipients', jsonb_build_array(jsonb_build_object('name', 'Asha Patel', 'email', 'asha.tpl@example.test', 'role', 'signer1')),
+ 'fields', jsonb_build_array(jsonb_build_object('type', 'initials', 'role', 'signer1', 'page', 1, 'x', 0.7, 'y', 0.93, 'w', 0.06, 'h', 0.016, 'label', 'Student Initial'),
+   jsonb_build_object('type', 'text', 'role', 'signer1', 'page', 1, 'x', 0.1, 'y', 0.2, 'w', 0.3, 'h', 0.016, 'label', '[Guardian Name]'))))$$, 'TPL-02: a request takes the generated initials and token fields');
+select lives_ok($$select public.signing_admin('template_save', pg_temp.v('tpl-doc'), '{"name":"Letter of offer","title":"Letter of offer and written agreement","kind":"text","category":"enrolment_agreement","body_html":"<p>Changed</p>","header_html":"<p>HEAD 3</p>"}')$$, 'TPL-02: the template changes after the request was made');
+select is(public.signing_admin('part_delete', pg_temp.v('part1'))->>'deleted', 'true', 'TPL-02: a preset can be deleted');
+select lives_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"SLIT letterhead","html":"<p>New</p>"}')$$, 'TPL-02: ...and its name used again');
+reset role;
+select is((select r.template_version || '|' || r.original_hash from hr.sign_requests r where r.id = 'd0000000-0000-0000-0000-0000000000c1'), '3|' || repeat('c', 64), 'TPL-02: the request keeps the version and the PDF it was made from');
+select is((select string_agg(f.type || ':' || f.label, ',' order by f.type) from hr.sign_fields f where f.request_id = 'd0000000-0000-0000-0000-0000000000c1'), 'initials:Student Initial,text:[Guardian Name]', 'TPL-02: the first signer owns the initials and the token field');
+select is((select header_html || '|' || bracket_variables from hr.sign_templates where id = pg_temp.v('tpl-copy')), '<p>HEAD</p>|true', 'TPL-02: a copy keeps the header and the [variables]');
+select is((select count(*)::int from hr.sign_templates where (header_html is not null or footer_html is not null or bracket_variables) and id not in (pg_temp.v('tpl-doc'), pg_temp.v('tpl-copy'))), 0, 'TPL-02: no other template changed');
+
 select * from finish();
 rollback;

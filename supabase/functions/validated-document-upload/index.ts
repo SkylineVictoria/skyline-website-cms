@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { checkedDocumentCategory } from "../_shared/document-category.ts";
 import { createDocumentCategoryCheck } from "../_shared/document-extraction/classify.ts";
+import { readerFetch } from "../_shared/document-extraction/lab-reader-fetch.ts";
 import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { DOCUMENT_MAX_BYTES, documentFileProblem } from "../_shared/validation/person.ts";
@@ -13,6 +14,8 @@ const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBL
 const checkCategory = createDocumentCategoryCheck({
   apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
   model: Deno.env.get("OPENAI_DOCUMENT_MODEL") ?? "",
+  // LAB ONLY: the lab's mock reader when SUPABASE_URL is local (EF_OPENAI_API_URL); plain fetch on any hosted project.
+  fetch: readerFetch({ SUPABASE_URL: url, EF_OPENAI_API_URL: Deno.env.get("EF_OPENAI_API_URL") ?? "" }),
 });
 const headers = {
   "Access-Control-Allow-Origin": "*",

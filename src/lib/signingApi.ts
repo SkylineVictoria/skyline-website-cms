@@ -8,6 +8,8 @@ export interface TemplateField { type: SignFieldType; role: string; page: number
 /** One template table (20261113170000): documents to sign (text or PDF) and the HRMS letters and emails (rich `body_html`, `subject`, one default per category). */
 export interface SigningTemplate {
   id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null; is_default?: boolean;
+  /** TPL-02: header and footer repeated on every page; [Variable] tokens active (templates saved in the sectioned editor). */
+  header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
   kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
   version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
 }
@@ -69,12 +71,39 @@ export async function signingAction<T>(body: Record<string, unknown>, file?: Fil
   if (form && file) { form.set("data", JSON.stringify(body)); form.set("file", file); }
   const { data, error } = await supabase.functions.invoke("document-signing", { body: form ?? body });
   if (error) {
-    let message = "The signing request could not be completed.";
-    try { const response = await error.context?.json(); if (typeof response?.error === "string") message = response.error; } catch { /* safe fallback */ }
-    throw new Error(message);
+    let message = "The signing request could not be completed.", code = "";
+    try {
+      const response = await error.context?.json();
+      if (typeof response?.error === "string") message = response.error;
+      if (typeof response?.code === "string") code = response.code;
+    } catch { /* safe fallback */ }
+    if (error.context?.status === 546) code ||= "WORKER_LIMIT";
+    throw Object.assign(new Error(message), { code });
   }
   return data as T;
 }
+/** The platform stopped the worker (its CPU or memory limit), not a refusal: the same call may simply be made again. */
+export const isWorkerLimit = (error: unknown) => (error as { code?: string } | null)?.code === "WORKER_LIMIT";
+/**
+ * Signs through the function, again up to twice when the platform stopped the worker. The database keeps one signature per person,
+ * so a retry after a stop that came after the commit answers "already signed": that is reported as signed.
+ */
+export async function signWithRetry<T>(body: Record<string, unknown>, wait = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<T | { signed: true; retried: true }> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await signingAction<T>(body); }
+    catch (error) {
+      if (attempt > 0 && /already signed/i.test((error as Error).message)) return { signed: true, retried: true };
+      if (!isWorkerLimit(error) || attempt >= 2) throw error;
+      await wait(800 * (attempt + 1));
+    }
+  }
+}
+/** A saved header or footer (TPL-02); picking one copies its HTML into the template. */
+export interface TemplatePart { id: string; kind: "header" | "footer"; name: string; html: string; updated_at: string }
+export const listTemplateParts = () => signingAdmin<TemplatePart[]>("part_list");
+export const saveTemplatePart = (part: { id?: string | null; kind: "header" | "footer"; name: string; html: string }) => signingAdmin<TemplatePart>("part_save", part.id ?? null, { kind: part.kind, name: part.name, html: part.html });
+export const deleteTemplatePart = (id: string) => signingAdmin<{ id: string }>("part_delete", id);
+
 export const pdfBytes = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 /** The text of a .docx file, for a text template (formatting is not kept). */
 export async function docxText(file: File): Promise<string> {

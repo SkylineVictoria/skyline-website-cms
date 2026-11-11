@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(298);
+select plan(329);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -612,5 +612,80 @@ select throws_ok($$select public.portal_self_register('agent','{"businessName":"
  'The email and phone number you entered are already linked to another company. Please enter a different email and phone number, since this will be the admin account for your company.','both matching are named together');
 select lives_ok($$select public.portal_self_register('agent','{"businessName":"Clean Agency","abn":"33102417064","contactName":"Clean Contact","email":"clean.contact@example.test","phone":"0390000002"}')$$,'a new ABN with a new email and phone registers');
 reset role;
+
+-- ---------------------------------------------------------------- INT-01 course intakes (20261113200000, 20261113210000)
+reset role;
+insert into public.agencies(id, name, code) values ('13000000-0000-0000-0000-0000000000a1', 'Intake agency', 'INT-AGENCY');
+insert into public.portal_profiles(id, auth_user_id, full_name, email) values ('23000000-0000-0000-0000-0000000000a1', '33000000-0000-0000-0000-0000000000a1', 'Intake agent', 'intake.agent@example.test');
+insert into public.agency_memberships(user_id, agency_id, role) values ('23000000-0000-0000-0000-0000000000a1', '13000000-0000-0000-0000-0000000000a1', 'agent');
+insert into public.cms_courses(id, slug, code, name, status) values ('int-course-a', 'int-course-a', 'INTA1', 'Intake course A', 'Published'), ('int-course-b', 'int-course-b', 'INTB1', 'Intake course B', 'Published');
+insert into public.enrollment_students(id, agency_id, full_name, email) values ('73000000-0000-0000-0000-0000000000a1', '13000000-0000-0000-0000-0000000000a1', 'Ina Take', 'ina.take@example.test');
+insert into public.enrollment_applications(id, reference, agency_id, assigned_agent_id, status, data, student_id) values
+ ('43000000-0000-0000-0000-0000000000a1', 'APP-INT-0001', '13000000-0000-0000-0000-0000000000a1', '23000000-0000-0000-0000-0000000000a1', 'draft', '{}', '73000000-0000-0000-0000-0000000000a1');
+create temp table intake_ids(k text primary key, v uuid);
+grant select, insert on intake_ids to public;
+set local role authenticated;
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-0000000000a1';
+select throws_ok($$select public.course_intakes_admin('save', 'int-course-a', null, '{"startDate":"2030-01-01"}')$$, '42501', 'Only CMS staff can manage intakes', 'INT-01: an agent cannot manage intakes');
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-000000000002';
+select is(jsonb_array_length(public.course_intakes_admin('save', 'int-course-a', null, jsonb_build_object('startDate', current_date + 60))), 1, 'INT-01: staff add an intake');
+select is(jsonb_array_length(public.course_intakes_admin('save', 'int-course-a', null, jsonb_build_object('startDate', current_date + 20, 'label', 'Early start', 'endDate', current_date + 400))), 2, 'INT-01: with a label and an end date');
+select is(jsonb_array_length(public.course_intakes_admin('save', 'int-course-a', null, jsonb_build_object('startDate', current_date - 10))), 3, 'INT-01: a past intake can be recorded');
+select is(jsonb_array_length(public.course_intakes_admin('save', 'int-course-a', null, jsonb_build_object('startDate', current_date + 90, 'isActive', false))), 4, 'INT-01: and an inactive one');
+select is(jsonb_array_length(public.course_intakes_admin('save', 'int-course-b', null, jsonb_build_object('startDate', current_date + 30))), 1, 'INT-01: another course has its own intakes');
+select throws_ok(format($$select public.course_intakes_admin('save', 'int-course-a', null, '{"startDate":"%s"}')$$, current_date + 60), '23505', null, 'INT-01: one intake per course and start date');
+select throws_ok(format($$select public.course_intakes_admin('save', 'int-course-a', null, '{"startDate":"%s","endDate":"%s"}')$$, current_date + 61, current_date + 1), '22023', 'The end date is before the start date', 'INT-01: an end date before the start is refused');
+select throws_ok($$select public.course_intakes_admin('list', 'no-such-course')$$, 'P0002', 'Course not found', 'INT-01: an unknown course is refused');
+reset role;
+insert into intake_ids select 'a20', id from public.course_intakes where course_id = 'int-course-a' and start_date = current_date + 20;
+insert into intake_ids select 'a60', id from public.course_intakes where course_id = 'int-course-a' and start_date = current_date + 60;
+insert into intake_ids select 'past', id from public.course_intakes where course_id = 'int-course-a' and start_date = current_date - 10;
+insert into intake_ids select 'off', id from public.course_intakes where course_id = 'int-course-a' and start_date = current_date + 90;
+insert into intake_ids select 'b30', id from public.course_intakes where course_id = 'int-course-b';
+create function pg_temp.iv(text) returns uuid language sql stable as $$ select v from intake_ids where k = $1 $$;
+set local role authenticated;
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-0000000000a1';
+select is((select string_agg(x->>'name', ',' order by n) from jsonb_array_elements(public.course_intakes_open('int-course-a')) with ordinality as e(x, n)),
+ 'Early start,' || to_char(current_date + 60, 'FMMonth YYYY'), 'INT-01: the dropdown lists only active intakes that have not started, earliest first');
+select is(public.course_intakes_open('int-course-a')->1->>'display', to_char(current_date + 60, 'FMMonth YYYY') || ' (starts ' || to_char(current_date + 60, 'FMDD Mon YYYY') || ')', 'INT-01: the label is made by the database');
+select is(public.course_intakes_open('int-course-a')->0->>'display', 'Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')', 'INT-01: a staff label is used');
+select is(jsonb_array_length(public.course_intakes_open('int-course-b')), 1, 'INT-01: each course lists its own intakes');
+select is((select count(*)::int from public.course_intakes), 4, 'INT-01: an applicant reads only active intakes of courses they can see (the inactive one is hidden)');
+select lives_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 0, '{"values":{"preferred_intake":"Next month please"},"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('a20')),
+ 'INT-01: a draft saves an open intake of its course');
+select throws_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 1, '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('b30')),
+ '22023', 'This intake is not open for the chosen course. Choose the course again and pick one of its intakes.', 'INT-01: a tampered course / intake pair is refused');
+select throws_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 1, '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('past')),
+ '22023', 'This intake is not open for the chosen course. Choose the course again and pick one of its intakes.', 'INT-01: an intake that has started is refused');
+select throws_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 1, '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('off')),
+ '22023', 'This intake is not open for the chosen course. Choose the course again and pick one of its intakes.', 'INT-01: an inactive intake is refused');
+select throws_ok($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 1, '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"00000000-0000-4000-8000-000000000000"}]}')$$,
+ '22023', 'This intake is not open for the chosen course. Choose the course again and pick one of its intakes.', 'INT-01: an unknown intake is refused');
+reset role;
+select is((select a.data#>>'{values,preferred_intake}' || '|' || a.intake || '|' || c.intake_id from public.enrollment_applications a join public.enrollment_application_courses c on c.application_id = a.id where a.id = '43000000-0000-0000-0000-0000000000a1'),
+ 'Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')|Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')|' || pg_temp.iv('a20'), 'INT-01: the application records the intake''s own label, not the text the client sent');
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), null, 'INT-01: submission accepts an open intake of the course');
+select is((hr.sign_subject('student', '73000000-0000-0000-0000-0000000000a1')->'values') - array['current_date', 'student.address', 'student.phone', 'student.date_of_birth', 'student.passport_number', 'student.nationality', 'course.fees', 'course.duration', 'course.cricos', 'student.first_name', 'student.last_name', 'student.email', 'student.full_name', 'agency.name'],
+ jsonb_build_object('course.name', 'Intake course A', 'course.code', 'INTA1', 'course.intake', 'Early start', 'course.start_date', to_char(current_date + 20, 'FMDD FMMonth YYYY'), 'course.end_date', to_char(current_date + 400, 'FMDD FMMonth YYYY'),
+  'student.id', 'APP-INT-0001', 'agent.name', 'Intake agent'), 'INT-01: [Intake], [Start Date], [Student ID] and [Agent Name] fill from the student''s record');
+update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Hand edited"') where id = '43000000-0000-0000-0000-0000000000a1';
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), 'The preferred intake does not match the chosen intake. Choose the intake again.', 'INT-01: a hand-edited intake label is refused at submission');
+update public.course_intakes set is_active = false where id = pg_temp.iv('a20');
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), 'The chosen intake is not open for this course any more. Choose another intake.', 'INT-01: an intake closed after it was chosen is refused at submission');
+update public.course_intakes set is_active = true where id = pg_temp.iv('a20');
+set local role authenticated;
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-000000000002';
+select throws_ok(format($$select public.course_intakes_admin('delete', 'int-course-a', '%s')$$, pg_temp.iv('a20')), '23514', 'This intake is chosen on 1 application(s). Deactivate it instead of deleting it.', 'INT-01: a chosen intake is not deleted');
+select throws_ok(format($$select public.course_intakes_admin('save', 'int-course-a', '%s', '{"startDate":"%s"}')$$, pg_temp.iv('a20'), current_date + 21), '23514', null, 'INT-01: a chosen intake keeps its start date');
+select lives_ok(format($$select public.course_intakes_admin('save', 'int-course-a', '%s', '{"startDate":"%s","label":"Renamed"}')$$, pg_temp.iv('a20'), current_date + 20), 'INT-01: its label can change');
+select is(jsonb_array_length(public.course_intakes_admin('delete', 'int-course-a', pg_temp.iv('off'))), 3, 'INT-01: an unused intake is deleted');
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-0000000000a1';
+select lives_ok($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', (select draft_version from public.enrollment_applications where id = '43000000-0000-0000-0000-0000000000a1'), '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A"}]}')$$,
+ 'INT-01: a client without the intake dropdown still saves (release 1)');
+reset role;
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), 'Choose an intake for the course', 'INT-01: but such an application cannot be submitted once 20261113210000 is released');
+select is(has_function_privilege('anon', 'public.course_intakes_open(text)', 'execute') or has_function_privilege('anon', 'public.course_intakes_admin(text, text, uuid, jsonb)', 'execute')
+ or has_function_privilege('authenticated', 'public.application_intake_problem(uuid)', 'execute') or has_table_privilege('authenticated', 'public.course_intakes', 'insert'), false, 'INT-01: no anonymous access, no direct writes');
+
 select * from finish();
 rollback;

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { Button, Field, TextArea, TextInput } from "@/pages/admin/components/ui";
 import PdfPages from "@/components/signing/PdfPages";
 import LegacySignPage from "@/components/signing/LegacySignPage";
-import { RECIPIENT_STATE, signingAction, type SigningView } from "@/lib/signingApi";
+import { RECIPIENT_STATE, signingAction, signWithRetry, type SigningView } from "@/lib/signingApi";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
+import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 
 function readToken() {
   const token = new URLSearchParams(window.location.hash.slice(1)).get("t");
@@ -70,12 +71,21 @@ export default function SigningPage() {
   const signatureReady = method === "typed" ? name.trim().length >= 2 : !!picture;
   const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length;
   const goTo = (id: string) => document.querySelector(`[data-field="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  // TPL-02: a [token] of the template is one question, however often it appears; its answer fills every copy of it.
+  const tokenLabels = canSign ? [...new Set(view.fields.filter((f) => f.type === "text" && isTokenFieldLabel(f.label)).map((f) => f.label))] : [];
+  const setText = (field: { id: string; label: string }, text: string) => setValues((current) => {
+    if (!view || !isTokenFieldLabel(field.label)) return { ...current, [field.id]: text };
+    const next = { ...current };
+    for (const f of view.fields) if (f.type === "text" && f.label === field.label) next[f.id] = text;
+    return next;
+  });
+  const answerOf = (label: string) => { const first = view?.fields.find((f) => f.label === label); return first ? values[first.id] ?? "" : ""; };
 
   const sign = async () => {
     if (!view || busy || !ready) return;
     setBusy(true); setError("");
     try {
-      await signingAction({ action: "sign", token, name, agreed, signatureKind: method, signatureImage: method === "typed" ? null : picture, values, documentHash: view.documentHash });
+      await signWithRetry({ action: "sign", token, name, agreed, signatureKind: method, signatureImage: method === "typed" ? null : picture, values, documentHash: view.documentHash });
       setJustSigned(true); await load(); window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); }
   };
@@ -114,7 +124,7 @@ export default function SigningPage() {
             const lacking = missing.some((m) => m.id === f.id);
             const frame = `absolute rounded-sm border-2 ${lacking ? "border-red-500 bg-red-50/80" : "border-primary-500 bg-primary-50/80"}`;
             if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
-              onChange={(e) => setValues({ ...values, [f.id]: e.target.value })} className={`${frame} px-1 text-[16px] leading-none sm:text-sm`} style={style} />;
+              onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-[16px] leading-none sm:text-sm`} style={style} />;
             if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>
               <input type="checkbox" aria-label={f.label || "Checkbox"} checked={values[f.id] === "true"} onChange={(e) => setValues({ ...values, [f.id]: e.target.checked ? "true" : "false" })} className="h-full w-full cursor-pointer" /></label>;
             const text = f.type === "signature" ? (method === "typed" ? name || "Sign here" : picture ? "" : "Sign here") : f.type === "initials" ? initialsOf(name) || "Initials" : f.type === "name" ? name || "Your name" : "Date when you sign";
@@ -130,6 +140,13 @@ export default function SigningPage() {
 
         {canSign && <form ref={signPanel} className="space-y-5 border-t pt-5" onSubmit={(e) => { e.preventDefault(); void sign(); }}>
           <h2 className="text-lg font-semibold">Sign this document</h2>
+          {tokenLabels.length > 0 && <fieldset className="space-y-3 rounded-md border border-background-300 p-3" data-testid="signer-details">
+            <legend className="px-1 text-sm font-semibold">Details to fill in</legend>
+            <p className="text-sm text-foreground-600">These go into the document wherever they appear. Answer each one before you sign.</p>
+            {tokenLabels.map((label) => { const name = tokenFieldName(label); const lacking = !answerOf(label).trim(); return <Field key={label} label={name} required>
+              <TextInput value={answerOf(label)} maxLength={500} aria-invalid={lacking} data-testid={`detail-${name.replace(/\s+/g, "-").toLowerCase()}`} className="!text-[16px]"
+                onChange={(e) => { const first = view!.fields.find((f) => f.label === label)!; setText(first, e.target.value); }} /></Field>; })}
+          </fieldset>}
           {missing.length > 0 && <p className="rounded-md border border-red-300 bg-red-50 p-3 text-sm">{missing.length} required field{missing.length === 1 ? "" : "s"} in the document still need{missing.length === 1 ? "s" : ""} an answer.{" "}
             <button type="button" className="font-semibold underline" onClick={() => goTo(missing[0].id)} data-testid="next-field">Go to the next one</button></p>}
           <Field label="Your full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} required maxLength={150} autoComplete="name" className="!text-[16px]" /></Field>

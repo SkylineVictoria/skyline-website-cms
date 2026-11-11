@@ -313,6 +313,34 @@
   font-weight: 600;
 }
 
+/* Document templates (TPL-02): the editor looks like the PDF (Arial / Arimo 10 pt, black text, bordered tables unless turned off). */
+.rte-content.doc-content {
+  font-family: Arial, Arimo, "Liberation Sans", Helvetica, sans-serif;
+  font-size: 10pt;
+  line-height: 1.2;
+  color: #000;
+}
+.rte-content.doc-content h1 { font-size: 18pt; font-weight: 700; margin: 10pt 0 6pt; color: #000; }
+.rte-content.doc-content h2 { font-size: 15pt; color: #000; }
+.rte-content.doc-content h3 { font-size: 13pt; color: #000; }
+.rte-content.doc-content h4 { font-size: 11.5pt; color: #000; }
+.rte-content.doc-content p { margin: 0 0 6pt; }
+.rte-content.doc-content blockquote { font-style: normal; color: #000; }
+.rte-content.doc-content img { border-radius: 0; margin: 0; display: inline; }
+.rte-content.doc-content table { font-size: inherit; margin: 0 0 6pt; }
+.rte-content.doc-content th,
+.rte-content.doc-content td { border: 1px solid #000; padding: 4pt; vertical-align: top; }
+.rte-content.doc-content th { background: transparent; font-weight: 700; }
+.rte-content.doc-content td p,
+.rte-content.doc-content th p { margin: 0 0 2pt; }
+.rte-content.doc-content table[style*="border:none"] td,
+.rte-content.doc-content table[style*="border: none"] td,
+.rte-content.doc-content table[style*="border:none"] th,
+.rte-content.doc-content table[style*="border: none"] th { border: 1px dashed oklch(var(--background-300)); }
+::highlight(tpl-known) { background-color: #dbeafe; }
+::highlight(tpl-field) { background-color: #fde68a; }
+::highlight(tpl-auto) { background-color: #dcfce7; }
+
 /* CMS-authored page content (cms_pages.body) rendered on the public site */
 .cms-content h2 {
   font-family: var(--font-heading);

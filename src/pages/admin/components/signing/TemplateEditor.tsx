@@ -4,6 +4,9 @@ import FieldEditor, { type EditorField } from "@/components/signing/FieldEditor"
 import PdfPages from "@/components/signing/PdfPages";
 import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
 import TemplatePreviewDialog from "./TemplatePreviewDialog";
+import DocumentSections from "./DocumentSections";
+import { sectionsReport } from "@/lib/templateSections";
+import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
 import { docxText, pdfBytes, signingAction, signingAdmin, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
 import { SIGN_CATEGORIES, SUBJECT_VARIABLES, signingVariables } from "../../../../../supabase/functions/_shared/signing";
 import {
@@ -13,12 +16,12 @@ import {
 
 type Kind = "text" | "email" | "pdf";
 type Draft = Pick<SigningTemplate, "name" | "title" | "audience" | "category" | "signing_mode" | "expiry_days" | "reminder_days" | "roles" | "fields">
-  & { id: string | null; kind: Kind; body_html: string; subject: string; is_default: boolean; source_pages: number | null; version: number };
+  & { id: string | null; kind: Kind; body_html: string; header_html: string; footer_html: string; subject: string; is_default: boolean; source_pages: number | null; version: number };
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const SENDER = "sender";
 const EMAIL_TYPES = TEMPLATE_TYPES.filter((t) => t.kind === "email");
 const blank = (kind: Kind = "text", category = "offer_letter"): Draft => ({
-  id: null, name: "", title: "", body_html: "<p></p>", subject: "", is_default: false, kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
+  id: null, name: "", title: "", body_html: "<p></p>", header_html: "", footer_html: "", subject: "", is_default: false, kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
   signing_mode: "sequential", expiry_days: 14, reminder_days: 3, roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0,
 });
 const roleKey = (label: string, taken: string[]) => {
@@ -50,12 +53,14 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   template: SigningTemplate | null; onClose: () => void; onSaved: (message: string) => void; newKind?: Kind; newCategory?: string;
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
-    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), subject: template.subject ?? (template.kind === "email" ? template.title : ""), is_default: Boolean(template.is_default) }
+    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), is_default: Boolean(template.is_default) }
     : blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")));
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [placing, setPlacing] = useState<string | Uint8Array | null>(null); const [preview, setPreview] = useState<Uint8Array | null>(null);
   const [previewWith, setPreviewWith] = useState(false);
+  /** Sectioned documents: what the template asks for, shown before it is saved (TPL-02). */
+  const [confirming, setConfirming] = useState<ReturnType<typeof sectionsReport> | null>(null);
   const [versions, setVersions] = useState<Array<{ version: number; created_at: string; name: string }> | null>(null);
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   useEffect(() => { if (template) void signingAdmin<Array<{ version: number; created_at: string; name: string }>>("template_versions", template.id).then(setVersions).catch(() => setVersions([])); }, [template]);
@@ -63,7 +68,9 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const hrms = isTemplateType(draft.category);
   const spec = hrms ? TEMPLATE_TYPES.find((t) => t.type === draft.category) : undefined;
   const signed = draft.kind !== "email";
-  const html = sanitizeTemplateHtml(draft.body_html);
+  // A document template (not an HRMS letter or email, not a PDF) has a header, a body and a footer, and [Variable] tokens.
+  const sections = draft.kind === "text" && !hrms;
+  const html = sections ? sanitizeRichHtml(draft.body_html) : sanitizeTemplateHtml(draft.body_html);
   const placeholders: PlaceholderSpec[] = draft.kind === "pdf" ? [] : [
     ...(hrms ? placeholdersFor(draft.category as TemplateType) : PLACEHOLDERS.filter((p) => !p.only)),
     ...(draft.kind === "email" ? [] : recordPlaceholders(draft.audience)),
@@ -71,7 +78,8 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const run = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); setError(""); try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); } };
   const payload = () => ({
     name: draft.name.trim(), title: (draft.kind === "email" ? draft.subject : draft.title).trim(), subject: draft.kind === "email" ? draft.subject.trim() : null,
-    body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : templateText(html), kind: draft.kind, audience: draft.audience, category: draft.category,
+    body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : sections ? richPlainText(html).slice(0, 200000) || null : templateText(html), kind: draft.kind,
+    ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: true } : {}), audience: draft.audience, category: draft.category,
     signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [], is_default: draft.is_default,
   });
   /** The same checks the database makes (hr.template_problem for letters and emails; the signing variable rules for the rest). */
@@ -79,7 +87,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     if (!draft.name.trim()) throw new Error("Give the template a name.");
     if (draft.kind === "email" ? !draft.subject.trim() : !draft.title.trim()) throw new Error(draft.kind === "email" ? "Enter the email subject." : hrms ? "Give the letter a title." : "Enter a document title.");
     if (draft.kind === "pdf") { if (!draft.id && !file) throw new Error("Choose the PDF for this template."); }
-    else if (!html.replace(/<[^>]*>|&nbsp;|\s/g, "")) throw new Error("The template has no text yet.");
+    else if (sections ? !richPlainText(html).trim() : !html.replace(/<[^>]*>|&nbsp;|\s/g, "")) throw new Error("The template has no text yet.");
     if (signed && draft.roles.some((r) => !r.label.trim())) throw new Error("Give every signer a role name.");
     const text = draft.kind === "pdf" ? "" : html;
     if (hrms && spec) {
@@ -91,8 +99,10 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     }
     signingVariables([draft.title, text, ...draft.fields.filter((f) => f.role === SENDER).map((f) => f.value ?? "")].join("\n"));
   };
-  const save = () => run(async () => {
+  const save = (confirmed = false) => run(async () => {
     check();
+    if (sections && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
+    setConfirming(null);
     if (draft.kind === "pdf" && file) await signingAction({ action: "template_upload", id: draft.id, template: payload() }, file);
     else await signingAdmin("template_save", draft.id, payload());
     onSaved(draft.id ? "The template was saved as a new version." : "The template was added.");
@@ -112,6 +122,21 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     <FieldEditor source={placing} owners={owners} fields={editorFields} onChange={(fields) => set({ fields: fromEditor(fields) })} />
   </Modal>;
   if (preview) return <Modal open title="Template preview (PDF)" width="max-w-4xl" onClose={() => setPreview(null)}><PdfPages source={preview} /></Modal>;
+  if (confirming) {
+    const { report, warnings } = confirming;
+    const list = (items: string[]) => items.length ? <ul className="ml-5 list-disc">{items.map((n) => <li key={n}><code>[{n}]</code></li>)}</ul> : <p className="text-foreground-600">None.</p>;
+    return <Modal open title="Check the variables before saving" width="max-w-2xl" onClose={() => setConfirming(null)}
+      footer={<><Button variant="outline" disabled={busy} onClick={() => setConfirming(null)}>Back to editing</Button><Button disabled={busy} onClick={() => void save(true)} data-testid="template-save-confirm">{busy ? "Saving…" : "Save template"}</Button></>}>
+      <div className="space-y-4 text-sm" data-testid="template-variable-check">
+        {error && <p role="alert" className={ALERT}>{error}</p>}
+        {warnings.length > 0 && <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3"><p className="font-semibold">Check these brackets</p><ul className="ml-5 list-disc">{warnings.map((w) => <li key={w}>{w}</li>)}</ul></div>}
+        <section data-testid="signer-fields"><h3 className="font-semibold">Filled in by the signer before signing ({report.fields.length})</h3>
+          <p className="mb-1 text-foreground-600">Each of these is a box the signer must complete on the signing screen. If one is a typing mistake for a variable, go back and fix it.</p>{list(report.fields)}</section>
+        <section><h3 className="font-semibold">Filled from the record ({report.known.length})</h3>{list(report.known)}</section>
+        <section><h3 className="font-semibold">Filled automatically ({report.automatic.length})</h3>{list(report.automatic)}</section>
+      </div>
+    </Modal>;
+  }
   if (previewWith && hrms) return <TemplatePreviewDialog template={{ id: draft.id, type: draft.category as TemplateType, name: draft.name, subject: draft.kind === "email" ? draft.subject : draft.title, bodyHtml: html }} onClose={() => setPreviewWith(false)} />;
 
   return <Modal open title={template ? `Edit ${kindLabel} (version ${draft.version})` : `New ${kindLabel}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
@@ -141,12 +166,13 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
         {draft.kind !== "email" && <Field label="Used for"><Select value={draft.audience} disabled={hrms} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>}
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
-      {draft.kind !== "pdf" ? <div className="space-y-2">
+      {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError} />
+      : draft.kind !== "pdf" ? <div className="space-y-2">
         <RichTextEditor key={draft.id ?? `new-${draft.kind}`} value={draft.body_html} onChange={(body_html) => setDraft((d) => ({ ...d, body_html }))} placeholders={placeholders} />
         <div className="flex flex-wrap items-center gap-4 text-xs text-foreground-600">
           {hrms && <span>A line that only holds an optional detail (department, hours per week, reporting manager, work location) is left out for a person who does not have it.</span>}
           {spec?.requires.length ? <span>This email must contain {spec.requires.map((k) => `{{${k}}}`).join(" and ")}: it is the link the person uses.</span> : null}
-          {draft.kind === "text" && <label className="flex items-center gap-2">Import a Word document (.docx): <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" data-testid="docx-input"
+          {draft.kind === "text" && !sections && <label className="flex items-center gap-2">Import a Word document (.docx): <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" data-testid="docx-input"
             onChange={(e) => { const chosen = e.target.files?.[0]; if (chosen) void run(async () => { set({ body_html: textToHtml(await docxText(chosen)) }); }); }} /></label>}
         </div>
       </div> : <Field label={draft.id ? `PDF (${draft.source_pages ?? "?"} pages). Choose a file only to replace it` : "PDF document"} required={!draft.id} hint="Up to 7 MB, not password-protected. Variables are printed with Sender fields placed on the pages.">

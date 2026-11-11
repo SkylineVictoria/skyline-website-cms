@@ -6,6 +6,9 @@ import { SIGN_CATEGORIES, signingVariables, templateVariables } from "../../../.
 import { templatePlaceholders, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
 import { templatePerson } from "@/lib/hrTemplatesApi";
 import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
+import DocRichTextEditor from "@/pages/admin/components/RichTextEditor";
+import { richPlainText } from "../../../../../supabase/functions/_shared/rich-html";
+import { tokenReport, variableKeys } from "../../../../../supabase/functions/_shared/template-variables";
 
 export interface SubjectPreset { type: "student" | "employee" | "agent"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
@@ -61,9 +64,19 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   }, [source, template]);
 
   let variables: string[] = [];
-  if (source === "template" && template) { try { variables = templateVariables(template).filter((v) => !["full_name", "email"].includes(v)); } catch { variables = []; } }
+  // TPL-02: the [Variables] of a sectioned template (by their record key) and the [tokens] the signer fills in.
+  let bracketVariables: Array<{ name: string; key: string }> = [];
+  let signerTokens: string[] = [];
+  if (source === "template" && template) {
+    try { variables = templateVariables(template).filter((v) => !["full_name", "email"].includes(v)); } catch { variables = []; }
+    if (template.bracket_variables) {
+      const texts = [template.title, richPlainText(template.header_html ?? ""), richPlainText(template.body_html ?? template.body ?? ""), richPlainText(template.footer_html ?? "")];
+      bracketVariables = variableKeys(texts).filter((v) => !["full_name", "email"].includes(v.key));
+      signerTokens = tokenReport(texts).fields;
+    }
+  }
   const valueOf = (key: string) => typed[key] ?? subject?.values[key] ?? "";
-  const values = Object.fromEntries(variables.map((v) => [v, valueOf(v)]).filter(([, value]) => value.trim()));
+  const values = Object.fromEntries([...variables, ...bracketVariables.map((v) => v.key)].map((v) => [v, valueOf(v)]).filter(([, value]) => value.trim()));
   const setPerson = (index: number, patch: Partial<Person>) => setPeople(people.map((p, i) => i === index ? { ...p, ...patch } : p));
   const run = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); setError(""); try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); } };
   const body = () => ({ recipients: people, signingMode: mode, expiryDays: expiry, reminderDays: reminder, message, ...(subjectType && subjectId ? { subjectType, subjectId } : {}), ...(copyText !== null ? (copyIsHtml ? { html: copyText } : { text: copyText }) : {}) });
@@ -100,11 +113,15 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         <Field label="Template" required><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template"><option value="">Choose a template</option>{usable.map((t) => <option key={t.id} value={t.id}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category})</option>)}</Select></Field>
         {copyText !== null && <section className="space-y-2"><h3 className="font-semibold">Text of this copy</h3>
           <p className="text-sm text-foreground-600">Changes apply to this request only; the template is not changed. The history records that this copy was edited.</p>
-          {copyIsHtml ? <RichTextEditor value={copyText} onChange={setCopyText} placeholders={[]} minHeight={260} /> : <TextArea rows={10} value={copyText} maxLength={40000} onChange={(e) => setCopyText(e.target.value)} data-testid="copy-text" />}
+          {copyIsHtml && template?.bracket_variables ? <DocRichTextEditor mode="document" value={copyText} onChange={setCopyText} minHeight={260} label="Body of this copy" />
+            : copyIsHtml ? <RichTextEditor value={copyText} onChange={setCopyText} placeholders={[]} minHeight={260} /> : <TextArea rows={10} value={copyText} maxLength={40000} onChange={(e) => setCopyText(e.target.value)} data-testid="copy-text" />}
           {copyLeft.length > 0 && <p role="alert" className="text-sm text-red-700">Still to fill in: {copyLeft.map((k) => `{{${k}}}`).join(", ")}</p>}
           <button type="button" className="text-sm text-primary-700 underline" onClick={() => setCopyText(null)}>Discard my edits</button></section>}
         {variables.length > 0 && copyText === null && <section><h3 className="mb-2 font-semibold">Variables</h3><div className="grid gap-3 md:grid-cols-2">{variables.map((key) => <Field key={key} label={`{{${key}}}`} required hint={subject?.values[key] && typed[key] === undefined ? "Filled from the record. You can correct it here." : undefined}>
           <TextInput value={valueOf(key)} maxLength={2000} onChange={(e) => setTyped({ ...typed, [key]: e.target.value })} /></Field>)}</div></section>}
+        {bracketVariables.length > 0 && copyText === null && <section data-testid="compose-bracket-variables"><h3 className="mb-2 font-semibold">Variables</h3><div className="grid gap-3 md:grid-cols-2">{bracketVariables.map(({ name, key }) => <Field key={key} label={`[${name}]`} required hint={subject?.values[key] && typed[key] === undefined ? "Filled from the record. You can correct it here." : undefined}>
+          <TextInput value={valueOf(key)} maxLength={2000} onChange={(e) => setTyped({ ...typed, [key]: e.target.value })} data-testid={`bracket-value-${key}`} /></Field>)}</div></section>}
+        {signerTokens.length > 0 && <p className="rounded-md border border-background-300 bg-background-50 p-3 text-sm" data-testid="compose-signer-fields">The first signer fills in {signerTokens.map((n) => `[${n}]`).join(", ")} on the signing screen before signing; their initials go wherever [Student Initial] is.</p>}
       </> : <div className="grid gap-4 md:grid-cols-2">
         <Field label="PDF document" required hint="Up to 7 MB, sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
         <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>

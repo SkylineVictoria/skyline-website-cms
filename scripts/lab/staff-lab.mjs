@@ -19,6 +19,8 @@
 //   node scripts/lab/staff-lab.mjs signing  Documents & Signatures: templates and versions, variables from a student / employee / agent, one signer, three in
 //                                           order, two at once, placed fields in the signed PDF, invitations, reminders, expiry, decline, void, completion
 //                                           mail with the signed PDF and certificate, tamper checks and refused access (mock Postmark)
+//                                           TPL-02 / INT-01: a document template with header and footer presets, [Variables] from the student's
+//                                           record and chosen intake, the signer's [tokens] and initials on every page, signed through the function
 //   node scripts/lab/staff-lab.mjs signing-browser  the same screens in Chromium: dashboard, template editor, field placement, send; signing on an iPhone-size screen
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs holidays public holiday sync (20261113150000 / holiday-sync): the real function against a mock data.gov.au (2025 only)
@@ -1695,7 +1697,15 @@ async function signing() {
   const recState = (id) => psql(`select string_agg(state, ',' order by signing_order, id) from hr.sign_recipients where request_id = '${id}';`);
   const linkOf = (address, kind = /^Please sign|^Reminder to sign/) => tokenIn([...mailsTo(address)].reverse().find((m) => kind.test(m.subject))?.text);
   const waitMail = async (address, subject, count = 1) => { for (let i = 0; i < 40; i++) { if (mailsTo(address).filter((m) => subject.test(m.subject)).length >= count) break; await new Promise((r) => setTimeout(r, 250)); } return mailsTo(address).filter((m) => subject.test(m.subject)).length; };
-  const sign = (token, hash, extra = {}) => signCall(lab, lab.anonKey, { action: "sign", token, name: "Lab Signer", agreed: true, signatureKind: "typed", documentHash: hash, ...extra });
+  // Like the signing page (signWithRetry): a worker stopped by the runtime's CPU limit (WORKER_LIMIT) is asked again, up to twice.
+  let workerRetries = 0;
+  const sign = async (token, hash, extra = {}) => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await signCall(lab, lab.anonKey, { action: "sign", token, name: "Lab Signer", agreed: true, signatureKind: "typed", documentHash: hash, ...extra });
+      if (attempt >= 2 || !(res.status === 546 || res.body?.code === "WORKER_LIMIT")) return res;
+      workerRetries++; await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
+  };
   const open = (token) => signCall(lab, lab.anonKey, { action: "open", token });
   try {
     const jwt = await adminToken(lab);
@@ -2018,6 +2028,72 @@ async function signing() {
       check("dashboard: a draft can be discarded", discard.status === 200 && discard.body.state === "void");
     } else console.log("NOT RUN agent panel (no agent could be seeded)");
 
+    // ---- TPL-02 + INT-01: a document template with a header and footer from presets, [Variables] from the student's record and chosen intake,
+    // the signer's own [tokens] and initials on every page, through the real function: preview, create, send, open, sign, signed PDF.
+    const requestsBefore = () => psql("select coalesce(md5(string_agg(id || original_hash || coalesce(template_version::text, '') || coalesce(rendered_text, ''), ',' order by id)), '') from hr.sign_requests where created_at < now() - interval '0 seconds' and id in (select id from tpl02_before);");
+    psql("drop table if exists tpl02_before; create table tpl02_before as select id from hr.sign_requests;");
+    const tpl02Before = requestsBefore();
+    if (studentId) {
+      const intakeId = psql(`insert into public.course_intakes(course_id, start_date) values ('lab-sign-${run}', current_date + 45) returning id;`).split("\n")[0];
+      psql(`update public.enrollment_application_courses set intake_id = '${intakeId}' where course_id = 'lab-sign-${run}'; update public.enrollment_applications set reference = 'APP-LAB-${run}' where student_id = '${studentId}';`);
+      const [intakeName, startDate] = psql(`select public.course_intake_name(i) || '|' || to_char(i.start_date, 'FMDD FMMonth YYYY') from public.course_intakes i where i.id = '${intakeId}';`).split("|");
+      const LOGO = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      const headerHtml = `<table style="border:none;width:100%"><tr><td style="width:50%"><img src="data:image/png;base64,${LOGO}" style="width:48px;height:48px"> <strong style="font-size:14pt">Skyline Institute of Technology</strong></td>`
+        + `<td style="text-align:right;width:50%">Level 8, 310 King Street, Melbourne VIC 3000<br>RTO 45989 | CRICOS 04114B<br>info@slit.edu.au | +61 3 9125 1661<br>https://slit.edu.au/</td></tr></table>`;
+      const footerHtml = `<p>LETTER OF OFFER AND WRITTEN AGREEMENT &nbsp; Version Oct 2024 &nbsp; Student Initial [Student Initial] &nbsp; Page [Page Number]</p><p style="font-size:8pt">INDOPACIFIC GLOBAL PTY LTD T/A SKYLINE INSTITUTE OF TECHNOLOGY (SLIT) &nbsp; ABN: 20 643 760 721</p>`;
+      const hp = await signRpc(lab, jwt, "part_save", null, { kind: "header", name: `SLIT letterhead ${run}`, html: headerHtml });
+      const fp = await signRpc(lab, jwt, "part_save", null, { kind: "footer", name: `SLIT agreement footer ${run}`, html: footerHtml });
+      const parts = (await signRpc(lab, jwt, "part_list")).body ?? [];
+      const preset = (kind) => parts.find((p) => p.kind === kind && p.name.endsWith(run))?.html;
+      check("TPL-02: header and footer presets are saved and listed", hp.status === 200 && fp.status === 200 && !!preset("header") && !!preset("footer"), JSON.stringify([hp.body, fp.body]).slice(0, 200));
+      const rows = Array.from({ length: 30 }, (_, i) => `<tr><td>Fee item ${i + 1}: tuition instalment, materials and services for study period ${i + 1}</td><td style="text-align:right">$${(i + 1) * 150}.00</td></tr>`).join("");
+      const body = `<h2>1. Your offer</h2><p>Dear [Student Name] ([Student ID]), you are offered [Course Name] ([Course Code]), intake [Intake], starting [Start Date].</p>`
+        + `<table><tr><th>Fee item</th><th>Amount</th></tr>${rows}</table><h2>2. Written agreement</h2><p>${"You agree to the terms of this written agreement and the refund policy. ".repeat(45)}</p>`
+        + `<p>Emergency contact: [Emergency Contact Name] ([Relationship]). Confirm the emergency contact: [Emergency Contact Name].</p>`;
+      const tDoc = await signRpc(lab, jwt, "template_save", null, { name: `Letter of offer ${run}`, title: `Letter of offer and written agreement ${run}`, kind: "text", audience: "student", category: "enrolment_agreement",
+        body_html: body, body: "Letter of offer", header_html: preset("header"), footer_html: preset("footer"), bracket_variables: true, roles: [{ key: "student", label: "Student", order: 1, required: true }] });
+      check("TPL-02: a document template is saved with the presets as its header and footer", tDoc.status === 200 && tDoc.body.header_html === preset("header") && tDoc.body.bracket_variables === true, JSON.stringify(tDoc.body).slice(0, 160));
+      const pv = await signCall(lab, jwt, { action: "template_preview", id: tDoc.body.id, subjectType: "student", subjectId: studentId });
+      const pvPages = pv.status === 200 ? await pdfWords(Buffer.from(pv.body.pdfBase64, "base64")) : [];
+      const everyPage = (pages) => pages.length >= 2 && pages.every((p, i) => { const t = p.items.map((x) => x.text).join(" "); return t.includes("CRICOS 04114B") && t.includes("Skyline Institute of Technology") && new RegExp(`Page ${i + 1}(?!\\d)`).test(t) && t.includes("ABN: 20 643 760 721") && t.includes("Version Oct 2024"); });
+      check("TPL-02 acceptance 1: the preview shows the header and footer on every page with its own page number", everyPage(pvPages), `${pv.status} pages ${pvPages.length}`);
+      check("TPL-02: the preview lists the signer's fields (each token, initials on every page)", pv.status === 200 && pv.body.signerFields.filter((f) => f.type === "initials").length === pvPages.length
+        && [...new Set(pv.body.signerFields.filter((f) => f.type === "text").map((f) => f.label))].sort().join(",") === "[Emergency Contact Name],[Relationship]", JSON.stringify(pv.body.signerFields ?? pv.body).slice(0, 300));
+      const cDoc = await signCall(lab, jwt, { action: "create", templateId: tDoc.body.id, subjectType: "student", subjectId: studentId, recipients: [{ name: "Stu Dent", email: mail("student-doc"), role: "student" }], values: {} });
+      check("TPL-02: a request is made from the student's record", cDoc.status === 200, JSON.stringify(cDoc.body).slice(0, 200));
+      if (cDoc.status === 200) {
+        await signCall(lab, jwt, { action: "send", id: cDoc.body.id });
+        await waitMail(mail("student-doc"), /Please sign/);
+        const tk = linkOf(mail("student-doc"));
+        const od = await open(tk);
+        const textFields = (od.body.fields ?? []).filter((f) => f.type === "text"), initialFields = (od.body.fields ?? []).filter((f) => f.type === "initials");
+        const original = od.status === 200 ? await signedFile(od.body.url) : null, origPages = original ? await pdfWords(original) : [];
+        check("TPL-02 acceptance 1: the PDF sent for signing has the header and footer on every page with its page number", everyPage(origPages), `pages ${origPages.length}`);
+        check("TPL-02 acceptance 3: the signing screen gets one field per [token] occurrence, grouped by label, and initials on every page",
+          [...new Set(textFields.map((f) => f.label))].sort().join(",") === "[Emergency Contact Name],[Relationship]" && textFields.length === 3 && initialFields.length === origPages.length, JSON.stringify(od.body.fields ?? od.body).slice(0, 300));
+        const values = (answers) => Object.fromEntries(textFields.map((f) => [f.id, answers[f.label] ?? ""]));
+        const empty = await sign(tk, od.body.documentHash, { name: "Stu Dent", values: values({}) });
+        check("TPL-02 acceptance 3: signing is blocked until every token is filled", empty.status === 400 && /required field/.test(empty.body.error ?? ""), JSON.stringify(empty.body));
+        const mixed = Object.fromEntries(textFields.map((f, i) => [f.id, f.label === "[Emergency Contact Name]" ? `Answer ${i}` : "Mother"]));
+        const twoAnswers = await sign(tk, od.body.documentHash, { name: "Stu Dent", values: mixed });
+        check("TPL-02: a token that appears twice takes one answer", twoAnswers.status === 400 && /one answer/.test(twoAnswers.body.error ?? ""), JSON.stringify(twoAnswers.body));
+        const done = await sign(tk, od.body.documentHash, { name: "Stu Dent", values: values({ "[Emergency Contact Name]": "Ravi Dent 0412 345 678", "[Relationship]": "Father" }) });
+        check("TPL-02: with every token filled the student signs", done.status === 200 && done.body.complete === true, JSON.stringify(done.body));
+        const finalDoc = await signedFile((await open(tk)).body.url);
+        const fPages = finalDoc ? await pdfWords(finalDoc) : [];
+        const words = fPages.flatMap((p) => p.items.map((i) => i.text)).join(" ");
+        check("TPL-02 acceptance 3: the signed PDF carries the answers", (words.match(/Ravi Dent 0412 345 678/g) ?? []).length === 2 && words.includes("Father"), words.slice(0, 120));
+        check("TPL-02 acceptance 3: the student's initials are in the footer of every page", fPages.slice(0, origPages.length).every((p) => p.items.some((i) => i.text === "SD" && i.y < 60)), fPages.map((p) => p.items.filter((i) => i.y < 60).map((i) => i.text).join(" ")).join(" || ").slice(0, 300));
+        check("TPL-02 + INT-01: [Student Name], [Student ID], [Course Name], [Intake] and [Start Date] come from the record and the chosen intake",
+          ["Dear Stu Dent", `APP-LAB-${run}`, "Certificate IV in Lab Signing", intakeName, startDate].every((v) => words.includes(v)) && !/\[(Student Name|Intake|Start Date|Page Number)\]/.test(words), `${intakeName} ${startDate} ${words.slice(0, 200)}`);
+        const fees = Array.from({ length: 30 }, (_, i) => i + 1).every((n) => { const a = fPages.findIndex((p) => p.items.some((x) => x.text.includes(`Fee item ${n}:`))), b = fPages.findIndex((p) => p.items.some((x) => x.text === `$${n * 150}.00`)); return a >= 0 && a === b; });
+        check("TPL-02 acceptance 1: no fee table row is split across pages", fees);
+      }
+      // Acceptance 5: every request made before (their original PDF, template version and text) is untouched by the new templates.
+      check("TPL-02 acceptance 5: every earlier request keeps its original PDF hash, template version and text", requestsBefore() === tpl02Before && tpl02Before !== "");
+      psql("drop table if exists tpl02_before;");
+    } else console.log("NOT RUN TPL-02 student document (no student could be seeded)");
+
     // ---- 7 (dashboard): every status is reported
     const all = (await signRpc(lab, jwt, "list")).body.requests.filter((r) => r.title.includes(run) || r.title.startsWith("Employment contract for") || r.title === "Consent form");
     const statuses = new Set(all.map((r) => r.status));
@@ -2028,6 +2104,7 @@ async function signing() {
   } finally {
     await stopMockPostmark();
   }
+  console.log(`signing: ${workerRetries} sign call(s) were stopped by the runtime's CPU limit and made again`);
   console.log(failures ? `\n${failures} signing check(s) FAILED` : "\nAll signing checks passed.");
   process.exitCode = failures ? 1 : 0;
 }
@@ -2045,7 +2122,14 @@ async function signingBrowser() {
   const browser = await chromium.launch(process.env.LAB_CHROMIUM ? { executablePath: process.env.LAB_CHROMIUM } : {});
   const run = nodeCrypto.randomBytes(3).toString("hex"), mail = (n) => `ui.${n}.${run}@example.test`;
   // The function may be served outside the stack (LAB_SIGNING_FUNCTION_URL): the browser's calls to it are forwarded there.
-  const forward = async (context) => { if (!process.env.LAB_SIGNING_FUNCTION_URL) return;
+  const forward = async (context) => {
+    // Signed Storage links name the stack's internal gateway (http://kong:8000), which only containers resolve: the browser's requests
+    // for them go to the lab's API address instead (as signedFile() does for the checks).
+    await context.route("http://kong:8000/**", async (route) => {
+      const res = await fetch(route.request().url().replace("http://kong:8000", lab.apiUrl));
+      await route.fulfill({ status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/pdf", "access-control-allow-origin": "*" }, body: Buffer.from(await res.arrayBuffer()) });
+    });
+    if (!process.env.LAB_SIGNING_FUNCTION_URL) return;
     await context.route("**/functions/v1/document-signing", async (route) => {
       if (route.request().method() === "OPTIONS") return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" }, body: "ok" });
       const res = await fetch(process.env.LAB_SIGNING_FUNCTION_URL, { method: "POST", headers: { ...route.request().headers(), "x-forwarded-for": "203.0.113.20" }, body: route.request().postDataBuffer() });
@@ -2071,19 +2155,23 @@ async function signingBrowser() {
     if (inNav) await nav.click(); await page.waitForURL(/\/admin\/signing/);
     await page.getByTestId("status-all").waitFor({ timeout: 20000 });
     check("browser: the dashboard shows the eight status filters", (await Promise.all(["draft", "sent", "viewed", "partial", "signed", "declined", "expired", "void"].map((k) => page.getByTestId(`status-${k}`).isVisible()))).every(Boolean));
-    // A template through the editor: text with an inserted variable, previewed.
+    // A template through the editor (one template system since TPL-01, Header / Body / Footer since TPL-02): a consent form whose body
+    // gets a variable from the picker, previewed as PDF, saved after the variable check.
     await page.getByTestId("new-template").click();
-    const modal = page.getByRole("heading", { name: "New template" }).locator("xpath=ancestor::div[contains(@class,'relative')][1]");
-    await modal.getByLabel(/Template name/).fill(`UI consent ${run}`); await modal.getByLabel(/Document title/).fill("Consent form for {{student.full_name}}");
-    await page.getByTestId("template-body").fill("I, ");
-    await page.getByTestId("insert-variable").selectOption("student.full_name");
-    check("browser: a variable is inserted into the template text", (await page.getByTestId("template-body").inputValue()).includes("{{student.full_name}}"));
-    await page.getByRole("button", { name: "Preview" }).click();
+    await page.getByTestId("template-name").fill(`UI consent ${run}`);
+    await page.getByTestId("template-subject").fill("Consent form for [Student Name]");
+    await page.getByTestId("template-category").selectOption("consent_form");
+    const bodyEditor = page.getByTestId("section-editor-body");
+    await bodyEditor.click(); await page.keyboard.type("I, ");
+    await page.getByTestId("variable-student-name").click();
+    await page.keyboard.type(", agree to the consent form.");
+    check("browser: a variable is inserted into the template text", (await bodyEditor.innerText()).includes("I, [Student Name], agree"));
+    await page.getByRole("button", { name: "Preview the PDF" }).click();
     check("browser: the template preview renders the document", await page.locator("[data-pdf-page='1'] canvas").waitFor({ timeout: 30000 }).then(() => true, () => false));
     await page.screenshot({ path: path.join(shots, "template-preview.png") });
     await page.getByRole("button", { name: "Close" }).last().click();
-    if (!(await page.getByRole("button", { name: "Save template" }).waitFor({ timeout: 5000 }).then(() => true, () => false))) await page.screenshot({ path: path.join(shots, "after-preview.png") });
-    await page.getByRole("button", { name: "Save template" }).click();
+    await page.getByTestId("template-save").click();
+    await page.getByTestId("template-save-confirm").click();
     check("browser: the template is saved and listed", await page.getByTestId("template-table").getByText(`UI consent ${run}`).waitFor({ timeout: 15000 }).then(() => true, () => false));
     // A two-person request made through the function, then fields placed and sent from the screen.
     const made = await signCall(lab, jwt, { action: "create", title: `UI agreement ${run}`, recipients: [{ name: "Una Phone", email: mail("one") }, { name: "Theo Second", email: mail("two"), order: 2 }] }, await realPdf(2));
@@ -2139,7 +2227,7 @@ async function signingBrowser() {
     check("phone: the last signature completes the document and offers the downloads", await second.getByTestId("download-signed").waitFor({ timeout: 30000 }).then(() => true, () => false) && await second.getByText("Download the completion certificate").isVisible());
     check("phone: still no sideways scrolling when complete", await noSideScroll(second));
     await second.screenshot({ path: path.join(shots, "phone-complete.png") });
-    const download = await (await fetch(await second.getByTestId("download-signed").getAttribute("href"))).arrayBuffer();
+    const download = await signedFile(await second.getByTestId("download-signed").getAttribute("href"));
     check("phone: the downloaded PDF is the recorded signed copy", nodeCrypto.createHash("sha256").update(Buffer.from(download)).digest("hex") === psql(`select signed_hash from hr.sign_requests where id = '${made.body.id}';`));
     // ---- the request on the dashboard as Completed
     await page.keyboard.press("Escape").catch(() => undefined); await page.goto(`${SITE}/admin/signing`); await page.getByTestId("status-signed").click(); await page.getByTestId("request-search").fill(run);

@@ -160,6 +160,176 @@ test("signing links: a malformed token is refused before the database is asked",
   assert.equal(asked, false);
 });
 
+/* ------------------------------------------------------------------ TPL-02 document templates: header / body / footer, [Variables] */
+const richHtml = await load.import<typeof import("../supabase/functions/_shared/rich-html.ts")>("../supabase/functions/_shared/rich-html.ts");
+const tplVars = await load.import<typeof import("../supabase/functions/_shared/template-variables.ts")>("../supabase/functions/_shared/template-variables.ts");
+const documentPdf = await load.import<typeof import("../supabase/functions/_shared/document-pdf.ts")>("../supabase/functions/_shared/document-pdf.ts");
+const docxImport = await load.import<typeof import("../src/lib/docxImport.ts")>("../src/lib/docxImport.ts");
+const SLIT_HEADER = `<table style="border:none;width:100%"><tr><td style="width:50%"><strong style="font-size:14pt">Skyline Institute of Technology</strong></td><td style="text-align:right;width:50%">Level 8, 310 King Street, Melbourne VIC 3000<br>RTO 45989 | CRICOS 04114B<br>info@slit.edu.au | +61 3 9125 1661<br>https://slit.edu.au/</td></tr></table>`;
+const SLIT_FOOTER = `<p>LETTER OF OFFER AND WRITTEN AGREEMENT &nbsp; Version Oct 2024 &nbsp; Student Initial [Student Initial] &nbsp; Page [Page Number]</p><p style="font-size:8pt">INDOPACIFIC GLOBAL PTY LTD T/A SKYLINE INSTITUTE OF TECHNOLOGY (SLIT) ABN: 20 643 760 721</p>`;
+const FEE_ROWS = Array.from({ length: 36 }, (_, i) => `<tr><td>Fee item ${i + 1}: a description long enough to wrap onto a second line inside its cell of the fee table</td><td style="text-align:right">$${(i + 1) * 100}.00</td></tr>`).join("");
+const AGREEMENT = `<h2>1. Fees</h2><p>Dear [Student Name] ([Student ID]), you start [Course Name] on [Start Date] ([Intake]). Your emergency contact is [Emergency Contact Name].</p><table><tr><th>Fee item</th><th>Amount</th></tr>${FEE_ROWS}</table><h2>2. Agreement</h2><p>${"The student agrees to the terms of this written agreement. ".repeat(60)}</p><p>Emergency contact again: [Emergency Contact Name].</p>`;
+const STUDENT_VALUES = { "student.full_name": "Asha Patel", "student.id": "SLIT-APP-0042", "course.name": "Diploma of Business", "course.start_date": "3 February 2027", "course.intake": "February 2027", current_date: "11 November 2026" };
+
+test("template variables: one registry; record values fill, page numbers and initials are automatic, any other [token] is a signer field", () => {
+  for (const name of ["Page Number", "Total Pages", "Date", "Student Name", "Student ID", "Course Name", "Course Code", "Intake", "Start Date", "Agent Name"]) assert.ok(tplVars.lookupVariable(name), name);
+  assert.equal(tplVars.lookupVariable("student   NAME")?.name, "Student Name", "case and spacing do not matter");
+  assert.equal(tplVars.lookupVariable("USI"), undefined, "[USI] is not a variable yet (room left for it)");
+  assert.equal(new Set(tplVars.TEMPLATE_VARIABLES.map((v) => v.name.toLowerCase())).size, tplVars.TEMPLATE_VARIABLES.length, "names are unique");
+  for (const v of tplVars.TEMPLATE_VARIABLES) assert.ok(Boolean(v.keys?.length) !== Boolean(v.render || v.field), `${v.name} resolves one way`);
+  assert.deepEqual(tplVars.resolveToken("Student Name", STUDENT_VALUES), { kind: "value", text: "Asha Patel" });
+  assert.deepEqual(tplVars.resolveToken("Start Date", { "employee.start_date": "2027-01-04" }), { kind: "value", text: "2027-01-04" }, "an employee's start date on staff documents");
+  assert.deepEqual(tplVars.resolveToken("Intake", {}), { kind: "missing", name: "Intake" });
+  assert.deepEqual(tplVars.resolveToken("Intake", {}, true), { kind: "value", text: "[Intake]" }, "a preview shows what is missing");
+  assert.deepEqual(tplVars.resolveToken("Page Number", {}), { kind: "page" });
+  assert.deepEqual(tplVars.resolveToken("Student Initial", {}), { kind: "field", field: "initials", label: "Student Initial" });
+  assert.deepEqual(tplVars.resolveToken(" Guardian  Name ", {}), { kind: "field", field: "text", label: "Guardian Name" });
+  for (const literal of ["1", " ", "___", "2024"]) assert.deepEqual(tplVars.resolveToken(literal, {}), { kind: "literal" }, `[${literal}] stays text`);
+  assert.deepEqual(tplVars.tokenReport(["Dear [Student Name], [Guardian Name] [Page Number] of [Total Pages] [guardian name] [x] [1]"]),
+    { known: ["Student Name"], fields: ["Guardian Name", "x"], automatic: ["Page Number", "Total Pages"] });
+  assert.deepEqual(tplVars.variableKeys(["[Intake] [Course Name]"]), [{ name: "Intake", key: "course.intake" }, { name: "Course Name", key: "course.name" }]);
+  assert.equal(tplVars.isTokenFieldLabel(tplVars.tokenFieldLabel("Guardian Name")), true);
+  assert.equal(tplVars.isTokenFieldLabel("Initial here"), false, "a field placed by hand is not a token field");
+});
+
+test("template HTML: the allow-list keeps tables, uploaded pictures, colours and sizes; scripts, handlers, linked pictures and javascript links go", () => {
+  const dirty = `<p onclick="x()">Hi<script>alert(1)</script><style>p{}</style></p><img src="https://evil.example/x.png"><img src="data:image/png;base64,${PNG_1PX}" onerror="x()" width="120">`
+    + `<a href="javascript:alert(1)">bad</a><a href="https://slit.edu.au/">good</a><iframe src="https://x"></iframe><table border="0"><tr><td style="width:50%;background-color:#eeeeee;position:fixed">L</td><td align="right">R</td></tr></table>`
+    + `<font size="5" color="red" face="Arial">big</font><span style="font-size:11pt;font-weight:700;color:rgb(0,0,255)">blue</span>`;
+  const clean = richHtml.sanitizeRichHtml(dirty);
+  for (const gone of ["script", "alert", "onclick", "onerror", "evil.example", "javascript", "iframe", "<style", "position", "font-family"]) assert.ok(!clean.includes(gone), `${gone} removed: ${clean}`);
+  for (const kept of [`src="data:image/png;base64,${PNG_1PX}"`, "width:90pt", '<a href="https://slit.edu.au/">good</a>', '<table style="border:none">', "width:50%", "background-color:#eeeeee",
+    "text-align:right", "font-size:18pt", "color:#ff0000", "font-size:11pt", "font-weight:bold", "color:#0000ff"]) assert.ok(clean.includes(kept), `${kept} kept: ${clean}`);
+  assert.equal(richHtml.sanitizeRichHtml("<p>a<p>b<ul><li>one<li>two</ul>"), "<p>a</p><p>b</p><ul><li>one</li><li>two</li></ul>", "implied closes");
+  assert.equal(richHtml.sanitizeRichHtml(richHtml.sanitizeRichHtml(dirty)), clean, "sanitising twice changes nothing");
+  assert.equal(richHtml.richPlainText("<h1>Fees</h1><table><tr><td>Tuition</td><td>$1</td></tr></table><p>A<br>B</p>"), "Fees\nTuition\t$1\nA\nB");
+  assert.deepEqual(richHtml.bracketWarnings("Dear [Student Name", "Body"), ['Body: a [ or ] without its pair in "Dear [Student Name"']);
+  assert.deepEqual(richHtml.bracketWarnings("Tick [ ] here", "Footer"), ['Footer: an empty [ ] in "Tick [ ] here"']);
+  assert.deepEqual(richHtml.bracketWarnings("Dear [Student Name], [Intake]", "Body"), []);
+  assert.equal(richHtml.joinSplitTokens("Dear [Student <strong>Name</strong>], hi"), "Dear [Student Name]<strong></strong>, hi");
+  assert.equal(richHtml.joinSplitTokens("<strong>[Student </strong>Name]"), "<strong>[Student Name]</strong>");
+  // The database refuses the same things on top of the pages' allow-list (hr.rich_html_problem in 20261113190000).
+  const migration = read("supabase/migrations/20261113190000_template_sections.sql");
+  for (const rule of ["script|style|iframe", "on[a-z]+", "javascript|vbscript", "data:image/(png|jpeg);base64,"]) assert.ok(migration.includes(rule), rule);
+});
+
+test("document PDF: the header and footer repeat on every page with the right page number; fee table rows never split; values, signer fields and initials placed", async () => {
+  const made = await documentPdf.buildDocumentPdf({ title: "Letter of offer", header: SLIT_HEADER, body: AGREEMENT, footer: SLIT_FOOTER, values: STUDENT_VALUES, brackets: true });
+  assert.ok(made.pages >= 3, `pages: ${made.pages}`);
+  assert.deepEqual([made.missing, made.unsupported], [[], null]);
+  const items = await pdfText(made.bytes);
+  const pageText = (n: number) => items.filter((t) => t.page === n).map((t) => t.text).join(" ");
+  for (let n = 1; n <= made.pages; n++) {
+    const text = pageText(n);
+    for (const expected of ["Skyline Institute of Technology", "Level 8, 310 King Street, Melbourne VIC 3000", "CRICOS 04114B", "+61 3 9125 1661", "LETTER OF OFFER AND WRITTEN AGREEMENT", "Version Oct 2024", "ABN: 20 643 760 721"])
+      assert.ok(text.includes(expected), `page ${n}: ${expected}`);
+    assert.match(text, new RegExp(`Page ${n}(?!\\d)`), `page ${n} prints its own number`);
+    const header = items.find((t) => t.page === n && t.text.includes("CRICOS"))!, footer = items.find((t) => t.page === n && t.text.includes("ABN"))!;
+    assert.ok(header.y > 760 && footer.y < 60, `page ${n}: the header at the top, the footer at the bottom`);
+  }
+  const all = items.map((t) => t.text).join(" ");
+  for (const value of ["Dear Asha Patel (SLIT-APP-0042)", "Diploma of Business", "3 February 2027", "(February 2027)"]) assert.ok(all.includes(value), value);
+  assert.ok(!/\[(Student Name|Intake|Page Number|Student Initial)\]/.test(all), "no registry token is printed as text");
+  // A fee row is on one page: its description and its amount together, each exactly once.
+  for (let i = 1; i <= 36; i++) {
+    const label = items.filter((t) => t.text.includes(`Fee item ${i}:`)), amount = items.filter((t) => t.text === `$${i * 100}.00`);
+    assert.equal(label.length, 1, `fee item ${i} printed once`); assert.equal(amount.length, 1, `amount ${i} printed once`);
+    assert.equal(label[0].page, amount[0].page, `fee row ${i} is not split across pages`);
+  }
+  const bodyRows = made.placed.filter((r) => r.top < 760);
+  assert.ok(bodyRows.every((r) => r.bottom > 55), "every row ends above the footer");
+  // Fields: the initials in every footer, the signer's token once per place it appears (one question on the signing page).
+  const initials = made.fields.filter((f) => f.type === "initials");
+  assert.deepEqual(initials.map((f) => f.page), Array.from({ length: made.pages }, (_, i) => i + 1), "Student Initial on every page");
+  const answers = made.fields.filter((f) => f.type === "text");
+  assert.deepEqual([...new Set(answers.map((f) => f.label))], ["[Emergency Contact Name]"]);
+  assert.equal(answers.length, 2, "the token appears twice in the body");
+  for (const f of made.fields) assert.ok(f.x >= 0 && f.y >= 0 && f.x + f.w <= 1.0001 && f.y + f.h <= 1.0001 && f.w > 0 && f.h > 0, JSON.stringify(f));
+  const loaded = await PdfLib.PDFDocument.load(made.bytes);
+  const fontNames = loaded.context.enumerateIndirectObjects().map(([, obj]) => obj instanceof PdfLib.PDFDict ? obj.get(PdfLib.PDFName.of("BaseFont"))?.toString() : undefined).filter(Boolean);
+  assert.ok(fontNames.some((name) => /Arimo-Regular/.test(String(name))) && fontNames.some((name) => /Arimo-Bold/.test(String(name))), `set in Arimo: ${fontNames.join(", ")}`);
+  // Signed: the initials land in the footer box of every page and the answer in its boxes (the existing stamp, from the fields).
+  const signer = { id: "r1", name: "Asha Patel", email: "a@example.test", role: "Student", state: "signed", signer_name: "Asha Patel", signed_at: "2026-11-11T01:00:00Z", signature_kind: "typed" };
+  const signed = await signingPdf.stampDocument(made.bytes, { reference: "SLIT-2026-000099", title: "Letter of offer", recipients: [signer],
+    fields: made.fields.map((f) => ({ ...f, recipient_id: "r1", value: f.type === "text" ? "Ravi Patel 0412 345 678" : "signed", done: true })) });
+  const stamped = await pdfText(signed);
+  for (let n = 1; n <= made.pages; n++) assert.ok(stamped.some((t) => t.page === n && t.text === "AP" && t.y < 60), `initials AP in the footer of page ${n}`);
+  assert.equal(stamped.filter((t) => t.text.includes("Ravi Patel 0412 345 678")).length, 2, "the answer is printed wherever the token was");
+  // Missing values are reported (the function refuses to send); a preview shows them; text no font can print is reported.
+  const noIntake = await documentPdf.buildDocumentPdf({ title: "x", body: "<p>[Intake] [Course Code]</p>", values: {}, brackets: true });
+  assert.deepEqual(noIntake.missing, ["Intake", "Course Code"]);
+  assert.ok((await pdfText((await documentPdf.buildDocumentPdf({ title: "x", body: "<p>[Intake]</p>", values: {}, brackets: true, sample: true })).bytes)).some((t) => t.text.includes("[Intake]")));
+  assert.equal((await documentPdf.buildDocumentPdf({ title: "x", body: "<p>名前 Ελληνικά</p>", values: {}, brackets: true })).unsupported, "名前");
+  // With brackets off (a template not yet saved in the new editor) square brackets are plain text.
+  const literal = await documentPdf.buildDocumentPdf({ title: "x", body: "<p>Tick [Guardian Name]</p>", values: {}, brackets: false });
+  assert.deepEqual([literal.fields.length, (await pdfText(literal.bytes)).some((t) => t.text.includes("[Guardian Name]"))], [0, true]);
+});
+
+/** A small .docx made here (no file on disk): a heading, a token Word split across a bold run, a fee table with a token in a cell. */
+async function sampleDocx(): Promise<Uint8Array> {
+  const { zipSync, strToU8 } = await import("fflate");
+  const r = (t: string, bold = false) => `<w:r>${bold ? "<w:rPr><w:b/></w:rPr>" : ""}<w:t xml:space="preserve">${t}</w:t></w:r>`;
+  const cell = (t: string) => `<w:tc><w:p>${r(t)}</w:p></w:tc>`;
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`
+    + `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${r("1. Fees and charges")}</w:p>`
+    + `<w:p>${r("Dear ")}${r("[Student ")}${r("Name]", true)}${r(", your intake is [Intake]. Guardian: [Guardian Name].")}</w:p>`
+    + `<w:tbl><w:tr>${cell("Fee item")}${cell("Amount")}</w:tr><w:tr>${cell("Tuition")}${cell("$14,000.00")}</w:tr><w:tr>${cell("Materials ([Materials Fee])")}${cell("$500.00")}</w:tr></w:tbl></w:body></w:document>`;
+  return zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+    "word/document.xml": strToU8(doc),
+  });
+}
+test("Word import: the heading, the fee table and every [token] survive, and become variables and signer fields", async () => {
+  const { html } = await docxImport.docxToTemplateHtml(await sampleDocx());
+  assert.ok(html.includes("<h1>1. Fees and charges</h1>"), html);
+  assert.match(html, /<table><tr><td><p>Fee item<\/p><\/td><td><p>Amount<\/p><\/td><\/tr><tr><td><p>Tuition<\/p><\/td><td><p>\$14,000\.00<\/p><\/td><\/tr>/);
+  for (const token of ["[Student Name]", "[Intake]", "[Guardian Name]", "[Materials Fee]"]) assert.ok(html.includes(token), `${token} survived`);
+  assert.deepEqual(tplVars.tokenReport([richHtml.richPlainText(html)]), { known: ["Student Name", "Intake"], fields: ["Guardian Name", "Materials Fee"], automatic: [] });
+  const made = await documentPdf.buildDocumentPdf({ title: "Imported", body: html, values: STUDENT_VALUES, brackets: true });
+  assert.deepEqual(made.fields.map((f) => f.label), ["[Guardian Name]", "[Materials Fee]"]);
+  const text = (await pdfText(made.bytes)).map((t) => t.text).join(" ");
+  for (const expected of ["Tuition", "$14,000.00", "Asha Patel", "February 2027"]) assert.ok(text.includes(expected), expected);
+  await assert.rejects(docxImport.docxToTemplateHtml(new TextEncoder().encode("not a zip")), /not a Word/);
+});
+
+test("signing function: a sectioned template's preview and request carry the header, footer and signer fields; old templates render as before; one answer per token", async () => {
+  const template = { id: "00000000-0000-4000-8000-0000000000a1", name: "Offer", title: "Letter of offer", kind: "text", status: "active", category: "enrolment_agreement", bracket_variables: true,
+    header_html: SLIT_HEADER, footer_html: SLIT_FOOTER, body_html: "<p>Dear [Student Name], guardian [Guardian Name].</p>", body: "Dear", fields: [], roles: [{ key: "student", label: "Student", order: 1, required: true }],
+    signing_mode: "sequential", expiry_days: 14, reminder_days: 3 };
+  assert.equal(signingCore.isSectioned(template), true);
+  assert.equal(signingCore.isSectioned({ kind: "text", body: "Dear {{full_name}}", body_html: "<p>Dear {{full_name}}</p>", header_html: null, footer_html: null, bracket_variables: false }), false, "an existing template keeps its renderer");
+  assert.equal(signingCore.isSectioned({ kind: "pdf", header_html: "<p>x</p>" }), false);
+  let created: Record<string, unknown> | null = null; const stored: string[] = []; let n = 0;
+  const ports = { isServiceCaller: false, later: () => undefined, letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+    admin: async (action: string, _id: string | null, data: Record<string, unknown>) => {
+      if (action === "list") return { templates: [template], requests: [] };
+      if (action === "subject_search") return [];
+      if (action === "create") { created = data; return { id: _id, reference: "SLIT-2026-000099" }; }
+      throw new Error(`unexpected ${action}`);
+    },
+    service: async () => true,
+    storage: { download: async () => null, upload: async (p: string) => { stored.push(p); return true; }, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: null, config: { from: null, adminTo: [], siteUrl: "", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const call = (body: Record<string, unknown>) => signingCore.handleSigning({ body, upload: null, ip: null, userAgent: null }, ports);
+  const preview = await call({ action: "template_preview", template }) as { pdfBase64: string; signerFields: Array<{ label: string; type: string }> };
+  assert.deepEqual(preview.signerFields.map((f) => `${f.type}:${f.label}`), ["text:[Guardian Name]", "initials:Student Initial"]);
+  const previewText = (await pdfText(Uint8Array.from(Buffer.from(preview.pdfBase64, "base64")))).map((t) => t.text).join(" ");
+  assert.ok(previewText.includes("CRICOS 04114B") && previewText.includes("[Student Name]") && previewText.includes("Guardian Name"), "a preview shows the letterhead, the missing value and the field's label");
+  await assert.rejects(call({ action: "create", templateId: template.id, recipients: [{ name: "Asha Patel", email: "asha@example.test", role: "student" }], values: {} }), /\[Student Name\] has no value/);
+  await call({ action: "create", templateId: template.id, recipients: [{ name: "Asha Patel", email: "asha@example.test", role: "student" }, { name: "Hari Admissions", email: "hari@example.test", role: "officer", order: 2 }],
+    values: { "student.full_name": "Asha Patel" } });
+  const fields = (created as unknown as { fields: Array<{ type: string; role: string; label: string; page: number }> }).fields;
+  assert.deepEqual(fields.map((f) => `${f.role}:${f.type}:${f.label}:${f.page}`), ["student:text:[Guardian Name]:1", "student:initials:Student Initial:1"], "the first signer gets the token and the initials");
+  assert.equal(stored.length, 1, "one original PDF stored");
+  // Signing: two boxes of the same token must carry one answer.
+  const record = { id: "r", state: "sent", fields: [{ id: "f1", type: "text", label: "[Guardian Name]" }, { id: "f2", type: "text", label: "[Guardian Name]" }] };
+  const linkPorts = { ...ports, service: async (action: string) => { if (action === "open") return record; throw new Error(`unexpected ${action}`); } } as typeof ports;
+  await assert.rejects(signingCore.handleSigning({ body: { action: "sign", token: "a".repeat(64), name: "Asha Patel", agreed: true, values: { f1: "Ravi", f2: "Someone else" } }, upload: null, ip: null, userAgent: null }, linkPorts),
+    /one answer for \[Guardian Name\]/);
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [
@@ -961,6 +1131,13 @@ test("staff reading reuses the shared reader, runs only through the onboarding l
   await core.readerFetch({ SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co", EF_OPENAI_API_URL: "http://host.docker.internal:1" }, spy)("https://api.openai.com/v1/responses");
   await core.readerFetch({ SUPABASE_URL: "http://kong:8000" }, spy)("https://api.openai.com/v1/responses");
   assert.deepEqual(seen, ["http://host.docker.internal:1/v1/responses", "https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses"]);
+  // The student upload function (validated-document-upload) uses the shared copy: the same redirect, only for a local Supabase.
+  const labFetch = await load.import<typeof import("../supabase/functions/_shared/document-extraction/lab-reader-fetch.ts")>("../supabase/functions/_shared/document-extraction/lab-reader-fetch.ts");
+  seen.length = 0;
+  await labFetch.readerFetch({ SUPABASE_URL: "http://kong:8000", EF_OPENAI_API_URL: "http://host.docker.internal:1/" }, spy)("https://api.openai.com/v1/responses");
+  await labFetch.readerFetch({ SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co", EF_OPENAI_API_URL: "http://host.docker.internal:1" }, spy)("https://api.openai.com/v1/responses");
+  assert.deepEqual(seen, ["http://host.docker.internal:1/v1/responses", "https://api.openai.com/v1/responses"]);
+  assert.ok(read("supabase/functions/validated-document-upload/index.ts").includes("fetch: readerFetch({ SUPABASE_URL: url"), "the student upload function reads through the lab redirect");
 });
 
 test("the Employees tabs cover every reviewed status once and match the database filter", () => {

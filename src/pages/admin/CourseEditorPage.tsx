@@ -12,6 +12,7 @@ import type { AdminCourse } from "@/pages/admin/lib/types";
 import { removeCmsObject, uploadCmsDocument } from "@/pages/admin/lib/storage";
 import { NationalCourseFields, SkylineStatusBadge } from "@/pages/admin/components/CourseCatalogue";
 import { fetchCatalogueCourse, type CatalogueCourse } from "@/pages/admin/lib/courseCatalogue";
+import CourseIntakes from "@/pages/admin/components/CourseIntakes";
 
 const TABS = [
   { id: "basic", label: "Basic Info", icon: "ri-information-line" },
@@ -20,6 +21,7 @@ const TABS = [
   { id: "structure", label: "Course Structure", icon: "ri-list-check-2" },
   { id: "units", label: "Units of Competency", icon: "ri-book-2-line" },
   { id: "delivery", label: "Duration / Delivery", icon: "ri-time-line" },
+  { id: "intakes", label: "Intakes", icon: "ri-calendar-event-line" },
   { id: "fees", label: "Fees / Career", icon: "ri-money-dollar-circle-line" },
   { id: "media", label: "Media", icon: "ri-image-line" },
   { id: "attachments", label: "Attachments", icon: "ri-attachment-line" },
@@ -364,6 +366,10 @@ export default function CourseEditorPage() {
               </div>
             )}
           </div>
+        ) : null}
+
+        {tab === "intakes" ? (
+          original ? <CourseIntakes courseId={draft.id} /> : <p className="text-sm text-foreground-600">Save the course first, then add its intakes.</p>
         ) : null}
 
         {tab === "delivery" ? (

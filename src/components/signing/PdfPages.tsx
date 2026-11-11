@@ -23,7 +23,9 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900 }: 
     setDoc(null); setPages([]); setError("");
     void (async () => {
       try {
-        const [pdf, worker] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]);
+        // The legacy build: pdf.js 6 calls Map.prototype.getOrInsertComputed, which browsers only shipped recently; the legacy build
+        // brings its polyfills, so the document still draws on an older phone or browser (it drew nothing there before).
+        const [pdf, worker] = await Promise.all([import("pdfjs-dist/legacy/build/pdf.mjs"), import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")]);
         pdf.GlobalWorkerOptions.workerSrc = worker.default;
         task = pdf.getDocument(typeof source === "string" ? { url: source } : { data: source.slice() }) as unknown as typeof task;
         const opened = await task!.promise as PdfDocument;

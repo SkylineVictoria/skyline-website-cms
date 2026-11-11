@@ -52,8 +52,9 @@ export function resumeContactFromText(text: string): ResumeContact {
 
 async function readPdf(bytes: Uint8Array, signal: AbortSignal): Promise<string> {
   const [pdf, worker] = await Promise.all([
-    import("pdfjs-dist"),
-    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    // The legacy build, with the polyfills older browsers need (see components/signing/PdfPages.tsx).
+    import("pdfjs-dist/legacy/build/pdf.mjs"),
+    import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"),
   ]);
   signal.throwIfAborted();
   pdf.GlobalWorkerOptions.workerSrc = worker.default;

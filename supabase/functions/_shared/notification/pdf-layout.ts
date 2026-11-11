@@ -39,6 +39,7 @@ const BORDER_COLOUR: Rgb = [0.78, 0.8, 0.84];
 const col = (c: Rgb) => rgb(c[0], c[1], c[2]);
 
 const fromBase64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+let fontBytes: [Uint8Array, Uint8Array] | null = null;
 const IMAGE_MAX_H = 40;
 const IMAGE_MAX_W = 150;
 
@@ -70,7 +71,9 @@ export class PdfWriter {
 
   private static async fonts(pdf: PDFDocument): Promise<[PDFFont, PDFFont]> {
     pdf.registerFontkit(fontkit);
-    return [await pdf.embedFont(fromBase64(NOTO_SANS_REGULAR), { subset: true }), await pdf.embedFont(fromBase64(NOTO_SANS_BOLD), { subset: true })];
+    // The base64 is decoded once per isolate: each PDF of a signature (signed copy, certificate) reuses the bytes (CPU budget).
+    fontBytes ??= [fromBase64(NOTO_SANS_REGULAR), fromBase64(NOTO_SANS_BOLD)];
+    return [await pdf.embedFont(fontBytes[0], { subset: true }), await pdf.embedFont(fontBytes[1], { subset: true })];
   }
 
   static async create(title: string, palette: Palette): Promise<PdfWriter> {

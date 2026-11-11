@@ -42,8 +42,11 @@ function paraOf(block: TemplateBlock): Para {
  * The texts the embedded font cannot set as typed (a character that would be folded or printed as "?"), or null when every one prints as
  * it is. For callers that must refuse rather than alter (document signing: the signer's typed name, a template's text).
  */
+let checker: Promise<PdfWriter> | null = null;
 export async function unsupportedText(texts: string[]): Promise<string | null> {
-  const writer = await PdfWriter.create("check", paletteOf(null));
+  // One writer per isolate: only its character sets are read (a signature used to embed both fonts once more just for this check).
+  checker ??= PdfWriter.create("check", paletteOf(null));
+  const writer = await checker.catch((error) => { checker = null; throw error; });
   return texts.find((t) => writer.clean(t) !== t || writer.clean(t, true) !== t) ?? null;
 }
 

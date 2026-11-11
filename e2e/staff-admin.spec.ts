@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { strToU8, zipSync } from "fflate";
 import {
   PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAdmin, staffAt, waitForHrMail,
 } from "./support";
@@ -387,3 +388,107 @@ test("HRMS > Templates: create with placeholders, preview with a real employee, 
     expect(error?.message ?? "").toContain("Only an administrator can do this.");
   }
 });
+
+test("Documents & Signatures: a document template with Header, Body and Footer, presets, a Word import with its fee table and [tokens], and the variable check before saving (TPL-02)", async ({ page }) => {
+  test.setTimeout(240_000);
+  const admin = await createAdmin("tpl02-admin");
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/signing");
+  await page.getByTestId("new-template").click();
+  const name = `E2E letter of offer ${Date.now()}`;
+  await page.getByTestId("template-name").fill(name);
+  await page.getByTestId("template-subject").fill("Letter of offer and written agreement");
+  await page.getByTestId("template-category").selectOption("enrolment_agreement");
+  const sections = page.getByTestId("document-sections");
+  await expect(sections.getByRole("tab")).toHaveText(["Header", "Body", "Footer"]);
+  // One family, the one the PDF prints: no font choice that would change in the PDF.
+  await expect(sections.getByLabel("Font family")).toHaveCount(0);
+  await expect(sections.getByTestId("document-font")).toHaveText("Arial");
+
+  // Header and footer written once (source view), saved as presets.
+  const setSource = async (section: "header" | "body" | "footer", html: string) => {
+    await page.getByTestId(`section-tab-${section}`).click();
+    await page.getByTestId(`section-editor-${section}-source`).click();
+    await page.getByTestId(`section-editor-${section}-source-text`).fill(html);
+    await page.getByTestId(`section-editor-${section}-source`).click();
+  };
+  const header = `<table style="border:none;width:100%"><tr><td style="width:50%"><strong style="font-size:14pt">Skyline Institute of Technology</strong></td><td style="text-align:right;width:50%">Level 8, 310 King Street, Melbourne VIC 3000<br>RTO 45989 | CRICOS 04114B<br>info@slit.edu.au | +61 3 9125 1661<br>https://slit.edu.au/</td></tr></table>`;
+  const footer = `<p>LETTER OF OFFER AND WRITTEN AGREEMENT &nbsp; Version Oct 2024 &nbsp; Student Initial [Student Initial] &nbsp; Page [Page Number]</p><p>INDOPACIFIC GLOBAL PTY LTD T/A SKYLINE INSTITUTE OF TECHNOLOGY (SLIT) ABN: 20 643 760 721</p>`;
+  const presetName = `SLIT ${Date.now()}`;
+  await setSource("header", header);
+  await expect(page.getByTestId("section-editor-header")).toContainText("CRICOS 04114B");
+  await page.getByTestId("preset-header-name").fill(presetName);
+  await page.getByTestId("preset-header-save").click();
+  await expect(sections.getByRole("status")).toContainText(`Saved as the header preset "${presetName}"`);
+  await setSource("footer", footer);
+  await page.getByTestId("preset-footer-name").fill(presetName);
+  await page.getByTestId("preset-footer-save").click();
+  await expect(sections.getByRole("status")).toContainText(`Saved as the footer preset "${presetName}"`);
+  // Picking the preset copies it in (the header is emptied first to prove it).
+  await setSource("header", "");
+  page.once("dialog", (d) => void d.accept());
+  await page.getByTestId("preset-header").selectOption({ label: presetName });
+  await expect(page.getByTestId("section-editor-header")).toContainText("Level 8, 310 King Street");
+  await shot(page, "tpl02-header-preset");
+
+  // The body from a Word document: the fee table and the tokens survive.
+  await page.getByTestId("section-tab-body").click();
+  await page.getByTestId("docx-input").setInputFiles({ name: "offer.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: sampleDocx() });
+  const body = page.getByTestId("section-editor-body");
+  await expect(body.locator("table tr")).toHaveCount(3);
+  await expect(body).toContainText("[Student Name]");
+  await expect(body).toContainText("[Guardian Name]");
+  await expect(body.locator("td").filter({ hasText: "$14,000.00" })).toHaveCount(1);
+  // A variable from the picker goes in at the cursor; the tokens are highlighted by kind.
+  await body.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Start: ");
+  await page.getByTestId("variable-start-date").click();
+  await expect(body).toContainText("Start: [Start Date]");
+  const painted = await page.evaluate(() => { const h = (globalThis as unknown as { CSS: { highlights?: Map<string, { size: number }> } }).CSS.highlights; return h ? { known: h.get("tpl-known")?.size ?? 0, field: h.get("tpl-field")?.size ?? 0 } : null; });
+  if (painted) expect(painted.known > 0 && painted.field > 0).toBe(true);
+  await shot(page, "tpl02-body-docx");
+
+  // The PDF preview shows header and footer (the PDF itself is checked by the lab's signing run and the offline tests).
+  // (The test browser cannot draw pdf.js 6 pages, so the PDF the preview receives is checked instead of the canvas.)
+  const previewResponse = page.waitForResponse((r) => r.url().includes("/functions/v1/document-signing") && r.request().postData()?.includes("template_preview") === true);
+  await page.getByRole("button", { name: "Preview the PDF" }).click();
+  const previewBody = await (await previewResponse).json() as { pdfBase64?: string; signerFields?: Array<{ type: string; label: string }> };
+  expect(Buffer.from(previewBody.pdfBase64 ?? "", "base64").subarray(0, 5).toString()).toBe("%PDF-");
+  expect((previewBody.signerFields ?? []).map((f) => f.label)).toEqual(expect.arrayContaining(["[Guardian Name]", "[Materials Fee]", "Student Initial"]));
+  await expect(page.getByRole("heading", { name: "Template preview (PDF)" })).toBeVisible();
+  await shot(page, "tpl02-preview");
+  await page.getByRole("button", { name: "Close" }).last().click();
+
+  // Saving lists what the signer will fill in, what the record fills and what is automatic; an unpaired bracket is a warning.
+  await page.getByTestId("section-tab-body").click();
+  await body.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Note [unfinished");
+  await page.getByTestId("template-save").click();
+  const check = page.getByTestId("template-variable-check");
+  await expect(check.getByTestId("signer-fields")).toContainText("[Guardian Name]");
+  await expect(check.getByTestId("signer-fields")).toContainText("[Materials Fee]");
+  await expect(check).toContainText("[Student Name]");
+  await expect(check).toContainText("[Page Number]");
+  await expect(check).toContainText("[Student Initial]");
+  await expect(check.getByRole("alert")).toContainText("without its pair");
+  await shot(page, "tpl02-variable-check");
+  await page.getByTestId("template-save-confirm").click();
+  await expect.poll(() => sql(`select (header_html like '%CRICOS 04114B%') || '|' || (footer_html like '%[Student Initial]%') || '|' || bracket_variables || '|' || (body_html like '%<table>%[Materials Fee]%') from hr.sign_templates where name = '${name}'`)).toBe("true|true|true|true");
+});
+
+/** A small .docx made here: a heading, a token Word split across a bold run, a fee table with a token in a cell. */
+function sampleDocx(): Buffer {
+  const r = (t: string, bold = false) => `<w:r>${bold ? "<w:rPr><w:b/></w:rPr>" : ""}<w:t xml:space="preserve">${t}</w:t></w:r>`;
+  const cell = (t: string) => `<w:tc><w:p>${r(t)}</w:p></w:tc>`;
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`
+    + `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${r("1. Fees and charges")}</w:p>`
+    + `<w:p>${r("Dear ")}${r("[Student ")}${r("Name]", true)}${r(", your intake is [Intake]. Guardian: [Guardian Name].")}</w:p>`
+    + `<w:tbl><w:tr>${cell("Fee item")}${cell("Amount")}</w:tr><w:tr>${cell("Tuition")}${cell("$14,000.00")}</w:tr><w:tr>${cell("Materials ([Materials Fee])")}${cell("$500.00")}</w:tr></w:tbl></w:body></w:document>`;
+  return Buffer.from(zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+    "word/document.xml": strToU8(doc),
+  }));
+}

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT } from "./env";
-import { PASSWORD, PDF, createAdmin, domSnapshot, latestLink, markStudentDocumentRead, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
+import { PASSWORD, createAdmin, domSnapshot, latestLink, markStudentDocumentRead, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
 test.describe.configure({ mode: "serial" });
@@ -114,7 +114,7 @@ test("the student document wizard: upload, reading, emergency contact and the ph
 
   let applicationId = "";
   const upload = async (category: string, file: string, read: Record<string, string>) => {
-    await wizard.locator('input[type="file"]').first().setInputFiles({ name: file, mimeType: "application/pdf", buffer: PDF });
+    await wizard.locator('input[type="file"]').first().setInputFiles({ name: file, mimeType: "application/pdf", buffer: pdfFor(category === "English Test" ? "English" : category) });
     await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where filename = '${file}' and category = '${category}' and is_current`)).not.toBe("0");
     applicationId ||= sql(`select application_id from public.enrollment_application_documents where filename = '${file}' order by created_at desc limit 1`);
     markStudentDocumentRead(applicationId, category, read);

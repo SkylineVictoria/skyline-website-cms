@@ -31,7 +31,7 @@ function EnvelopeSigningPage() {
   const location = useLocation();
   const routeView = new URLSearchParams(location.search).get("view") ?? location.pathname.split("/").at(-1) ?? "";
   const routeTab = routeView === "templates" ? "templates" : "requests";
-  const routeStatus = Object.prototype.hasOwnProperty.call(SIGNING_STATUS, routeView) ? routeView : "all";
+  const routeStatus = routeView === "pending" ? "sent" : routeView === "completed" ? "signed" : Object.prototype.hasOwnProperty.call(SIGNING_STATUS, routeView) ? routeView : "all";
   const [tab, setTab] = useState(routeTab);
   const [status, setStatus] = useState(routeStatus);
   useEffect(() => { setTab(routeTab); setStatus(routeStatus); }, [routeTab, routeStatus]);

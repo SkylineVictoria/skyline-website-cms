@@ -1,5 +1,5 @@
-import { checkedDocumentCategory, hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
-import { uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
+import { checkedDocumentCategory } from "../../../../supabase/functions/_shared/document-category";
+import { RejectedDocumentError, uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
 import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
@@ -722,7 +722,7 @@ export { DOCUMENT_MAX_BYTES as MAX_DOCUMENT_BYTES } from "../../../../supabase/f
 /** Size, declared type and content of a picked file: the shared rule (also the staff onboarding wizard's and its Edge Function's). */
 async function validateDocumentFile(file: File): Promise<void> {
   const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
-  if (problem) throw new Error(problem);
+  if (problem) throw new RejectedDocumentError(problem);
 }
 
 export interface UploadDocumentInput {
@@ -771,8 +771,8 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   if (duplicate) {
     const id = String(duplicate.id);
     const path = String(duplicate.storage_path);
-    if (protectedCategory && !hasValidatedDocumentPath(path)) {
-      // A retry for an older file checks the existing bytes before returning it.
+    if (protectedCategory) {
+      // Check retries against the current passport before returning the saved file.
       await uploadValidatedDocument("enrollment", applicationId, category, file, id);
     }
     return { id, path, category: String(duplicate.category), filename: String(duplicate.filename) };

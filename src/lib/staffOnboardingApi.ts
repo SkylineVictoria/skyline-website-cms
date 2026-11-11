@@ -1,3 +1,4 @@
+import { isRejectedDocumentStatus, RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { StaffDocCategory, StaffStatus } from "@/lib/staffStatus";
 import type { StaffDocSummary, StaffDocument } from "@/lib/staffApi";
@@ -66,6 +67,10 @@ async function invoke(body: Record<string, unknown> | FormData): Promise<Record<
     }
     if (code === "link_invalid") throw new LinkInvalidError(message);
     if (code === "no_offer") throw new NoOfferError(message);
+    if (body instanceof FormData && body.get("action") === "upload" && context instanceof Response &&
+      (isRejectedDocumentStatus(context.status) || (context.status === 400 && field === "file"))) {
+      throw new RejectedDocumentError(message);
+    }
     throw new FieldError(message || "Something went wrong. Please try again.", field);
   }
   return (data ?? {}) as Record<string, unknown>;
@@ -92,7 +97,9 @@ function uploadWithProgress(body: FormData, onProgress?: (fraction: number) => v
       try { parsed = JSON.parse(request.responseText) as typeof parsed; } catch { /* not JSON */ }
       if (request.status >= 200 && request.status < 300) { resolve(parsed); return; }
       if (parsed.code === "link_invalid") reject(new LinkInvalidError(parsed.error ?? "This link is not valid any more."));
-      else reject(new FieldError(parsed.error || "The upload failed. Please try again.", parsed.field));
+      else if (isRejectedDocumentStatus(request.status) || (request.status === 400 && parsed.field === "file")) {
+        reject(new RejectedDocumentError(parsed.error || "This document was rejected."));
+      } else reject(new FieldError(parsed.error || "The upload failed. Please try again.", parsed.field));
     };
     request.send(body);
   });
@@ -126,7 +133,7 @@ export const onboarding = {
   upload: async (t: string, category: StaffDocCategory, file: File, expiryDate: string | null, replaces?: string, onProgress?: (fraction: number) => void) => {
     // The shared document rule (size, declared type, content), before anything leaves the device; the function checks again.
     const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
-    if (problem) throw new FieldError(problem, "file");
+    if (problem) throw new RejectedDocumentError(problem);
     const body = new FormData();
     body.set("action", "upload");
     body.set("t", t);

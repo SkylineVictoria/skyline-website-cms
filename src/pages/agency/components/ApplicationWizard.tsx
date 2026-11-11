@@ -1,3 +1,4 @@
+import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -119,6 +120,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [step, setStep] = useState(() => savedWizardStep(applicationId));
   const [documents, setDocuments] = useState<WizardDoc[]>([]);
   const [pending, setPending] = useState<PendingUpload[]>([]);
+  const [uploadRejections, setUploadRejections] = useState<Record<string, string>>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState("");
@@ -269,7 +271,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           )));
         }
       } catch (error) {
-        setPending((prev) => prev.map((entry) => (entry.key === item.key ? { ...entry, error: error instanceof Error ? error.message : "Upload failed." } : entry)));
+        if (error instanceof RejectedDocumentError) {
+          setPending((prev) => prev.filter((entry) => entry.key !== item.key));
+          setUploadRejections((prev) => ({ ...prev, [item.category]: error.message }));
+        } else {
+          setPending((prev) => prev.map((entry) => (entry.key === item.key ? { ...entry, error: error instanceof Error ? error.message : "Upload failed." } : entry)));
+        }
       }
     },
     [applicationId, profile?.id],
@@ -278,6 +285,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The loader starts here, synchronously, before any hashing or network call.
   const handlePickFiles = (target: WizardStep, list: FileList | null) => {
     if (!list || list.length === 0) return;
+    setUploadRejections((prev) => ({ ...prev, [target.category]: "" }));
     if (target.id === "passport") setExpiredPassport(null);
     if (target.id === "licence") setRejectedLicence(null);
     setRejectedDocs((prev) => { if (!prev[target.category]) return prev; const next = { ...prev }; delete next[target.category]; return next; });
@@ -539,24 +547,27 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       );
     }
     return (
-      <WizardDocumentStep
-        step={current}
-        docs={stepDocs}
-        pending={stepPending}
-        dismissed={dismissed}
-        onPickFiles={(files) => handlePickFiles(current, files)}
-        onRetryUpload={(item) => void startUpload(item)}
-        onDropUpload={(item) => setPending((prev) => prev.filter((entry) => entry.key !== item.key))}
-        onRetryDoc={(doc) => void handleRetryDoc(doc)}
-        onDismissDoc={(doc) => setDismissed((prev) => new Set(prev).add(doc.id))}
-        onRemoveDoc={handleRemoveDoc}
-        signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
-        logView={
-          role === "slit_admin"
-            ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
-            : undefined
-        }
-      />
+      <>
+        {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
+        <WizardDocumentStep
+          step={current}
+          docs={stepDocs}
+          pending={stepPending}
+          dismissed={dismissed}
+          onPickFiles={(files) => handlePickFiles(current, files)}
+          onRetryUpload={(item) => void startUpload(item)}
+          onDropUpload={(item) => setPending((prev) => prev.filter((entry) => entry.key !== item.key))}
+          onRetryDoc={(doc) => void handleRetryDoc(doc)}
+          onDismissDoc={(doc) => setDismissed((prev) => new Set(prev).add(doc.id))}
+          onRemoveDoc={handleRemoveDoc}
+          signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
+          logView={
+            role === "slit_admin"
+              ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
+              : undefined
+          }
+        />
+      </>
     );
   };
 

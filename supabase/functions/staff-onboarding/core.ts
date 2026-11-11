@@ -1,4 +1,4 @@
-import type { CheckDocumentCategory } from "../_shared/document-extraction/classify.ts";
+import type { CheckDocumentOwnership } from "../_shared/document-ownership.ts";
 // Staff onboarding by emailed link (HR-02c). Runtime-neutral and injectable so every branch is tested offline
 // (scripts/test-staff-registration.ts); index.ts wires it to Deno, Supabase Storage and the document reader.
 // There is no login: every action carries the link token, which is hashed here (sha256) and checked by the database on EVERY
@@ -59,8 +59,8 @@ export interface OnboardingDeps {
   upload(path: string, bytes: Uint8Array, contentType: string): Promise<{ error: string | null }>;
   remove(paths: string[]): Promise<void>;
   signedUrl(path: string, seconds: number): Promise<string | null>;
-  checkCategory: CheckDocumentCategory;
-  recordCategory(path: string, category: string): Promise<boolean>;
+  checkOwnership: CheckDocumentOwnership;
+  recordCategory(path: string, category: string, passportId: string | null): Promise<boolean>;
   scheduleExtraction(doc: DocumentToRead): void;
   hash(value: string): Promise<string>;
   newId(): string;
@@ -325,13 +325,13 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       // The database decides first whether this link may upload this type now; nothing is stored when it may not.
       const target = await call("hr_svc_upload_target", { p_category: category, p_replaces: replaces || null });
       if (target.error) return fromDb(target.error);
-      const categoryProblem = await deps.checkCategory({ category, bytes, mime: kind.mime, filename: file.name });
-      if (categoryProblem) return { status: categoryProblem.status, body: { error: categoryProblem.error, field: "file" } };
       const { profileId, folder } = target.data as { profileId: string; folder: string };
+      const ownership = await deps.checkOwnership({ category, bytes, mime: kind.mime, filename: file.name }, profileId);
+      if (!ownership.ok) return { status: ownership.status, body: { error: ownership.error, field: "file" } };
       const path = `${profileId}/${folder}/validated-${deps.newId()}.${kind.ext}`;
       const stored = await deps.upload(path, bytes, kind.mime);
       if (stored.error) return { status: 503, body: { error: "The upload failed. Please try again." } };
-      if (!(await deps.recordCategory(path, category))) {
+      if (!(await deps.recordCategory(path, category, ownership.passportId))) {
         await deps.remove([path]);
         return { status: 503, body: { error: "The file could not be verified. Please try again.", field: "file" } };
       }

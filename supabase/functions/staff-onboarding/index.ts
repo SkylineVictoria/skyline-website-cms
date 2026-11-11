@@ -7,6 +7,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { createDocumentCategoryCheck } from "../_shared/document-extraction/classify.ts";
+import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
 import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
@@ -120,8 +121,8 @@ Deno.serve(async (req) => {
     upload: async (path, bytes, contentType) => { const { error } = await bucket.upload(path, bytes, { contentType, upsert: false }); return { error: error ? error.message : null }; },
     remove: async (paths) => { if (paths.length) await bucket.remove(paths); },
     signedUrl: async (path, seconds) => { const { data } = await bucket.createSignedUrl(path, seconds); return data?.signedUrl ?? null; },
-    checkCategory,
-    recordCategory: (path, category) => recordDocumentCategory(admin, "staff-documents", path, category),
+    checkOwnership: checkDocumentOwnership(admin, "staff-documents", checkCategory),
+    recordCategory: (path, category, passportId) => recordDocumentCategory(admin, "staff-documents", path, category, passportId),
     scheduleExtraction,
     hash: sha256,
     newId: () => crypto.randomUUID(),

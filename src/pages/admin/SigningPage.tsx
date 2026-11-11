@@ -36,7 +36,7 @@ function EnvelopeSigningPage() {
   const [status, setStatus] = useState(routeStatus);
   useEffect(() => { setTab(routeTab); setStatus(routeStatus); }, [routeTab, routeStatus]);
   const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [subject, setSubject] = useState("");
-  const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null);
+  const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SigningTemplate | "new" | null>(null);
   const load = useCallback(async () => { setContext(await signingAdmin<SigningContext>("list")); setLoaded(true); }, []);
   useEffect(() => { void load().catch((e: Error) => setError(e.message)); }, [load]);
@@ -94,8 +94,8 @@ function EnvelopeSigningPage() {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Delete the template “${t.name}”? Requests already made from it keep their own copy.`)) void act(() => signingAdmin("template_delete", t.id), "Template deleted."); }}>Delete</Button>
           </div></td></tr>)}</tbody></table></div>)}
 
-    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r) => { setCompose(false); setNotice("Draft saved. Place the fields, review the document, then send it for signature."); void load(); setOpenId(r.id); }} />}
+    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {editing && <TemplateEditor template={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={(message) => { setEditing(null); setNotice(message); void load(); }} />}
-    {openId && <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void load()} />}
+    {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </div>;
 }

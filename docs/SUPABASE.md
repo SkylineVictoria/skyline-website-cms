@@ -6,7 +6,7 @@ Only project **xcpydisstlvtvcsqnjob** (Skyline Web, ap-southeast-2, PostgreSQL 1
 
 ### Release status (verified on hosted 2026-11-11, after TPL-02 / INT-01 release step 3)
 
-Every repo migration is applied on hosted: 215 of 215 (highest 20261113210000; External Integrations under its hosted versions 20261111075147 / 20261111075214 since the rename of 2026-11-11), all of them in `hosted-refreshed.json`. Every function in `supabase/functions/` is deployed (RELEASED):
+Every released repo migration is applied on hosted: 217 of 217 (highest 20261113210000; 20261111131056 integration_token_refresh_schedule, applied by the External Integrations session, added to the repo and to `hosted-refreshed.json` 2026-11-11; 20261111143429 student_office365_accounts came with PR #31 and is in `hosted-refreshed.json`; local-only P09-01 20261113220000 is not applied; External Integrations under its hosted versions 20261111075147 / 20261111075214 since the rename of 2026-11-11), all of them in `hosted-refreshed.json`. Every function in `supabase/functions/` is deployed (RELEASED):
 
 | Function | Hosted version | verify_jwt | Note |
 |---|---|---|---|
@@ -15,22 +15,23 @@ Every repo migration is applied on hosted: 215 of 215 (highest 20261113210000; E
 | document-signing | 5 | true | TPL-02 (Header / Body / Footer, [Variables]) |
 | guest-documents | 10 | true | |
 | holiday-sync | 1 | true | cron hr-holiday-sync active |
-| integrations-admin | 2 | true | External Integrations (other session) |
+| integrations-admin | 5 | true | External Integrations (other session; v5 seen on hosted 2026-11-11, repo source may predate it) |
 | integrations-webhook | 1 | false | External Integrations (other session) |
 | notification-delivery | 20 | true | |
 | portal-admin-users | 24 | true | |
 | portal-document-delete | 20 | true | |
 | portal-document-extract | 34 | false | |
 | portal-self-register | 10 | false | |
-| public-assistant | 21 | false | |
-| public-assistant-index | 18 | false | |
+| public-assistant | 21 | false | P09-01 local change NOT deployed (needs migration 20261113220000 first) |
+| public-assistant-index | 18 | false | P09-01 local change NOT deployed (needs migration 20261113220000 first) |
 | staff-admin | 8 | true | |
 | staff-onboarding | 10 | false | |
 | staff-register | 10 | false | |
+| student-office365 | 1 | true | PR #31 (other session), deployed 2026-11-11 |
 | validated-document-upload | 2 | true | repo adds only the LAB ONLY reader redirect (no hosted change) |
 | xero-push | 2 | true | stub, inactive |
 
-Hosted-only functions (not in this repo): address-search v9, portal-application-delete v7, omara-ingest v10, omara-abr-enrich v10. The shared PDF files changed by TPL-02 (`notification/pdf-layout.ts` font bytes cached, `offer-letter-pdf.ts` one checker per isolate) give the same output; the functions that bundle them besides document-signing keep their deployed builds. The version column in the table below is each function's history.
+Hosted-only functions (not in this repo): address-search v9, portal-application-delete v7, omara-ingest v10, omara-abr-enrich v10, integrations-refresh v1 (verify_jwt true; deployed by the External Integrations session, called daily by cron integration-token-refresh through migration 20261111131056). The shared PDF files changed by TPL-02 (`notification/pdf-layout.ts` font bytes cached, `offer-letter-pdf.ts` one checker per isolate) give the same output; the functions that bundle them besides document-signing keep their deployed builds. The version column in the table below is each function's history.
 
 | Function | verify_jwt | Auth model | Hosted version (history) |
 |---|---|---|---|
@@ -572,3 +573,16 @@ Shared PDF styling. The live notification-delivery function (v15) has drawn the 
 - Release blockers: the Windows recovery environment and `docs/release-evidence/close-20261026/hosted-refreshed.json` are unavailable in this checkout. Perform the approved recovery checkpoint, apply only this migration, append its version to the existing backup manifest, deploy both functions, then verify all eight admin routes with a real authorized account. Do not blanket-push unrelated migrations. Add `integration_private` credential references/OAuth state to the appropriate recovery scope alongside Vault. The frontend commit is on main and Vercel reports success; authenticated page acceptance remains pending.
 - Navigation: eight distinct `/admin/integrations/{overview,applications,add,credentials,webhooks,sync-history,logs,settings}` routes. Payments & Billing was absent in live navigation at audit; the migration uses its order+1 if present, otherwise 86 (after Sign). No unrelated menu rows are changed. Administrators can grant connection-scoped viewer/operator access to existing active users; tenant membership and verified tenant scope are checked on the server. External email alert delivery is not implemented.
 - Validation: frontend type-check/lint/build, deterministic provider/signature/OAuth/navigation tests, and isolated PGlite SQL checks (repeatability, secret denial, admin/tenant isolation, event deduplication, revocation). PGlite simulates Vault and existing authorization helpers; it is not native Supabase acceptance. Full native lab/mobile/admin browser acceptance and live provider tests remain pending.
+
+## Public assistant per tenant (P09-01; LOCAL ONLY, not released)
+- Migration `20261113220000_public_assistant_tenant_scope.sql` (local, unapplied): `tenant_assistant_context(tenant)` (version, institution name, published FAQs and courses of that tenant only; null for an inactive tenant), `tenant_assistant_cache_get` / `_put` (a cache key is read or overwritten only within its tenant), FAQ question unique per tenant instead of platform-wide, `public_assistant_claim_index_job` also claims active-tenant jobs (inactive tenants' jobs untouched), and a guarded patch of the fenced `public_assistant_commit_index` (predecessor asserted): the CMS parent must belong to the job's tenant, documents only from that institution's public storage (legacy `cms-media` forms/ or policies/, tenant `tenant-public-media/<tenant id>/`), embedding usage charged to the tenant. All service_role only.
+- `public-assistant`: tenant from `x-tenant-domain` / Origin (`_shared/public-tenant.ts`): header and Origin must agree (403 `tenant_origin_mismatch`), a non-legacy Origin without the header is still scoped, an unverified / unknown / inactive host gets 404 `tenant_unavailable` (never the legacy institution's answers). Rate limit, context, cache, search and usage name the tenant; answers name the tenant's institution. Generation stays legacy-only until P09-04 adds a tenant generation budget. CORS allows `x-tenant-domain`. The site still hides the widget on tenant hosts (activation is P09-05).
+- `public-assistant-index`: every CMS read filtered by the job's tenant; the same storage rule before download.
+- Release order: back up, push the migration, deploy `public-assistant-index` then `public-assistant`, add the version to `hosted-refreshed.json`. An old `public-assistant` keeps working on the new schema (legacy functions unchanged).
+- Lab: `node scripts/lab/staff-lab.mjs assistant` (fresh `up`; mock embeddings on the lab reader port, lab key `local-test-openai-key`).
+
+## 15-minute recovery checkpoint and restore test (2026-11-11 evening)
+- Recurring checkpoints failed at "history" from 13:40Z: hosted had 20261111131056 (integration_token_refresh_schedule, External Integrations session), missing from the repo and `hosted-refreshed.json`. Both added (previous manifest copy in `C:\Users\goura\Skyline-Backups\checkpoint-manifest-20261111\`); checkpoints 173 (14:05Z) and 174 (14:20Z) PASS. Last PASS before that: 2026-11-09 15:32Z (a gap of about two days).
+- `collect-production-checkpoint.mjs`: schema `integration_private` added (connection id, kind and Vault reference only; public functions reference it, so restore-schema failed with 3F000 without it). Object reads retry up to 3 times on 5xx.
+- `restore-production-checkpoint.mjs`: the contained Storage disk is 256 MB (was 64 MB; the checkpoint now carries about 100 MB of private files) and service containers 768 MB. Enrollment files whose application no longer exists (62 on hosted, created 2026-10-15 to 2026-11-06) have no owner; tenant_storage_boundary denies every signed-in reader by design, so the test verifies their bytes and that anonymous, foreign and every restored user are denied, instead of requiring a reader. Owned files keep the strict check.
+- Restore test 2026-11-11 PASS on checkpoint 174: 190 tables, 4285 rows, 73 private objects (104 MB), 5 hr.staff_profiles rows, 3 signed PDFs with matching hashes; restore containers removed.

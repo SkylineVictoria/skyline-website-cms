@@ -150,7 +150,7 @@ Owner decisions (2026-10-27), recorded for P08-04 to P08-07:
 
 ## Phase 9 - Multi-tenant RAG chatbot
 
-- P09-01 Scope RAG knowledge and cache to verified tenant. status: TODO. Priority P0. Deps: P02-10, P03-05, P08-07.
+- P09-01 Scope RAG knowledge and cache to verified tenant. status: DONE (local, 2026-11-11; migration 20261113220000 and public-assistant / public-assistant-index changes NOT released). Lab `assistant` 20/20 (two hosts, spoofed / unverified / unknown host, foreign storage refused, unpublish), public_assistant_integration 67/67, all 14 SQL suites PASS. Generation stays legacy-only until P09-04. Priority P0. Deps: P02-10, P03-05, P08-07.
   - Scope: bind structured/FAQ/vector/cache/index operations and budgets to the authorized public tenant (public-assistant, public-assistant-index).
   - Acceptance: tenant B cannot retrieve A sources or cached answers; private student documents never enter the public index.
   - Tests: REG-RAG/SEC two-host, spoofed tenant, private bucket, unpublished.

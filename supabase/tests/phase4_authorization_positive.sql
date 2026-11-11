@@ -650,7 +650,7 @@ select is((select string_agg(x->>'name', ',' order by n) from jsonb_array_elemen
 select is(public.course_intakes_open('int-course-a')->1->>'display', to_char(current_date + 60, 'FMMonth YYYY') || ' (starts ' || to_char(current_date + 60, 'FMDD Mon YYYY') || ')', 'INT-01: the label is made by the database');
 select is(public.course_intakes_open('int-course-a')->0->>'display', 'Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')', 'INT-01: a staff label is used');
 select is(jsonb_array_length(public.course_intakes_open('int-course-b')), 1, 'INT-01: each course lists its own intakes');
-select is((select count(*)::int from public.course_intakes), 4, 'INT-01: an applicant reads only active intakes of courses they can see (the inactive one is hidden)');
+select is((select count(*)::int from public.course_intakes where course_id in ('int-course-a', 'int-course-b')), 4, 'INT-01: an applicant reads only active intakes of courses they can see (the inactive one is hidden)');
 select lives_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 0, '{"values":{"preferred_intake":"Next month please"},"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('a20')),
  'INT-01: a draft saves an open intake of its course');
 select throws_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 1, '{"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('b30')),

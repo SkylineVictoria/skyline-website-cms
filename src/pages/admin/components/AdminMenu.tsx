@@ -20,7 +20,7 @@ function MenuEntry({ node, close }: { node: MenuNode; close: () => void }) {
       {expanded ? <ul className="ml-3 border-l border-background-200 pl-2">{node.children.map(child => <MenuEntry key={child.id} node={child} close={close} />)}</ul> : null}
     </> : node.route ? <NavLink to={node.route} end={node.route === '/admin' || node.route === '/'} onClick={close}
       target={node.open_in_new_tab ? '_blank' : undefined} rel={node.open_in_new_tab ? 'noopener noreferrer' : undefined}
-      className={({ isActive }) => `${linkClass} ${isActive ? 'bg-primary-500 text-background-50' : 'text-foreground-700 hover:bg-background-100'}`}>
+      className={() => `${linkClass} ${pathname === node.route ? 'bg-primary-500 text-background-50' : 'text-foreground-700 hover:bg-background-100'}`}>
       {content}
     </NavLink> : null}
   </li>;

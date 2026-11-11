@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import { integrationRequest, type Snapshot } from './api';
-export const sections = [['overview','Overview'],['applications','Connected Applications'],['add','Add Connection'],['credentials','Credentials & Secrets'],['webhooks','Webhooks & Events'],['sync-history','Sync History'],['logs','Integration Logs'],['settings','Settings']] as const;
 export const inputClass = 'rounded-md border border-background-300 bg-white p-2 text-foreground-900 w-full';
 export const date = (value: string | null) => value ? new Date(value).toLocaleString() : 'Never';
 export function useIntegrations() {

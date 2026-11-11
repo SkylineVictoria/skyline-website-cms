@@ -1,7 +1,4 @@
-import IntegrationOverviewPage from "@/pages/admin/integrations/OverviewPage";
-import IntegrationApplicationsPage from "@/pages/admin/integrations/ApplicationsPage";
-import IntegrationAddPage from "@/pages/admin/integrations/AddPage";
-import IntegrationCredentialsPage from "@/pages/admin/integrations/CredentialsPage";
+import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
 import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
 import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
 import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
@@ -246,11 +243,11 @@ const routes: RouteObject[] = [
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },
           { path: "activity", element: <ActivityPage /> },
-          { path: "integrations", element: <Navigate to="/admin/integrations/overview" replace /> },
-          { path: "integrations/overview", element: <IntegrationOverviewPage /> },
-          { path: "integrations/applications", element: <IntegrationApplicationsPage /> },
-          { path: "integrations/add", element: <RequireAdmin><IntegrationAddPage /></RequireAdmin> },
-          { path: "integrations/credentials", element: <RequireAdmin><IntegrationCredentialsPage /></RequireAdmin> },
+          { path: "integrations", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/overview", element: <Navigate to="/admin/integrations" replace /> },
+          { path: "integrations/applications", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/add", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/credentials", element: <IntegrationConnectionsPage /> },
           { path: "integrations/webhooks", element: <IntegrationWebhooksPage /> },
           { path: "integrations/sync-history", element: <IntegrationSyncHistoryPage /> },
           { path: "integrations/logs", element: <IntegrationLogsPage /> },

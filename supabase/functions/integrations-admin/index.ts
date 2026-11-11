@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
-import { oauthConfig, stateHash, authorizeUrl, exchange } from '../_shared/integrations/oauth.ts';
+import { oauthCallback, oauthConfig, oauthProviders, readOAuthCredential, stateHash, authorizeUrl, exchange } from '../_shared/integrations/oauth.ts';
 import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
@@ -103,20 +103,48 @@ Deno.serve(async(req:Request)=>{
    const saved=await admin.from('integration_webhook_registrations').insert({connection_id:c.id,provider_id:registration.id,endpoint_url:endpoint,event_types:events});check(saved.error);
    await log('webhook_registered');return json({ok:true});
   }
-  if(action==='oauth_start'||action==='oauth_complete'){
+  if(['oauth_setup','oauth_app_save','oauth_start','oauth_complete'].includes(action)){
+   if(!oauthProviders.includes(c.connector_id))return json({error:'This application does not use sign-in authorization.'},400);
+   const env=(name:string)=>Deno.env.get(name);
+   const callbackUrl=oauthCallback(env);
+   if(action==='oauth_app_save'){
+    const clientId=typeof body.clientId==='string'?body.clientId.trim():'';
+    const clientSecret=typeof body.clientSecret==='string'?body.clientSecret.trim():'';
+    const environment=c.connector_id==='docusign'?body.environment:undefined;
+    if(!clientId||clientId.length>300||!clientSecret||clientSecret.length>3000||
+       /[\x00-\x20\x7f]/.test(clientId+clientSecret)||
+       (c.connector_id==='docusign'&&environment!=='demo'&&environment!=='production')){
+     return json({error:'Enter a valid app ID and client secret, and select the environment for DocuSign.'},400);
+    }
+    if(c.status==='disabled')return json({error:'Enable the connection first.'},409);
+    const saved=await admin.rpc('integration_credential_write',{
+     p_connection:c.id,p_kind:'api_key',p_version:c.updated_at,
+     p_secret:JSON.stringify({version:1,app:{clientId,clientSecret,environment}})
+    });
+    if(saved.error)return json({error:'The app credentials could not be saved. Reload and try again.'},409);
+    return json({ok:true});
+   }
+   const {app,token:existingToken}=await readOAuthCredential(c.id,(name,args)=>admin.rpc(name,args));
+   let config;
+   try{config=oauthConfig(c.connector_id,env,app);}catch{/* Report missing app credentials below. */}
+   if(action==='oauth_setup')return json({callbackUrl,configured:!!config,authorized:!!existingToken,environment:app?.environment ?? (env('EF_DOCUSIGN_ENVIRONMENT')==='production'?'production':'demo')});
    if(c.status==='disabled')return json({error:'Enable the connection first.'},409);
-   let config;try{config=oauthConfig(c.connector_id,n=>Deno.env.get(n));}catch{return json({error:'OAuth application registration is missing. Configure the provider client ID, client secret and approved callback URL on the server.'},409);}
+   if(!config)return json({error:'Enter the app credentials before signing in.'},409);
    if(action==='oauth_start'){
+    if(req.headers.get('origin') && req.headers.get('origin')!==new URL(callbackUrl).origin){
+     return json({error:'Open the CRM at the domain shown in the redirect URL to sign in.'},409);
+    }
     const state=crypto.randomUUID()+crypto.randomUUID();
     const r=await admin.rpc('integration_oauth_state',{p_hash:await stateHash(state),p_connection:c.id,p_user:user.user.id,p_consume:false});check(r.error);
-    if(!r.data)return json({error:'Connection changed. Reload and retry.'},409);
+    const latest=await caller.from('integration_connections').select('updated_at').eq('id',c.id).maybeSingle();check(latest.error);
+    if(!r.data||latest.data?.updated_at!==c.updated_at)return json({error:'Connection changed. Reload and retry.'},409);
     return json({url:authorizeUrl(config,state),state});
    }
    if(typeof body.state!=='string'||typeof body.code!=='string'||body.state.length>200||body.code.length>4000)return json({error:'Invalid authorization response.'},400);
    const r=await admin.rpc('integration_oauth_state',{p_hash:await stateHash(body.state),p_connection:c.id,p_user:user.user.id,p_consume:true});check(r.error);
    if(!r.data)return json({error:'Authorization expired, already used, or belongs to a different session. Reconnect.'},409);
    let token;try{token=await exchange(config,body.code);}catch{return json({error:'Provider authorization failed. Start Reconnect again.'},409);}
-   const saved=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:'api_key',p_secret:JSON.stringify(token),p_version:c.updated_at});check(saved.error);
+   const saved=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:'api_key',p_secret:JSON.stringify({version:1,app,token}),p_version:c.updated_at});check(saved.error);
    await log('oauth_authorized');return json({ok:true});
   }
   if(action==='disable'||action==='enable'){
@@ -138,14 +166,15 @@ Deno.serve(async(req:Request)=>{
    if(c.status==='disabled')return json({error:'Enable this connection before testing.'},409);
    const {data:settings,error:se}=await caller.from('integration_settings').select('*').maybeSingle();check(se);
    let secret='';
+   let docusignProduction=false;
    if(c.connector_id==='calendly'){
     let q=admin.from('cms_integration_secrets').select('secret').eq('provider','calendly');q=tenant?q.eq('tenant_id',tenant):q.is('tenant_id',null);const r=await q.maybeSingle();check(r.error);secret=r.data?.secret??'';
    }else{
-    try{const credential=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));secret=credential.token;c.updated_at=credential.version;}
+    try{const credential=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));secret=credential.token;c.updated_at=credential.version;docusignProduction=credential.docusignProduction??false;}
     catch(e){const code=e instanceof Error?e.message:'';await log('credential_refresh_failed','error');return json({error:code==='oauth_reconnect_required'?'Provider authorization expired or was revoked. Use Reconnect.':code==='oauth_refresh_busy'?'Another authorization refresh is running. Retry shortly.':'Authorization could not be renewed. Check OAuth app settings or reconnect.'},409);}
    }
    const {data:job,error:je}=await admin.from('integration_sync_jobs').insert({connection_id:c.id,operation:'connection_test',status:'running',correlation_id:correlation}).select('id').single();check(je);
-   const result=await testProvider(c.connector_id,secret,settings?.timeout_seconds??10,settings?.max_retries??1,fetch,Deno.env.get('EF_DOCUSIGN_ENVIRONMENT')==='production');
+   const result=await testProvider(c.connector_id,secret,settings?.timeout_seconds??10,settings?.max_retries??1,fetch,docusignProduction);
    const now=new Date().toISOString();
    const jr=await admin.from('integration_sync_jobs').update({status:result.ok?'succeeded':'failed',completed_at:now,attempts:result.attempts}).eq('id',job!.id);check(jr.error);
    // Fence stale results against credential rotation / disable / concurrent edits.

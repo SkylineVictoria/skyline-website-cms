@@ -1,6 +1,32 @@
+export const oauthProviders = ['docusign', 'microsoft365', 'xero'];
+const defaultCallback = 'https://skyline-website-cms.vercel.app/admin/integrations/credentials';
+export type OAuthApp = { clientId: string; clientSecret: string; environment?: 'demo' | 'production' };
+export type OAuthEnv = (name: string) => string | undefined;
+export type OAuthRpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }>;
+
+export function oauthCallback(env: OAuthEnv) {
+ const url = new URL(env('EF_INTEGRATIONS_OAUTH_REDIRECT_URI') || defaultCallback);
+ if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/admin/integrations/credentials') {
+  throw Error('oauth_callback_invalid');
+ }
+ return url.href;
+}
+
+export type OAuthCredential = { version: 1; app?: OAuthApp; token?: OAuthToken };
+export function parseOAuthCredential(secret: string): OAuthCredential {
+ const value = JSON.parse(secret);
+ return value?.version === 1 ? value : { version: 1, token: value };
+}
+
+export async function readOAuthCredential(connectionId: string, rpc: OAuthRpc): Promise<OAuthCredential> {
+ const result = await rpc('integration_credential_read', { p_connection: connectionId, p_kind: 'api_key' });
+ if (result.error) throw Error('credential_store_unavailable');
+ return typeof result.data === 'string' ? parseOAuthCredential(result.data) : { version: 1 };
+}
+
 type Config = { authorize:string; token:string; scope:string; clientId:string; clientSecret:string; redirect:string; basic:boolean };
-export function oauthConfig(provider:string, env:(name:string)=>string|undefined):Config {
- const ds=env('EF_DOCUSIGN_ENVIRONMENT')==='production'?'account.docusign.com':'account-d.docusign.com';
+export function oauthConfig(provider:string, env: OAuthEnv, app?: OAuthApp):Config {
+ const ds=(app?.environment ?? env('EF_DOCUSIGN_ENVIRONMENT'))==='production'?'account.docusign.com':'account-d.docusign.com';
  const providers:Record<string,{authorize:string;token:string;scope:string;basic:boolean}>={
   xero:{authorize:'https://login.xero.com/identity/connect/authorize',token:'https://identity.xero.com/connect/token',scope:'openid profile email offline_access accounting.settings.read',basic:true},
   microsoft365:{authorize:'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize',token:'https://login.microsoftonline.com/organizations/oauth2/v2.0/token',scope:'openid offline_access https://graph.microsoft.com/User.Read',basic:false},
@@ -8,8 +34,10 @@ export function oauthConfig(provider:string, env:(name:string)=>string|undefined
  };
  const p=providers[provider];if(!p)throw Error('oauth_not_supported');
  const prefix=`EF_${provider.toUpperCase()}`;
- const clientId=env(`${prefix}_CLIENT_ID`)??'',clientSecret=env(`${prefix}_CLIENT_SECRET`)??'',redirect=env('EF_INTEGRATIONS_OAUTH_REDIRECT_URI')??'';
- if(!clientId||!clientSecret||!/^https:\/\//.test(redirect)||new URL(redirect).pathname!=='/admin/integrations/credentials')throw Error('oauth_configuration_missing');
+ const clientId=app?.clientId ?? env(`${prefix}_CLIENT_ID`) ?? '';
+ const clientSecret=app?.clientSecret ?? env(`${prefix}_CLIENT_SECRET`) ?? '';
+ const redirect=oauthCallback(env);
+ if(!clientId||!clientSecret)throw Error('oauth_configuration_missing');
  return {...p,clientId,clientSecret,redirect};
 }
 export async function stateHash(state:string){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(state)))).map(x=>x.toString(16).padStart(2,'0')).join('');}

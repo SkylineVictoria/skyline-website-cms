@@ -27,7 +27,7 @@ export const menuIcon = (key: string) => Object.hasOwn(icons, key) ? icons[key] 
 // Only implemented internal destinations. Adding a route requires frontend code;
 // changing labels, order, enabled state and hierarchy does not.
 const routes = new Set([
-'/admin/integrations/overview','/admin/integrations/applications','/admin/integrations/add','/admin/integrations/credentials','/admin/integrations/webhooks','/admin/integrations/sync-history','/admin/integrations/logs','/admin/integrations/settings',
+  '/admin/integrations',
   '/', '/admin', '/admin/courses', '/admin/pages', '/admin/navigation', '/admin/footer',
   '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
@@ -41,7 +41,9 @@ export interface MenuNode extends AdminMenuItem { children: MenuNode[] }
 export function menuTree(rows: AdminMenuItem[]): MenuNode[] {
   const nodes = new Map<string, MenuNode>();
   for (const row of rows) {
-    if (row.is_enabled && (!row.route || routes.has(row.route))) nodes.set(row.id, { ...row, children: [] });
+    if (!row.is_enabled || row.parent_id === 'external_integrations') continue;
+    const route = row.id === 'external_integrations' ? '/admin/integrations' : row.route;
+    if (!route || routes.has(route)) nodes.set(row.id, { ...row, route, children: [] });
   }
   const visit = (parent: string | null, ancestors: Set<string>): MenuNode[] =>
     [...nodes.values()].filter(n => n.parent_id === parent && !ancestors.has(n.id))

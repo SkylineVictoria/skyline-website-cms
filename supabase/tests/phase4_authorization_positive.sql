@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(329);
+select plan(338);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -686,6 +686,26 @@ reset role;
 select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), 'Choose an intake for the course', 'INT-01: but such an application cannot be submitted once 20261113210000 is released');
 select is(has_function_privilege('anon', 'public.course_intakes_open(text)', 'execute') or has_function_privilege('anon', 'public.course_intakes_admin(text, text, uuid, jsonb)', 'execute')
  or has_function_privilege('authenticated', 'public.application_intake_problem(uuid)', 'execute') or has_table_privilege('authenticated', 'public.course_intakes', 'insert'), false, 'INT-01: no anonymous access, no direct writes');
+-- Fallback (owner's decision 2026-11-11): a course without open intakes offers the next twelve months, as before.
+reset role;
+insert into public.cms_courses(id, slug, code, name, status) values ('int-course-c', 'int-course-c', 'INTC1', 'Intake course C', 'Published');
+insert into public.enrollment_applications(id, reference, agency_id, assigned_agent_id, status, data, student_id) values
+ ('43000000-0000-0000-0000-0000000000a2', 'APP-INT-0002', '13000000-0000-0000-0000-0000000000a1', '23000000-0000-0000-0000-0000000000a1', 'draft', '{}', '73000000-0000-0000-0000-0000000000a1');
+set local role authenticated;
+set local request.jwt.claim.sub = '33000000-0000-0000-0000-0000000000a1';
+select is(jsonb_array_length(public.course_intakes_open('int-course-c')), 12, 'INT-01 fallback: a course without intakes lists twelve start months');
+select is(public.course_intakes_open('int-course-c')->0->>'display', to_char(date_trunc('month', public.course_intake_today()::timestamp) + interval '1 month', 'FMMonth YYYY'), '...from next month, labelled by the database');
+select is((select bool_and((x->>'fallback')::boolean and x->>'id' is null) from jsonb_array_elements(public.course_intakes_open('int-course-c')) x), true, '...marked as fallback months, with no intake row');
+select is((select bool_or((x->>'fallback')::boolean) from jsonb_array_elements(public.course_intakes_open('int-course-a')) x), false, 'INT-01 fallback: a course with real intakes lists only those');
+select lives_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a2', 0, '{"values":{"preferred_intake":"%s"},"courses":[{"courseId":"int-course-c","code":"INTC1","title":"Intake course C"}]}')$$, to_char(date_trunc('month', public.course_intake_today()::timestamp) + interval '1 month', 'FMMonth YYYY')),
+ 'INT-01 fallback: a draft saves a start month for a course without intakes');
+reset role;
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a2'), null, 'INT-01 fallback: submission accepts a listed month');
+update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Whenever suits"') where id = '43000000-0000-0000-0000-0000000000a2';
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a2'), 'Choose one of the listed start months for the course.', 'INT-01 fallback: any other text is refused');
+insert into public.course_intakes(course_id, start_date) values ('int-course-c', current_date + 50);
+select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a2'), 'Choose an intake for the course', 'INT-01 fallback: once the course has a real intake, a month alone is refused');
+select is((select bool_or((x->>'fallback')::boolean) from jsonb_array_elements(public.course_intakes_open('int-course-c')) x), false, '...and only the real intake is listed');
 
 select * from finish();
 rollback;

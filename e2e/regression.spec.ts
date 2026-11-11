@@ -228,20 +228,20 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   expect(expected[0]).toMatch(/^Early start \(starts /);
   await intake.selectOption({ label: expected[1] });
   await shot(page, "student-wizard-intake-chosen");
+  // A course with no open intake (course B's only one is inactive): the previous automatic start months, from the database.
+  const months = sql(`select string_agg(x->>'display', '|' order by n) from jsonb_array_elements(public.course_intakes_open('${courseB}')) with ordinality e(x, n)`).split("|");
+  expect(months).toHaveLength(12);
   await wizard.locator("#wizard-course").selectOption(withoutIntakes);
   await expect(intake).toHaveValue("");
-  await expect(wizard.getByTestId("intake-help")).toContainText("This course has no open intakes at the moment");
-  await expect(intake).toBeDisabled();
-  await shot(page, "student-wizard-intake-none");
+  await expect.poll(async () => (await intake.locator("option").allTextContents()).slice(1)).toEqual(months);
+  await expect(wizard.getByTestId("intake-help")).toContainText("No intake dates are published for this course yet");
+  await shot(page, "student-wizard-intake-fallback");
   await finish.click();
-  await expect(wizard.getByText("This course has no open intakes at the moment").first()).toBeVisible();
-  await expect(wizard.locator("#wizard-course")).toBeVisible();
-  await wizard.locator("#wizard-course").selectOption(withIntakes);
-  await expect.poll(async () => (await intake.locator("option").count())).toBe(3);
-  await intake.selectOption({ label: expected[0] });
+  await expect(wizard.getByText("Choose the intake.").first()).toBeVisible();
+  await intake.selectOption({ label: months[1] });
   await finish.click();
   await expect.poll(() => sql(`select coalesce(c.intake_id::text, '-') || '|' || a.intake from public.enrollment_application_courses c join public.enrollment_applications a on a.id = c.application_id where a.id = '${applicationId}'`))
-    .toBe(`${sql(`select id from public.course_intakes where course_id = '${courseA}' and label = 'Early start'`)}|${expected[0]}`);
+    .toBe(`-|${months[1]}`);
   // The server never trusts the pair: course B with an intake of course A is refused, whatever the page sends.
   const client = await signedInClient(student.email);
   const version = Number(sql(`select draft_version from public.enrollment_applications where id = '${applicationId}'`));

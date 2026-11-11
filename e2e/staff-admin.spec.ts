@@ -25,7 +25,7 @@ test("Staff is its own sidebar group with Candidates, Employees and Jobs; the ol
   expect(sql(`select parent_id || '/' || label from public.admin_menu_items where route = '/admin/jobs'`)).toBe("website/Jobs");
   expect(sql(`select string_agg(route, ',' order by sort_order) from public.admin_menu_items where parent_id = 'website' and route in ('/admin/jobs', '/admin/staff/candidates')`)).toBe("/admin/jobs,/admin/staff/candidates");
   expect(sql(`select parent_id || '/' || label || '/' || route from public.admin_menu_items where id = 'agency_staff'`)).toBe("staff/Employees//admin/staff/employees");
-  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero,staff_templates");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_locations,staff_holidays,staff_xero,staff_templates");
   await page.goto("/admin/candidates");
   await expect(page).toHaveURL(/\/admin\/staff\/candidates$/);
   await page.goto(`/admin/employees/${someone.id}`);

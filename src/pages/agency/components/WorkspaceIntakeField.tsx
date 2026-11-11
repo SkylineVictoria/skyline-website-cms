@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
-import type { OpenIntake } from "@/pages/agency/lib/intakes";
+import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 
 /**
- * The intake on the full application form (INT-01). That form is read from its controls by name, so this posts two: `intake_id` (the
- * select) and `preferred_intake` (the intake's own label, hidden). It follows the course checkboxes of the same form: a new course
- * clears the intake and lists that course's intakes.
+ * The intake on the full application form (INT-01). That form is read from its controls by name, so this posts two hidden values:
+ * `intake_id` (the chosen intake row; empty for a fallback month) and `preferred_intake` (the intake's own label, or the month). It
+ * follows the course checkboxes of the same form: a new course clears the intake and lists that course's intakes.
  */
 export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, initialIntakeId, initialLabel, disabled, className }: {
   formId: string; courseField: string; courseIdOf: (label: string) => string | null; initialIntakeId: string; initialLabel: string; disabled?: boolean; className: string;
 }) {
   const [course, setCourse] = useState<string | null>(null);
-  const [intake, setIntake] = useState<{ id: string; label: string }>({ id: initialIntakeId, label: initialIntakeId ? initialLabel : "" });
+  const [intake, setIntake] = useState<{ id: string; label: string }>({ id: initialIntakeId, label: initialLabel });
   useEffect(() => {
     const form = document.getElementById(formId);
     if (!form) return undefined;
@@ -31,7 +31,8 @@ export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, 
   const choose = (picked: OpenIntake | null) => setIntake({ id: picked?.id ?? "", label: picked?.display ?? "" });
   return (
     <div>
-      <IntakeSelect id={`${formId}-preferred_intake`} name="intake_id" courseId={course ? courseIdOf(course) : null} value={intake.id} onChange={choose} disabled={disabled} className={className} />
+      <IntakeSelect id={`${formId}-preferred_intake`} courseId={course ? courseIdOf(course) : null} value={intakeKey(intake.id, intake.label)} onChange={choose} disabled={disabled} className={className} />
+      <input type="hidden" name="intake_id" value={intake.id} readOnly />
       <input type="hidden" name="preferred_intake" value={intake.label} readOnly />
     </div>
   );

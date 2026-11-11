@@ -1,7 +1,7 @@
 import EmergencyContactFields from "@/components/shared/wizard/EmergencyContactFields";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
-import type { OpenIntake } from "@/pages/agency/lib/intakes";
+import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 
 /**
@@ -72,7 +72,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
           </div>
           <div>
             <Label htmlFor="wizard-preferred_intake">Intake</Label>
-            <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={answers.intake_id ?? ""} error={errors.preferred_intake}
+            <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={intakeKey(answers.intake_id, answers.preferred_intake)} error={errors.preferred_intake}
               className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} />
             <FieldError text={errors.preferred_intake} />
           </div>

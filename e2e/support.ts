@@ -334,7 +334,8 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await visitor.getByTestId("staff-citizen-yes").click();
   await expect(visitor.getByTestId("staff-required-summary")).toContainText("Passport, Academic results, Health insurance (0 of 3 uploaded)");
   for (const slug of ["passport", "academic", "health-insurance"]) {
-    await visitor.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: PDF });
+    // Each fixture file says what it is (the reader classifies every upload since staff-onboarding v7 / PR #29).
+    await visitor.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: pdfFor({ passport: "Passport", academic: "Academic", "health-insurance": "Health Insurance" }[slug]!) });
     await expect.poll(() => sql(`select count(*) from hr.staff_documents d where d.profile_id = '${who.profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
   }
   await expect(visitor.getByTestId("staff-doc-passport")).toContainText("Done ✓");

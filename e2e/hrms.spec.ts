@@ -63,7 +63,7 @@ test("the admin sidebar's HRMS group lists Timesheets, Leave, Pay Schedules, Pub
   for (const [href, label] of [["/admin/staff/timesheets", "Timesheets"], ["/admin/staff/leave", "Leave"], ["/admin/staff/pay-schedules", "Pay Schedules"], ["/admin/staff/holidays", "Public Holidays"], ["/admin/staff/xero-export", "Xero Export"]]) {
     await expect(sidebar.locator(`a[href="${href}"]`)).toHaveText(label);
   }
-  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero,staff_templates");
+  expect(sql(`select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled`)).toBe("agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_locations,staff_holidays,staff_xero,staff_templates");
   await expect(page.getByTestId("timesheet-table")).toBeVisible();
   await page.goto("/admin/staff/leave");
   await expect(page.getByTestId("leave-approvals")).toBeVisible();

@@ -18,7 +18,7 @@ import {
 import { portalCourseOptions, resolveCourseOption } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
-import type { OpenIntake } from "@/pages/agency/lib/intakes";
+import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
@@ -434,10 +434,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const setAnswer = (name: string, value: string) => {
     // A new course clears the intake: intakes belong to one course.
     setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "" } : {}) }));
-    if (name === "course") setOpenIntakeCount(null);
+    if (name === "course") setIntakeList(null);
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
-  const [openIntakeCount, setOpenIntakeCount] = useState<number | null>(null);
+  // The course's intakes as listed (real intakes, or the fallback months): the choice must be one of them.
+  const [intakeList, setIntakeList] = useState<OpenIntake[] | null>(null);
   const courseIdOf = (label: string): string | null => {
     const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === label) : resolveCourseOption(label);
     return course?.courseId || null;
@@ -479,8 +480,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
-      if (filled("course") && openIntakeCount === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
-      else if (!filled("intake_id")) errors.preferred_intake = "Choose the intake.";
+      const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"));
+      if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
+      else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display) === chosen))) errors.preferred_intake = "Choose the intake.";
       if (filled("course")) {
         const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === answers.course) : resolveCourseOption(answers.course);
         if (!course) errors.course = "This course is no longer offered. Choose another.";
@@ -558,7 +560,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       return (
         <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
           <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-            onIntake={setIntake} onIntakesLoaded={(list) => setOpenIntakeCount(list.length)} />
+            onIntake={setIntake} onIntakesLoaded={setIntakeList} />
           {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
         </form>
       );

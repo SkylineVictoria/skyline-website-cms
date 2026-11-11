@@ -1,258 +1,92 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { Button, Field, Modal, PageHeader, Select, TextInput } from "./components/ui";
-import { signingAction, signingAdmin, type SigningContext, type SigningPreview, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
-import { adminListStaff, type StaffListRow } from "@/lib/staffApi";
-import { templatePerson } from "@/lib/hrTemplatesApi";
-import { staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
-import { fillSigningTemplate, signingVariables } from "../../../supabase/functions/_shared/signing";
-import { PLACEHOLDERS, templateValues, type PlaceholderSpec } from "../../../supabase/functions/_shared/hr-template";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Badge, Button, EmptyState, Field, PageHeader, SectionTabs, Select, TextInput } from "./components/ui";
+import ComposeRequest from "./components/signing/ComposeRequest";
+import RequestDetail from "./components/signing/RequestDetail";
+import TemplateEditor from "./components/signing/TemplateEditor";
+import LegacySigningPage from "./components/signing/LegacySigningPage";
+import { signedCount, signingAction, signingAdmin, signingStatus, signingUpgraded, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
+import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 
-const TEXTAREA = "w-full min-h-48 rounded border border-background-300 p-3 text-sm";
-const ALERT = "rounded border border-primary-200 bg-primary-50 p-3 text-sm text-primary-900";
-/** The record variables a signing template may use (the same names as letter templates, without the email link ones). */
-const RECORD_VARIABLES: PlaceholderSpec[] = PLACEHOLDERS.filter((p) => !p.only && p.group !== "Links");
-const RECORD_KEYS = new Set(RECORD_VARIABLES.map((p) => p.key));
-type Step = "fill" | "preview" | "edit";
+const SUBJECT = { student: "Student", employee: "Employee", agent: "Agent" } as const;
+const AUDIENCE = { any: "Anyone", student: "Students", employee: "Employees", agent: "Agents" } as const;
 
-function pdfBlobUrl(base64: string): string {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+/** Documents & Signatures. Shows the released first-stage page until the hosted database has the second-stage actions. */
+export default function SigningPage() {
+  const [upgraded, setUpgraded] = useState<boolean | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void signingUpgraded().then(setUpgraded).catch((e: Error) => setError(e.message)); }, []);
+  if (error) return <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>;
+  if (upgraded === null) return <p role="status">Loading…</p>;
+  return upgraded ? <EnvelopeSigningPage /> : <LegacySigningPage />;
 }
 
-/**
- * Documents & Signatures. Templates are plain text with {{variables}} inserted from a picker: the staff record's variables
- * (full name, job title, job location, job type, pay type, start date, manager, company, today …) and any custom variable typed
- * in. A request is composed for a staff member (their record fills the variables; what is empty is flagged, never sent raw) or
- * for someone else (typed values). Flow: template › fill / confirm › preview the PDF exactly as it will be sent › edit the text of
- * this copy (optional; the template is untouched) › save the draft › send for e-signing. The sent text is stored with the request.
- */
-export default function SigningPage() {
+/** Documents & Signatures: every request by status with search and filters, and the templates they are made from. */
+function EnvelopeSigningPage() {
   const [context, setContext] = useState<SigningContext>({ templates: [], requests: [] });
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  const [template, setTemplate] = useState<SigningTemplate | null>(null); const [compose, setCompose] = useState(false);
-  const [templateId, setTemplateId] = useState(""); const [name, setName] = useState(""); const [email, setEmail] = useState("");
-  const [title, setTitle] = useState(""); const [values, setValues] = useState<Record<string, string>>({}); const [file, setFile] = useState<File | undefined>();
-  const [recipientKind, setRecipientKind] = useState<"staff" | "other">("staff");
-  const [staffSearch, setStaffSearch] = useState(""); const [staffRows, setStaffRows] = useState<StaffListRow[]>([]); const [staff, setStaff] = useState<StaffListRow | null>(null);
-  const [record, setRecord] = useState<Record<string, string>>({});
-  const [step, setStep] = useState<Step>("fill"); const [preview, setPreview] = useState<SigningPreview | null>(null); const [pdfUrl, setPdfUrl] = useState("");
-  const [draft, setDraft] = useState(""); const [edited, setEdited] = useState<string | null>(null); const [composeError, setComposeError] = useState("");
-  const [pdf, setPdf] = useState(""); const [audit, setAudit] = useState<Array<{ event: string; at: string }> | null>(null);
-  const [filter, setFilter] = useState("");
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
-
-  const load = useCallback(async () => setContext(await signingAdmin<SigningContext>("list")), []);
+  const [tab, setTab] = useState("requests"); const [status, setStatus] = useState("all");
+  const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [subject, setSubject] = useState("");
+  const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<SigningTemplate | "new" | null>(null);
+  const load = useCallback(async () => { setContext(await signingAdmin<SigningContext>("list")); setLoaded(true); }, []);
   useEffect(() => { void load().catch((e: Error) => setError(e.message)); }, [load]);
-  useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); }, [pdfUrl]);
-  useEffect(() => {
-    if (!compose || recipientKind !== "staff") return;
-    let live = true;
-    const timer = window.setTimeout(() => {
-      void adminListStaff([], staffSearch, 25, 0).then((data) => { if (live) setStaffRows(data.rows); }, () => { if (live) setStaffRows([]); });
-    }, 200);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [compose, recipientKind, staffSearch]);
-
   const act = async (work: () => Promise<unknown>, message = "") => {
     if (busy) return; setBusy(true); setError(""); setNotice("");
     try { await work(); await load(); setNotice(message); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); }
   };
-  const chooseStaff = async (row: StaffListRow | null) => {
-    setStaff(row); setRecord({}); setPreview(null); setEdited(null); setStep("fill");
-    if (!row) return;
-    setName(row.name); setEmail(row.email);
-    try { setRecord(templateValues(await templatePerson(row.id))); } catch (e) { setComposeError(e instanceof Error ? e.message : "The staff record could not be read."); }
-  };
-
-  const selected = context.templates.find((t) => t.id === templateId);
-  const variables = useMemo(() => {
-    if (!selected) return [] as string[];
-    try { return signingVariables(`${selected.title}\n${selected.body}`).filter((k) => !["full_name", "email"].includes(k)); } catch { return []; }
-  }, [selected]);
-  // What each variable will be filled with: the staff record first, then what was typed; '' = still missing.
-  const filled = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const key of variables) out[key] = (recipientKind === "staff" && RECORD_KEYS.has(key) ? record[key] : undefined) || values[key] || "";
-    return { ...out, full_name: name.trim(), email: email.trim() };
-  }, [variables, record, values, name, email, recipientKind]);
-  const missing = variables.filter((k) => !filled[k]);
-  let clientPreview = "", previewError = "";
-  if (selected && !file) {
-    try { clientPreview = fillSigningTemplate(selected.body, filled); } catch (e) { previewError = e instanceof Error ? e.message : "Check the values."; }
-  }
-
-  const insertVariable = (key: string) => {
-    if (!template) return;
-    const el = bodyRef.current; const token = `{{${key}}}`;
-    if (!el) { setTemplate({ ...template, body: `${template.body}${token}` }); return; }
-    const start = el.selectionStart ?? template.body.length, end = el.selectionEnd ?? start;
-    const body = `${template.body.slice(0, start)}${token}${template.body.slice(end)}`;
-    setTemplate({ ...template, body });
-    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(start + token.length, start + token.length); });
-  };
-  const save = () => act(async () => {
-    if (!template) return;
-    if (!template.name.trim() || !template.title.trim() || !template.body.trim()) throw new Error("Enter a template name, document title and document text.");
-    signingVariables(`${template.title}\n${template.body}`);
-    await signingAdmin("template_save", template.id || null, { name: template.name, title: template.title, body: template.body }); setTemplate(null);
-  }, "Template saved.");
-
-  const requestBody = (text: string | null) => ({
-    recipientName: name, recipientEmail: email, title, templateId, values: filled, profileId: recipientKind === "staff" ? staff?.id ?? null : null, ...(text ? { text } : {}),
-  });
-  const showPreview = async (text: string | null) => {
-    if (busy) return; setBusy(true); setComposeError("");
-    try {
-      const made = await signingAction<SigningPreview>({ action: "preview", ...requestBody(text) });
-      setPreview(made); setEdited(made.edited ? made.text : null);
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-      setPdfUrl(pdfBlobUrl(made.pdfBase64)); setStep("preview");
-    } catch (e) { setComposeError(e instanceof Error ? e.message : "The preview could not be made."); }
-    finally { setBusy(false); }
-  };
-  const create = () => act(async () => {
-    await signingAction<SigningRequest>({ action: "create", ...requestBody(edited) }, file);
-    closeCompose();
-  }, "Draft saved exactly as previewed. Select Send for signature when you are ready.");
-  const closeCompose = () => { setCompose(false); setFile(undefined); setValues({}); setStaff(null); setRecord({}); setPreview(null); setEdited(null); setStep("fill"); setComposeError(""); };
-  const view = (id: string) => act(async () => setPdf((await signingAction<{ url: string }>({ action: "admin_url", id })).url));
-  const draftLeft = step === "edit" ? (() => { try { return signingVariables(draft); } catch { return ["…"]; } })() : [];
-  const canSave = file ? Boolean(name && email && title) : step === "preview" && Boolean(preview) && !missing.length;
+  const counts = useMemo(() => { const c: Record<string, number> = { all: context.requests.length }; for (const r of context.requests) c[r.status] = (c[r.status] ?? 0) + 1; return c; }, [context.requests]);
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return context.requests.filter((r) => (status === "all" || r.status === status) && (!category || r.category === category) && (!subject || r.subject_type === subject)
+      && (!q || `${r.title} ${r.reference} ${r.recipients.map((p) => `${p.name} ${p.email}`).join(" ")}`.toLowerCase().includes(q)));
+  }, [context.requests, status, category, subject, search]);
 
   return <div className="space-y-6">
-    <PageHeader title="Documents & Signatures" description="Prepare a document from a template, fill its variables from the staff record, preview and edit it, then send a private signing link." />
+    <PageHeader title="Documents & Signatures" description="Prepare a document from a template or a PDF, send it to one or more signers, follow its progress and keep the signed copy with its certificate." />
     {error && <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>}
     {notice && <p role="status" className="rounded border border-green-300 p-3">{notice}</p>}
-    <div className="flex flex-wrap gap-3"><Button onClick={() => { closeCompose(); setCompose(true); setName(""); setEmail(""); setTitle(""); setTemplateId(""); setRecipientKind("staff"); }} data-testid="signing-new">New signing request</Button>
-      <Button variant="outline" onClick={() => setTemplate({ id: "", name: "", title: "", body: "Dear {{full_name}},\n\n" })} data-testid="signing-new-template">New template</Button>
-      <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh status</Button></div>
-    <section className="rounded border p-4"><h2 className="text-lg font-semibold">Reusable templates</h2>
-      <p className="my-2 text-sm text-foreground-600">Variables such as {"{{employee_full_name}}, {{job_title}}, {{job_location}}, {{job_type}}, {{pay_type}}, {{start_date}}, {{company_name}}, {{today_date}}"} are filled from the staff record when the request is made; add your own (for example {"{{course_name}}"}) and type its value per request. Each request keeps its own fixed copy.</p>
-      <div className="flex flex-wrap gap-2">{context.templates.map((t) => <Button key={t.id} variant="outline" onClick={() => setTemplate({ ...t })}>{t.name}</Button>)}
-        {!context.templates.length && <p className="text-sm">No templates yet. Create one, or upload a PDF in a new request.</p>}</div>
-    </section>
-    <Field label="Find a request"><TextInput value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Name, email or document title" /></Field>
-    <div className="space-y-3">{context.requests.filter((r) => `${r.title} ${r.recipient_name} ${r.recipient_email}`.toLowerCase().includes(filter.toLowerCase())).map((r) => {
-      const closed = ["signed", "declined", "void"].includes(r.state);
-      const expired = !closed && r.expires_at && new Date(r.expires_at).getTime() < Date.now();
-      return <article key={r.id} className="rounded border p-4" data-testid={`signing-request-${r.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div>
-        <h3 className="font-semibold">{r.title}{r.edited ? <span className="ml-2 rounded bg-secondary-100 px-1.5 py-0.5 text-xs font-semibold text-secondary-900">Edited copy</span> : null}</h3>
-        <p className="text-sm">{r.recipient_name} · {r.recipient_email}{r.profile_id ? <> · <Link to={staffEmployeePath(r.profile_id)} className="text-primary-700 hover:underline">staff record</Link></> : null}</p>
-        <p className="mt-1 text-sm font-medium">{expired ? "Expired" : r.state.replaceAll("_", " ")}</p>{r.delivery_error && <p className="text-sm text-red-700">{r.delivery_error}</p>}
-      </div><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => void view(r.id)}>{r.state === "signed" ? "Signed PDF" : "Preview PDF"}</Button>
-        <Button variant="outline" disabled={busy} onClick={() => void act(async () => setAudit((await signingAdmin<{ events: Array<{ event: string; at: string }> }>("detail", r.id)).events))}>History</Button>
-        {!closed && <><Button disabled={busy} onClick={() => { if (window.confirm(`Send “${r.title}” to ${r.recipient_email} for signature? Any previous link will stop working.`)) void act(() => signingAction({ action: "send", id: r.id }), "Signing email sent."); }} data-testid={`signing-send-${r.id}`}>{r.state === "draft" ? "Send for signature" : "Send again"}</Button>
-          <Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Void this request and disable its signing link?")) void act(() => signingAdmin("void", r.id), "Request voided."); }}>Void</Button></>}
-      </div></div></article>;
-    })}{!context.requests.length && <p>No signing requests yet.</p>}</div>
+    <div className="flex flex-wrap gap-3">
+      <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>
+      <Button variant="outline" icon="ri-file-add-line" onClick={() => { setTab("templates"); setEditing("new"); }} data-testid="new-template">New template</Button>
+      <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh</Button>
+      <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>
+    </div>
+    <SectionTabs tabs={[{ id: "requests", label: `Requests (${context.requests.length})`, icon: "ri-quill-pen-line" }, { id: "templates", label: `Templates (${context.templates.length})`, icon: "ri-file-copy-2-line" }]} active={tab} onChange={setTab} />
 
-    {template && <Modal open width="max-w-4xl" title={template.id ? "Edit template" : "New template"} onClose={() => { if (!busy) setTemplate(null); }} footer={<Button disabled={busy} onClick={() => void save()} data-testid="signing-template-save">Save template</Button>}>
-      <div className="space-y-4"><div className="grid gap-4 md:grid-cols-2"><Field label="Template name" required><TextInput value={template.name} maxLength={120} onChange={(e) => setTemplate({ ...template, name: e.target.value })} data-testid="signing-template-name" /></Field>
-        <Field label="Document title" required hint="May use variables too, for example “Agreement: {{job_title}}”."><TextInput value={template.title} maxLength={200} onChange={(e) => setTemplate({ ...template, title: e.target.value })} data-testid="signing-template-title" /></Field></div>
-        <div className="grid gap-3 lg:grid-cols-[1fr_250px]">
-          <Field label="Document text" required hint="Plain text with {{variables}}. Use blank lines between paragraphs."><textarea ref={bodyRef} className={TEXTAREA} value={template.body} maxLength={40000} onChange={(e) => setTemplate({ ...template, body: e.target.value })} data-testid="signing-template-body" /></Field>
-          <aside className="rounded-md border border-background-200 bg-background-100 p-3" aria-label="Variables">
-            <p className="text-[13px] font-semibold text-foreground-900">Variables</p>
-            <p className="mb-2 text-xs text-foreground-600">Click one to insert it at the cursor. These are filled from the staff record; anything else you type as {"{{my_variable}}"} is asked for per request.</p>
-            <div className="max-h-[40vh] space-y-3 overflow-y-auto pr-1">
-              {(["Person", "Job and pay", "Company"] as const).map((group) => <div key={group}>
-                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
-                <ul className="space-y-1">{RECORD_VARIABLES.filter((p) => p.group === group).map((p) => <li key={p.key}>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertVariable(p.key)} data-testid={`signing-variable-${p.key}`} title={`Example: ${p.sample}`}
-                    className="w-full cursor-pointer rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
-                    <span className="block font-medium text-foreground-900">{p.label}</span><code className="text-[11px] text-foreground-600">{`{{${p.key}}}`}</code></button></li>)}</ul>
-              </div>)}
-              <CustomVariable onInsert={insertVariable} />
-            </div>
-          </aside>
-        </div>
-        {error && <p role="alert" className={ALERT}>{error}</p>}</div>
-    </Modal>}
-
-    {compose && <Modal open title="Prepare signing request" width="max-w-5xl" onClose={() => { if (!busy) closeCompose(); }}
-      footer={<>
-        {step !== "fill" && !file ? <Button variant="outline" disabled={busy} onClick={() => setStep(step === "edit" ? "preview" : "fill")}>Back</Button> : null}
-        {step === "fill" && !file ? <Button disabled={busy || !selected || missing.length > 0 || !name.trim() || !email.trim()} onClick={() => void showPreview(edited)} data-testid="signing-preview">{busy ? "Making the preview…" : "Preview the PDF"}</Button> : null}
-        {step === "preview" && !file ? <Button variant="outline" disabled={busy} onClick={() => { setDraft(edited ?? preview?.text ?? ""); setStep("edit"); }} data-testid="signing-edit">Edit this document</Button> : null}
-        {step === "edit" ? <>{edited ? <Button variant="outline" disabled={busy} onClick={() => { setEdited(null); void showPreview(null); }}>Discard my changes</Button> : null}
-          <Button disabled={busy || draftLeft.length > 0} onClick={() => void showPreview(draft)} data-testid="signing-edit-preview">{busy ? "Making the preview…" : "Preview with my changes"}</Button></> : null}
-        {(file || step === "preview") ? <Button disabled={busy || !canSave} onClick={() => void create()} data-testid="signing-save-draft">Save draft for sending</Button> : null}
-      </>}>
-      <div className="space-y-4">
-        <ol className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-foreground-600" aria-label="Steps">
-          {(["fill", "preview", "edit"] as Step[]).map((s, i) => <li key={s} className={s === step ? "font-semibold text-foreground-950" : ""}>{i + 1}. {s === "fill" ? "Recipient, template and details" : s === "preview" ? "Preview" : "Edit (optional)"}</li>)}
-          <li>4. Save, then send</li>
-        </ol>
-        {step === "fill" ? <>
-          <Field label="Who signs">
-            <div className="flex flex-wrap gap-4 text-sm">
-              <label className="inline-flex items-center gap-1.5"><input type="radio" checked={recipientKind === "staff"} onChange={() => { setRecipientKind("staff"); setPreview(null); }} /> A staff member (their record fills the variables)</label>
-              <label className="inline-flex items-center gap-1.5"><input type="radio" checked={recipientKind === "other"} onChange={() => { setRecipientKind("other"); void chooseStaff(null); setName(""); setEmail(""); }} /> Someone else</label>
-            </div>
-          </Field>
-          {recipientKind === "staff" ? <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Find a staff member" hint="Search by name or email."><TextInput value={staffSearch} onChange={(e) => setStaffSearch(e.target.value)} data-testid="signing-staff-search" /></Field>
-            <Field label="Staff member" required><Select value={staff?.id ?? ""} onChange={(e) => void chooseStaff(staffRows.find((r) => r.id === e.target.value) ?? null)} data-testid="signing-staff">
-              <option value="">Choose…</option>{staff && !staffRows.some((r) => r.id === staff.id) ? <option value={staff.id}>{staff.name || staff.email}</option> : null}
-              {staffRows.map((r) => <option key={r.id} value={r.id}>{r.name || r.email}{r.jobTitle ? ` · ${r.jobTitle}` : ""}</option>)}
-            </Select></Field>
-          </div> : null}
-          <div className="grid gap-4 md:grid-cols-2"><Field label="Recipient full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={150} data-testid="signing-name" /></Field>
-            <Field label="Recipient email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="signing-email" /></Field></div>
-          <Field label="Template"><Select value={templateId} onChange={(e) => { setTemplateId(e.target.value); setValues({}); setPreview(null); setEdited(null); }} disabled={!!file} data-testid="signing-template"><option value="">Choose a template</option>{context.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
-          <Field label="Or upload a ready-made PDF" hint="Up to 7 MB. Variables are filled in templates; an uploaded PDF is sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} /></Field>
-          {file ? <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field> : selected ? <>
-            {variables.length ? <div className="rounded-md border border-background-200 p-3">
-              <p className="mb-2 text-[13px] font-semibold text-foreground-900">Variables in “{selected.name}”</p>
-              <div className="grid gap-3 md:grid-cols-2" data-testid="signing-variables">{variables.map((key) => {
-                const fromRecord = recipientKind === "staff" && RECORD_KEYS.has(key);
-                const value = filled[key];
-                return <div key={key} data-testid={`signing-variable-row-${key}`}>
-                  <Field label={`{{${key}}}`} required hint={fromRecord ? (value ? "From the staff record." : "Empty on the staff record: add it to their employment or pay details, or type it here.") : undefined}>
-                    {fromRecord && value ? <p className="rounded border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm">{value}</p>
-                      : <TextInput value={values[key] ?? ""} maxLength={2000} onChange={(e) => setValues({ ...values, [key]: e.target.value })} aria-invalid={!value} className={!value ? "border-primary-400 bg-primary-50" : undefined} />}
-                  </Field>
-                </div>; })}</div>
-              {missing.length ? <p role="alert" className={`mt-2 ${ALERT}`} data-testid="signing-missing">Still empty: <strong>{missing.map((k) => `{{${k}}}`).join(", ")}</strong>. Nothing is sent with a raw variable in it.</p> : null}
-            </div> : null}
-            {previewError && !missing.length ? <p className="text-sm">{previewError}</p> : clientPreview ? <details className="rounded border bg-background-50 p-3"><summary className="cursor-pointer text-sm font-medium">Text (filled in)</summary>
-              <pre className="mt-2 whitespace-pre-wrap font-sans text-sm" data-testid="signing-text-preview">{highlight(clientPreview, missing)}</pre></details> : null}
-          </> : null}
-        </> : null}
-        {step === "preview" && preview ? <div className="space-y-2" data-testid="signing-pdf-preview">
-          <p className="text-sm"><strong>{preview.title}</strong>{preview.edited ? <span className="ml-2 rounded bg-secondary-100 px-1.5 py-0.5 text-xs font-semibold text-secondary-900">Edited for this document</span> : null}</p>
-          <p className="text-xs text-foreground-600">This is the PDF that will be sent for signing: the same letterhead, fonts and “Document” header as the final copy.</p>
-          {pdfUrl ? <iframe title="Document preview" src={pdfUrl} className="h-[60vh] w-full rounded border bg-white" referrerPolicy="no-referrer" /> : null}
-        </div> : null}
-        {step === "edit" ? <div className="space-y-2" data-testid="signing-edit-step">
-          <p className="text-sm">Change the text of <strong>this document only</strong>. The template “{selected?.name}” stays as it is.</p>
-          <textarea className={`${TEXTAREA} min-h-[50vh]`} value={draft} maxLength={40000} onChange={(e) => setDraft(e.target.value)} data-testid="signing-edit-text" />
-          {draftLeft.length ? <p role="alert" className={ALERT}>The text still has {draftLeft.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it before previewing.</p> : null}
-        </div> : null}
-        {composeError && <p role="alert" className={ALERT} data-testid="signing-compose-error">{composeError}</p>}
-        {error && <p role="alert" className={ALERT}>{error}</p>}
+    {tab === "requests" && <>
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Status">{["all", ...Object.keys(SIGNING_STATUS)].map((key) => <button key={key} type="button" role="tab" aria-selected={status === key} data-testid={`status-${key}`} onClick={() => setStatus(key)}
+        className={`rounded-full border px-3 py-1.5 text-[13px] font-medium ${status === key ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
+        {key === "all" ? "All" : SIGNING_STATUS[key].label} ({counts[key] ?? 0})</button>)}</div>
+      <div className="grid gap-3 md:grid-cols-[1fr_220px_180px]">
+        <Field label="Search"><TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Document, reference, recipient name or email" data-testid="request-search" /></Field>
+        <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All types</option>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
+        <Field label="For"><Select value={subject} onChange={(e) => setSubject(e.target.value)}><option value="">Everyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>
       </div>
-    </Modal>}
-    {pdf && <Modal open title="Review document" width="max-w-5xl" onClose={() => setPdf("")}><a href={pdf} target="_blank" rel="noreferrer" className="underline">Open / download PDF</a><iframe title="Document preview" src={pdf} className="mt-3 h-[70vh] w-full" referrerPolicy="no-referrer" /><p className="mt-2 text-xs text-foreground-600">This link works for 60 seconds.</p></Modal>}
-    {audit && <Modal open title="Signing history" onClose={() => setAudit(null)}><ol className="space-y-3">{audit.map((e, i) => <li key={i}>{e.event.replaceAll("_", " ")} — {new Date(e.at).toLocaleString()}</li>)}</ol></Modal>}
-  </div>;
-}
+      {!loaded ? <p role="status">Loading…</p> : !shown.length ? <EmptyState icon="ri-quill-pen-line" title={context.requests.length ? "No request matches these filters" : "No signing requests yet"} description={context.requests.length ? undefined : "Create a template or upload a PDF to send your first document."} />
+        : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="request-table">
+          <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Document</th><th className="px-3">Recipients</th><th className="px-3">Status</th><th className="px-3">Progress</th><th className="px-3">Created</th><th className="px-3">Expires</th></tr></thead>
+          <tbody>{shown.map((r: SigningRequest) => { const s = signingStatus(r.status); return <tr key={r.id} className="cursor-pointer border-t border-background-200 hover:bg-background-100" onClick={() => setOpenId(r.id)}>
+            <td className="px-3 py-2"><button type="button" className="text-left font-medium text-primary-700 underline-offset-2 hover:underline">{r.title}</button><p className="text-xs text-foreground-500">{r.reference} · {SIGN_CATEGORIES[r.category]?.label ?? r.category}{r.subject_type ? ` · ${SUBJECT[r.subject_type]}` : ""}</p></td>
+            <td className="px-3">{r.recipients.map((p) => p.name).join(", ")}</td><td className="px-3"><Badge tone={s.tone}>{s.label}</Badge></td><td className="px-3">{r.state === "draft" ? "Not sent" : signedCount(r)}</td>
+            <td className="px-3">{new Date(r.created_at).toLocaleDateString()}</td><td className="px-3">{r.expires_at ? new Date(r.expires_at).toLocaleDateString() : ""}</td></tr>; })}</tbody></table></div>}
+    </>}
 
-/** Unfilled variables stand out in the text preview. */
-function highlight(text: string, missing: string[]) {
-  if (!missing.length) return text;
-  const parts = text.split(/(\{\{\s*[a-z][a-z0-9_]*\s*\}\})/g);
-  return parts.map((part, i) => (/^\{\{/.test(part) ? <mark key={i} className="rounded bg-primary-100 px-1 text-primary-900">{part}</mark> : part));
-}
+    {tab === "templates" && (!context.templates.length ? <EmptyState icon="ri-file-copy-2-line" title="No templates yet" description="A template holds the text or PDF, its variables, who signs and where." />
+      : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="template-table">
+        <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Template</th><th className="px-3">Type</th><th className="px-3">For</th><th className="px-3">Signers</th><th className="px-3">Version</th><th className="px-3" /></tr></thead>
+        <tbody>{context.templates.map((t) => <tr key={t.id} className="border-t border-background-200">
+          <td className="px-3 py-2"><p className="font-medium">{t.name}</p><p className="text-xs text-foreground-500">{t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : "Text"} · {t.fields.length} field{t.fields.length === 1 ? "" : "s"}{t.status === "archived" ? " · archived" : ""}</p></td>
+          <td className="px-3">{SIGN_CATEGORIES[t.category]?.label ?? t.category}</td><td className="px-3">{AUDIENCE[t.audience]}</td><td className="px-3">{t.roles.map((r) => r.label).join(" → ")}</td><td className="px-3">{t.version}</td>
+          <td className="px-3 py-2"><div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setEditing(t)}>Edit</Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAction({ action: "template_duplicate", id: t.id }), "Template duplicated.")}>Duplicate</Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAdmin("template_archive", t.id), t.status === "active" ? "Template archived." : "Template restored.")}>{t.status === "active" ? "Archive" : "Unarchive"}</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Delete the template “${t.name}”? Requests already made from it keep their own copy.`)) void act(() => signingAdmin("template_delete", t.id), "Template deleted."); }}>Delete</Button>
+          </div></td></tr>)}</tbody></table></div>)}
 
-function CustomVariable({ onInsert }: { onInsert: (key: string) => void }) {
-  const [key, setKey] = useState("");
-  const clean = key.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").replace(/^[0-9]+/, "");
-  return <div>
-    <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-foreground-500">Custom</p>
-    <div className="flex gap-1"><TextInput value={key} placeholder="course_name" onChange={(e) => setKey(e.target.value)} data-testid="signing-custom-variable" />
-      <Button size="sm" variant="outline" disabled={!clean} onMouseDown={(e) => e.preventDefault()} onClick={() => { onInsert(clean); setKey(""); }}>Insert</Button></div>
-    <p className="mt-1 text-[11px] text-foreground-600">Lowercase letters, numbers and underscores. Its value is typed when a request is made.</p>
+    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r) => { setCompose(false); setNotice("Draft saved. Place the fields, review the document, then send it for signature."); void load(); setOpenId(r.id); }} />}
+    {editing && <TemplateEditor template={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={(message) => { setEditing(null); setNotice(message); void load(); }} />}
+    {openId && <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void load()} />}
   </div>;
 }

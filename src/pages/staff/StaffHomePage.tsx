@@ -13,6 +13,7 @@ import OfferPanel from "./components/OfferPanel";
 import { myDocumentUrl, myOfferApi, myOnboarding, type MyOnboarding } from "@/lib/staffOnboardingApi";
 import { STAFF_DOC_LABEL, type StaffDocCategory } from "@/lib/staffStatus";
 import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
+import MySigningDocuments from "@/components/signing/MySigningDocuments";
 
 /**
  * /staff: "My HR" for a signed-in staff member (HR-02f): profile, role and joining date, current documents with their expiry,
@@ -210,6 +211,7 @@ export default function StaffHomePage() {
                 </ul>
               ) : <p className="text-sm text-foreground-600">No documents.</p>}
             </Section>
+            <MySigningDocuments className="mt-6" />
             <Section title="Signed offer" testId="my-hr-offer">
               {me.signedOffer ? (
                 <div className="flex flex-wrap items-center justify-between gap-2">

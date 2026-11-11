@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
+import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
@@ -139,6 +140,8 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
         ) : <p className="text-sm text-foreground-500">No documents yet. Choose or drop the files above, check each type, then Upload.</p>}
         <p className="mt-2 text-xs text-foreground-500">Uploading a new file of the same type replaces the current one.</p>
       </Card>
+
+      <div className="mb-4"><SubjectSigningPanel type="employee" id={employee.id} name={fullName(employee)} /></div>
 
       <BankDetailsCard key={`bank-${employee.id}-${bankVersion}`} profileId={employee.id} />
       <PaySetupCard profileId={employee.id} hasEmployment />

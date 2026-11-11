@@ -49,14 +49,115 @@ test("signing values are plain text and cannot introduce HTML", () => {
   assert.equal(signing.signingNameValid("Asha\nPatel"), false);
   assert.equal(signing.signingNameValid("Asha Patel"), true);
 });
-test("signed PDF preserves original pages and appends a readable signature record", async () => {
-  const original = await PdfLib.PDFDocument.create(); original.addPage(); original.addPage();
-  const bytes = await signing.signingReceipt(await original.save(), { id: "synthetic-request", title: "Student agreement", recipientEmail: "student@example.test",
-    signerName: "Asha Patel", signedAt: "2026-11-10T12:00:00Z", sourceHash: "a".repeat(64), consent: signing.SIGNING_CONSENT });
-  const signed = await PdfLib.PDFDocument.load(bytes);
-  assert.ok(signed.getPageCount() > 2);
-  assert.equal(signed.getPage(0).getWidth(), original.getPage(0).getWidth());
-  assert.equal(Math.round(signed.getPage(2).getWidth()), 595, "the signature record is an A4 page of the shared layout");
+const signingPdf = await load.import<typeof import("../supabase/functions/_shared/signing-pdf.ts")>("../supabase/functions/_shared/signing-pdf.ts");
+const signingCore = await load.import<typeof import("../supabase/functions/document-signing/core.ts")>("../supabase/functions/document-signing/core.ts");
+/** Every text item of a PDF with its page and position (pdf.js), to check where a field was printed. */
+async function pdfText(bytes: Uint8Array) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise; const items: Array<{ page: number; text: string; x: number; y: number; w: number; h: number }> = [];
+  for (let n = 1; n <= doc.numPages; n++) { const page = await doc.getPage(n); const view = page.getViewport({ scale: 1 });
+    for (const t of (await page.getTextContent()).items as Array<{ str: string; transform: number[] }>) items.push({ page: n, text: t.str, x: t.transform[4], y: t.transform[5], w: view.width, h: view.height }); }
+  return items;
+}
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+test("signing variables: record fields with a dot, sample fill marks what is missing, sender fields count", () => {
+  assert.deepEqual(signing.signingVariables("{{student.first_name}} {{course.fees}} {{current_date}}"), ["student.first_name", "course.fees", "current_date"]);
+  assert.throws(() => signing.signingVariables("{{student.first.name}}"), /variables/);
+  assert.equal(signing.sampleFill("Dear {{student.first_name}}, fee {{course.fees}}", { "student.first_name": "Asha" }), "Dear Asha, fee [course.fees]");
+  assert.equal(signing.fillSigningTemplate("{{employee.position}} from {{current_date}}", { "employee.position": "Trainer", current_date: "11 November 2026" }), "Trainer from 11 November 2026");
+  assert.deepEqual(signing.templateVariables({ title: "{{student.full_name}}", body: null, fields: [{ role: "sender", value: "{{course.name}}" }, { role: "student", value: "{{ignored}}" }] }), ["student.full_name", "course.name"]);
+  assert.match(signing.signingToday(new Date("2026-11-11T02:00:00Z")), /^11 November 2026$/);
+  for (const key of ["student.first_name", "student.last_name", "student.email", "student.address", "course.name", "course.fees", "current_date"]) assert.ok(signing.SUBJECT_VARIABLES.student.includes(key), key);
+  for (const key of ["employee.name", "employee.position"]) assert.ok(signing.SUBJECT_VARIABLES.employee.includes(key), key);
+});
+test("signing recipients: 1 to 10, each with a name and their own email, at least one required", () => {
+  const two = signing.checkRecipients([{ name: "Asha Patel", email: "ASHA@example.test" }, { name: "Hari Manager", email: "hari@example.test", required: false, order: 2, label: "HR Manager", role: "hr" }]);
+  assert.deepEqual(two.map((r) => [r.email, r.role, r.order, r.required]), [["asha@example.test", "signer1", 1, true], ["hari@example.test", "hr", 2, false]]);
+  assert.throws(() => signing.checkRecipients([]), /between 1 and 10/);
+  assert.throws(() => signing.checkRecipients(Array.from({ length: 11 }, (_, i) => ({ name: "Some One", email: `p${i}@example.test` }))), /between 1 and 10/);
+  assert.throws(() => signing.checkRecipients([{ name: "A B", email: "x@example.test" }, { name: "C D", email: "X@example.test" }]), /listed twice/);
+  assert.throws(() => signing.checkRecipients([{ name: "A B", email: "not-an-email" }]), /recipient 1/);
+  assert.throws(() => signing.checkRecipients([{ name: "A B", email: "a@example.test", required: false }]), /required/);
+});
+test("signing: a Word document becomes template text, split variables joined, no DOCTYPE", () => {
+  const xml = '<w:document><w:body><w:p><w:r><w:t>Dear {{student.</w:t></w:r><w:r><w:t>first_name}}</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">Fee: &amp; </w:t><w:tab/><w:t>{{course.fees}}</w:t></w:r></w:p></w:body></w:document>';
+  assert.equal(signing.docxXmlToText(xml), "Dear {{student.first_name}}\n\nFee: & \t{{course.fees}}");
+  assert.throws(() => signing.docxXmlToText('<!DOCTYPE x><w:p><w:t>x</w:t></w:p>'), /could not be read/);
+  assert.throws(() => signing.docxXmlToText("<w:document/>"), /No text/);
+});
+test("signing emails: only invitations and reminders carry the link; each kind says what happened", () => {
+  const job = { kind: "invite" as const, audience: "recipient" as const, title: "Employment contract", reference: "SLIT-2026-000001", name: "Asha", role: "Employee", message: "Please sign by Friday", expires_at: "2026-11-20T00:00:00Z" };
+  const invite = signing.renderSigningEmail(job, "https://slit.example/sign#t=abc")!;
+  assert.match(invite.subject, /^Please sign: Employment contract$/); assert.match(invite.text, /sign#t=abc/); assert.match(invite.text, /Please sign by Friday/); assert.match(invite.text, /SLIT-2026-000001/);
+  assert.equal(signing.renderSigningEmail(job, null), null, "no invitation without a link");
+  assert.match(signing.renderSigningEmail({ ...job, kind: "reminder" }, "https://x/sign#t=r")!.subject, /^Reminder to sign/);
+  for (const kind of ["expired", "declined", "voided", "completed"] as const) for (const audience of ["recipient", "admin"] as const) {
+    const mail = signing.renderSigningEmail({ ...job, kind, audience, reason: "Wrong salary", declined_by: "Hari" }, "https://x/sign#t=never")!;
+    assert.ok(mail && !/https?:\/\//.test(mail.text), `${kind}/${audience} has no link`);
+  }
+  assert.match(signing.renderSigningEmail({ ...job, kind: "declined", audience: "admin", reason: "Wrong salary", declined_by: "Hari" }, null)!.text, /Hari declined.*\n\nReason given: Wrong salary/s);
+});
+test("signed PDF: each completed field is printed inside its box on its page; others stay empty", async () => {
+  const original = await PdfLib.PDFDocument.create(); original.addPage([595.28, 841.89]); original.addPage([595.28, 841.89]);
+  const recipients = [{ id: "r1", name: "Asha Patel", email: "a@example.test", role: "Employee", state: "signed", signer_name: "Asha Patel", signed_at: "2026-11-11T01:00:00Z", signature_kind: "typed" },
+    { id: "r2", name: "Hari Manager", email: "h@example.test", role: "HR Manager", state: "sent" }];
+  const fields = [{ recipient_id: "r1", type: "signature", page: 2, x: 0.1, y: 0.7, w: 0.35, h: 0.08, value: "signed", done: true },
+    { recipient_id: "r1", type: "text", page: 1, x: 0.5, y: 0.2, w: 0.4, h: 0.03, value: "Student 4471", done: true },
+    { recipient_id: "r1", type: "checkbox", page: 1, x: 0.1, y: 0.3, w: 0.03, h: 0.02, value: "true", done: true },
+    { recipient_id: "r2", type: "signature", page: 2, x: 0.55, y: 0.7, w: 0.35, h: 0.08, value: null, done: false }];
+  const bytes = await signingPdf.stampDocument(await original.save(), { reference: "SLIT-2026-000001", title: "Contract", fields, recipients });
+  assert.equal((await PdfLib.PDFDocument.load(bytes)).getPageCount(), 2, "no extra page when every signer has a placed signature");
+  const text = await pdfText(bytes);
+  const inBox = (t: { x: number; y: number; w: number; h: number }, f: { x: number; y: number; w: number; h: number }) => t.x >= f.x * t.w - 1 && t.x <= (f.x + f.w) * t.w && t.y >= t.h * (1 - f.y - f.h) - 1 && t.y <= t.h * (1 - f.y) + 1;
+  const answer = text.find((t) => t.text.includes("Student 4471"))!; assert.ok(answer && answer.page === 1 && inBox(answer, fields[1]), JSON.stringify(answer));
+  const sig = text.find((t) => t.text === "Asha Patel")!; assert.ok(sig && sig.page === 2 && inBox(sig, fields[0]), JSON.stringify(sig));
+  assert.ok(!text.some((t) => t.text.includes("Hari")), "the second signer's field is empty until they sign");
+  // A signer with no placed signature field gets a signature page.
+  const loose = await signingPdf.stampDocument(await original.save(), { reference: "SLIT-2026-000002", title: "Contract", fields: [], recipients: [{ ...recipients[0], signature_kind: "drawn", signature_image: PNG_1PX }] });
+  assert.equal((await PdfLib.PDFDocument.load(loose)).getPageCount(), 3);
+  assert.ok((await pdfText(loose)).some((t) => t.page === 3 && t.text.includes("Asha Patel")));
+});
+test("signature pictures must be PNG and small; the certificate carries both hashes and the history", async () => {
+  assert.equal(signingPdf.signatureImageBytes(`data:image/png;base64,${PNG_1PX}`)[1], 0x50);
+  assert.throws(() => signingPdf.signatureImageBytes(btoa("GIF89a....")), /could not be used/);
+  assert.throws(() => signingPdf.signatureImageBytes("<svg>"), /Draw or upload/);
+  const certificate = await signingPdf.buildCertificate({ id: "00000000-0000-4000-8000-000000000001", reference: "SLIT-2026-000003", title: "Consent form", fields: [], createdAt: "2026-11-10T00:00:00Z",
+    sentAt: "2026-11-10T00:01:00Z", completedAt: "2026-11-11T00:00:00Z", signingMode: "sequential", originalHash: "a".repeat(64), signedHash: "b".repeat(64), consent: signing.SIGNING_CONSENT, chainOk: true,
+    recipients: [{ id: "r1", name: "Asha Patel", email: "a@example.test", role: "Student", state: "signed", signer_name: "Asha Patel", signed_at: "2026-11-11T00:00:00Z", signature_kind: "drawn", ip: "203.0.113.5" }],
+    events: [{ event: "created", at: "2026-11-10T00:00:00Z" }, { event: "signed", at: "2026-11-11T00:00:00Z", recipient_id: "r1", hash: "c".repeat(64) }] });
+  const words = (await pdfText(certificate)).map((t) => t.text).join(" "), tight = words.replace(/\s+/g, "");
+  for (const expected of ["SLIT-2026-000003", "Asha Patel", "203.0.113.5", "Drawn on the page", "Signed by Asha Patel"]) assert.ok(words.includes(expected), expected);
+  assert.ok(tight.includes("a".repeat(64)) && tight.includes("b".repeat(64)), "both hashes");
+  assert.match(words, /not a government identity check or a legal certification/);
+});
+test("signing mail: each job is sent once; a completed copy is sent only with matching files; closed requests send nothing", async () => {
+  const sent: Array<{ to: string; subject: string; attachments?: unknown[] }> = []; const results: Array<[number, string]> = [];
+  const files: Record<string, Uint8Array> = { "r/signed-1.pdf": new Uint8Array([1, 2, 3]), "r/certificate-1.pdf": new Uint8Array([4, 5]) };
+  const hashOf = (b: Uint8Array) => signingCore.sha256Hex(b);
+  let queue: Array<Record<string, unknown>> = [
+    { id: 1, kind: "invite", audience: "recipient", title: "Contract", reference: "SLIT-1", to: "a@example.test", name: "Asha", token: "t".repeat(64) },
+    { id: 2, kind: "completed", audience: "recipient", title: "Contract", reference: "SLIT-1", to: "a@example.test", signed_path: "r/signed-1.pdf", signed_hash: await hashOf(files["r/signed-1.pdf"]), certificate_path: "r/certificate-1.pdf", certificate_hash: await hashOf(files["r/certificate-1.pdf"]) },
+    { id: 3, kind: "completed", audience: "admin", title: "Contract", reference: "SLIT-1", sender_email: "admin@example.test", signed_path: "r/signed-1.pdf", signed_hash: "0".repeat(64), certificate_path: "r/certificate-1.pdf", certificate_hash: await hashOf(files["r/certificate-1.pdf"]) },
+  ];
+  const ports = { isServiceCaller: false, uuid: () => "u", later: () => undefined, letterhead: async () => null, admin: async () => ({}),
+    service: async (action: string, args: { data?: { id?: number; state?: string } } = {}) => { if (action === "notify_claim") { const out = queue; queue = []; return out; } if (action === "notify_result") results.push([args.data!.id!, args.data!.state!]); return {}; },
+    storage: { download: async (p: string) => files[p] ?? null, upload: async () => true, remove: async () => undefined, signedUrl: async () => null },
+    mail: { config: { from: { name: "Skyline", email: "hr@example.test" }, adminTo: ["hr@example.test"], siteUrl: "https://slit.example", problems: [] },
+      provider: { id: "mock", send: async (m: { to: string; subject: string; attachments?: unknown[] }) => { sent.push(m); return { kind: "accepted" as const, messageId: `m-${sent.length}` }; } } },
+  } as unknown as Parameters<typeof signingCore.drainSigningMail>[0];
+  const first = await signingCore.drainSigningMail(ports);
+  assert.deepEqual(first, { sent: 2, failed: 1, requeued: 0 });
+  assert.deepEqual(results, [[1, "sent"], [2, "sent"], [3, "failed"]], "a changed signed PDF is never attached");
+  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 2);
+  assert.deepEqual(await signingCore.drainSigningMail(ports), { sent: 0, failed: 0, requeued: 0 }, "nothing is sent twice");
+  const off = await signingCore.drainSigningMail({ ...ports, mail: { ...ports.mail, provider: null } } as typeof ports);
+  assert.deepEqual(off, { sent: 0, failed: 0, requeued: 0 }, "with sending off nothing is claimed");
+});
+test("signing links: a malformed token is refused before the database is asked", async () => {
+  let asked = false;
+  const ports = { service: async () => { asked = true; return {}; } } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  await assert.rejects(signingCore.handleSigning({ body: { action: "open", token: "../../x" }, upload: null, ip: null, userAgent: null }, ports), (e: Error & { status?: number }) => e.status === 403);
+  assert.equal(asked, false);
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

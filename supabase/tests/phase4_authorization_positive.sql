@@ -15,10 +15,12 @@ insert into public.cms_users(id,name,email,role,status,auth_user_id) values ('ph
 insert into public.portal_notifications(id,recipient,title) values ('63000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Original');
 -- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
-create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
+-- Holder-name matching (20261113160000): the receipt names the application's current passport at the time (none before the first one).
+create function pg_temp.checked_upload(p_path text, p_category text, p_owner uuid default null) returns void language plpgsql security definer as $$
 begin
   insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
-  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+  perform public.record_passport_matched_document('enrollment-documents', p_path, p_category,
+    (public.current_upload_passport('enrollment-documents', coalesce(p_owner, case when split_part(p_path, '/', 1) ~ '^[0-9a-f-]{36}$' then split_part(p_path, '/', 1)::uuid end))->>'id')::uuid);
 end $$;
 select pg_temp.checked_upload(p, 'Passport') from unnest(array['43000000-0000-0000-0000-000000000001/a.pdf', '43000000-0000-0000-0000-000000000001/b.pdf', 'foreign/b.pdf']) as p;
 set local role authenticated;
@@ -31,6 +33,8 @@ select lives_ok($$select public.portal_save_draft_v2('43000000-0000-0000-0000-00
 select lives_ok($$select public.portal_save_document_review('43000000-0000-0000-0000-000000000001','{"first_name":"Ada"}','{}','["first_name"]','[]')$$,'draft manual confirmation preserved');
 select lives_ok($$insert into public.enrollment_application_documents(id,application_id,category,storage_path,filename) values('53000000-0000-0000-0000-000000000001','43000000-0000-0000-0000-000000000001','Passport','43000000-0000-0000-0000-000000000001/a.pdf','a.pdf')$$,'draft document registration preserved');
 select throws_ok($$update public.enrollment_application_documents set storage_path='43000000-0000-0000-0000-000000000001/b.pdf' where id='53000000-0000-0000-0000-000000000001'$$,'42501',null,'draft locator is immutable too');
+-- The foreign file's receipt names the application's passport (as a checked upload would), so only the prefix rule can refuse it.
+select pg_temp.checked_upload('foreign/b.pdf', 'Passport', '43000000-0000-0000-0000-000000000001');
 select throws_ok($$insert into public.enrollment_application_documents(application_id,category,storage_path,filename) values('43000000-0000-0000-0000-000000000001','Passport','foreign/b.pdf','b.pdf')$$,'42501',null,'foreign prefix insertion denied');
 select lives_ok($$insert into public.enrollment_application_messages(application_id,author,body) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Agency message')$$,'agency public message preserved');
 select throws_ok($$insert into public.enrollment_application_messages(application_id,author,body,visibility) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Forged note','internal')$$,'42501',null,'agency internal-note insertion denied');

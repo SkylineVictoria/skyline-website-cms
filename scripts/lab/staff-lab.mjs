@@ -403,8 +403,20 @@ function startMockReader() {
           const dataUrl = String(first.file_data ?? first.image_url ?? "");
           const content = Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64").toString("latin1");
           const category = (content.match(/%lab-category:([A-Za-z ]+)/) ?? [])[1]?.trim() ?? "Unclear";
+          // Holder-name matching (PR #29): the lab's files may carry %lab-holder:<printed name>; the passport attachment (second item) gives the first name.
+          const holderOf = (text) => (text.match(/%lab-holder:([^\r\n%]+)/) ?? [])[1]?.trim() ?? null;
+          const verify = Array.isArray(body.text?.format?.schema?.required) && body.text.format.schema.required.includes("holders");
+          let extra = {};
+          if (verify) {
+            const second = body.input?.[0]?.content?.[1];
+            const passportUrl = String(second?.file_data ?? second?.image_url ?? "");
+            const passportText = passportUrl ? Buffer.from(passportUrl.slice(passportUrl.indexOf(",") + 1), "base64").toString("latin1") : (category === "Passport" ? content : "");
+            const passportHolder = holderOf(passportText) ?? (passportText ? MOCK_PASSPORT.first_name + " " + MOCK_PASSPORT.last_name : null);
+            const holder = holderOf(content) ?? passportHolder;
+            extra = { holders: [holder], passport_first_name: passportHolder ? passportHolder.split(/\s+/)[0] : null };
+          }
           res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, status: "completed", output_text: JSON.stringify({ category }), usage: {} }));
+          return res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, status: "completed", output_text: JSON.stringify({ category, ...extra }), usage: {} }));
         }
         const names = body.text?.format?.schema?.properties?.fields?.required ?? [];
         const category = (String(body.instructions ?? "").match(/in this (.+?) document\./) ?? [])[1] ?? "Other";
@@ -1045,12 +1057,14 @@ async function holidays() {
     const res = await fetch(`${lab.apiUrl}/functions/v1/holiday-sync`, { method: "POST", headers: { apikey: lab.anonKey, ...(token ? { Authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, body: JSON.stringify({ action: "sync" }) });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   };
-  // Back to the seeded state (as hosted was before the first sync) so the command can be run again without a fresh `up`.
-  psql("delete from hr.optional_holiday_requests r using hr.public_holidays h where h.id = r.holiday_id and h.state = 'VIC' and extract(year from h.holiday_date) in (2026, 2027); "
+  // Back to the seeded state (as hosted was before the first sync) so the command can be run again without a fresh `up`, and again at
+  // the end so the SQL suites that read the seeds (hrms_time_leave.sql) see them whatever ran before.
+  const resetHolidaySeeds = () => psql("delete from hr.optional_holiday_requests r using hr.public_holidays h where h.id = r.holiday_id and h.state = 'VIC' and extract(year from h.holiday_date) in (2026, 2027); "
     + "delete from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) in (2026, 2027); delete from hr.holiday_sync_runs; "
     + "insert into hr.public_holidays(holiday_date, name, state, status, source) select d::date, n, 'VIC', 'review', 'seed' from (values"
     + " ('2026-01-01','New Year''s Day'),('2026-01-26','Australia Day'),('2026-03-09','Labour Day'),('2026-04-03','Good Friday'),('2026-04-04','Saturday before Easter Sunday'),('2026-04-05','Easter Sunday'),('2026-04-06','Easter Monday'),('2026-04-25','ANZAC Day'),('2026-06-08','King''s Birthday'),('2026-11-03','Melbourne Cup Day'),('2026-12-25','Christmas Day'),('2026-12-26','Boxing Day'),('2026-12-28','Boxing Day (additional day)'),"
     + " ('2027-01-01','New Year''s Day'),('2027-01-26','Australia Day'),('2027-03-08','Labour Day'),('2027-03-26','Good Friday'),('2027-03-27','Saturday before Easter Sunday'),('2027-03-28','Easter Sunday'),('2027-03-29','Easter Monday'),('2027-04-25','ANZAC Day'),('2027-06-14','King''s Birthday'),('2027-11-02','Melbourne Cup Day'),('2027-12-25','Christmas Day'),('2027-12-26','Boxing Day'),('2027-12-27','Christmas Day (additional day)'),('2027-12-28','Boxing Day (additional day)')) v(d, n);");
+  resetHolidaySeeds();
   const rows = (year) => psql(`select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = ${year};`);
   const before = { y2026: rows(2026), y2027: rows(2027), runs: psql("select count(*) from hr.holiday_sync_runs;") };
   check("the migration installed the weekly cron job, active, Mondays 03:20 UTC", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-holiday-sync';") === "true/20 3 * * 1");
@@ -1112,6 +1126,7 @@ async function holidays() {
   }
   check("the dispatcher posts to holiday-sync through pg_net with the Vault key and the function records a 'cron' run that succeeds", requestId !== "" && cronRun === "ok", `request ${requestId || "none"}, run ${cronRun || "none"}`);
   check("...the hosted-style schedule is untouched by the lab", psql("select schedule from cron.job where jobname = 'hr-holiday-sync';") === "20 3 * * 1");
+  resetHolidaySeeds();
   console.log(failures ? `holidays: ${failures} FAILED` : "holidays: all checks passed");
 }
 
@@ -1184,8 +1199,8 @@ async function flow() {
   const jwt = await adminToken(lab);
   const mailsTo = (address) => postmark.messages.filter((m) => m.to === address);
   const stage = (id) => psql(`select hr.onboarding_stage('${id}')->>'stage';`);
-  const letterTemplate = psql("select id from hr.templates where type = 'offer_letter' and is_default;");
-  const seededLetter = psql(`select body_html from hr.templates where id = '${letterTemplate}';`);
+  const letterTemplate = psql("select id from hr.sign_templates where category = 'offer_letter' and is_default and deleted_at is null;");
+  const seededLetter = psql(`select body_html from hr.sign_templates where id = '${letterTemplate}';`);
   const PASSWORD = "correct horse 42 battery";
   // Calls that are MEANT to be refused as a dead link come from their own address (see onboardCall).
   const probe = `203.0.113.${1 + (Date.now() % 250)}`;
@@ -1243,7 +1258,7 @@ async function flow() {
   check("offer letter: made from the default template, every placeholder filled with the person's details, stored as a PDF with the rendered copy",
     made.status === 200 && made.body.pages >= 1 && letter[1] === "Standard offer letter" && letter[2] === "true" && letter[3] === "true" && letter[4] === "true"
     && new TextDecoder().decode(letterBytes.subarray(0, 5)) === "%PDF-", `${made.status} ${JSON.stringify(made.body)} ${letter.join("|")}`);
-  psql(`update hr.templates set body_html = '<p>Edited later for {{first_name}}.</p>' where id = '${letterTemplate}';`);
+  psql(`update hr.sign_templates set body_html = '<p>Edited later for {{first_name}}.</p>' where id = '${letterTemplate}';`);
   check("editing the template afterwards does not change the letter that was made", psql(`select (body_html like '%Lab Trainer%')::text from hr.staff_offer_letters where profile_id = '${person.id}';`) === "true");
 
   // 6. Send: one email with the offer and a one-time set-password link. A login exists but cannot sign in yet.
@@ -1325,7 +1340,7 @@ async function flow() {
 
   // 10. A failed offer email: everything is put back, and no login is left behind.
   const second = await readyForOffer(lab, "flowfail");
-  psql(`update hr.templates set body_html = '<p>Dear {{first_name}}, you start as {{position}} on {{start_date}}.</p>' where id = '${letterTemplate}';`);
+  psql(`update hr.sign_templates set body_html = '<p>Dear {{first_name}}, you start as {{position}} on {{start_date}}.</p>' where id = '${letterTemplate}';`);
   await staffAdminCall(lab, jwt, { action: "offer_generate", profileId: second.id, templateId: letterTemplate });
   postmark.mode = "fail";
   const failedSend = await staffAdminCall(lab, jwt, { action: "offer_send_login", profileId: second.id });
@@ -1353,7 +1368,7 @@ async function flow() {
     withdrawn.status === 200 && psql(`select status from hr.staff_profiles where id = '${second.id}';`) === "rejected" && liveLinks(second.id) === "0"
     && Boolean(rejectionMail?.html) && psql(`select hr.onboarding_stage('${second.id}')->>'closed';`) === "rejected", `${withdrawn.status} ${Boolean(rejectionMail)}`);
   // Leave the lab's default letter template as it was seeded.
-  psql(`update hr.templates set body_html = '${seededLetter.replace(/'/g, "''")}' where id = '${letterTemplate}';`);
+  psql(`update hr.sign_templates set body_html = '${seededLetter.replace(/'/g, "''")}' where id = '${letterTemplate}';`);
 }
 
 /* ------------------------------------------------------------------ onboarding wizard */
@@ -1498,10 +1513,18 @@ async function wizard() {
   const wrongContent = await onboardCall(lab, { action: "upload", t: link.token, category: "Passport", expiryDate: "" }, { blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "application/pdf" }), name: "passport.pdf" });
   check("a file whose content is not what it says is refused with the student wizard's message", wrongContent.status === 400 && wrongContent.body.error === "The selected file does not match its declared document type.", JSON.stringify(wrongContent.body));
   await onboardCall(lab, { action: "save", t: link.token, patch: { is_australian_citizen: false } });
+  // The passport comes first, and every other document must belong to the passport holder (PR #29): the employee gets a clear message.
+  const beforePassport = await onboardCall(lab, { action: "upload", t: link.token, category: "Visa", expiryDate: "" }, pdf("Visa.pdf"));
+  check("staff wizard: a visa before the passport is refused and the employee is told to upload the passport first", beforePassport.status === 422 && beforePassport.body.error === "Upload the passport identity page before uploading other documents." && beforePassport.body.field === "file", JSON.stringify(beforePassport.body));
   for (const category of ["Passport", "Visa", "English", "Academic", "Health Insurance"]) {
     const r = await onboardCall(lab, { action: "upload", t: link.token, category, expiryDate: "" }, pdf(`${category}.pdf`));
     if (r.status !== 200) check(`upload ${category} without an expiry date`, false, JSON.stringify(r.body));
   }
+  const otherHolder = { blob: new Blob([new TextEncoder().encode("%PDF-1.4\n%lab-category:Academic\n%lab-holder:Someone Else\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")], { type: "application/pdf" }), name: "Academic-other.pdf" };
+  const mismatch = await onboardCall(lab, { action: "upload", t: link.token, category: "Academic", expiryDate: "" }, otherHolder);
+  check("staff wizard: a document in someone else's name is refused with the passport-holder message and nothing is stored", mismatch.status === 422 && /passport's first name wasn't found/.test(mismatch.body.error ?? "")
+    && psql(`select count(*) from hr.staff_documents where profile_id = '${person.id}' and category = 'Academic';`) === "1", JSON.stringify(mismatch.body));
+  check("staff wizard: the accepted documents carry the passport they were matched against", psql(`select count(*) from hr.document_category_receipts r join storage.objects o on o.id = r.object_id where o.name like '${person.id}/%' and r.category <> 'Passport' and r.passport_document_id is not null;`) === "4");
   const docId = (category) => psql(`select id from hr.staff_documents where profile_id = '${person.id}' and category = '${category}' and is_current;`);
   const read = [await readingDone(docId("Passport")), await readingDone(docId("Visa"))];
   const view = (await onboardCall(lab, { action: "open", t: link.token })).body.view;
@@ -1659,7 +1682,8 @@ async function pdfWords(bytes) {
   return pages;
 }
 const sha256 = (bytes) => nodeCrypto.createHash("sha256").update(bytes).digest("hex");
-async function signedFile(url) { const res = await fetch(url); return res.ok ? new Uint8Array(await res.arrayBuffer()) : null; }
+/** Inside the local Edge runtime SUPABASE_URL is http://kong:8000 (reachable only by the containers); hosted signs public URLs. */
+async function signedFile(url) { const res = await fetch(String(url).replace("http://kong:8000", readLab().apiUrl)); return res.ok ? new Uint8Array(await res.arrayBuffer()) : null; }
 
 async function signing() {
   const lab = readLab();

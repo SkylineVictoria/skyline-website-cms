@@ -22,14 +22,19 @@ insert into public.enrollment_applications(id, agency_id, assigned_agent_id, dat
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
 -- The merged application (its own answers plus the student record, 20261104120000) read as the owner whatever role a test runs as.
 create function pg_temp.app_data(p_id uuid) returns jsonb language sql stable security definer as $$ select public.application_data(p_id) $$;
+-- Holder-name matching (20261113160000): the receipt names the application's current passport at the time (none before the first one),
+-- so a replacement passport is recorded after the first and a supporting document after the passport, as the uploader does.
 create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
 begin
   insert into storage.objects(bucket_id, name) values ('enrollment-documents', p_path) on conflict do nothing;
-  perform public.record_validated_document_category('enrollment-documents', p_path, p_category);
+  perform public.record_passport_matched_document('enrollment-documents', p_path, p_category,
+    (public.current_upload_passport('enrollment-documents', split_part(p_path, '/', 1)::uuid)->>'id')::uuid);
 end $$;
-select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/a.pdf', 'Passport'), pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/b.pdf', 'Passport');
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/a.pdf', 'Passport');
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
-  ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/a.pdf', 'a.pdf', '{}'),
+  ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/a.pdf', 'a.pdf', '{}');
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/b.pdf', 'Passport');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
   ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/b.pdf', 'b.pdf', '{}');
 
 set local role service_role;
@@ -75,6 +80,10 @@ select is((public.portal_apply_document_candidates('50000000-0000-0000-0000-0000
 insert into public.enrollment_applications(id, agency_id, assigned_agent_id, data, status) values
   ('40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '{"academicQualifications":[{"institution":"Manual Inst","qualification":"Cert"}]}', 'draft');
 reset role;
+-- Since 20261113160000 a supporting document needs the application's current passport first.
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000003/passport.pdf', 'Passport');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
+  ('50000000-0000-0000-0000-000000000030', '40000000-0000-0000-0000-000000000003', 'Passport', '40000000-0000-0000-0000-000000000003/passport.pdf', 'passport.pdf', '{}');
 select pg_temp.checked_upload('40000000-0000-0000-0000-000000000003/' || f, c) from (values ('old.pdf', 'Driving Licence'), ('new.pdf', 'Driving Licence'), ('a1.pdf', 'Academic'), ('a2.pdf', 'Academic'), ('a3.pdf', 'Academic')) as x(f, c);
 set local role service_role;
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values

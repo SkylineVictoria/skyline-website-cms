@@ -85,7 +85,7 @@ function EnvelopeSigningPage() {
       : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="template-table">
         <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Template</th><th className="px-3">Type</th><th className="px-3">For</th><th className="px-3">Signers</th><th className="px-3">Version</th><th className="px-3" /></tr></thead>
         <tbody>{context.templates.map((t) => <tr key={t.id} className="border-t border-background-200">
-          <td className="px-3 py-2"><p className="font-medium">{t.name}</p><p className="text-xs text-foreground-500">{t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : "Text"} · {t.fields.length} field{t.fields.length === 1 ? "" : "s"}{t.status === "archived" ? " · archived" : ""}</p></td>
+          <td className="px-3 py-2"><p className="font-medium">{t.name}{t.is_default ? <Badge tone="success">Default</Badge> : null}</p><p className="text-xs text-foreground-500">{t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : t.kind === "email" ? "Email (not signed)" : "Text"} · {t.fields.length} field{t.fields.length === 1 ? "" : "s"}{t.status === "archived" ? " · archived" : ""}</p></td>
           <td className="px-3">{SIGN_CATEGORIES[t.category]?.label ?? t.category}</td><td className="px-3">{AUDIENCE[t.audience]}</td><td className="px-3">{t.roles.map((r) => r.label).join(" → ")}</td><td className="px-3">{t.version}</td>
           <td className="px-3 py-2"><div className="flex flex-wrap justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(t)}>Edit</Button>

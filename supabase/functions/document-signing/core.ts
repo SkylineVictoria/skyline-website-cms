@@ -5,10 +5,12 @@
 // stored bytes were re-hashed against the recorded sha256.
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
 import type { Letterhead } from "../_shared/letterhead.ts";
-import { checkRecipients, fillSigningTemplate, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
+import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
   type SigningMailJob } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
-import { templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
+import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
+
+const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 import type { EmailProvider } from "../_shared/notification/delivery.ts";
 import { outcomeState, type HrMailConfig } from "../_shared/hr-mail.ts";
 
@@ -158,24 +160,48 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
     };
     /** A template's document for a set of values: a letter from its text, or its PDF. `sample` shows [name] for what is still missing. */
     // deno-lint-ignore no-explicit-any
-    const templateDocument = async (template: Record<string, any>, values: Record<string, unknown>, sample: boolean, editedText: unknown = null) => {
+    const templateDocument = async (template: Record<string, any>, values: Record<string, unknown>, sample: boolean, editedText: unknown = null, editedHtml: unknown = null) => {
       const fill = (source: string) => sample ? sampleFill(source, values) : fillSigningTemplate(source, values);
       const title = fill(String(template.title ?? ""));
+      const senderFields = (Array.isArray(template.fields) ? template.fields : []).map((f: Record<string, unknown>) => f.role === "sender" ? { ...f, value: String(f.value ?? "").trim() ? fill(String(f.value)).trim() : "" } : f);
+      if (template.kind === "pdf") return { title, rendered: null as string | null, templateText: null as string | null, edited: false, isHtml: false, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields };
+      const letterPdf = await letterPdfModule();
+      const bodyHtml = typeof template.body_html === "string" && template.body_html.trim() ? String(template.body_html) : null;
+      if (bodyHtml) {
+        // A rich template (the HRMS letters, one table since 20261113170000): the signing variables ({{employee.name}}, {{salary}}) are filled
+        // first, escaped; the HRMS placeholders ({{first_name}}, {{job_title}}…) by their own renderer (formatting, optional lines, nothing
+        // left unfilled). The administrator may edit the HTML of THIS copy; the template is untouched.
+        const strings = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+        const prefilled = fillHtmlVariables(bodyHtml, strings, { sample, leave: (key) => HRMS_PLACEHOLDER.has(key) });
+        const made = renderTemplate(sanitizeTemplateHtml(prefilled), strings);
+        if (!sample && (made.missing.length || made.unknown.length)) {
+          const gaps = [...made.missing, ...made.unknown];
+          throw new SigningError(`The document cannot be made yet: ${placeholderLabels(gaps)} ${gaps.length === 1 ? "has" : "have"} no value. Add ${gaps.length === 1 ? "it" : "them"} on the record, type ${gaps.length === 1 ? "it" : "them"} here, or change the template.`);
+        }
+        let html = made.html;
+        if (typeof editedHtml === "string" && editedHtml.trim()) {
+          if (editedHtml.length > 200000) throw new SigningError("Keep the edited document under 200,000 characters.");
+          html = sanitizeTemplateHtml(editedHtml);
+          const left = templatePlaceholders(html);
+          if (left.length) throw new SigningError(`The edited text still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`);
+          if (!templateText(html).trim()) throw new SigningError("The edited document is empty.");
+        }
+        const bad = await letterPdf.unsupportedText([title, templateText(html)]);
+        if (bad !== null) throw new SigningError(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF: "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
+        return { title, rendered: html, templateText: made.html, edited: html !== made.html, isHtml: true, bytes: (await letterPdf.buildLetterPdf({ title, html, letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
+      }
       // The administrator may edit the filled text of THIS copy (text templates; the template is untouched): no {{variable}} may remain.
       let text: string | null = null;
-      if (template.kind !== "pdf" && typeof editedText === "string" && editedText.trim()) {
+      if (typeof editedText === "string" && editedText.trim()) {
         if (editedText.length > 40000) throw new SigningError("Keep the document text under 40,000 characters.");
         const left = signingVariables(editedText);
         if (left.length) throw new SigningError(`The edited text still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`);
         text = editedText.replace(/\r\n/g, "\n");
       }
-      const senderFields = (Array.isArray(template.fields) ? template.fields : []).map((f: Record<string, unknown>) => f.role === "sender" ? { ...f, value: String(f.value ?? "").trim() ? fill(String(f.value)).trim() : "" } : f);
-      if (template.kind === "pdf") return { title, rendered: null as string | null, templateText: null as string | null, edited: false, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields };
-      const templateText = fill(String(template.body ?? "")), rendered = text ?? templateText;
-      const letterPdf = await letterPdfModule();
+      const plain = fill(String(template.body ?? "")), rendered = text ?? plain;
       const bad = await letterPdf.unsupportedText([title, rendered]);
       if (bad !== null) throw new SigningError(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF: "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
-      return { title, rendered, templateText, edited: rendered !== templateText, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
+      return { title, rendered, templateText: plain, edited: rendered !== plain, isHtml: false, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
     };
     /** The record's values: the signing names (student.*, employee.*, agent.*) and, for an employee, the letter names of HRMS Templates ({{job_title}}…). */
     const subjectValues = async (type: unknown, id: unknown) => {
@@ -244,8 +270,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
       const subject = await subjectValues(body.subjectType, body.subjectId);
       const values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
-      const made = await templateDocument(template, values, false, body.text);
-      return { pdfBase64: toBase64(made.bytes), title: made.title, text: made.rendered, templateText: made.templateText, edited: made.edited,
+      const made = await templateDocument(template, values, false, body.text, body.html);
+      return { pdfBase64: toBase64(made.bytes), title: made.title, text: made.rendered, templateText: made.templateText, edited: made.edited, isHtml: made.isHtml,
         recipientName: recipients[0].name, recipientEmail: recipients[0].email, variables: templateVariables(template), templateName: template.name };
     }
     if (action === "create") {
@@ -264,7 +290,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
         // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
         values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
-        const made = await templateDocument(template, values, false, body.text);
+        const made = await templateDocument(template, values, false, body.text, body.html);
         title = made.title; rendered = made.rendered; bytes = made.bytes; templateId = template.id; category = template.category;
         edited = made.edited; templateText = made.templateText;
         // What the sender prints on a PDF template (its variables) becomes part of the document itself, before anyone sees or signs it.

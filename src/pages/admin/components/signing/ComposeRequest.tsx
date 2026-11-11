@@ -3,8 +3,9 @@ import { Button, Field, Modal, Select, TextArea, TextInput } from "../ui";
 import PdfPages from "@/components/signing/PdfPages";
 import { pdfBytes, signingAction, signingAdmin, type SigningRequest, type SigningSubject, type SigningTemplate } from "@/lib/signingApi";
 import { SIGN_CATEGORIES, signingVariables, templateVariables } from "../../../../../supabase/functions/_shared/signing";
-import { templateValues } from "../../../../../supabase/functions/_shared/hr-template";
+import { templatePlaceholders, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
 import { templatePerson } from "@/lib/hrTemplatesApi";
+import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
 
 export interface SubjectPreset { type: "student" | "employee" | "agent"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
@@ -26,9 +27,11 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const [mode, setMode] = useState<"sequential" | "parallel">("sequential"); const [expiry, setExpiry] = useState(14); const [reminder, setReminder] = useState(3);
   const [message, setMessage] = useState(""); const [typed, setTyped] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [preview, setPreview] = useState<Uint8Array | null>(null);
-  /** The text of THIS copy when the administrator edits it (text templates only; the template is untouched). */
+  /** The text of THIS copy when the administrator edits it (text templates only; the template is untouched); `copyIsHtml` for a rich template. */
   const [copyText, setCopyText] = useState<string | null>(null);
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
+  const [copyIsHtml, setCopyIsHtml] = useState(false);
+  // Emails are not signed; everything else of the one template table is offered.
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
 
   // The record's own values (name, address, course…) and the first recipient.
@@ -63,9 +66,9 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const values = Object.fromEntries(variables.map((v) => [v, valueOf(v)]).filter(([, value]) => value.trim()));
   const setPerson = (index: number, patch: Partial<Person>) => setPeople(people.map((p, i) => i === index ? { ...p, ...patch } : p));
   const run = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); setError(""); try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); } };
-  const body = () => ({ recipients: people, signingMode: mode, expiryDays: expiry, reminderDays: reminder, message, ...(subjectType && subjectId ? { subjectType, subjectId } : {}), ...(copyText !== null ? { text: copyText } : {}) });
+  const body = () => ({ recipients: people, signingMode: mode, expiryDays: expiry, reminderDays: reminder, message, ...(subjectType && subjectId ? { subjectType, subjectId } : {}), ...(copyText !== null ? (copyIsHtml ? { html: copyText } : { text: copyText }) : {}) });
   let copyLeft: string[] = [];
-  if (copyText !== null) { try { copyLeft = signingVariables(copyText); } catch { copyLeft = ["…"]; } }
+  if (copyText !== null) { try { copyLeft = copyIsHtml ? templatePlaceholders(copyText) : signingVariables(copyText); } catch { copyLeft = ["…"]; } }
   const create = () => run(async () => {
     if (source === "upload" && !file) throw new Error("Choose the PDF to send.");
     if (source === "template" && !template) throw new Error("Choose a template.");
@@ -78,7 +81,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
     footer={<>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes(copyText !== null
         ? (await signingAction<{ pdfBase64: string }>({ action: "preview", templateId, values, ...body() })).pdfBase64
         : (await signingAction<{ pdfBase64: string }>({ action: "template_preview", id: templateId, values, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) })).pdfBase64)))}>Preview document</Button>}
-      {source === "template" && template?.kind === "text" && copyText === null && <Button variant="outline" disabled={busy} data-testid="edit-copy" onClick={() => void run(async () => setCopyText((await signingAction<{ text: string }>({ action: "preview", templateId, values, ...body() })).text))}>Edit the text of this copy</Button>}
+      {source === "template" && template?.kind === "text" && copyText === null && <Button variant="outline" disabled={busy} data-testid="edit-copy" onClick={() => void run(async () => { const p = await signingAction<{ text: string; isHtml?: boolean }>({ action: "preview", templateId, values, ...body() }); setCopyIsHtml(Boolean(p.isHtml)); setCopyText(p.text); })}>Edit the text of this copy</Button>}
       <Button disabled={busy} data-testid="continue-to-place-fields" onClick={() => void create()}>{busy ? "Preparing fields…" : "Continue to place fields"}</Button></>}>
     <div className="space-y-5">
       {error && <p role="alert" className="rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
@@ -97,7 +100,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         <Field label="Template" required><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template"><option value="">Choose a template</option>{usable.map((t) => <option key={t.id} value={t.id}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category})</option>)}</Select></Field>
         {copyText !== null && <section className="space-y-2"><h3 className="font-semibold">Text of this copy</h3>
           <p className="text-sm text-foreground-600">Changes apply to this request only; the template is not changed. The history records that this copy was edited.</p>
-          <TextArea rows={10} value={copyText} maxLength={40000} onChange={(e) => setCopyText(e.target.value)} data-testid="copy-text" />
+          {copyIsHtml ? <RichTextEditor value={copyText} onChange={setCopyText} placeholders={[]} minHeight={260} /> : <TextArea rows={10} value={copyText} maxLength={40000} onChange={(e) => setCopyText(e.target.value)} data-testid="copy-text" />}
           {copyLeft.length > 0 && <p role="alert" className="text-sm text-red-700">Still to fill in: {copyLeft.map((k) => `{{${k}}}`).join(", ")}</p>}
           <button type="button" className="text-sm text-primary-700 underline" onClick={() => setCopyText(null)}>Discard my edits</button></section>}
         {variables.length > 0 && copyText === null && <section><h3 className="mb-2 font-semibold">Variables</h3><div className="grid gap-3 md:grid-cols-2">{variables.map((key) => <Field key={key} label={`{{${key}}}`} required hint={subject?.values[key] && typed[key] === undefined ? "Filled from the record. You can correct it here." : undefined}>

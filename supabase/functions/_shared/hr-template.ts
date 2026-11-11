@@ -15,7 +15,11 @@ export const TEMPLATE_TYPES: ReadonlyArray<{ type: TemplateType; label: string; 
 export const TEMPLATE_TYPE_LABEL = Object.fromEntries(TEMPLATE_TYPES.map((t) => [t.type, t.label])) as Record<TemplateType, string>;
 export const isTemplateType = (value: unknown): value is TemplateType => TEMPLATE_TYPES.some((t) => t.type === value);
 
-export interface PlaceholderSpec { key: string; label: string; sample: string; group: "Person" | "Job and pay" | "Company" | "Links"; only?: readonly TemplateType[] }
+export interface PlaceholderSpec { key: string; label: string; sample: string; group: "Person" | "Job and pay" | "Company" | "Links" | "Student" | "Employee record" | "Agent" | "Document"; only?: readonly TemplateType[] }
+/** Plain text as simple HTML: one <p> per paragraph (a blank line between), <br> for a line break, everything escaped (the same as hr.text_to_html). */
+export function textToHtml(text: string): string {
+  return text.replace(/\r\n/g, "\n").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+}
 /** Every placeholder an Admin can insert. `only` limits a link placeholder to the emails that carry that link. */
 export const PLACEHOLDERS: readonly PlaceholderSpec[] = [
   { key: "first_name", label: "First name", sample: "Asha", group: "Person" },

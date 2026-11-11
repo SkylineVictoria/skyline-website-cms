@@ -10,6 +10,9 @@ assertLocalOnly();
 
 export const PASSWORD = "Correct-Horse-9-Battery";
 export const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+/** A fixture file the lab's mock reader recognises as the given staff document type (staff-onboarding checks every upload's contents since v7). */
+const LAB_TYPE: Record<string, string> = { Passport: "Passport", Visa: "Australian Visa", English: "English Evidence", Academic: "Academic", "Driving Licence": "Driving Licence", "Health Insurance": "Health Insurance" };
+export const pdfFor = (category: string) => Buffer.from(`%PDF-1.4\n%lab-category:${LAB_TYPE[category] ?? "Other"}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n`);
 export const NEUTRAL_EMAIL = "This email can't be used. Sign in or contact the administrator.";
 export const NEUTRAL_PHONE = "This number can't be used. Sign in or contact the administrator.";
 
@@ -224,7 +227,7 @@ export async function staffAt(adminClient: SupabaseClient, label: string, target
   const bank = await onboard({ action: "bank_save", t: token, bank: { accountName: `E2E ${label}`, bsb: "062-000", accountNumber: "1234 4321" } });
   if (bank.status !== 200) throw new Error(`bank details: ${JSON.stringify(bank.body)}`);
   for (const [category, expiryDate] of [["Passport", inDays(1500)], ["Academic", ""], ["Health Insurance", inDays(300)]]) {
-    const r = await onboard({ action: "upload", t: token, category, expiryDate }, { bytes: PDF, name: `${category}.pdf` });
+    const r = await onboard({ action: "upload", t: token, category, expiryDate }, { bytes: pdfFor(category), name: `${category}.pdf` });
     if (r.status !== 200) throw new Error(`upload ${category}: ${JSON.stringify(r.body)}`);
   }
   if ((await onboard({ action: "submit", t: token })).status !== 200) throw new Error("submit failed");

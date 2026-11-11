@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
 import { StaffAdminError, staffAdminActions, type StaffAdminResult } from "@/lib/staffApi";
-import { offerLetterContext, saveTemplate, type HrTemplate, type OfferLetterContext } from "@/lib/hrTemplatesApi";
+import { offerLetterContext, type HrTemplate, type OfferLetterContext } from "@/lib/hrTemplatesApi";
+import { signingAdmin } from "@/lib/signingApi";
 import TemplateEditor from "@/pages/admin/components/hrms/TemplateEditor";
 import { TEMPLATE_PROSE } from "@/pages/admin/lib/onboardingText";
 import { STAFF_TEMPLATES_PATH } from "@/pages/admin/lib/staffRoutes";
-import { placeholderLabels, renderMessage, sanitizeTemplateHtml, templatePlaceholders, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
+import { placeholderLabels, renderMessage, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
@@ -101,7 +102,9 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
     if (!letterTemplate || !saveAs.trim() || busy) return;
     setBusy("Saving the template…"); setError("");
     try {
-      await saveTemplate(null, { type: "offer_letter", name: saveAs.trim(), subject: letterTemplate.subject, bodyHtml: sanitizeTemplateHtml(draft) });
+      // The one template table (20261113170000): a new offer letter version 1, rich HTML with its plain-text copy, not the default.
+      const html = sanitizeTemplateHtml(draft);
+      await signingAdmin("template_save", null, { name: saveAs.trim(), title: letterTemplate.subject, body_html: html, body: templateText(html), kind: "text", audience: "employee", category: "offer_letter", is_default: false });
       setSavedAs(saveAs.trim()); setSaveAs("");
     } catch (e) { fail(e, "The template could not be saved."); }
     finally { setBusy(""); }

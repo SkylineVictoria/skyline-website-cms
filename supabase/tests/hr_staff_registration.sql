@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(645);
+select plan(663);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -31,8 +31,26 @@ create function pg_temp.h(text) returns text language sql immutable as $$ select
 create function pg_temp.obj(text) returns void language sql as $$ insert into storage.objects(bucket_id, name) values ('staff-documents', $1) $$;
 -- Checked categories (20261112100000): a staff document row needs the uploader's validation receipt on its Storage object. The fixture
 -- files stand for files the Edge Function checked, so this records a receipt for every checked category on every fixture object.
+-- Holder-name matching (20261113160000): a receipt names the passport the file was checked against, so each receipt carries the person's
+-- current passport at the time, and a passport that is recorded afterwards refreshes the receipts of that person's other files (what
+-- the uploader does per file, done once for the fixtures).
 create function pg_temp.checked_uploads() returns void language sql as $$
-  select public.record_validated_document_category('staff-documents', o.name, c) from storage.objects o cross join unnest(array['Passport','Academic','Driving Licence','Visa','English','English Test','English Certificate','PTE','Health Insurance']) c where o.bucket_id = 'staff-documents' $$;
+  select public.record_passport_matched_document('staff-documents', o.name, c, (select d.id from hr.staff_documents d
+    where d.profile_id = split_part(o.name, '/', 1)::uuid and d.category = 'Passport' and d.is_current order by d.created_at desc limit 1))
+  from storage.objects o cross join unnest(array['Passport','Academic','Driving Licence','Visa','English','English Test','English Certificate','PTE','Health Insurance']) c
+  where o.bucket_id = 'staff-documents' and split_part(o.name, '/', 1) ~ '^[0-9a-f-]{36}$' $$;
+create function hr.test_refresh_receipts() returns trigger language plpgsql security definer set search_path = hr, public, storage, pg_temp as $$
+begin
+  if new.category = 'Passport' then
+    -- The receipts of this person's other files now name this passport (a receipt for a supporting file needs a passport to exist at all).
+    perform public.record_passport_matched_document('staff-documents', o.name, c, new.id)
+      from storage.objects o cross join unnest(array['Academic','Driving Licence','Visa','English','English Test','English Certificate','PTE','Health Insurance']) c
+      where o.bucket_id = 'staff-documents' and split_part(o.name, '/', 1) = new.profile_id::text;
+  end if;
+  return new;
+end $$;
+-- BEFORE, so that in a fixture that writes a passport and its supporting files in one statement (passport row first) the later rows find their receipt.
+create trigger test_refresh_receipts before insert on hr.staff_documents for each row execute function hr.test_refresh_receipts();
 -- Onboarding flow (20261111090000): the pay details an offer needs. pg_temp.pay() is the form with defaults (p_over replaces fields);
 -- pg_temp.set_pay() stores what hr_admin_onboarding_pay_save stores, for fixtures that are not about the form.
 insert into t select 'sched', id::text from hr.pay_schedules where is_active order by name limit 1;
@@ -65,7 +83,7 @@ begin
  perform pg_temp.checked_uploads();
  insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, reviewed_at, expiry_date)
   select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', now(), case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
-  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
+  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id order by case when c.category = 'Passport' then 0 else 1 end;
  perform pg_temp.set_pay(v_id);
  insert into hr.staff_offers(profile_id, storage_path, filename, file_size, sha256, uploaded_by) values (v_id, v_id || '/offer/o.pdf', 'o.pdf', 10, repeat('a', 64), 'a0000000-0000-0000-0000-000000000004');
  return v_id;
@@ -84,7 +102,7 @@ begin
  perform pg_temp.checked_uploads();
  insert into hr.staff_documents(application_id, profile_id, category, storage_path, filename, mime_type, file_size, status, expiry_date)
   select a.id, v_id, c.category, v_id || '/' || hr.staff_doc_slug(c.category) || '/' || c.f, c.f, 'application/pdf', 10, 'approved', case when hr.staff_doc_needs_expiry(c.category) then current_date + 400 end
-  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id;
+  from hr.staff_applications a, (values ('Passport', 'p.pdf'), ('Academic', 'a.pdf'), ('Health Insurance', 'h.pdf')) c(category, f) where a.profile_id = v_id order by case when c.category = 'Passport' then 0 else 1 end;
  insert into storage.objects(bucket_id, name) values ('staff-documents', v_id || '/offer/o.pdf'), ('staff-documents', v_id || '/offer/s.pdf');
  insert into hr.staff_offers(profile_id, storage_path, filename, file_size, sha256, uploaded_by, sent_at, sent_by, signed_at, signer_name, consent_text, signed_path, signed_sha256)
   values (v_id, v_id || '/offer/o.pdf', 'o.pdf', 10, repeat('a', 64), 'a0000000-0000-0000-0000-000000000004', now(), 'a0000000-0000-0000-0000-000000000004', now(),
@@ -692,9 +710,9 @@ insert into auth.users(id, email, email_confirmed_at, invited_at, raw_user_meta_
  ('a0000000-0000-0000-0000-00000000f002', 'flow.two@example.test', null, null, '{}', 'authenticated', 'authenticated');
 insert into hr.jobs(title, description, employment_type, location, status, department) values ('Flow Trainer', 'Teach.', 'part_time', 'Melbourne', 'open', 'Training');
 insert into t select 'fjob', id::text from hr.jobs where title = 'Flow Trainer';
--- hr.templates is closed to every role but the functions: these read it for the assertions.
-create function pg_temp.tpl(p_name text) returns uuid language sql stable security definer as $$ select id from hr.templates where name = p_name $$;
-create function pg_temp.tpl_defaults(p_type text) returns integer language sql stable security definer as $$ select count(*)::int from hr.templates where type = p_type and is_default $$;
+-- hr.sign_templates (the one template table since 20261113170000) is closed to every role but the functions: these read it for the assertions.
+create function pg_temp.tpl(p_name text) returns uuid language sql stable security definer as $$ select id from hr.sign_templates where name = p_name and deleted_at is null $$;
+create function pg_temp.tpl_defaults(p_type text) returns integer language sql stable security definer as $$ select count(*)::int from hr.sign_templates where category = p_type and is_default and deleted_at is null $$;
 
 -- ---- Applied > Shortlisted (a Careers applicant)
 insert into t select 'f1', public.hr_svc_apply('Flo', 'One', 'flow.one@example.test', '0400 000 951', pg_temp.v('fjob'), null)->>'profileId';
@@ -769,8 +787,13 @@ select is((select e.job_title || '/' || e.employment_type || '/' || (e.joining_d
 select is((select pay_details_by from hr.employment where profile_id = pg_temp.v('f1')), 'a0000000-0000-0000-0000-000000000004'::uuid, '...with who completed them');
 
 -- ---- Templates
-select is((select count(*)::int from hr.templates where is_default and archived_at is null), 6, 'one seeded default template of each kind');
-select is((select count(*)::int from hr.templates t where hr.template_problem(t.type, t.subject, t.body_html) is not null), 0, 'every seeded template passes its own checks');
+select is((select count(*)::int from hr.sign_templates where is_default and status = 'active' and deleted_at is null and hr.template_kind_of(category) is not null), 6, 'one seeded default template of each kind (moved into hr.sign_templates by 20261113170000)');
+select is((select count(*)::int from hr.sign_templates t where hr.template_kind_of(t.category) is not null and t.deleted_at is null and hr.template_problem(t.category, coalesce(t.subject, t.title), t.body_html) is not null), 0, 'every seeded template passes its own checks');
+select is((select count(*)::int from hr.templates t where not exists (select 1 from hr.sign_templates s where s.id = t.id)), 0, 'every old hr.templates row was copied with the same id');
+select is((select string_agg(distinct s.kind || '/' || s.audience || '/' || s.version, ',') from hr.sign_templates s join hr.templates t on t.id = s.id where t.type <> 'offer_letter'), 'email/employee/1', 'the emails are kind email for employees, at version 1');
+select is((select s.kind || '/' || (s.body is not null)::text || '/' || (s.body_html = t.body_html)::text from hr.sign_templates s join hr.templates t on t.id = s.id where t.type = 'offer_letter' and t.is_default), 'text/true/true', 'the offer letter is a text template with its rich HTML kept and a plain-text copy');
+select is((select count(*)::int from hr.sign_template_versions v join hr.templates t on t.id = v.template_id), 6, 'each moved template has its version 1 snapshot');
+select is((select pg_get_constraintdef(oid) from pg_constraint where conname = 'staff_offer_letters_template_id_fkey'), 'FOREIGN KEY (template_id) REFERENCES hr.sign_templates(id) ON DELETE SET NULL', 'sent letters link to the one table');
 select is((select string_agg(label, ',') from public.admin_menu_items where id = 'staff_templates' and parent_id = 'staff' and permission_key = 'cms.admin'), 'Templates', 'HRMS > Templates is in the menu for Admins only');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
@@ -831,7 +854,27 @@ select ok((public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || 
 reset role;
 select is((select l.body_html || '|' || l.edited || '|' || l.template_html from hr.staff_offer_letters l join hr.staff_offers o on o.id = l.offer_id where l.profile_id = pg_temp.v('f1') and o.withdrawn_at is null order by l.created_at desc limit 1),
  '<p>Dear Flo, you start as Senior Trainer. We cover relocation.</p>|true|<p>Dear Flo, you start as Senior Trainer.</p>', 'the sent text and what the template rendered are both kept');
-select is((select body_html from hr.templates where id = pg_temp.v('tpl2')), '<p>Completely different text for {{first_name}}.</p>', 'the template itself is not changed by a per-letter edit');
+select is((select body_html from hr.sign_templates where id = pg_temp.v('tpl2')), '<p>Completely different text for {{first_name}}.</p>', 'the template itself is not changed by a per-letter edit');
+select is((select version from hr.sign_templates where id = pg_temp.v('tpl2')), 2, 'an HRMS save is a new version of the one template');
+select is((select count(*)::int from hr.sign_template_versions where template_id = pg_temp.v('tpl2')), 2, '...with both versions kept');
+-- The signing editor saves the same kinds: a rich letter with its HTML, the HRMS rules, one default per kind, the default protected.
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.signing_admin('template_save', null, '{"name":"Bad letter","title":"Offer","body_html":"<p>Dear {{first_name}}, {{signing_link}}</p>","kind":"text","audience":"employee","category":"offer_letter"}')$$,
+ 'P0001', '{{signing_link}} cannot be used in this kind of template.', 'the signing editor applies the HRMS placeholder rules to a letter');
+select throws_ok($$select public.signing_admin('template_save', null, '{"name":"Bad email","title":"Hello","body_html":"<p>Hello {{first_name}}</p>","kind":"email","audience":"employee","category":"rejection"}')$$,
+ 'P0001', 'Enter the email subject', 'an email template needs its subject');
+insert into t select 'tpl3', public.signing_admin('template_save', null, '{"name":"Rich offer","title":"Offer of employment: {{job_title}}","body_html":"<h2>Offer</h2><p>Dear {{first_name}}, you start as <strong>{{job_title}}</strong> on {{start_date}} at {{job_location}}.</p>","kind":"text","audience":"employee","category":"offer_letter"}')->>'id';
+select is((select x->>'type' || '/' || (x->>'isDefault') from jsonb_array_elements(public.hr_admin_templates()) x where x->>'id' = pg_temp.v('tpl3')::text), 'offer_letter/false', 'a letter saved by the signing editor is listed by the HRMS page');
+select is((select (x->>'bodyHtml') like '%<strong>{{job_title}}</strong>%' from jsonb_array_elements(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->'templates') x where x->>'id' = pg_temp.v('tpl3')::text), true, '...and offered with its rich HTML when an offer is sent');
+select is(public.signing_admin('template_default', pg_temp.v('tpl3'))->>'is_default', 'true', 'the signing editor makes it the default');
+select is(pg_temp.tpl_defaults('offer_letter'), 1, '...and there is still exactly one default offer letter');
+select throws_ok($$select public.signing_admin('template_archive', pg_temp.v('tpl3'))$$, 'P0001', 'This is the default template. Make another one the default before archiving it.', 'the default cannot be archived from the signing editor either');
+select throws_ok($$select public.signing_admin('template_delete', pg_temp.v('tpl3'))$$, 'P0001', 'This is the default template. Make another one the default before deleting it.', 'nor deleted');
+select is(public.hr_admin_template_set_default(pg_temp.v('tpl2'))->>'isDefault', 'true', 'the HRMS page takes the default back');
+select is((select string_agg(x->>'name', ',' order by x->>'name') from jsonb_array_elements(public.signing_admin('list')->'templates') x where x->>'category' = 'offer_letter' and x->>'name' in ('Rich offer', 'Short offer')), 'Rich offer,Short offer', 'the signing list shows the HRMS letters too (one table)');
+reset role;
+select is((select body from hr.sign_templates where id = pg_temp.v('tpl3')) like 'Offer%Dear%job_title%', true, 'a rich template keeps a plain-text copy for the signing tools');
 select is((select (detail->>'edited') from hr.staff_audit where profile_id = pg_temp.v('f1') and action = 'offer_letter_generated' order by id desc limit 1), 'true', 'the history says the letter was edited');
 
 -- ---- Offer sent, with the login

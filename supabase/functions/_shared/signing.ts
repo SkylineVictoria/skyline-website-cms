@@ -57,6 +57,23 @@ export function sampleFill(source: string, values: Record<string, unknown>): str
     return typeof value === "string" && value.trim() ? value.trim() : `[${key}]`;
   });
 }
+/**
+ * Rich (HTML) templates, one table since 20261113170000: fills the variables that have a value, escaped so a value never becomes
+ * markup; a variable with no value is left in place when `leave(key)` says the HRMS renderer owns it (its own placeholders, with
+ * formatting and optional lines), otherwise refused, or shown as [name] in a sample.
+ */
+export function fillHtmlVariables(source: string, values: Record<string, unknown>, options: { sample?: boolean; leave?: (key: string) => boolean } = {}): string {
+  if (source.length > 200000) throw new Error("Keep the document under 200,000 characters.");
+  const has = (key: string) => { const value = Object.hasOwn(values, key) ? values[key] : undefined; return typeof value === "string" && value.trim() !== "" && value.length <= 2000 ? value.trim() : null; };
+  for (const key of signingVariables(source)) {
+    if (has(key) === null && !options.sample && !options.leave?.(key)) throw new Error(`Enter a value for {{${key}}} (up to 2,000 characters).`);
+  }
+  return source.replace(TOKEN, (whole, key: string) => {
+    const value = has(key);
+    if (value !== null) return escapeHtml(value).replace(/\r?\n/g, "<br>");
+    return options.leave?.(key) ? whole : `[${key}]`;
+  });
+}
 export const signingEmailValid = (value: unknown): value is string => typeof value === "string" && value.length <= 254 && /^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(value);
 export const initialsOf = (name: string) => name.trim().split(/\s+/).map((part) => part[0] ?? "").join("").toUpperCase().slice(0, 4);
 

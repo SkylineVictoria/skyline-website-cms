@@ -5,9 +5,11 @@ export type SignFieldType = "signature" | "initials" | "date" | "name" | "text" 
 export interface SigningRole { key: string; label: string; order: number; required: boolean }
 /** A field placed on a template: `role` is a signer role, or "sender" for text the sender prints (a variable on a PDF template). */
 export interface TemplateField { type: SignFieldType; role: string; page: number; x: number; y: number; w: number; h: number; required?: boolean; label?: string; value?: string }
+/** One template table (20261113170000): documents to sign (text or PDF) and the HRMS letters and emails (rich `body_html`, `subject`, one default per category). */
 export interface SigningTemplate {
-  id: string; name: string; title: string; body: string | null; kind: "text" | "pdf"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
-  version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string;
+  id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null; is_default?: boolean;
+  kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
+  version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
 }
 export interface SigningRecipient {
   id: string; role_key: string; role_label: string; name: string; email: string; signing_order: number; required: boolean; state: "pending" | "sent" | "viewed" | "signed" | "declined" | "skipped";
@@ -31,7 +33,7 @@ export interface LegacySigningRequest { id: string; title: string; recipient_nam
 export interface LegacySigningContext { templates: LegacySigningTemplate[]; requests: LegacySigningRequest[] }
 export interface LegacySigningView { id: string; title: string; recipientName: string; state: string; signedAt: string | null; consent: string; documentHash: string; url: string }
 /** document-signing `preview`: the PDF as it will be sent (base64), the filled text, the template's own render and the variables the template uses. */
-export interface SigningPreview { pdfBase64: string; title: string; text: string; templateText: string; edited: boolean; recipientName: string; recipientEmail: string; variables: string[]; templateName: string }
+export interface SigningPreview { pdfBase64: string; title: string; text: string; templateText: string; edited: boolean; isHtml?: boolean; recipientName: string; recipientEmail: string; variables: string[]; templateName: string }
 export interface SigningContext { templates: SigningTemplate[]; requests: SigningRequest[] }
 export interface SigningSubject { name: string; email: string; values: Record<string, string> }
 /** What a link holder gets: their own fields only, and who else is signing. */

@@ -16,7 +16,7 @@ function MenuEntry({ node, close }: { node: MenuNode; close: () => void }) {
       <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)} className={`${linkClass} w-full text-foreground-700 hover:bg-background-100`}>
         {content}<i className={expanded ? 'ri-arrow-up-s-line ml-auto' : 'ri-arrow-down-s-line ml-auto'} aria-hidden="true" />
       </button>
-      {node.route ? <NavLink to={node.route} onClick={close} className={linkClass}>Open {node.label}</NavLink> : null}
+      
       {expanded ? <ul className="ml-3 border-l border-background-200 pl-2">{node.children.map(child => <MenuEntry key={child.id} node={child} close={close} />)}</ul> : null}
     </> : node.route ? <NavLink to={node.route} end={node.route === '/admin' || node.route === '/'} onClick={close}
       target={node.open_in_new_tab ? '_blank' : undefined} rel={node.open_in_new_tab ? 'noopener noreferrer' : undefined}

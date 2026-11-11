@@ -25,8 +25,8 @@ function EnvelopeSigningPage() {
   const [context, setContext] = useState<SigningContext>({ templates: [], requests: [] });
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get("view") === "templates" ? "templates" : "requests"); const [status, setStatus] = useState(() => { const v = new URLSearchParams(window.location.search).get("view"); return v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"; });
-  useEffect(() => { const sync = () => { const v = new URLSearchParams(window.location.search).get("view"); setTab(v === "templates" ? "templates" : "requests"); setStatus(v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"); }; window.addEventListener("popstate", sync); return () => window.removeEventListener("popstate", sync); }, []);
+  const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)) === "templates" ? "templates" : "requests"); const [status, setStatus] = useState(() => { const v = (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)); return v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"; });
+  useEffect(() => { const sync = () => { const v = (new URLSearchParams(window.location.search).get("view") ?? window.location.pathname.split("/").at(-1)); setTab(v === "templates" ? "templates" : "requests"); setStatus(v && Object.prototype.hasOwnProperty.call(SIGNING_STATUS, v) ? v : "all"); }; window.addEventListener("popstate", sync); return () => window.removeEventListener("popstate", sync); }, []);
   const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [subject, setSubject] = useState("");
   const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SigningTemplate | "new" | null>(null);

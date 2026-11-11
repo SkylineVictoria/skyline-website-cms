@@ -1243,7 +1243,9 @@ select is(has_function_privilege('authenticated', 'public.record_validated_docum
 
 -- ---------------------------------------------------------------- TPL-02 document templates: header / body / footer, presets, [Variables] (20261113190000)
 reset role;
-select is((select count(*)::int from hr.sign_templates where header_html is not null or footer_html is not null or bracket_variables), 0, 'TPL-02: every template made before keeps its body, with an empty header and footer and no [variables]');
+-- (Counted against the rows that exist now: a lab that already ran the signing checks holds sectioned templates of its own.)
+create temp table tpl02_before as select count(*)::int as n from hr.sign_templates where header_html is not null or footer_html is not null or bracket_variables;
+select is((select count(*)::int from hr.sign_templates where is_default and (header_html is not null or footer_html is not null or bracket_variables)), 0, 'TPL-02: the standard HRMS templates keep their body, with an empty header and footer and no [variables]');
 select is(has_function_privilege('authenticated', 'hr.signing_admin_core(text, uuid, jsonb)', 'execute'), false, 'TPL-02: only the wrapper calls the released signing_admin');
 select is(has_function_privilege('authenticated', 'public.signing_admin(text, uuid, jsonb)', 'execute') and not has_function_privilege('anon', 'public.signing_admin(text, uuid, jsonb)', 'execute'), true, 'TPL-02: the wrapper keeps the grants (authenticated, not anon)');
 set local role authenticated;
@@ -1257,7 +1259,7 @@ select lives_ok($$select public.signing_admin('part_save', null, '{"kind":"foote
 select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Bad","html":"<p>x</p><script>alert(1)</script>"}')$$, '22023', 'The template contains content that is not allowed (scripts, frames, forms or embedded objects).', 'TPL-02: no script in a preset');
 select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Linked","html":"<img src=\"https://evil.example/logo.png\">"}')$$, '22023', 'Pictures must be uploaded into the template (PNG or JPEG), not linked from another site.', 'TPL-02: no linked picture');
 select throws_ok($$select public.signing_admin('part_save', null, '{"kind":"header","name":"Handler","html":"<p onmouseover=\"x()\">x</p>"}')$$, '22023', 'The template contains content that is not allowed (event handlers).', 'TPL-02: no event handler');
-select is(jsonb_array_length(public.signing_admin('part_list')), 2, 'TPL-02: both presets are listed');
+select is((select count(*)::int from jsonb_array_elements(public.signing_admin('part_list')) x where x->>'name' = 'SLIT letterhead'), 2, 'TPL-02: both presets are listed');
 insert into t select 'tpl-doc', public.signing_admin('template_save', null, '{"name":"Letter of offer","title":"Letter of offer and written agreement","kind":"text","audience":"student","category":"enrolment_agreement","body_html":"<p>Dear [Student Name], guardian [Guardian Name].</p>","body":"Dear [Student Name], guardian [Guardian Name].","header_html":"<p>HEAD</p>","footer_html":"<p>Page [Page Number] [Student Initial]</p>","bracket_variables":true}')->>'id';
 select is((public.signing_admin('template_save', pg_temp.v('tpl-doc'), '{"name":"Letter of offer","title":"Letter of offer and written agreement","kind":"text","audience":"student","category":"enrolment_agreement","body_html":"<p>Dear [Student Name], guardian [Guardian Name].</p>","header_html":"<p>HEAD 2</p>"}')->>'version'), '2', 'TPL-02: a new header is a new version');
 reset role;
@@ -1282,7 +1284,7 @@ reset role;
 select is((select r.template_version || '|' || r.original_hash from hr.sign_requests r where r.id = 'd0000000-0000-0000-0000-0000000000c1'), '3|' || repeat('c', 64), 'TPL-02: the request keeps the version and the PDF it was made from');
 select is((select string_agg(f.type || ':' || f.label, ',' order by f.type) from hr.sign_fields f where f.request_id = 'd0000000-0000-0000-0000-0000000000c1'), 'initials:Student Initial,text:[Guardian Name]', 'TPL-02: the first signer owns the initials and the token field');
 select is((select header_html || '|' || bracket_variables from hr.sign_templates where id = pg_temp.v('tpl-copy')), '<p>HEAD</p>|true', 'TPL-02: a copy keeps the header and the [variables]');
-select is((select count(*)::int from hr.sign_templates where (header_html is not null or footer_html is not null or bracket_variables) and id not in (pg_temp.v('tpl-doc'), pg_temp.v('tpl-copy'))), 0, 'TPL-02: no other template changed');
+select is((select count(*)::int from hr.sign_templates where (header_html is not null or footer_html is not null or bracket_variables) and id not in (pg_temp.v('tpl-doc'), pg_temp.v('tpl-copy'))), (select n from tpl02_before), 'TPL-02: no other template changed');
 
 select * from finish();
 rollback;

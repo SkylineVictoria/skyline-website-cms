@@ -436,6 +436,8 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await office.getByTestId("pay-rate").fill("42.50");
   await office.getByTestId("pay-schedule").selectOption({ index: 1 });
   await office.getByTestId("pay-hours").fill("38");
+  // A work location is required since LET-01 (20261113090000): the lab seeds one.
+  await office.getByTestId("pay-location").selectOption({ index: 1 });
   await shot(office, "admin-pay-details-form");
   await office.getByTestId("pay-details-save").click();
   await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "pay_details");
@@ -448,6 +450,9 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await expect(office.getByTestId("offer-letter-preview")).toContainText(who.jobTitle ?? "Trainer");
   await expect(office.getByTestId("offer-letter-preview")).not.toContainText("{{");
   await shot(office, "admin-offer-preview");
+  // Since LET-01 the dialog shows the PDF exactly as it will be sent before the send step.
+  await office.getByTestId("offer-preview-next").click();
+  await expect(office.getByTestId("offer-pdf-preview")).toBeVisible();
   await office.getByTestId("offer-send-next").click();
   await expect(office.getByTestId("offer-confirm")).toContainText(who.email);
   await shot(office, "admin-offer-confirm");

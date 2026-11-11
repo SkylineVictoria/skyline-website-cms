@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { PDF, applyAsStaff, candidateAction, createAdmin, createEditor, expectStatus, hrMails, inDays, journeyFromDocumentLink, linkToken, onboard, person, resetRateLimits, shot, sideBySide, signInAsAdmin, signedInClient, sql, staffAdmin, waitForHrMail } from "./support";
+import { PDF, pdfFor, applyAsStaff, candidateAction, createAdmin, createEditor, expectStatus, hrMails, inDays, journeyFromDocumentLink, linkToken, onboard, person, resetRateLimits, shot, sideBySide, signInAsAdmin, signedInClient, sql, staffAdmin, waitForHrMail } from "./support";
 
 // Staff enrolment v2 end to end, against the LOCAL lab stack only (scripts/lab/staff-lab.mjs e2e): the public form without a login,
 // onboarding by emailed link, the admin review, the offer signed on the page, activation by the Auth invite, and My HR.
@@ -176,7 +176,8 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   await page.getByTestId("staff-doc-passport").locator('input[type="file"]').first().setInputFiles({ name: "passport.gif", mimeType: "image/gif", buffer: Buffer.from("GIF89a....") });
   await expect(page.getByTestId("staff-doc-passport")).toContainText("Only PDF, JPG, and PNG documents are supported.");
   for (const slug of ["passport", "visa", "english", "academic", "health-insurance"]) {
-    await page.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: PDF });
+    // Each fixture says what it is: the reader classifies every staff upload (staff-onboarding v7 / PR #29).
+    await page.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: pdfFor({ passport: "Passport", visa: "Visa", english: "English", academic: "Academic", "health-insurance": "Health Insurance" }[slug]!) });
     await expect.poll(() => sql(`select count(*) from hr.staff_documents d where d.profile_id = '${applicant.id}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
   }
   await expect(page.getByTestId("staff-doc-visa")).toContainText("Done ✓");
@@ -254,6 +255,8 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   await expect(page.getByTestId("staff-bank-bsb")).toHaveValue("733-000");
   await expect(page.getByTestId("staff-bank-name")).toContainText("Westpac");
   await page.getByTestId("staff-bank-accountNumber").fill("7711223344");
+  // Leave the field first (as a person tabbing out does): its check on blur re-renders the footer, which can move the button under a tap.
+  await page.getByTestId("staff-bank-accountNumber").blur();
   await shot(page, "staff-wizard-bank-phone");
   await page.getByTestId("staff-next").click();
 

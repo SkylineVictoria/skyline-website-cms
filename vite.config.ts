@@ -79,12 +79,17 @@ export default defineConfig({
       "@": resolve(__dirname, "./src"),
     },
   },
+  // Pre-bundled at start: packages the pages load on demand (PDF viewer, Word import, zip), so the dev server never re-optimises
+  // and reloads an open page the first time one of them is needed (it made long browser tests lose their place).
+  optimizeDeps: {
+    include: ["pdfjs-dist/legacy/build/pdf.mjs", "mammoth", "fflate", "read-excel-file/browser", "write-excel-file/browser"],
+  },
   server: {
     port: 3001,
     host: "0.0.0.0",
     watch: {
       // Reports and disposable fixtures are written while tests/development run.
-      ignored: ["**/docs/*-evidence/**", "**/tmp/**"],
+      ignored: ["**/docs/*-evidence/**", "**/tmp/**", "**/test-results/**", "**/auto-imports.d.ts"],
     },
   },
 });

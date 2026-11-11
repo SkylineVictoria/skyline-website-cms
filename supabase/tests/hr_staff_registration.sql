@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(663);
+select plan(664);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -789,10 +789,13 @@ select is((select pay_details_by from hr.employment where profile_id = pg_temp.v
 -- ---- Templates
 select is((select count(*)::int from hr.sign_templates where is_default and status = 'active' and deleted_at is null and hr.template_kind_of(category) is not null), 6, 'one seeded default template of each kind (moved into hr.sign_templates by 20261113170000)');
 select is((select count(*)::int from hr.sign_templates t where hr.template_kind_of(t.category) is not null and t.deleted_at is null and hr.template_problem(t.category, coalesce(t.subject, t.title), t.body_html) is not null), 0, 'every seeded template passes its own checks');
-select is((select count(*)::int from hr.templates t where not exists (select 1 from hr.sign_templates s where s.id = t.id)), 0, 'every old hr.templates row was copied with the same id');
-select is((select string_agg(distinct s.kind || '/' || s.audience || '/' || s.version, ',') from hr.sign_templates s join hr.templates t on t.id = s.id where t.type <> 'offer_letter'), 'email/employee/1', 'the emails are kind email for employees, at version 1');
-select is((select s.kind || '/' || (s.body is not null)::text || '/' || (s.body_html = t.body_html)::text from hr.sign_templates s join hr.templates t on t.id = s.id where t.type = 'offer_letter' and t.is_default), 'text/true/true', 'the offer letter is a text template with its rich HTML kept and a plain-text copy');
-select is((select count(*)::int from hr.sign_template_versions v join hr.templates t on t.id = v.template_id), 6, 'each moved template has its version 1 snapshot');
+-- The six HRMS templates seeded by 20261111100000 live in the one table (moved by 20261113170000; hr.templates dropped by 20261113180000).
+select is((select string_agg(s.name, ',' order by s.name) from hr.sign_templates s where s.name like 'Standard %' and s.deleted_at is null),
+ 'Standard document re-upload,Standard document request,Standard offer email,Standard offer letter,Standard rejection,Standard welcome and login', 'the six seeded HRMS templates are in hr.sign_templates');
+select is((select string_agg(distinct s.kind || '/' || s.audience || '/' || s.version, ',') from hr.sign_templates s where s.name like 'Standard %' and s.category <> 'offer_letter'), 'email/employee/1', 'the emails are kind email for employees, at version 1');
+select is((select s.kind || '/' || (s.body is not null)::text || '/' || (s.body_html like '%{{position}}%')::text from hr.sign_templates s where s.category = 'offer_letter' and s.name = 'Standard offer letter'), 'text/true/true', 'the offer letter is a text template with its rich HTML kept and a plain-text copy');
+select is((select count(*)::int from hr.sign_template_versions v join hr.sign_templates s on s.id = v.template_id where s.name like 'Standard %'), 6, 'each moved template has its version 1 snapshot');
+select is(to_regclass('hr.templates'), null, 'the old hr.templates table is gone (20261113180000)');
 select is((select pg_get_constraintdef(oid) from pg_constraint where conname = 'staff_offer_letters_template_id_fkey'), 'FOREIGN KEY (template_id) REFERENCES hr.sign_templates(id) ON DELETE SET NULL', 'sent letters link to the one table');
 select is((select string_agg(label, ',') from public.admin_menu_items where id = 'staff_templates' and parent_id = 'staff' and permission_key = 'cms.admin'), 'Templates', 'HRMS > Templates is in the menu for Admins only');
 set local role authenticated;

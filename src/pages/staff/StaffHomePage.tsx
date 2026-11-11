@@ -9,6 +9,7 @@ import PunchCard from "./components/PunchCard";
 import MyTimesheet from "./components/MyTimesheet";
 import MyLeave from "./components/MyLeave";
 import HolidaysList from "./components/HolidaysList";
+import OptionalHolidays from "./components/OptionalHolidays";
 import OfferPanel from "./components/OfferPanel";
 import { myDocumentUrl, myOfferApi, myOnboarding, type MyOnboarding } from "@/lib/staffOnboardingApi";
 import { STAFF_DOC_LABEL, type StaffDocCategory } from "@/lib/staffStatus";
@@ -153,13 +154,14 @@ export default function StaffHomePage() {
             {team && (team.isManager || team.isAdmin) ? (
               <p className="mt-4 flex flex-wrap gap-3 text-sm" data-testid="my-hr-team-links">
                 <Link to="/staff/team/timesheets" className="font-semibold text-primary-700 hover:underline">Team timesheets</Link>
-                <Link to="/staff/team/leave" className="font-semibold text-primary-700 hover:underline">Leave approvals{team.pendingLeave ? ` (${team.pendingLeave} pending)` : ""}</Link>
+                <Link to="/staff/team/leave" className="font-semibold text-primary-700 hover:underline">Leave approvals{team.pendingLeave + (team.pendingOptional ?? 0) ? ` (${team.pendingLeave + (team.pendingOptional ?? 0)} pending)` : ""}</Link>
               </p>
             ) : null}
             <Section title="Punch card"><PunchCard onChange={() => setPunches((n) => n + 1)} /></Section>
             <Section title="My timesheet"><MyTimesheet refreshKey={punches} /></Section>
             <Section title="Leave"><MyLeave /></Section>
             <Section title="Public holidays (Victoria)"><HolidaysList /></Section>
+            <Section title="Optional holidays"><OptionalHolidays /></Section>
             <Section title="Your role" testId="my-hr-role">
               <dl>
                 <Row label="Name" value={name} />

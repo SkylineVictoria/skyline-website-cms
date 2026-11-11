@@ -3,7 +3,7 @@ begin;
 -- period lock), pay schedules and periods (fortnightly / monthly), overtime maths, leave (balances, requests, approvals, accrual
 -- on lock), timesheet approvals, the Xero export, and who may see what. Fixtures only; rolled back. Run: npx supabase test db
 -- RPCs run as role authenticated with a JWT subject (pg_temp.as); table checks run as postgres again (pg_temp.su).
-select plan(178);
+select plan(265);
 
 -- ---------------------------------------------------------------- fixtures
 insert into auth.users(id, email, email_confirmed_at, raw_user_meta_data, aud, role) values
@@ -342,6 +342,185 @@ select pg_temp.su();
 select is((select string_agg(id || ':' || route, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled and sort_order >= 40),
  'staff_timesheets:/admin/staff/timesheets,staff_leave:/admin/staff/leave,staff_pay_schedules:/admin/staff/pay-schedules,staff_locations:/admin/staff/locations,staff_holidays:/admin/staff/holidays,staff_xero:/admin/staff/xero-export,staff_templates:/admin/staff/templates',
  'the HRMS menu rows in order (Templates added by 20261111100000, Locations by 20261113090000)');
+
+-- ---------------------------------------------------------------- public holiday sync (20261113150000): seeds adopted, upsert, no duplicates, manual kept, demote, failure
+create function pg_temp.n(text) returns bigint language sql stable as $$ select v::bigint from t where k = $1 $$;
+create function pg_temp.svc() returns void language plpgsql as $$ begin execute 'set local role service_role'; perform set_config('request.jwt.claim.role', 'service_role', true); perform set_config('request.jwt.claims', '{"role":"service_role"}', true); end $$;
+create function pg_temp.vic2026(p_gf boolean) returns jsonb language sql immutable as $$
+ select jsonb_build_array(
+  jsonb_build_object('date','2026-01-01','name','New Year''s Day'), jsonb_build_object('date','2026-01-26','name','Australia Day'), jsonb_build_object('date','2026-03-09','name','Labour Day'),
+  jsonb_build_object('date','2026-04-03','name','Good Friday'), jsonb_build_object('date','2026-04-04','name','Saturday before Easter Sunday'), jsonb_build_object('date','2026-04-05','name','Easter Sunday'),
+  jsonb_build_object('date','2026-04-06','name','Easter Monday'), jsonb_build_object('date','2026-04-25','name','ANZAC Day'), jsonb_build_object('date','2026-06-08','name','King''s Birthday'),
+  jsonb_build_object('date','2026-11-03','name','Melbourne Cup Day','note','First Tuesday in November'), jsonb_build_object('date','2026-12-25','name','Christmas Day'),
+  jsonb_build_object('date','2026-12-26','name','Boxing Day'), jsonb_build_object('date','2026-12-28','name','Boxing Day (additional day)'))
+  || case when p_gf then jsonb_build_array(jsonb_build_object('date','2026-09-25','name','Friday before the AFL Grand Final')) else '[]'::jsonb end $$;
+create function pg_temp.vic2027(p_gf_tentative boolean) returns jsonb language sql immutable as $$
+ select jsonb_build_array(
+  jsonb_build_object('date','2027-01-01','name','New Year''s Day'), jsonb_build_object('date','2027-01-26','name','Australia Day'), jsonb_build_object('date','2027-03-08','name','Labour Day'),
+  jsonb_build_object('date','2027-03-26','name','Good Friday'), jsonb_build_object('date','2027-03-27','name','Saturday before Easter Sunday'), jsonb_build_object('date','2027-03-28','name','Easter Sunday'),
+  jsonb_build_object('date','2027-03-29','name','Easter Monday'), jsonb_build_object('date','2027-04-25','name','ANZAC Day'), jsonb_build_object('date','2027-06-14','name','King''s Birthday'),
+  jsonb_build_object('date','2027-11-02','name','Melbourne Cup Day'), jsonb_build_object('date','2027-12-25','name','Christmas Day'), jsonb_build_object('date','2027-12-26','name','Boxing Day'),
+  jsonb_build_object('date','2027-12-27','name','Christmas Day (additional day)'), jsonb_build_object('date','2027-12-28','name','Boxing Day (additional day)'),
+  jsonb_build_object('date','2027-09-24','name','Friday before the AFL Grand Final','tentative', p_gf_tentative)) $$;
+select is((select count(*) from hr.public_holidays where source = 'seed'), 26::bigint, 'the seeded holidays are marked seed (Christmas 2026, confirmed by hand above, became manual)');
+select is((select source from hr.public_holidays where holiday_date = '2026-12-25' and state = 'VIC'), 'manual', 'a holiday edited by hand is manual');
+select is((select count(*) from cron.job where jobname = 'hr-holiday-sync' and active), 1::bigint, 'the weekly holiday sync job exists and is active');
+select is(public.hr_holiday_sync_dispatch() is null, not exists (select 1 from vault.secrets where name = 'hr_retention_function_url'), 'the dispatcher calls nothing without the Vault secrets (and queues one pg_net call with them)');
+update hr.public_holidays set name = 'Kings Birthday (old wording)' where holiday_date = '2026-06-08' and state = 'VIC';
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+select throws_ok($$select public.hr_holiday_sync_begin()$$, 'Only an administrator can do this.', 'an employee cannot start a sync');
+select throws_ok($$select public.hr_admin_holiday_sync_status()$$, 'Only an administrator can do this.', 'the sync status is admin only');
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+insert into t select 'run1', (public.hr_holiday_sync_begin())->>'id';
+select is((public.hr_admin_holiday_sync_status())->'lastRun'->>'status', 'running', 'a started sync is running');
+select throws_ok($$select public.hr_holiday_sync_begin()$$, 'A holiday sync is already running. Try again in a few minutes.', 'a second sync cannot start meanwhile');
+insert into t select 'r1', (public.hr_holiday_sync_finish(pg_temp.n('run1'), jsonb_build_object('ok', true, 'years', jsonb_build_object('2026', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2026(true))))))::text;
+select is((select v::jsonb->>'status' from t where k = 'r1'), 'ok', 'the first sync succeeds');
+select is((select (v::jsonb->>'inserted') || '/' || (v::jsonb->>'updated') || '/' || (v::jsonb->>'keptManual') || '/' || (v::jsonb->>'demoted') from t where k = 'r1'), '1/12/1/0', 'Grand Final Friday added; 12 seeds adopted and confirmed; hand-confirmed Christmas kept; nothing demoted');
+select pg_temp.su();
+select is((select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2026 and holiday_date <> pg_temp.d('p_oct_start') + 1), 14::bigint, 'no duplicate rows: 14 dates for 2026');
+select is((select name || '/' || source || '/' || status || '/' || sync_source from hr.public_holidays where holiday_date = '2026-06-08'), 'King''s Birthday/api/confirmed/nager', 'a seed adopts the official name, becomes api and confirmed');
+select is((select name || '/' || source || '/' || status from hr.public_holidays where holiday_date = '2026-12-25'), 'Christmas Day/manual/confirmed', 'the hand-confirmed row is untouched');
+select is((select note from hr.public_holidays where holiday_date = '2026-11-03'), 'First Tuesday in November', 'a note from the source replaces the seed note');
+select is((select status || '/' || source from hr.public_holidays where holiday_date = '2026-09-25'), 'confirmed/api', 'Grand Final Friday is confirmed automatically');
+select is(hr.is_public_holiday('2026-09-25'), true, 'and it counts');
+-- The service role (the cron job) may run a sync too; the same list again changes nothing; 2027 arrives with a tentative Grand Final Friday.
+select pg_temp.svc();
+insert into t select 'run2', (public.hr_holiday_sync_begin())->>'id';
+select pg_temp.su();
+select is((select triggered_by from hr.holiday_sync_runs where id = pg_temp.n('run2')), 'cron', 'the service role starts a cron run');
+select pg_temp.svc();
+insert into t select 'r2', (public.hr_holiday_sync_finish(pg_temp.n('run2'), jsonb_build_object('ok', true, 'years', jsonb_build_object(
+ '2026', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2026(true)), '2027', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2027(true))))))::text;
+select pg_temp.su();
+select is((select (v::jsonb->>'inserted') || '/' || (v::jsonb->>'updated') || '/' || (v::jsonb->>'unchanged') || '/' || (v::jsonb->>'keptManual') from t where k = 'r2'), '1/14/13/1', 'second run: 2026 unchanged (13 api rows, Christmas kept), 2027 seeds adopted, tentative Grand Final Friday added');
+select is((select status || '/' || left(note, 14) from hr.public_holidays where holiday_date = '2027-09-24'), 'review/Tentative date', 'a tentative date waits at review');
+select is(hr.is_public_holiday('2027-03-29'), true, 'Easter Monday 2027 is confirmed by the sync');
+-- The source drops 2026 Grand Final Friday and declares 2027: demote (never delete) and promote.
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+insert into t select 'run3', (public.hr_holiday_sync_begin())->>'id';
+insert into t select 'r3', (public.hr_holiday_sync_finish(pg_temp.n('run3'), jsonb_build_object('ok', true, 'years', jsonb_build_object(
+ '2026', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2026(false)), '2027', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2027(false))))))::text;
+select pg_temp.su();
+select is((select (v::jsonb->>'demoted') || '/' || (v::jsonb->>'updated') from t where k = 'r3'), '1/1', 'one row demoted, one promoted');
+select is((select status || '/' || left(note, 24) from hr.public_holidays where holiday_date = '2026-09-25'), 'review/Not in the nager list on', 'a holiday the source no longer lists goes back to review with a note, not deleted');
+select is((select status || '/' || note from hr.public_holidays where holiday_date = '2027-09-24'), 'confirmed/', 'a declared date is confirmed and the tentative note is cleared');
+-- A failed fetch changes nothing; a year that fails is recorded while the other is applied.
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+insert into t select 'run4', (public.hr_holiday_sync_begin())->>'id';
+insert into t select 'r4', (public.hr_holiday_sync_finish(pg_temp.n('run4'), jsonb_build_object('ok', false, 'error', 'data.gov.au: timeout; Nager.Date: 503')))::text;
+select is((select v::jsonb->>'status' || '/' || (v::jsonb->>'error') from t where k = 'r4'), 'failed/data.gov.au: timeout; Nager.Date: 503', 'a failed sync is recorded with its reason');
+select is((public.hr_admin_holiday_sync_status())->'lastOk'->>'id', pg_temp.n('run3')::text, 'the last successful run is still run 3');
+insert into t select 'run5', (public.hr_holiday_sync_begin())->>'id';
+insert into t select 'r5', (public.hr_holiday_sync_finish(pg_temp.n('run5'), jsonb_build_object('ok', true, 'years', jsonb_build_object('2026', jsonb_build_object('error', 'both sources down'), '2027', jsonb_build_object('source', 'nager', 'holidays', pg_temp.vic2027(false))))))::text;
+select is((select v::jsonb->>'status' || '/' || (v::jsonb->'errors'->>'2026') from t where k = 'r5'), 'ok/both sources down', 'a year that could not be read is recorded while the other is applied');
+select pg_temp.su();
+select is((select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2026 and holiday_date <> pg_temp.d('p_oct_start') + 1), 14::bigint, 'five runs later there are still 14 rows for 2026');
+select is((select count(*) from hr.public_holidays where source = 'seed'), 0::bigint, 'every seed was adopted');
+
+-- ---------------------------------------------------------------- holidays by hand: several at once, ranges, import, protection
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.hr_admin_holidays_add('[]'::jsonb)$$, 'Add at least one holiday.', 'an empty list is refused');
+select throws_ok($$select public.hr_admin_holidays_add('[{"name":"Backwards","startDate":"2027-04-06","endDate":"2027-04-05"}]'::jsonb)$$, 'Nothing was added. Fix these and try again: holiday 1: the last day is before the first day', 'a backwards range is refused');
+select throws_ok($$select public.hr_admin_holidays_add('[{"name":"Too long","startDate":"2027-04-01","endDate":"2027-05-05"}]'::jsonb)$$, 'Nothing was added. Fix these and try again: holiday 1: a range can cover up to 31 days', 'a range over 31 days is refused');
+insert into t select 'added', (public.hr_admin_holidays_add('[{"name":"Festival of Lights","startDate":"2027-04-05","endDate":"2027-04-06","isOptional":true,"note":"Two days"},
+ {"name":"Lab Day","startDate":"2027-04-08","isOptional":true}, {"name":"Founders Day","startDate":"2027-04-09","isOptional":false,"status":"review"}]'::jsonb))::text;
+select is((select (v::jsonb->>'inserted') || '/' || jsonb_array_length(v::jsonb->'holidays') from t where k = 'added'), '4/4', 'a two-day range and two single days make four rows');
+select lives_ok($$select public.hr_admin_holidays_import('[{"date":"2027-12-24","name":"Christmas Eve","isOptional":true}]'::jsonb, 'confirmed')$$, 'the Excel import still works and keeps its Optional column');
+select pg_temp.su();
+select is((select count(*) from hr.public_holidays where is_optional and extract(year from holiday_date) = 2027), 4::bigint, 'four optional days in 2027 (two-day festival, Lab Day, imported Christmas Eve)');
+select is((select string_agg(source || '/' || status, ',') from hr.public_holidays where name = 'Festival of Lights'), 'manual/confirmed,manual/confirmed', 'hand entries are manual and confirmed');
+select is((select status from hr.public_holidays where name = 'Founders Day'), 'review', 'a public day may be added at review');
+select is((select source || '/' || is_optional::text from hr.public_holidays where name = 'Christmas Eve'), 'import/true', 'imported rows are import, optional when the column says so');
+insert into t select 'fol1', id::text from hr.public_holidays where name = 'Festival of Lights' and holiday_date = '2027-04-05';
+insert into t select 'fol2', id::text from hr.public_holidays where name = 'Festival of Lights' and holiday_date = '2027-04-06';
+insert into t select 'labday', id::text from hr.public_holidays where name = 'Lab Day';
+insert into t select 'founders', id::text from hr.public_holidays where name = 'Founders Day';
+insert into t select 'p_dst27', p.id::text from hr.pay_periods p where p.schedule_id = pg_temp.v('fn') and date '2027-04-04' between p.start_date and p.end_date;
+
+-- ---------------------------------------------------------------- optional holidays: allowance, picks, approvals, limit
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+select is((public.hr_optional_holidays_my(2027))->>'allowance', '0', 'no allowance until HR sets one');
+select is(jsonb_array_length((public.hr_optional_holidays_my(2027))->'holidays'), 4, 'the employee sees the four optional days of 2027');
+select throws_ok($$select public.hr_optional_holiday_pick(pg_temp.v('fol1'))$$, 'HR has not set an optional holiday allowance for 2027.', 'no pick without an allowance');
+select throws_ok($$select public.hr_optional_holiday_pick(pg_temp.v('founders'))$$, 'That is a public holiday for everyone, not an optional one.', 'a public holiday cannot be picked');
+select throws_ok($$select public.hr_admin_optional_rule_save(2027, '{"allowance":2,"isPaid":true}')$$, 'Only an administrator can do this.', 'only an admin sets the allowance');
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select is((public.hr_admin_optional_rule_save(2027, '{"allowance":2,"isPaid":true}'))->>'allowance', '2', 'HR allows two paid optional holidays in 2027');
+select throws_ok($$select public.hr_admin_optional_rule_save(2027, '{"allowance":99}')$$, 'The allowance is how many optional holidays each employee may take in the year (0 to 30).', 'the allowance is bounded');
+select is((select r->>'allowance' || '/' || (r->>'isSet') || '/' || (r->>'optionalHolidays') from jsonb_array_elements(public.hr_admin_optional_rules()) r where r->>'year' = '2027'), '2/true/4', 'the rules list shows the year');
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+insert into t select 'oh1', (public.hr_optional_holiday_pick(pg_temp.v('fol1'), 'Family celebration'))->>'id';
+insert into t select 'oh2', (public.hr_optional_holiday_pick(pg_temp.v('fol2')))->>'id';
+select is((select r->>'status' from jsonb_array_elements((public.hr_optional_holidays_my(2027))->'requests') r where r->>'id' = pg_temp.v('oh1')::text), 'pending', 'a pick is pending');
+select is((public.hr_optional_holidays_my(2027))->>'remaining', '0', 'two picks use the allowance');
+select throws_ok($$select public.hr_optional_holiday_pick(pg_temp.v('labday'))$$, '2 optional holidays for 2027 already picked, the most allowed.', 'a third pick is refused');
+select throws_ok($$select public.hr_optional_holiday_decide(pg_temp.v('oh1'), 'approved')$$, 'You cannot approve your own record.', 'no self-approval');
+select pg_temp.as('b0000000-0000-0000-0000-000000000005');
+select throws_ok($$select public.hr_optional_holiday_decide(pg_temp.v('oh1'), 'approved')$$, 'Only HR or the person''s manager can do this.', 'an unrelated employee cannot approve');
+select throws_ok($$select public.hr_optional_holiday_list()$$, 'Only HR or a manager can see this.', 'an unrelated employee sees no list');
+select pg_temp.as('b0000000-0000-0000-0000-000000000002');
+select is(jsonb_array_length((public.hr_optional_holiday_list('pending'))->'requests'), 2, 'the manager sees the two pending picks');
+select is((public.hr_my_team())->>'pendingOptional', '2', 'the team badge counts them');
+select is((public.hr_optional_holiday_decide(pg_temp.v('oh1'), 'approved', 'Enjoy'))->>'status', 'approved', 'the manager approves the first day');
+select is((public.hr_optional_holiday_decide(pg_temp.v('oh2'), 'rejected', 'Too many away'))->>'status', 'rejected', 'and rejects the second');
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+select is(((public.hr_optional_holidays_my(2027))->>'used') || '/' || ((public.hr_optional_holidays_my(2027))->>'remaining'), '1/1', 'a rejected pick gives the allowance back');
+insert into t select 'oh3', (public.hr_optional_holiday_pick(pg_temp.v('labday')))->>'id';
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select is((public.hr_optional_holiday_decide(pg_temp.v('oh3'), 'approved'))->>'status', 'approved', 'HR approves the third pick');
+select throws_ok($$select public.hr_admin_optional_holiday_add('c0000000-0000-0000-0000-000000000003', pg_temp.v('fol2'))$$, '2 optional holidays for 2027 already picked, the most allowed.', 'HR cannot exceed the allowance either');
+select is((public.hr_admin_optional_holiday_add('c0000000-0000-0000-0000-000000000004', pg_temp.v('labday'), 'Agreed in person'))->>'status', 'approved', 'an HR entry is approved at once');
+select throws_ok($$select public.hr_admin_holiday_delete(pg_temp.v('fol1'))$$, '1 employee picked this optional holiday. Cancel those requests first.', 'a picked optional holiday cannot be deleted (the rejected pick does not count)');
+select pg_temp.su();
+
+-- ---------------------------------------------------------------- the timesheet, leave days and the Xero export across the DST end (Melbourne, 2027-04-04)
+-- Eve: Sat 3 Apr 22:00 -> Sun 4 Apr 04:00 (7 h, clocks go back), Tue 6 and Wed 7 Apr 09:00-17:00; approved optional days Mon 5 and Thu 8 Apr;
+-- Easter Monday 29 Mar is a confirmed public holiday in the same period. Ordinary = 76.
+select pg_temp.shift('c0000000-0000-0000-0000-000000000003', date '2027-04-03', '22:00', '2027-04-04 04:00');
+select pg_temp.shift('c0000000-0000-0000-0000-000000000003', date '2027-04-06', '09:00', '17:00');
+select pg_temp.shift('c0000000-0000-0000-0000-000000000003', date '2027-04-07', '09:00', '17:00');
+select is(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'workedHours', '23.00', 'DST-end night shift is 7 h of elapsed time: 7 + 8 + 8');
+select is(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'holidayHours', '22.80', 'Easter Monday + two approved paid optional days = 3 x 7.6');
+select is(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'unpaidHolidayHours', '0.00', 'nothing unpaid while the rule says paid');
+select is(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'countedHours', '45.80', 'counted = 23 worked + 22.8 holidays');
+select is((select string_agg(h->>'day' || ':' || (h->>'isOptional'), ',' order by h->>'day') from jsonb_array_elements(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->'holidays') h), '2027-03-29:false,2027-04-05:true,2027-04-08:true', 'the timesheet lists the public and the optional days');
+select is((select string_agg(day::text || ' ' || pay_item || ' ' || hours, ', ' order by day, pay_item) from hr.period_day_lines(pg_temp.v('p_dst27'), 'c0000000-0000-0000-0000-000000000003')),
+ '2027-03-29 Public Holiday 7.60, 2027-04-03 Ordinary 7.00, 2027-04-05 Optional Holiday 7.60, 2027-04-06 Ordinary 8.00, 2027-04-07 Ordinary 8.00, 2027-04-08 Optional Holiday 7.60', 'export lines: the night shift on its start date with 7 h, optional days as Optional Holiday');
+select is((select array_agg(d order by d) from hr.leave_dates('c0000000-0000-0000-0000-000000000003', '2027-04-05', '2027-04-09') d), array[date '2027-04-06', date '2027-04-07', date '2027-04-09'], 'leave days skip the approved optional holidays (and a public one)');
+select is((select hr.leave_dates('c0000000-0000-0000-0000-000000000004', '2027-04-08', '2027-04-08')), date '2027-04-08', 'a single-day request on an optional holiday still stands on that day');
+select is((select count(*) from hr.shifts('c0000000-0000-0000-0000-000000000003', '2027-04-05', '2027-04-05')), 0::bigint, 'an unpicked or picked optional day has no shift of its own');
+-- Unpaid optional days: listed, not counted, exported as unpaid.
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.hr_admin_optional_rule_save(2027, '{"allowance":2,"isPaid":false}')$$, 'HR makes 2027 optional days unpaid');
+select pg_temp.su();
+select is((pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'holidayHours') || '/' || (pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'unpaidHolidayHours'), '7.60/15.20', 'unpaid optional days move out of the paid hours');
+select is(pg_temp.summary('p_dst27', 'c0000000-0000-0000-0000-000000000003')->>'countedHours', '30.60', 'counted = 23 + Easter Monday only');
+select is((select count(*) from hr.period_day_lines(pg_temp.v('p_dst27'), 'c0000000-0000-0000-0000-000000000003') where pay_item = 'Optional Holiday (unpaid)'), 2::bigint, 'unpaid optional days export as Optional Holiday (unpaid)');
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.hr_admin_optional_rule_save(2027, '{"allowance":2,"isPaid":true}')$$, 'back to paid');
+-- A change of an approved optional day reopens the timesheet approval; a locked period refuses changes; the export carries the days.
+select is((public.hr_timesheet_decide(pg_temp.v('p_dst27'), 'c0000000-0000-0000-0000-000000000003', 'approved'))->'approval'->>'status', 'approved', 'HR approves Eve''s DST-end timesheet');
+select is((public.hr_optional_holiday_cancel(pg_temp.v('oh3'), 'Needed at work'))->>'status', 'cancelled', 'HR cancels the Thursday');
+select pg_temp.su();
+select is((select count(*) from hr.timesheet_approvals where period_id = pg_temp.v('p_dst27') and profile_id = 'c0000000-0000-0000-0000-000000000003'), 0::bigint, 'the cancelled day reopened the approval');
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+insert into t select 'oh4', (public.hr_optional_holiday_pick(pg_temp.v('labday')))->>'id';
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.hr_optional_holiday_decide(pg_temp.v('oh4'), 'approved')$$, 'HR approves it again');
+select lives_ok($$select public.hr_timesheet_decide(pg_temp.v('p_dst27'), 'c0000000-0000-0000-0000-000000000003', 'approved')$$, 'and the timesheet again');
+select lives_ok($$select public.hr_timesheet_decide(pg_temp.v('p_dst27'), 'c0000000-0000-0000-0000-000000000002', 'approved')$$, 'and the manager''s');
+select is((public.hr_admin_period_set_status(pg_temp.v('p_dst27'), 'locked'))->>'status', 'locked', 'the period locks');
+select throws_ok($$select public.hr_optional_holiday_cancel(pg_temp.v('oh4'))$$, 'That day is in a locked or exported pay period.', 'no change inside a locked period');
+select pg_temp.as('b0000000-0000-0000-0000-000000000003');
+select throws_ok($$select public.hr_optional_holiday_pick(pg_temp.v('fol2'))$$, 'That day is in a locked or exported pay period.', 'no new pick inside a locked period either');
+select pg_temp.as('b0000000-0000-0000-0000-000000000001');
+insert into t select 'xdst', (public.hr_admin_xero_export(pg_temp.v('p_dst27')))::text;
+select is((select count(*) from jsonb_array_elements(v::jsonb->'lines') l where l->>'profileId' = 'c0000000-0000-0000-0000-000000000003' and l->>'payItem' = 'Optional Holiday' and (l->>'hours')::numeric = 7.6), 2::bigint, 'the Xero export carries both optional days at 7.6 h') from t where k = 'xdst';
+select is((select (v::jsonb->>'csv') like '%2027-04-03,"Ordinary",7.00,%' and (v::jsonb->>'csv') like '%"Optional Holiday"%' from t where k = 'xdst'), true, 'the CSV dates the night shift on its start day and names the optional pay item');
+select throws_ok($$select public.hr_admin_holiday_save(pg_temp.v('fol1'), '{"isOptional":false}')$$, 'Employees have picked this optional holiday. Cancel those requests before making it a public holiday.', 'a picked optional day cannot be turned public');
+select pg_temp.su();
+select is((select count(*) from hr.public_holidays where is_optional and source = 'manual' and extract(year from holiday_date) = 2027), 3::bigint, 'the syncs never touched the optional days');
 
 select * from finish();
 rollback;

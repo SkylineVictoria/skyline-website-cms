@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import LeaveApprovals from "@/pages/admin/components/hrms/LeaveApprovals";
+import OptionalHolidayApprovals from "@/pages/admin/components/hrms/OptionalHolidayApprovals";
 import {
   adminAddLeave, adjustLeave, leaveBalances, listLeaveTypes, myTeam, saveLeavePolicy, saveLeaveType,
   type LeaveBalances, type LeavePolicy, type LeaveType, type MyTeam,
@@ -32,7 +33,11 @@ export default function LeaveAdminPage() {
       <PageHeader breadcrumb="HRMS" title="Leave" description="Requests are approved by the person's manager or HR, never by the person themselves. Balances come from the ledger: accruals when a period is locked, leave taken, and HR adjustments." />
       <SectionTabs tabs={TABS} active={tab} onChange={(id) => setParams(id === "approvals" ? {} : { tab: id })} />
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
-      {tab === "approvals" ? <LeaveApprovals refreshKey={refresh} /> : null}
+      {tab === "approvals" ? <>
+        <LeaveApprovals refreshKey={refresh} />
+        <h2 className="mb-2 mt-8 text-sm font-semibold uppercase tracking-wide text-foreground-600">Optional holidays</h2>
+        <OptionalHolidayApprovals refreshKey={refresh} />
+      </> : null}
       {tab === "add" && team && types ? <AddLeave team={team} types={types} onAdded={() => setRefresh((n) => n + 1)} /> : null}
       {tab === "balances" && team && types ? <Balances team={team} types={types} /> : null}
       {tab === "types" && types ? <TypesAdmin types={types} onChanged={(t) => setTypes(t)} /> : null}

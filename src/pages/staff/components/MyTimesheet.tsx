@@ -34,7 +34,7 @@ export default function MyTimesheet({ refreshKey = 0 }: { refreshKey?: number } 
           {s ? (
             <>
               <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                {[["Worked", hoursLabel(s.workedHours), "my-timesheet-worked"], ["Paid leave", hoursLabel(s.paidLeaveHours), "my-timesheet-leave"], ["Public holidays", hoursLabel(s.holidayHours), "my-timesheet-holidays"], ["Ordinary", hoursLabel(s.ordinaryHours), ""], ["Overtime", hoursLabel(s.overtimeHours), "my-timesheet-overtime"], ["Breaks", minutesToHm(s.breakMinutes), ""]].map(([k, v, id]) => (
+                {[["Worked", hoursLabel(s.workedHours), "my-timesheet-worked"], ["Paid leave", hoursLabel(s.paidLeaveHours), "my-timesheet-leave"], ["Paid holidays", hoursLabel(s.holidayHours), "my-timesheet-holidays"], ["Ordinary", hoursLabel(s.ordinaryHours), ""], ["Overtime", hoursLabel(s.overtimeHours), "my-timesheet-overtime"], ["Breaks", minutesToHm(s.breakMinutes), ""]].map(([k, v, id]) => (
                   <div key={k} className="rounded-md bg-background-100 px-3 py-2"><dt className="text-xs text-foreground-600">{k}</dt><dd className="text-base font-semibold text-foreground-950" data-testid={id || undefined}>{v}</dd></div>
                 ))}
               </dl>
@@ -55,8 +55,8 @@ export default function MyTimesheet({ refreshKey = 0 }: { refreshKey?: number } 
               ) : <p className="mt-1 text-sm text-foreground-600">No shifts in this period.</p>}
               {s.leave.length ? <><h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-foreground-600">Leave</h3>
                 <ul className="mt-1 text-sm text-foreground-800" data-testid="my-timesheet-leave-days">{s.leave.map((l) => <li key={`${l.requestId}-${l.day}`}>{fmtDate(l.day)}: {l.name} {hoursLabel(l.hours)}{l.isPaid ? "" : " (unpaid)"}</li>)}</ul></> : null}
-              {s.holidays.length ? <><h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-foreground-600">Public holidays</h3>
-                <ul className="mt-1 text-sm text-foreground-800" data-testid="my-timesheet-holiday-days">{s.holidays.map((h) => <li key={h.day}>{fmtDate(h.day)}: {h.name} {hoursLabel(h.hours)}</li>)}</ul></> : null}
+              {s.holidays.length ? <><h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-foreground-600">Holidays</h3>
+                <ul className="mt-1 text-sm text-foreground-800" data-testid="my-timesheet-holiday-days">{s.holidays.map((h) => <li key={`${h.day}-${h.name}`}>{fmtDate(h.day)}: {h.name} {hoursLabel(h.hours)}{h.isOptional ? ` (optional${h.isPaid ? "" : ", unpaid"})` : ""}</li>)}</ul></> : null}
             </>
           ) : <p className="mt-2 text-sm text-foreground-600">No pay period covers today yet.</p>}
         </>

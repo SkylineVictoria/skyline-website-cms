@@ -21,6 +21,11 @@
 //                                           mail with the signed PDF and certificate, tamper checks and refused access (mock Postmark)
 //   node scripts/lab/staff-lab.mjs signing-browser  the same screens in Chromium: dashboard, template editor, field placement, send; signing on an iPhone-size screen
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
+//   node scripts/lab/staff-lab.mjs holidays public holiday sync (20261113150000 / holiday-sync): the real function against a mock data.gov.au (2025 only)
+//                                           and mock Nager.Date, refused for anon and employees, seeds adopted and confirmed, no duplicates on a re-run,
+//                                           a hand-edited row kept, a failed fetch recorded with nothing changed, data.gov.au preferred when it has the
+//                                           year, and the pg_cron dispatcher through pg_net with the Vault key (needs a fresh `up`: the mock URLs are
+//                                           written to the functions .env at start)
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -51,6 +56,7 @@ const SITE = "http://127.0.0.1:57330";
 const MOCK_POSTMARK_PORT = 57390;
 const MOCK_OPENAI_PORT = 57391;
 const MOCK_GEOSCAPE_PORT = 57392;
+const MOCK_HOLIDAY_PORT = 57393;
 const LAB_SECRETS = {
   EF_CAPTCHA_SECRET_KEY: "local-mock",
   EF_NOTIFICATION_EMAIL_ENABLED: "true",
@@ -65,6 +71,9 @@ const LAB_SECRETS = {
   // Address search (Geoscape): the lab key and a mock on port 57392; nothing reaches Geoscape.
   EF_ADDRESS_SEARCH_GEOSCAPE_KEY: "lab-geoscape-key",
   EF_ADDRESS_SEARCH_API_URL: `http://host.docker.internal:${MOCK_GEOSCAPE_PORT}`,
+  // Public holiday sync: mocks of data.gov.au and Nager.Date on port 57393; nothing reaches the real sources.
+  EF_HOLIDAY_SYNC_DATA_GOV_URL: `http://host.docker.internal:${MOCK_HOLIDAY_PORT}/data-gov`,
+  EF_HOLIDAY_SYNC_NAGER_URL: `http://host.docker.internal:${MOCK_HOLIDAY_PORT}/nager`,
 };
 /** What the mock reader "reads" from every passport. */
 const MOCK_PASSPORT = { first_name: "PASSPORT", middle_name: "Mock", last_name: "READER", dob: "1985-02-03", passport_number: "PA1234567", passport_expiry: "2033-01-01", nationality: "New Zealander" };
@@ -437,6 +446,54 @@ function startMockGeoscape() {
   });
 }
 const stopMockGeoscape = () => new Promise((r) => (geoscape.server ? geoscape.server.close(() => r()) : r()));
+
+// ---- mock holiday sources (data.gov.au CKAN + Nager.Date), shapes copied from the real answers of 2026-11-11 ----
+const NAGER_VIC_2026 = [
+  ["2026-01-01", "New Year's Day", null], ["2026-01-26", "Australia Day", null], ["2026-03-09", "Labour Day", ["AU-VIC"]], ["2026-04-03", "Good Friday", null],
+  ["2026-04-04", "Holy Saturday", ["AU-ACT", "AU-NSW", "AU-VIC"]], ["2026-04-05", "Easter Sunday", ["AU-ACT", "AU-NSW", "AU-VIC"]], ["2026-04-06", "Easter Monday", null],
+  ["2026-04-25", "Anzac Day", ["AU-SA", "AU-TAS", "AU-VIC"]], ["2026-06-08", "King's Birthday", ["AU-ACT", "AU-NSW", "AU-VIC"]], ["2026-09-25", "Friday before AFL Grand Final", ["AU-VIC"]],
+  ["2026-11-03", "Melbourne Cup", ["AU-VIC"]], ["2026-12-25", "Christmas Day", null], ["2026-12-28", "St. Stephen's Day", null], ["2026-03-02", "Labour Day", ["AU-WA"]],
+].map(([date, name, counties]) => ({ date, localName: name, name, countryCode: "AU", global: !counties, counties, types: ["Public"] }));
+const NAGER_VIC_2027 = [
+  ["2027-01-01", "New Year's Day", null], ["2027-01-26", "Australia Day", null], ["2027-03-08", "Labour Day", ["AU-VIC"]], ["2027-03-26", "Good Friday", null],
+  ["2027-03-27", "Holy Saturday", ["AU-VIC"]], ["2027-03-28", "Easter Sunday", ["AU-VIC"]], ["2027-03-29", "Easter Monday", null], ["2027-04-25", "Anzac Day", ["AU-SA", "AU-TAS", "AU-VIC"]],
+  ["2027-06-14", "King's Birthday", ["AU-VIC"]], ["2027-09-24", "Friday before AFL Grand Final (Tentative Date)", ["AU-VIC"]], ["2027-11-02", "Melbourne Cup", ["AU-VIC"]],
+  ["2027-12-27", "Christmas Day", null], ["2027-12-28", "St. Stephen's Day", null],
+].map(([date, name, counties]) => ({ date, localName: name, name, countryCode: "AU", global: !counties, counties, types: ["Public"] }));
+const DGA_VIC_2026 = [
+  ["20260101", "New Year's Day"], ["20260126", "Australia Day"], ["20260309", "Labour Day"], ["20260403", "Good Friday"], ["20260404", "Saturday before Easter Sunday"],
+  ["20260405", "Easter Sunday"], ["20260406", "Easter Monday"], ["20260425", "ANZAC Day"], ["20260608", "King's Birthday"], ["20260925", "Friday before the AFL Grand Final"],
+  ["20261103", "Melbourne Cup"], ["20261225", "Christmas Day"], ["20261226", "Boxing Day"], ["20261228", "Boxing Day"],
+].map(([Date, name], i) => ({ _id: i + 1, Date, "Holiday Name": name, Information: name === "Melbourne Cup" ? "Melbourne Cup Day is a public holiday across all of Victoria." : null, "More Information": "https://business.vic.gov.au/", Jurisdiction: "vic" }));
+/** mode: "nager" (data.gov.au has 2025 only), "down" (Nager 503 too), "dga" (data.gov.au has 2026). */
+const holidaySources = { mode: "nager", calls: [], server: null };
+function startMockHolidaySources() {
+  return new Promise((resolve, reject) => {
+    holidaySources.server = http.createServer((req, res) => {
+      const url = new URL(req.url, "http://mock");
+      holidaySources.calls.push(url.pathname);
+      const send = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+      if (url.pathname === "/data-gov/package_show") {
+        const resources = [{ id: "r2025", name: "Australian Public Holidays 2025", datastore_active: true, format: "CSV" }];
+        if (holidaySources.mode === "dga") resources.unshift({ id: "r2026", name: "Australian Public Holidays 2026", datastore_active: true, format: "CSV" });
+        return send(200, { success: true, result: { resources } });
+      }
+      if (url.pathname === "/data-gov/datastore_search") {
+        const id = url.searchParams.get("resource_id");
+        return send(200, { success: true, result: { records: id === "r2026" ? DGA_VIC_2026 : [], total: id === "r2026" ? DGA_VIC_2026.length : 0 } });
+      }
+      const m = /^\/nager\/PublicHolidays\/(\d{4})\/AU$/.exec(url.pathname);
+      if (m) {
+        if (holidaySources.mode === "down") return send(503, { error: "mock outage" });
+        return send(200, m[1] === "2026" ? NAGER_VIC_2026 : m[1] === "2027" ? NAGER_VIC_2027 : []);
+      }
+      send(404, { error: "not found" });
+    });
+    holidaySources.server.on("error", reject);
+    holidaySources.server.listen(MOCK_HOLIDAY_PORT, "0.0.0.0", () => resolve());
+  });
+}
+const stopMockHolidaySources = () => new Promise((r) => (holidaySources.server ? holidaySources.server.close(() => r()) : r()));
 /** Waits until the document's reading has finished and returns its status. */
 async function readingDone(docId) {
   let status = "";
@@ -978,6 +1035,85 @@ async function activate() {
 }
 
 /* ------------------------------------------------------------------ retention (HR-02h) */
+
+/** Public holiday sync (20261113150000 + holiday-sync): the real function against the mock sources, refusals, re-runs, failure, the cron dispatcher. */
+async function holidays() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  const call = async (token) => {
+    const res = await fetch(`${lab.apiUrl}/functions/v1/holiday-sync`, { method: "POST", headers: { apikey: lab.anonKey, ...(token ? { Authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, body: JSON.stringify({ action: "sync" }) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  // Back to the seeded state (as hosted was before the first sync) so the command can be run again without a fresh `up`.
+  psql("delete from hr.optional_holiday_requests r using hr.public_holidays h where h.id = r.holiday_id and h.state = 'VIC' and extract(year from h.holiday_date) in (2026, 2027); "
+    + "delete from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) in (2026, 2027); delete from hr.holiday_sync_runs; "
+    + "insert into hr.public_holidays(holiday_date, name, state, status, source) select d::date, n, 'VIC', 'review', 'seed' from (values"
+    + " ('2026-01-01','New Year''s Day'),('2026-01-26','Australia Day'),('2026-03-09','Labour Day'),('2026-04-03','Good Friday'),('2026-04-04','Saturday before Easter Sunday'),('2026-04-05','Easter Sunday'),('2026-04-06','Easter Monday'),('2026-04-25','ANZAC Day'),('2026-06-08','King''s Birthday'),('2026-11-03','Melbourne Cup Day'),('2026-12-25','Christmas Day'),('2026-12-26','Boxing Day'),('2026-12-28','Boxing Day (additional day)'),"
+    + " ('2027-01-01','New Year''s Day'),('2027-01-26','Australia Day'),('2027-03-08','Labour Day'),('2027-03-26','Good Friday'),('2027-03-27','Saturday before Easter Sunday'),('2027-03-28','Easter Sunday'),('2027-03-29','Easter Monday'),('2027-04-25','ANZAC Day'),('2027-06-14','King''s Birthday'),('2027-11-02','Melbourne Cup Day'),('2027-12-25','Christmas Day'),('2027-12-26','Boxing Day'),('2027-12-27','Christmas Day (additional day)'),('2027-12-28','Boxing Day (additional day)')) v(d, n);");
+  const rows = (year) => psql(`select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = ${year};`);
+  const before = { y2026: rows(2026), y2027: rows(2027), runs: psql("select count(*) from hr.holiday_sync_runs;") };
+  check("the migration installed the weekly cron job, active, Mondays 03:20 UTC", psql("select active::text || '/' || schedule from cron.job where jobname = 'hr-holiday-sync';") === "true/20 3 * * 1");
+  const anon = await call(lab.anonKey);
+  const none = await call(null);
+  check("the anon key and a missing token cannot sync (403 / 401) and no run is recorded", anon.status === 403 && none.status === 401 && psql("select count(*) from hr.holiday_sync_runs;") === before.runs, `${anon.status}/${none.status}`);
+
+  // 1. Sync now as the administrator: data.gov.au (2025 only) falls back to Nager.Date for 2026 and 2027.
+  holidaySources.mode = "nager"; holidaySources.calls = [];
+  const first = await call(jwt);
+  const run1 = first.body.run ?? {};
+  check("Sync now runs as an administrator and succeeds from Nager.Date for both years", first.status === 200 && run1.status === "ok" && run1.sources?.["2026"] === "nager" && run1.sources?.["2027"] === "nager", JSON.stringify(first.body).slice(0, 300));
+  check("...data.gov.au was asked first (package_show) and the Nager mock answered both years", holidaySources.calls.includes("/data-gov/package_show") && holidaySources.calls.includes("/nager/PublicHolidays/2026/AU") && holidaySources.calls.includes("/nager/PublicHolidays/2027/AU"), holidaySources.calls.join(","));
+  check("2026: 14 public holidays, all confirmed api rows (13 seeds adopted + Grand Final Friday), no duplicate dates", rows(2026) === "14"
+    && psql("select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2026 and (status <> 'confirmed' or source <> 'api');") === "0"
+    && psql("select count(distinct holiday_date) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2026;") === "14", `${rows(2026)} rows`);
+  check("...Grand Final Friday 2026-09-25 and Melbourne Cup Day 2026-11-03 are confirmed with the official names", psql("select string_agg(name || ':' || status, ',' order by holiday_date) from hr.public_holidays where holiday_date in ('2026-09-25', '2026-11-03');") === "Friday before the AFL Grand Final:confirmed,Melbourne Cup Day:confirmed");
+  check("...the weekend Boxing Day (26 Dec, Saturday) is kept next to the additional Monday", psql("select string_agg(holiday_date::text || ' ' || name, ',' order by holiday_date) from hr.public_holidays where holiday_date in ('2026-12-26', '2026-12-28');") === "2026-12-26 Boxing Day,2026-12-28 Boxing Day (additional day)");
+  check("2027: 15 rows; the tentative Grand Final Friday waits at review, the rest is confirmed", rows(2027) === "15"
+    && psql("select status from hr.public_holidays where holiday_date = '2027-09-24';") === "review"
+    && psql("select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2027 and status = 'confirmed';") === "14");
+  check("the run recorded its counts (inserted + updated + unchanged = the 29 api rows)", Number(run1.inserted) + Number(run1.updated) + Number(run1.unchanged) === 29 && run1.trigger === "manual", `${run1.inserted}/${run1.updated}/${run1.unchanged}`);
+
+  // 2. The same again: nothing changes. A row edited by hand is kept.
+  const cupId = psql("select id from hr.public_holidays where holiday_date = '2026-11-03' and state = 'VIC' and not is_optional;");
+  asAdmin(`select public.hr_admin_holiday_save('${cupId}', '{"note":"Metropolitan Melbourne only (edited by HR)"}');`);
+  const second = await call(jwt);
+  const run2 = second.body.run ?? {};
+  check("a re-run inserts and updates nothing, keeps the hand-edited row and lists 28 unchanged", second.status === 200 && run2.status === "ok" && run2.inserted === 0 && run2.updated === 0 && run2.keptManual === 1 && run2.unchanged === 28 && rows(2026) === "14" && rows(2027) === "15", JSON.stringify(run2).slice(0, 300));
+  check("...the hand-edited row is manual with its own note", psql("select source || '/' || note from hr.public_holidays where holiday_date = '2026-11-03';") === "manual/Metropolitan Melbourne only (edited by HR)");
+
+  // 3. Both sources down: the run fails, nothing changes, the status RPC reports it.
+  holidaySources.mode = "down";
+  const third = await call(jwt);
+  const run3 = third.body.run ?? {};
+  check("when data.gov.au has no year and Nager.Date is down the run is recorded as failed and nothing changes", third.status === 200 && run3.status === "failed" && /Nager\.Date: .*503/.test(run3.error ?? "") && rows(2026) === "14" && rows(2027) === "15"
+    && psql("select count(*) from hr.public_holidays where state = 'VIC' and not is_optional and extract(year from holiday_date) = 2027 and status = 'confirmed';") === "14", JSON.stringify(run3).slice(0, 300));
+  check("...the admin status RPC shows the failed last run and the last good one", (() => { const s = JSON.parse(asAdmin("select public.hr_admin_holiday_sync_status();").split(String.fromCharCode(10)).map((l) => l.trim()).find((l) => l.startsWith("{")) ?? "{}"); return s.lastRun?.status === "failed" && s.lastOk?.status === "ok" && s.cronActive === true; })());
+
+  // 4. data.gov.au has the year: it wins over Nager.Date.
+  holidaySources.mode = "dga";
+  const fourth = await call(jwt);
+  const run4 = fourth.body.run ?? {};
+  check("when data.gov.au has 2026 it is used for 2026 and Nager.Date only for 2027", fourth.status === 200 && run4.status === "ok" && run4.sources?.["2026"] === "data.gov.au" && run4.sources?.["2027"] === "nager" && rows(2026) === "14"
+    && psql("select sync_source || '/' || status from hr.public_holidays where holiday_date = '2026-09-25';") === "data.gov.au/confirmed", JSON.stringify(run4).slice(0, 300));
+  check("...a note from data.gov.au lands on an api row; the hand-edited one keeps its note", psql("select source || '/' || note from hr.public_holidays where holiday_date = '2026-11-03';") === "manual/Metropolitan Melbourne only (edited by HR)"
+    && psql("select name from hr.public_holidays where holiday_date = '2026-04-25';") === "ANZAC Day");
+
+  // 5. The pg_cron dispatcher: the Vault secrets of the retention job, pg_net POST with the service-role key, a 'cron' run.
+  holidaySources.mode = "nager";
+  psql("select vault.create_secret('" + lab.serviceKey + "', 'hr_retention_service_role_key', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_service_role_key');");
+  psql("select vault.create_secret('http://kong:8000/functions/v1/staff-admin', 'hr_retention_function_url', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_function_url');");
+  const runsBefore = psql("select count(*) from hr.holiday_sync_runs;");
+  const requestId = psql("select coalesce(public.hr_holiday_sync_dispatch()::text, '');");
+  let cronRun = "";
+  for (let i = 0; i < 40 && !cronRun; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    cronRun = psql(`select status from hr.holiday_sync_runs where triggered_by = 'cron' and id > (select coalesce(max(id), 0) from (select id from hr.holiday_sync_runs order by id limit ${runsBefore}) x) order by id desc limit 1;`);
+  }
+  check("the dispatcher posts to holiday-sync through pg_net with the Vault key and the function records a 'cron' run that succeeds", requestId !== "" && cronRun === "ok", `request ${requestId || "none"}, run ${cronRun || "none"}`);
+  check("...the hosted-style schedule is untouched by the lab", psql("select schedule from cron.job where jobname = 'hr-holiday-sync';") === "20 3 * * 1");
+  console.log(failures ? `holidays: ${failures} FAILED` : "holidays: all checks passed");
+}
 
 async function retention() {
   const lab = readLab();
@@ -2012,6 +2148,7 @@ function sqlSuites() {
 const command = process.argv[2] ?? "up";
 try {
   if (["apply", "onboard", "emails", "offer", "activate", "retention", "flow", "wizard", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); await startMockGeoscape(); }
+  if (command === "holidays") await startMockHolidaySources();
   if (command === "up") await up();
   else if (command === "apply") await apply();
   else if (command === "onboard") await onboard();
@@ -2019,6 +2156,7 @@ try {
   else if (command === "offer") await offer();
   else if (command === "activate") await activate();
   else if (command === "retention") await retention();
+  else if (command === "holidays") await holidays();
   else if (command === "flow") await flow();
   else if (command === "wizard") await wizard();
   else if (command === "signing") await signing();
@@ -2032,11 +2170,11 @@ try {
   }
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
-  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | flow | wizard | e2e | sql | down)`);
+  else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | holidays | flow | wizard | e2e | sql | down)`);
 } catch (error) {
   console.error(`ERROR ${error instanceof Error ? error.message : error}`);
-  await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape();
+  await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape(); await stopMockHolidaySources();
   process.exit(2);
 }
-await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape();
+await stopMockPostmark(); await stopMockReader(); await stopMockGeoscape(); await stopMockHolidaySources();
 if (failures) { console.log(`${failures} check(s) failed.`); process.exit(1); }

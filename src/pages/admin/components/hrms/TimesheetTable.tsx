@@ -155,7 +155,7 @@ export default function TimesheetTable({ team, admin, initialPeriodId }: { team:
         footer={<><Button variant="outline" onClick={() => setDecision(null)}>Cancel</Button><Button disabled={Boolean(busy)} onClick={() => void decide()} data-testid="decision-confirm">{decision?.kind === "approved" ? "Approve" : "Reject"}</Button></>}>
         {decision ? (
           <div className="space-y-3" data-testid="decision-dialog">
-            <p className="text-sm text-foreground-800">{decision.row.name}: {hoursLabel(decision.row.workedHours)} worked, {hoursLabel(decision.row.paidLeaveHours)} paid leave, {hoursLabel(decision.row.holidayHours)} public holidays, {hoursLabel(decision.row.overtimeHours)} overtime.</p>
+            <p className="text-sm text-foreground-800">{decision.row.name}: {hoursLabel(decision.row.workedHours)} worked, {hoursLabel(decision.row.paidLeaveHours)} paid leave, {hoursLabel(decision.row.holidayHours)} paid holidays, {hoursLabel(decision.row.overtimeHours)} overtime.</p>
             <Field label="Note (optional)"><TextArea rows={3} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} data-testid="decision-note" /></Field>
             {dialogError ? <p role="alert" className={ALERT}>{dialogError}</p> : null}
           </div>
@@ -200,7 +200,7 @@ function TimesheetRowView({ row, period, timezone, expanded, punches, busy, onTo
         <td className="px-3 py-2 text-right" data-testid={`timesheet-worked-${row.profileId}`}>{hoursLabel(row.workedHours)}</td>
         <td className="px-3 py-2 text-right">{minutesToHm(row.breakMinutes)}</td>
         <td className="px-3 py-2 text-right" data-testid={`timesheet-leave-${row.profileId}`}>{hoursLabel(row.paidLeaveHours)}{Number(row.unpaidLeaveHours) ? <span className="block text-xs text-foreground-500">+{hoursLabel(row.unpaidLeaveHours)} unpaid</span> : null}</td>
-        <td className="px-3 py-2 text-right" data-testid={`timesheet-holiday-${row.profileId}`}>{hoursLabel(row.holidayHours)}</td>
+        <td className="px-3 py-2 text-right" data-testid={`timesheet-holiday-${row.profileId}`}>{hoursLabel(row.holidayHours)}{Number(row.unpaidHolidayHours) ? <span className="block text-xs text-foreground-500">+{hoursLabel(row.unpaidHolidayHours)} unpaid</span> : null}</td>
         <td className="px-3 py-2 text-right">{hoursLabel(row.ordinaryHours)}</td>
         <td className="px-3 py-2 text-right" data-testid={`timesheet-overtime-${row.profileId}`}>{hoursLabel(row.overtimeHours)}</td>
         <td className="px-3 py-2 text-right">{row.estimatedGross === null ? <span className="text-foreground-400">—</span> : money(row.estimatedGross)}</td>
@@ -225,8 +225,8 @@ function TimesheetRowView({ row, period, timezone, expanded, punches, busy, onTo
               {row.shifts.length ? <ul className="space-y-1">{row.shifts.map((s) => <li key={s.startedAt}><ShiftLine shift={s} timezone={timezone} /></li>)}</ul> : <p className="text-sm text-foreground-500">No shifts in this period.</p>}
               {row.leave.length ? <><h4 className="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-foreground-600">Leave</h4>
                 <ul className="space-y-0.5 text-sm">{row.leave.map((l) => <li key={`${l.requestId}-${l.day}`}>{fmtDate(l.day)}: {l.name} {hoursLabel(l.hours)}{l.isPaid ? "" : " (unpaid)"}</li>)}</ul></> : null}
-              {row.holidays.length ? <><h4 className="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-foreground-600">Public holidays</h4>
-                <ul className="space-y-0.5 text-sm">{row.holidays.map((h) => <li key={h.day}>{fmtDate(h.day)}: {h.name} {hoursLabel(h.hours)}</li>)}</ul></> : null}
+              {row.holidays.length ? <><h4 className="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-foreground-600">Holidays</h4>
+                <ul className="space-y-0.5 text-sm">{row.holidays.map((h) => <li key={`${h.day}-${h.name}`}>{fmtDate(h.day)}: {h.name} {hoursLabel(h.hours)}{h.isOptional ? ` (optional${h.isPaid ? "" : ", unpaid"})` : ""}</li>)}</ul></> : null}
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">

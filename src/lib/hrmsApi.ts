@@ -22,8 +22,70 @@ export const getHrSettings = () => rpc<HrSettings>("hr_settings", undefined, "Th
 export const saveHrSettings = (settings: Partial<HrSettings>) => rpc<HrSettings>("hr_admin_settings_save", { p_settings: settings }, "The HR settings could not be saved.");
 
 /* ------------------------------------------------------------------ public holidays */
-export interface Holiday { id: string; date: string; name: string; isOptional: boolean; state: string; status: "review" | "confirmed"; note: string; updatedAt: string }
+export type HolidaySourceKind = "seed" | "api" | "manual" | "import";
+export type HolidaySyncSource = "data.gov.au" | "nager";
+export interface Holiday {
+  id: string; date: string; name: string; isOptional: boolean; type: "public" | "optional"; state: string; status: "review" | "confirmed"; note: string;
+  source: HolidaySourceKind; syncSource: HolidaySyncSource | null; syncedAt: string | null; updatedAt: string;
+}
 export const listHolidays = (from?: string, to?: string) => rpc<Holiday[]>("hr_public_holidays", { p_from: from ?? null, p_to: to ?? null }, "The public holidays could not be loaded.");
+/** Several holidays in one go (20261113150000): each a single date or a range (one row per day), public or optional; all or nothing. */
+export interface NewHolidayInput { name: string; startDate: string; endDate?: string; isOptional: boolean; note?: string; status?: "review" | "confirmed" }
+export const addHolidays = (rows: NewHolidayInput[]) => rpc<{ inserted: number; updated: number; holidays: Holiday[] }>("hr_admin_holidays_add", { p_rows: rows }, "The holidays could not be added.");
+
+/* ------------------------------------------------------------------ public holiday sync (holiday-sync Edge Function + weekly cron) */
+export interface HolidaySyncRun {
+  id: number; trigger: "cron" | "manual"; status: "running" | "ok" | "failed"; startedAt: string; finishedAt: string | null; years: number[];
+  sources: Record<string, HolidaySyncSource>; inserted: number; updated: number; demoted: number; keptManual: number; unchanged: number; error: string; errors: Record<string, string>;
+  detail: { skipped?: string[] } & Record<string, unknown>;
+}
+export interface HolidaySyncStatus { lastRun: HolidaySyncRun | null; lastOk: HolidaySyncRun | null; runs: HolidaySyncRun[]; cronActive: boolean; cronSchedule: string | null; dispatchReady: boolean; serverNow: string }
+export const holidaySyncStatus = () => rpc<HolidaySyncStatus>("hr_admin_holiday_sync_status", undefined, "The sync status could not be loaded.");
+/** "Sync now": the function fetches this year and next from data.gov.au / Nager.Date and records a run; the database applies the lists. */
+export async function syncHolidaysNow(): Promise<HolidaySyncRun> {
+  const { data, error } = await supabase.functions.invoke("holiday-sync", { body: { action: "sync", trigger: "manual" } });
+  if (error) {
+    let message = error.message;
+    const context = (error as { context?: unknown }).context;
+    if (context instanceof Response) { try { const parsed = (await context.clone().json()) as { error?: string }; if (parsed?.error) message = parsed.error; } catch { /* keep the generic message */ } }
+    throw new Error(message || "The holidays could not be synced.");
+  }
+  return (data as { run: HolidaySyncRun }).run;
+}
+/** The warning the holidays page shows, or null when the last sync is fine and recent. */
+export function holidaySyncWarning(s: HolidaySyncStatus | null): string | null {
+  if (!s) return null;
+  const run = s.lastRun;
+  if (!run) return "The holidays have never been synced. Press Sync now, or wait for the weekly job.";
+  if (run.status === "failed") return `The last sync (${run.trigger === "cron" ? "weekly job" : "Sync now"}) failed: ${run.error || "the holiday sources could not be read"}. Existing holidays were left as they were.`;
+  const errors = Object.entries(run.errors ?? {});
+  if (errors.length) return `The last sync could not read ${errors.map(([y, e]) => `${y} (${e})`).join("; ")}. The other year was updated.`;
+  const age = (Date.parse(s.serverNow) - Date.parse(run.startedAt)) / 86400000;
+  if (age > 10) return `The last successful sync was ${Math.floor(age)} days ago; the weekly job may not be running.`;
+  if (!s.cronActive) return "The weekly sync job is paused; holidays update only when someone presses Sync now.";
+  if (!s.dispatchReady) return "The weekly sync job cannot run until its Vault secrets are set (see docs/SUPABASE.md); press Sync now meanwhile.";
+  return null;
+}
+
+/* ------------------------------------------------------------------ optional holidays (employees pick up to a yearly allowance; approved like leave) */
+export type OptionalStatus = "pending" | "approved" | "rejected" | "cancelled";
+export interface OptionalRule { year: number; allowance: number; isPaid: boolean; isSet?: boolean; updatedAt: string | null; optionalHolidays?: number; picked?: number }
+export interface OptionalRequest {
+  id: string; profileId: string; personName: string; holidayId: string; date: string; name: string; year: number; holidayStatus: "review" | "confirmed"; isPaid: boolean; hours: number;
+  status: OptionalStatus; note: string; isAdminEntry: boolean; createdAt: string; decidedAt: string | null; decisionNote: string; cancelledAt: string | null;
+}
+export interface MyOptionalHolidays { profileId: string; year: number; allowance: number; isPaid: boolean; used: number; remaining: number; today: string; holidays: (Holiday & { request: OptionalRequest | null })[]; requests: OptionalRequest[] }
+export const myOptionalHolidays = (year?: number) => rpc<MyOptionalHolidays>("hr_optional_holidays_my", { p_year: year ?? null }, "Your optional holidays could not be loaded.");
+export const pickOptionalHoliday = (holidayId: string, note?: string) => rpc<OptionalRequest>("hr_optional_holiday_pick", { p_holiday: holidayId, p_note: note ?? null }, "The optional holiday could not be picked.");
+export const cancelOptionalHoliday = (id: string, note?: string) => rpc<OptionalRequest>("hr_optional_holiday_cancel", { p_id: id, p_note: note ?? null }, "The request could not be cancelled.");
+export const decideOptionalHoliday = (id: string, decision: "approved" | "rejected", note?: string) =>
+  rpc<OptionalRequest>("hr_optional_holiday_decide", { p_id: id, p_decision: decision, p_note: note ?? null }, "The decision could not be saved.");
+export const listOptionalHolidayRequests = (filter: { status?: OptionalStatus | null; profileId?: string | null; year?: number | null } = {}) =>
+  rpc<{ scope: "company" | "team"; requests: OptionalRequest[] }>("hr_optional_holiday_list", { p_status: filter.status ?? null, p_profile: filter.profileId ?? null, p_year: filter.year ?? null }, "The optional holiday requests could not be loaded.");
+export const adminAddOptionalHoliday = (profileId: string, holidayId: string, note?: string) =>
+  rpc<OptionalRequest>("hr_admin_optional_holiday_add", { p_profile: profileId, p_holiday: holidayId, p_note: note ?? null }, "The optional holiday could not be entered.");
+export const listOptionalRules = () => rpc<OptionalRule[]>("hr_admin_optional_rules", undefined, "The optional holiday settings could not be loaded.");
+export const saveOptionalRule = (year: number, rule: { allowance: number; isPaid: boolean }) => rpc<OptionalRule>("hr_admin_optional_rule_save", { p_year: year, p_rule: rule }, "The optional holiday setting could not be saved.");
 export const saveHoliday = (id: string | null, holiday: Partial<Pick<Holiday, "date" | "name" | "isOptional" | "state" | "status" | "note">>) =>
   rpc<Holiday>("hr_admin_holiday_save", { p_id: id, p_holiday: holiday }, "The holiday could not be saved.");
 export const deleteHoliday = (id: string) => rpc<Holiday>("hr_admin_holiday_delete", { p_id: id }, "The holiday could not be deleted.");
@@ -120,9 +182,9 @@ export const saveLeavePolicy = (leaveTypeId: string, policy: Partial<Omit<LeaveP
 
 /* ------------------------------------------------------------------ timesheets and approvals */
 export interface LeaveDay { day: string; hours: number; leaveTypeId: string; code: string; name: string; isPaid: boolean; requestId: string }
-export interface HolidayDay { day: string; name: string; hours: number }
+export interface HolidayDay { day: string; name: string; hours: number; isOptional: boolean; isPaid: boolean; requestId: string | null }
 export interface PeriodSummary {
-  periodId: string; profileId: string; workedHours: number; breakMinutes: number; openShifts: number; flags: ShiftFlag[]; paidLeaveHours: number; unpaidLeaveHours: number; holidayHours: number;
+  periodId: string; profileId: string; workedHours: number; breakMinutes: number; openShifts: number; flags: ShiftFlag[]; paidLeaveHours: number; unpaidLeaveHours: number; holidayHours: number; unpaidHolidayHours: number;
   ordinaryHours: number; countedHours: number; overtimeHours: number; payBasis: "salary" | "hourly" | null; rate: number | null; estimatedGross: number | null; xeroEmployeeId: string;
   hasPaySetup: boolean; shifts: Shift[]; leave: LeaveDay[]; holidays: HolidayDay[];
   approval: { status: "approved" | "rejected"; decidedAt: string; note: string; decidedByName: string | null } | null; approvable: boolean;
@@ -131,7 +193,7 @@ export interface TimesheetRow extends PeriodSummary { name: string; jobTitle: st
 export interface PeriodTimesheets { period: PayPeriod; scope: "company" | "team"; timezone: string; employees: TimesheetRow[] }
 export interface MyTimesheet { profileId: string; hasPaySetup: boolean; timezone: string; periods: PayPeriod[]; period: PayPeriod | null; summary: PeriodSummary | null }
 export interface TeamReport { profileId: string; name: string; jobTitle: string; status: string; payScheduleId: string | null }
-export interface MyTeam { isAdmin: boolean; profileId: string | null; isManager: boolean; reports: TeamReport[]; schedules: (PaySchedule & { periods: PayPeriod[] })[]; pendingLeave: number }
+export interface MyTeam { isAdmin: boolean; profileId: string | null; isManager: boolean; reports: TeamReport[]; schedules: (PaySchedule & { periods: PayPeriod[] })[]; pendingLeave: number; pendingOptional: number }
 
 export const periodTimesheets = (periodId: string) => rpc<PeriodTimesheets>("hr_period_timesheets", { p_period: periodId }, "The timesheets could not be loaded.");
 export const decideTimesheet = (periodId: string, profileId: string, decision: "approved" | "rejected", note?: string) =>

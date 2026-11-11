@@ -17,7 +17,7 @@ export default function HolidaysList() {
         <ul className="divide-y divide-background-200">
           {rows.map((h) => (
             <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm" data-testid={`my-holiday-${h.date}`}>
-              <span className="text-foreground-800">{fmtDate(h.date)} · {h.name}{h.isOptional ? " (optional)" : ""}</span>
+              <span className="text-foreground-800">{fmtDate(h.date)} · {h.name}{h.isOptional ? " (optional: pick it under Optional holidays)" : ""}</span>
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${h.status === "confirmed" ? "bg-secondary-50 text-secondary-900" : "bg-background-200 text-foreground-700"}`}>{h.status === "confirmed" ? "Confirmed" : "To be confirmed"}</span>
             </li>
           ))}

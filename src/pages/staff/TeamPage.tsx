@@ -3,6 +3,7 @@ import { Link, Navigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import TimesheetTable from "@/pages/admin/components/hrms/TimesheetTable";
 import LeaveApprovals from "@/pages/admin/components/hrms/LeaveApprovals";
+import OptionalHolidayApprovals from "@/pages/admin/components/hrms/OptionalHolidayApprovals";
 import { myTeam, type MyTeam } from "@/lib/hrmsApi";
 
 /**
@@ -31,7 +32,7 @@ function TeamShell({ title, kind, children }: { title: string; kind: "timesheets
           </div>
           <nav className="flex flex-wrap gap-2 text-sm">
             <Link to="/staff/team/timesheets" className={`rounded-full border px-3 py-1 ${kind === "timesheets" ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700"}`} data-testid="team-nav-timesheets">Team timesheets</Link>
-            <Link to="/staff/team/leave" className={`rounded-full border px-3 py-1 ${kind === "leave" ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700"}`} data-testid="team-nav-leave">Leave approvals{team?.pendingLeave ? ` (${team.pendingLeave})` : ""}</Link>
+            <Link to="/staff/team/leave" className={`rounded-full border px-3 py-1 ${kind === "leave" ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700"}`} data-testid="team-nav-leave">Leave approvals{(team?.pendingLeave ?? 0) + (team?.pendingOptional ?? 0) ? ` (${(team?.pendingLeave ?? 0) + (team?.pendingOptional ?? 0)})` : ""}</Link>
           </nav>
         </div>
         {error ? <p role="alert" className="mt-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
@@ -47,5 +48,9 @@ export function TeamTimesheetsPage() {
   return <TeamShell title="Team timesheets" kind="timesheets">{(team) => <TimesheetTable team={team} admin={team.isAdmin} />}</TeamShell>;
 }
 export function TeamLeavePage() {
-  return <TeamShell title="Leave approvals" kind="leave">{() => <LeaveApprovals />}</TeamShell>;
+  return <TeamShell title="Leave approvals" kind="leave">{() => <>
+    <LeaveApprovals />
+    <h2 className="mb-2 mt-8 text-sm font-semibold uppercase tracking-wide text-foreground-600">Optional holidays</h2>
+    <OptionalHolidayApprovals />
+  </>}</TeamShell>;
 }

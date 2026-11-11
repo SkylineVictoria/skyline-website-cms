@@ -8,7 +8,7 @@ import { SIGN_CATEGORIES } from "../../../../../supabase/functions/_shared/signi
 /** On a student's, an employee's or an agent's record: the documents sent to them for signature with their status, and a button to send another. */
 export default function SubjectSigningPanel({ type, id, name }: { type: "student" | "employee" | "agent"; id: string; name?: string }) {
   const [requests, setRequests] = useState<SigningRequest[] | null>(null);
-  const [error, setError] = useState(""); const [openId, setOpenId] = useState<string | null>(null);
+  const [error, setError] = useState(""); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<SigningContext["templates"] | null>(null);
   const load = useCallback(async () => setRequests(await signingAdmin<SigningRequest[]>("subject_list", id, { type })), [id, type]);
   const [hidden, setHidden] = useState(false);
@@ -27,7 +27,7 @@ export default function SubjectSigningPanel({ type, id, name }: { type: "student
         <button type="button" className="text-left" onClick={() => setOpenId(r.id)}><span className="font-medium text-primary-700 underline-offset-2 hover:underline">{r.title}</span>
           <span className="block text-xs text-foreground-500">{r.reference} · {SIGN_CATEGORIES[r.category]?.label ?? r.category} · {new Date(r.created_at).toLocaleDateString()}</span></button>
         <span className="flex items-center gap-2"><span className="text-xs text-foreground-600">{r.state === "draft" ? "Not sent" : signedCount(r)}</span><Badge tone={s.tone}>{s.label}</Badge></span></li>; })}</ul>}
-    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onCreated={(r) => { setTemplates(null); void load(); setOpenId(r.id); }} />}
-    {openId && <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void load()} />}
+    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onCreated={(r) => { setTemplates(null); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+    {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </Card>;
 }

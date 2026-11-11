@@ -15,7 +15,7 @@ Every repo migration is applied on hosted: 215 of 215 (highest 20261113210000; E
 | document-signing | 5 | true | TPL-02 (Header / Body / Footer, [Variables]) |
 | guest-documents | 10 | true | |
 | holiday-sync | 1 | true | cron hr-holiday-sync active |
-| integrations-admin | 1 | true | External Integrations (other session) |
+| integrations-admin | 2 | true | External Integrations (other session) |
 | integrations-webhook | 1 | false | External Integrations (other session) |
 | notification-delivery | 20 | true | |
 | portal-admin-users | 24 | true | |
@@ -563,7 +563,7 @@ Shared PDF styling. The live notification-delivery function (v15) has drawn the 
 - Checks: all 10 offline npm test scripts, type-check, build, src lint, new Edge Deno check PASS. 25 isolated PGlite assertions with mocked CMS admin and Storage metadata PASS (not full Supabase acceptance). Full Supabase suite BLOCKED: Docker unavailable. Browser test BLOCKED: Chromium socket creation denied. Existing-function Deno checks depend on externally fetched JSR manifests.
 
 
-### External Integrations (RELEASED: migrations applied hosted as 20261111075147 / 20261111075214, integrations-admin v1 and integrations-webhook v1 deployed; frontend on live/main; verified 2026-11-11)
+### External Integrations (RELEASED: migrations applied hosted as 20261111075147 / 20261111075214, integrations-admin v2 and integrations-webhook v1 deployed; frontend on live/main; verified 2026-11-11)
 - Additive migration `20261111075147_external_integrations.sql` and `20261111075214_external_integration_operations.sql`: nine database navigation rows, provider catalogue, tenant-scoped connection metadata/settings/jobs/logs/webhook registrations/events, service-only Vault credential gateways and single-use OAuth states. The generated migration was ordered after the existing highest migration to preserve repository ordering. No hosted migration applied.
 - `integrations-admin` (JWT on) reuses `tenant_scope` and `cms_integration_can_manage`; caller-scoped reads and explicit connection ownership checks precede service writes. Credentials live in Vault; Calendly continues to use its existing protected store. Stripe health checks, OAuth authorization code exchange for Xero/Microsoft 365/DocuSign, connection lifecycle, bounded health-check retries, Stripe webhook registration and filtered operational history are implemented. OAuth access tokens refresh through a serialized, version-fenced Vault rotation; expired or revoked grants show Reconnect. Stripe and Calendly credentials stay server-side.
 - `integrations-webhook` (JWT off intentionally; Stripe HMAC authentication in-handler) verifies raw request signatures and timestamp tolerance, caps payload size, and durably deduplicates event IDs while counting deliveries. Only event metadata is retained. Event recheck retrieves and verifies the provider event again. It does not replay or invoke payment or student business workflows. Non-Stripe webhook adapters are not implemented.

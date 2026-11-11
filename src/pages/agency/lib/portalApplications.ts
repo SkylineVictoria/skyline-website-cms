@@ -40,6 +40,8 @@ export interface ApplicationCourseRow {
   code: string;
   title: string;
   variant: string;
+  /** The chosen intake of this course (INT-01, course_intakes.id). */
+  intakeId?: string;
 }
 
 export interface ApplicationListRow {
@@ -142,7 +144,7 @@ async function fetchCoursesByApplication(appIds: string[]): Promise<Map<string, 
   if (appIds.length === 0) return map;
   const { data, error } = await supabase
     .from("enrollment_application_courses")
-    .select("application_id, course_id, course_code, course_title, variant")
+    .select("application_id, course_id, course_code, course_title, variant, intake_id")
     .in("application_id", appIds);
   if (error) return map;
   for (const row of data ?? []) {
@@ -154,6 +156,7 @@ async function fetchCoursesByApplication(appIds: string[]): Promise<Map<string, 
       code: str(r.course_code),
       title: str(r.course_title),
       variant: str(r.variant),
+      ...(r.intake_id ? { intakeId: str(r.intake_id) } : {}),
     });
     map.set(key, list);
   }

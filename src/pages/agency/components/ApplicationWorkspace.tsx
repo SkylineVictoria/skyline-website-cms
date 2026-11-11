@@ -39,6 +39,8 @@ import { canSubmitApplicationStatus } from "@/pages/agency/lib/applicationAccess
 import ApplicationReview, { type ConsentState } from "@/pages/agency/components/ApplicationReview";
 import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAttachmentField";
 import SchoolLevelField from "@/pages/agency/components/SchoolLevelField";
+import WorkspaceIntakeField from "@/pages/agency/components/WorkspaceIntakeField";
+import { baseFieldClass } from "@/components/feature/applicationFieldHelpers";
 import { DEGREE_LEVELS, schoolLevelFor } from "@/pages/agency/lib/educationLevels";
 import { PortalError } from "@/pages/agency/components/PortalUI";
 
@@ -405,8 +407,9 @@ export default function ApplicationWorkspace({
     try {
       const save = () => saveApplicationDraft(application.id, {
         data: {
-          values: snapshot.values,
-          courses: snapshot.courses.map(resolveCourse),
+          // INT-01: the intake goes with the course row (the server checks it belongs to the course and writes its label).
+          values: Object.fromEntries(Object.entries(snapshot.values).filter(([key]) => key !== "intake_id")),
+          courses: snapshot.courses.map(resolveCourse).map((course, index) => index === 0 && String(snapshot.values.intake_id ?? "") ? { ...course, intakeId: String(snapshot.values.intake_id) } : course),
           progress: progressRef.current,
           savedAt: new Date().toISOString(),
           preparedBy: agentName,
@@ -1250,11 +1253,6 @@ export default function ApplicationWorkspace({
         </span>
       );
     }
-    // An intake saved before the dropdown (e.g. "03/2027") stays selectable.
-    if (field.name === "preferred_intake") {
-      const saved = String(mergedInitial.preferred_intake ?? "").trim();
-      if (saved && !(field.options ?? []).includes(saved)) field = { ...field, options: [saved, ...(field.options ?? [])] };
-    }
     // The agency and agent are chosen when the application is started; their values are kept, the questions are not shown.
     if (LOCKED_AGENT_FIELDS.has(field.name)) {
       const kept = mergedInitial[field.name];
@@ -1360,6 +1358,10 @@ export default function ApplicationWorkspace({
           <div className={documentLocked ? (field.type === "radio" || field.type === "checkbox" ? DOCUMENT_FILLED_GROUP : DOCUMENT_FILLED_INPUT) : undefined}>
             {field.name === COURSE_FIELD ? (
               <CourseSearchField name={field.name} options={field.options ?? []} disabled={locked} single />
+            ) : field.name === "preferred_intake" ? (
+              <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
+                courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
+                initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} />
             ) : field.name === "school_level" ? (
               <SchoolLevelField field={field} id={`${FORM_ID}-${field.name}`} locked={locked}
                 choice={String(mergedInitial.highest_education ?? "")} schoolLevel={String(mergedInitial.school_level ?? "")} />

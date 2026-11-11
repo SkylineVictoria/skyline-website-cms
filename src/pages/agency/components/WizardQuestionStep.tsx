@@ -1,6 +1,7 @@
 import EmergencyContactFields from "@/components/shared/wizard/EmergencyContactFields";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
-import { nextIntakes } from "@/pages/agency/lib/portalSections";
+import IntakeSelect from "@/pages/agency/components/IntakeSelect";
+import type { OpenIntake } from "@/pages/agency/lib/intakes";
 import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 
 /**
@@ -8,13 +9,18 @@ import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agenc
  * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
  * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
-export default function WizardQuestionStep({ question, answers, errors, courseOptions, onChange }: {
+export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
   /** Course labels ("CODE - Title") the student can apply for. */
   courseOptions: string[];
+  /** The course id behind a label (the intakes are listed per course). */
+  courseIdOf: (label: string) => string | null;
   onChange: (name: string, value: string) => void;
+  /** The chosen intake (INT-01); the parent records its id and label. */
+  onIntake: (intake: OpenIntake | null) => void;
+  onIntakesLoaded: (intakes: OpenIntake[]) => void;
 }) {
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
@@ -65,13 +71,9 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
             <FieldError text={errors.course} />
           </div>
           <div>
-            <Label htmlFor="wizard-preferred_intake">Preferred intake</Label>
-            <select id="wizard-preferred_intake" name="preferred_intake" value={answers.preferred_intake ?? ""} aria-invalid={Boolean(errors.preferred_intake)} className={INPUT}
-              onChange={(e) => onChange("preferred_intake", e.target.value)}>
-              <option value="">Select intake</option>
-              {(answers.preferred_intake && !nextIntakes().includes(answers.preferred_intake) ? [answers.preferred_intake, ...nextIntakes()] : nextIntakes()).map((label) => <option key={label} value={label}>{label}</option>)}
-            </select>
-            <p className="mt-1 text-xs text-foreground-500">Intakes start every month.</p>
+            <Label htmlFor="wizard-preferred_intake">Intake</Label>
+            <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={answers.intake_id ?? ""} error={errors.preferred_intake}
+              className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} />
             <FieldError text={errors.preferred_intake} />
           </div>
         </div>

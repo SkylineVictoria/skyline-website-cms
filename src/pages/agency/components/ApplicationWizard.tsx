@@ -17,6 +17,8 @@ import {
 } from "@/pages/agency/lib/portalApplications";
 import { portalCourseOptions, resolveCourseOption } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
+import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
+import type { OpenIntake } from "@/pages/agency/lib/intakes";
 import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
@@ -196,6 +198,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
             course: courses[0] ?? "", preferred_intake: pick("preferred_intake"),
+            // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
+            intake_id: application.courses?.[0]?.intakeId ?? "",
           });
         }
         if (application.tenantId) {
@@ -428,8 +432,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   const courseLabels = institutionCourses ? institutionCourses.map((course) => `${course.code} - ${course.title}`) : portalCourseOptions;
   const setAnswer = (name: string, value: string) => {
-    setAnswers((prev) => ({ ...prev, [name]: value }));
+    // A new course clears the intake: intakes belong to one course.
+    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "" } : {}) }));
+    if (name === "course") setOpenIntakeCount(null);
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
+  };
+  const [openIntakeCount, setOpenIntakeCount] = useState<number | null>(null);
+  const courseIdOf = (label: string): string | null => {
+    const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === label) : resolveCourseOption(label);
+    return course?.courseId || null;
+  };
+  const setIntake = (intake: OpenIntake | null) => {
+    setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "" }));
+    setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
   };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
@@ -464,11 +479,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
-      if (!filled("preferred_intake")) errors.preferred_intake = "Choose the preferred intake.";
+      if (filled("course") && openIntakeCount === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
+      else if (!filled("intake_id")) errors.preferred_intake = "Choose the intake.";
       if (filled("course")) {
         const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === answers.course) : resolveCourseOption(answers.course);
         if (!course) errors.course = "This course is no longer offered. Choose another.";
-        else patch.courses = [course];
+        else patch.courses = [{ ...course, intakeId: filled("intake_id") || undefined }];
       }
       values.courses_of_interest = filled("course") ? [answers.course] : [];
       values.preferred_intake = filled("preferred_intake");
@@ -541,7 +557,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (question) {
       return (
         <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
-          <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} onChange={setAnswer} />
+          <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
+            onIntake={setIntake} onIntakesLoaded={(list) => setOpenIntakeCount(list.length)} />
           {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
         </form>
       );

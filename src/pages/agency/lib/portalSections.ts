@@ -113,16 +113,6 @@ function trimEmergencyContact(section: AppSection): AppSection {
   return { ...section, fields: fields.map((field) => (field.name === "ec_phone" ? { ...field, label: "Phone Number" } : field)) };
 }
 
-/** Intakes start every month: the next twelve, from next month, as "Month YYYY". */
-export function nextIntakes(from: Date = new Date(), count = 12): string[] {
-  const out: string[] = [];
-  for (let i = 1; i <= count; i += 1) {
-    const month = new Date(from.getFullYear(), from.getMonth() + i, 1);
-    out.push(month.toLocaleString("en-AU", { month: "long", year: "numeric" }));
-  }
-  return out;
-}
-
 /**
  * Later pages: the health-insurance upload moves below the questions, and the Application checklist page is dropped. Its
  * required answer is kept (always ticked, out of sight) with the Student declaration, so submission rules are unchanged.
@@ -168,7 +158,8 @@ export const portalSections: AppSection[] = reshapeLaterSections(regroupStudentS
       return { ...field, options: portalCourseOptions, description: "Search and pick one course. Only active courses open to international students are listed." };
     }
     if (field.name === "preferred_intake") {
-      return { ...field, type: "select" as const, options: nextIntakes(), placeholder: "Select intake", description: "Intakes start every month." };
+      // INT-01: the intakes come from the database for the chosen course (IntakeSelect); none are listed here.
+      return { ...field, label: "Intake", type: "select" as const, options: [], placeholder: "Choose the course first", description: "Only intakes of the chosen course that have not started yet are listed." };
     }
     return field;
   }),

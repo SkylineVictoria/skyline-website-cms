@@ -28,6 +28,9 @@
 //                                           a hand-edited row kept, a failed fetch recorded with nothing changed, data.gov.au preferred when it has the
 //                                           year, and the pg_cron dispatcher through pg_net with the Vault key (needs a fresh `up`: the mock URLs are
 //                                           written to the functions .env at start)
+//   node scripts/lab/staff-lab.mjs assistant P09-01 public assistant per tenant: two verified hosts with the same FAQ, the real public-assistant
+//                                           and public-assistant-index functions (mock embeddings), cache, spoofed / unverified / unknown hosts,
+//                                           a tenant document in another institution's storage refused, unpublish reflected (needs a fresh `up`)
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -67,7 +70,11 @@ const LAB_SECRETS = {
   EF_HR_EMAIL_FROM: "Skyline HR <hr@lab.example.test>",
   EF_HR_ADMIN_NOTIFY_TO: "hr.one@lab.example.test, hr.two@lab.example.test",
   EF_HR_PUBLIC_SITE_URL: "http://127.0.0.1:57330",
-  OPENAI_API_KEY: "lab-openai-key",
+  // The public assistant and its index worker accept a base-URL override only for this literal key and a loopback/Docker host
+  // (P09-01 `assistant` checks): embeddings go to the mock below, never to OpenAI.
+  OPENAI_API_KEY: "local-test-openai-key",
+  OPENAI_BASE_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}/v1`,
+  PUBLIC_ASSISTANT_WORKER_SECRET: "lab-public-assistant-worker-secret",
   OPENAI_DOCUMENT_MODEL: "lab-reader",
   EF_OPENAI_API_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}`,
   // Address search (Geoscape): the lab key and a mock on port 57392; nothing reaches Geoscape.
@@ -388,7 +395,7 @@ const stopMockPostmark = () => new Promise((r) => (postmark.server ? postmark.se
 /* ------------------------------------------------------------------ mock OpenAI reader (runs inside the check commands) */
 // Answers the Responses API shape the shared adapter parses. The field list comes from the request's own JSON schema, so it
 // follows the adapter. A passport gets MOCK_PASSPORT, a visa MOCK_VISA; any other category answers with no fields.
-const reader = { calls: 0, server: null };
+const reader = { calls: 0, embeddings: 0, server: null };
 function startMockReader() {
   return new Promise((resolve, reject) => {
     reader.server = http.createServer((req, res) => {
@@ -397,6 +404,12 @@ function startMockReader() {
       req.on("end", () => {
         let body = {};
         try { body = JSON.parse(Buffer.concat(parts).toString("utf8")); } catch { /* keep {} */ }
+        if (req.url === "/v1/embeddings" && req.headers.authorization === `Bearer ${LAB_SECRETS.OPENAI_API_KEY}`) {
+          // Public assistant (P09-01): one fixed, non-zero vector, so ranking is decided by text and tenant scope alone.
+          reader.embeddings++;
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ data: [{ embedding: [1, ...Array(1535).fill(0.001)] }], usage: { total_tokens: 5 } }));
+        }
         if (req.url !== "/v1/responses" || req.headers.authorization !== `Bearer ${LAB_SECRETS.OPENAI_API_KEY}`) { res.writeHead(401); return res.end("{}"); }
         reader.calls++;
         if (body.text?.format?.name === "document_category_v1") {
@@ -2242,6 +2255,93 @@ async function signingBrowser() {
 
 
 
+/** P09-01: the public assistant's knowledge, cache and index are bound to the verified public tenant (real functions, mock embeddings). */
+async function assistant() {
+  const lab = readLab();
+  const run = Date.now().toString(36);
+  const A = nodeCrypto.randomUUID(), B = nodeCrypto.randomUUID();
+  const hostA = `p9a-${run}.lab.test`, hostB = `p9b-${run}.lab.test`, hostU = `p9u-${run}.lab.test`;
+  const q = (v) => `'${String(v).replace(/'/g, "''")}'`;
+  psql(`insert into public.tenants(id,slug,name,status) values(${q(A)},${q(`p9a-${run}`)},'P9 Lab Institute A','active'),(${q(B)},${q(`p9b-${run}`)},'P9 Lab Institute B','active');
+insert into public.tenant_domains(hostname,tenant_id,verified_at,verification_evidence) values(${q(hostA)},${q(A)},now(),'lab'),(${q(hostB)},${q(B)},now(),'lab'),(${q(hostU)},${q(A)},null,null);
+insert into public.public_assistant_faqs(question,normalized_question,answer,source_url,status,tenant_id) values
+ ('What is the refund window?','what is the refund window','Alpha refunds within 7 days.','/refunds','published',${q(A)}),
+ ('What is the refund window?','what is the refund window','Bravo refunds within 30 days.','/refunds','published',${q(B)});
+insert into public.cms_courses(id,slug,code,name,fees,full_description,status,tenant_id) values
+ (${q(`p9a-course-${run}`)},${q(`p9a-course-${run}`)},'P9LA1','Alpha Lab Diploma','AUD 11,111','Visitors gather at the north lawn beacon after the alarm.','Published',${q(A)}),
+ (${q(`p9b-course-${run}`)},${q(`p9b-course-${run}`)},'P9LB1','Bravo Lab Certificate','AUD 22,222','Visitors gather at the east gate marker after the alarm.','Published',${q(B)}),
+ (${q(`p9b-draft-${run}`)},${q(`p9b-draft-${run}`)},'P9LB2','Bravo Hidden Draft','AUD 1','Draft text.','Draft',${q(B)});
+insert into public.cms_documents(id,name,url,status,assistant_publication_approved,bucket_name,storage_path,mime_type,file_size,tenant_id) values
+ (${q(`p9b-borrowed-${run}`)},'Borrowed policy','/documents/borrowed','Published',true,'cms-media','policies/p9-borrowed.pdf','application/pdf',100,${q(B)});`);
+  let ip = 0;
+  const ask = async (question, { header, origin } = {}) => {
+    const headers = { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}`, "Content-Type": "application/json", "x-forwarded-for": `203.0.113.${(++ip % 250) + 1}` };
+    if (header) headers["x-tenant-domain"] = header;
+    if (origin) headers.Origin = origin;
+    const res = await fetch(`${lab.apiUrl}/functions/v1/public-assistant`, { method: "POST", headers, body: JSON.stringify({ question }) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  const onA = { header: hostA, origin: `https://${hostA}` }, onB = { header: hostB, origin: `https://${hostB}` }, legacy = { origin: SITE };
+  const text = (r) => JSON.stringify(r.body);
+
+  // FAQ + cache: same question on two hosts; A first so that its answer is cached before B asks.
+  const a1 = await ask("What is the refund window?", onA), b1 = await ask("What is the refund window?", onB), a2 = await ask("What is the refund window?", onA);
+  check("assistant: tenant A host gets A's FAQ answer", a1.status === 200 && a1.body.answer === "Alpha refunds within 7 days." && a1.body.mode === "faq", text(a1));
+  check("assistant: tenant B host asking the same question gets B's answer, not A's cached one", b1.status === 200 && b1.body.answer === "Bravo refunds within 30 days.", text(b1));
+  check("assistant: A's cached answer is still A's", a2.body.answer === "Alpha refunds within 7 days.", text(a2));
+  const cacheRows = psql(`select count(*) from public.public_assistant_answer_cache where tenant_id in (${q(A)},${q(B)})`);
+  check("assistant: one cache row per tenant (two)", cacheRows === "2", cacheRows);
+  const leg = await ask("What is the refund window?", legacy);
+  check("assistant: the legacy site never answers from a tenant FAQ", leg.status === 200 && !/Alpha|Bravo/.test(text(leg)), text(leg));
+
+  // Structured course answers name the tenant and list only its published courses.
+  const listB = await ask("Which courses do you offer?", onB);
+  check("assistant: B's course list is B's published courses only, under B's name", listB.status === 200 && /P9 Lab Institute B courses/.test(listB.body.answer)
+    && listB.body.sources.some((s) => s.url === `/courses/p9b-course-${run}`) && !/Alpha Lab|Hidden Draft|SLIT/.test(text(listB)), text(listB));
+  const feeA = await ask("What are the fees for P9LB1?", onA);
+  check("assistant: A cannot read B's course by code", feeA.status === 200 && !/22,222|Bravo/.test(text(feeA)), text(feeA));
+
+  // Host checks: spoofed header, unverified and unknown hosts fail closed; no fallback to another institution.
+  const spoof = await ask("What is the refund window?", { header: hostA, origin: `https://${hostB}` });
+  check("assistant: a tenant header that disagrees with the browser Origin is refused (403)", spoof.status === 403 && spoof.body.code === "tenant_origin_mismatch", text(spoof));
+  const spoofLegacy = await ask("What is the refund window?", { header: hostA, origin: SITE });
+  check("assistant: a tenant header sent from the legacy site is refused (403)", spoofLegacy.status === 403, text(spoofLegacy));
+  const unverified = await ask("What is the refund window?", { header: hostU, origin: `https://${hostU}` });
+  check("assistant: an unverified domain gets no answer (404)", unverified.status === 404 && unverified.body.code === "tenant_unavailable" && !/Alpha/.test(text(unverified)), text(unverified));
+  const unknown = await ask("What is the refund window?", { origin: `https://unknown-${run}.lab.test` });
+  check("assistant: an unknown host without a header is not answered from the legacy site (404)", unknown.status === 404, text(unknown));
+  const usage = psql(`select count(*) from public.public_assistant_usage_events where tenant_id=${q(B)} and kind='retrieval'`);
+  check("assistant: B's usage is recorded against B", Number(usage) >= 2, usage);
+
+  // Index worker: drain the queue, then retrieval by meaning stays inside each tenant.
+  const embeddingsBefore = reader.embeddings;
+  for (let i = 0; i < 300; i++) {
+    const res = await fetch(`${lab.apiUrl}/functions/v1/public-assistant-index`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.serviceKey}`, "x-worker-secret": LAB_SECRETS.PUBLIC_ASSISTANT_WORKER_SECRET } });
+    const body = await res.json().catch(() => ({}));
+    if (body.processed === false && !body.stale) break;
+  }
+  const indexed = psql(`select string_agg(source_key||':'||coalesce(tenant_id::text,'legacy'),',' order by source_key) from public.public_assistant_sources where publication_status='published' and source_key like 'p9%${run}'`);
+  check("assistant: the worker indexed A's and B's published courses under their own tenants (drafts not indexed)",
+    indexed === `p9a-course-${run}:${A},p9b-course-${run}:${B}`, indexed);
+  check("assistant: indexing used the mock embeddings only", reader.embeddings > embeddingsBefore, String(reader.embeddings));
+  const borrowed = psql(`select state||':'||coalesce(error,'') from public.public_assistant_index_jobs where source_key=${q(`p9b-borrowed-${run}`)} order by created_at desc limit 1`);
+  check("assistant: B's document pointing at the legacy institution's media is refused and never indexed", /untrusted_document_location/.test(borrowed)
+    && psql(`select count(*) from public.public_assistant_sources where source_key=${q(`p9b-borrowed-${run}`)}`) === "0", borrowed);
+  let privateRefused = false;
+  try { psql(`insert into public.cms_documents(id,name,status,assistant_publication_approved,bucket_name,storage_path,tenant_id) values(${q(`p9b-private-${run}`)},'x','Published',true,'enrollment-documents',${q(`${B}/x.pdf`)},${q(B)})`); } catch { privateRefused = true; }
+  check("assistant: a public document row cannot point at the private student bucket", privateRefused);
+  const whereB = await ask("Where do visitors gather after the alarm?", onB), whereA = await ask("Where do visitors gather after the alarm?", onA), whereL = await ask("Where do visitors gather after the alarm?", legacy);
+  check("assistant: B's retrieval answer comes from B's indexed course only", whereB.status === 200 && whereB.body.mode === "retrieval" && /east gate/.test(whereB.body.answer) && !/north lawn/.test(text(whereB)), text(whereB));
+  check("assistant: A's retrieval answer comes from A's indexed course only", whereA.status === 200 && /north lawn/.test(whereA.body.answer) && !/east gate/.test(text(whereA)), text(whereA));
+  check("assistant: the legacy site retrieves neither tenant", whereL.status === 200 && !/north lawn|east gate/.test(text(whereL)), text(whereL));
+
+  // Unpublish: B's course leaves B's answers (cache invalidated by the CMS change).
+  psql(`update public.cms_courses set status='Draft' where id=${q(`p9b-course-${run}`)}`);
+  const afterB = await ask("Where do visitors gather after the alarm?", onB);
+  check("assistant: unpublishing B's course removes it from B's answers", afterB.status === 200 && !/east gate/.test(text(afterB)), text(afterB));
+  process.exitCode = failures ? 1 : 0;
+}
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -2260,6 +2360,7 @@ function sqlSuites() {
 const command = process.argv[2] ?? "up";
 try {
   if (["apply", "onboard", "emails", "offer", "activate", "retention", "flow", "wizard", "e2e"].includes(command)) { await startMockPostmark(); await startMockReader(); await startMockGeoscape(); }
+  if (command === "assistant") await startMockReader();
   if (command === "holidays") await startMockHolidaySources();
   if (command === "up") await up();
   else if (command === "apply") await apply();
@@ -2280,6 +2381,7 @@ try {
     const pw = await new Promise((resolve) => { const child = spawn(process.platform === "win32" ? "npx.cmd" : "npx", ["playwright", "test", ...process.argv.slice(3)], { cwd: REPO, env, stdio: "inherit", shell: process.platform === "win32" }); child.on("exit", (code) => resolve(code ?? 1)); });
     if (pw !== 0) failures++;
   }
+  else if (command === "assistant") await assistant();
   else if (command === "sql") sqlSuites();
   else if (command === "down") { const r = supabase(["stop", "--no-backup"]); console.log(r.code === 0 ? "Lab stopped." : r.out); }
   else throw new Error(`unknown command ${command} (up | apply | onboard | emails | offer | activate | retention | holidays | flow | wizard | e2e | sql | down)`);

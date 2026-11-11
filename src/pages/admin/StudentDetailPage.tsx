@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Button, Card, PageHeader } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
@@ -94,6 +95,7 @@ export default function StudentDetailPage() {
           </dl>
         </Card>
       </div>
+      <div className="mt-4"><SubjectSigningPanel type="student" id={id} name={student.name} /></div>
     </div>
   );
 }

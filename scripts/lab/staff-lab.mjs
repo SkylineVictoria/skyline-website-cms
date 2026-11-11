@@ -16,6 +16,9 @@
 //                                           list of inputs through both), existing bank details were encrypted by the migration, upload first > reading >
 //                                           details > bank details (masked) > submit, Admin reveal (logged) and ticks, an Editor gets nothing, and the
 //                                           bank numbers are in no log and no email
+//   node scripts/lab/staff-lab.mjs signing  Documents & Signatures: templates and versions, variables from a student / employee / agent, one signer, three in
+//                                           order, two at once, placed fields in the signed PDF, invitations, reminders, expiry, decline, void, completion
+//                                           mail with the signed PDF and certificate, tamper checks and refused access (mock Postmark)
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
@@ -30,6 +33,8 @@
 // Document reading: staff-onboarding's reader calls OpenAI, redirected (local only, EF_OPENAI_API_URL) to a mock on port 57391
 // that answers a fixed passport (name, middle name, date of birth); nothing reaches OpenAI.
 import http from "node:http";
+import nodeCrypto from "node:crypto";
+import zlib from "node:zlib";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -1469,6 +1474,372 @@ async function wizard() {
   check("...and in no address: the page calls carry the link token and the bank details in the request body only", !/[?&](t|bsb|account)/i.test(`${lab.apiUrl}/functions/v1/staff-onboarding`));
 }
 
+/* ------------------------------------------------------------------ Documents & Signatures (SIGN-02) */
+async function signCall(lab, bearer, body, file, headers = {}) {
+  let payload = JSON.stringify(body); const h = { apikey: lab.anonKey, Authorization: `Bearer ${bearer}`, ...headers };
+  if (file) { payload = new FormData(); payload.set("data", JSON.stringify(body)); payload.set("file", new Blob([file], { type: "application/pdf" }), "document.pdf"); } else h["content-type"] = "application/json";
+  const res = await fetch(`${lab.apiUrl}/functions/v1/document-signing`, { method: "POST", headers: h, body: payload });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+const signRpc = async (lab, bearer, action, id = null, data = {}) => restRpc(lab, bearer, "signing_admin", { p_action: action, p_id: id, p_data: data });
+/** A small transparent PNG with a stroke, like the page makes from a drawn signature. */
+function signaturePng() {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf) => { let c = 0xffffffff; for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const w = 120, h = 40, raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (Math.abs(y - (20 + Math.round(10 * Math.sin(x / 9)))) < 2) { const o = y * (w * 4 + 1) + 1 + x * 4; raw[o] = 10; raw[o + 1] = 20; raw[o + 2] = 90; raw[o + 3] = 255; }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+}
+/** The words on each page of a PDF with where they sit (pdf.js), to prove a field was printed where it was placed. */
+async function pdfWords(bytes) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, verbosity: 0 }).promise; const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) { const page = await doc.getPage(i); const view = page.getViewport({ scale: 1 }); const text = await page.getTextContent();
+    pages.push({ width: view.width, height: view.height, items: text.items.map((t) => ({ text: t.str, x: t.transform[4], y: t.transform[5] })) }); }
+  return pages;
+}
+const sha256 = (bytes) => nodeCrypto.createHash("sha256").update(bytes).digest("hex");
+async function signedFile(url) { const res = await fetch(url); return res.ok ? new Uint8Array(await res.arrayBuffer()) : null; }
+
+async function signing() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  await startMockPostmark();
+  const run = nodeCrypto.randomBytes(3).toString("hex"), mail = (name) => `sign.${name}.${run}@example.test`;
+  const CONSENT = "I have read this document and agree to its contents. I consent to sign it electronically and adopt the signature I provide here as my electronic signature.";
+  const state = (id) => psql(`select state from hr.sign_requests where id = '${id}';`);
+  const recState = (id) => psql(`select string_agg(state, ',' order by signing_order, id) from hr.sign_recipients where request_id = '${id}';`);
+  const linkOf = (address, kind = /^Please sign|^Reminder to sign/) => tokenIn([...mailsTo(address)].reverse().find((m) => kind.test(m.subject))?.text);
+  const waitMail = async (address, subject, count = 1) => { for (let i = 0; i < 40; i++) { if (mailsTo(address).filter((m) => subject.test(m.subject)).length >= count) break; await new Promise((r) => setTimeout(r, 250)); } return mailsTo(address).filter((m) => subject.test(m.subject)).length; };
+  const sign = (token, hash, extra = {}) => signCall(lab, lab.anonKey, { action: "sign", token, name: "Lab Signer", agreed: true, signatureKind: "typed", documentHash: hash, ...extra });
+  const open = (token) => signCall(lab, lab.anonKey, { action: "open", token });
+  try {
+    const jwt = await adminToken(lab);
+    const pdf3 = await realPdf(3);
+
+    // ---- related records (student, employee, agent). The tables differ between this lab and a bare database, so each is best effort.
+    const seed = (label, sql) => { try { return psql(sql).split("\n").pop(); } catch (e) { console.log(`SKIP seed ${label}: ${String(e.message).split("\n")[0].slice(0, 160)}`); return null; } };
+    const employeeId = seed("employee", `with p as (insert into hr.staff_profiles(first_name, last_name, email, phone_e164, address_street, address_suburb, address_state, address_postcode)
+      values ('Signe', 'Employee', '${mail("employee")}', '+6149${String(parseInt(run, 16)).padStart(8, "0").slice(0, 8)}', '1 Lab Street', 'Melbourne', 'VIC', '3000') returning id),
+      e as (insert into hr.employment(profile_id, job_title, department) select id, 'Lab Trainer', 'Training' from p returning profile_id) select profile_id from e;`);
+    const agencyId = seed("agency", `with a as (insert into public.agencies(name) values ('Sign Lab Agency ${run}') returning id) select id from a;`) ?? seed("agency (existing)", "select id from public.agencies order by created_at limit 1;");
+    const agentId = agencyId && seed("agent", `with g as (insert into public.agents(business_id, full_name, email) values ('${agencyId}', 'Agnes Agent', '${mail("agent")}') returning id) select id from g;`);
+    const studentId = agencyId && seed("student", `with s as (insert into public.enrollment_students(agency_id, full_name, email, details) values ('${agencyId}', 'Stu Dent', '${mail("student")}',
+      '{"first_name":"Stu","last_name":"Dent","au_street":"9 Campus Road","au_suburb":"Carlton","au_state":"VIC","au_postcode":"3053"}') returning id) select id from s;`);
+    if (studentId) seed("student course", `insert into public.cms_courses(id, slug, code, name, fees) values ('lab-sign-${run}', 'lab-sign-${run}', 'LAB${run}', 'Certificate IV in Lab Signing', 'AUD 12,000') on conflict do nothing;
+      with ap as (insert into public.enrollment_applications(student_id, agency_id) values ('${studentId}', '${agencyId}') returning id)
+      insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title) select id, 'lab-sign-${run}', 'LAB${run}', 'Certificate IV in Lab Signing' from ap; select 1;`);
+
+    // ---- 11. unauthorized access
+    const anonRpc = await restRpc(lab, lab.anonKey, "signing_admin", { p_action: "list" });
+    check("unauthorized: the admin RPC refuses a visitor", anonRpc.status >= 400, JSON.stringify(anonRpc.body).slice(0, 120));
+    const anonSvc = await restRpc(lab, lab.anonKey, "signing_service", { p_action: "tick" });
+    check("unauthorized: the service RPC refuses a visitor", anonSvc.status >= 400);
+    const adminSvc = await restRpc(lab, jwt, "signing_service", { p_action: "tick" });
+    check("unauthorized: the service RPC refuses even an administrator's browser", adminSvc.status >= 400);
+    const anonCreate = await signCall(lab, lab.anonKey, { action: "create", recipients: [{ name: "No Body", email: mail("nobody") }], title: "x" }, pdf3);
+    check("unauthorized: a visitor cannot create a request through the function", anonCreate.status === 403, `${anonCreate.status} ${JSON.stringify(anonCreate.body)}`);
+    let denied = false; try { psql("begin; set local role authenticated; select count(*) from hr.sign_requests; commit;"); } catch { denied = true; }
+    check("unauthorized: the signing tables cannot be read from a browser role", denied);
+    check("unauthorized: an unknown link is refused", (await open("a".repeat(64))).status === 403);
+
+    // ---- templates: save, versions, duplicate, archive, delete, restore, PDF upload
+    const tSave = await signRpc(lab, jwt, "template_save", null, { name: `Employment contract ${run}`, title: "Employment contract for {{employee.name}}",
+      body: "Dear {{employee.first_name}},\n\nYou are offered the position of {{employee.position}} in {{employee.department}} on {{current_date}}.\n\nSalary: {{salary}}.", audience: "employee", category: "employment_contract",
+      roles: [{ key: "employee", label: "Employee", order: 1, required: true }, { key: "hr", label: "HR Manager", order: 2, required: true }, { key: "director", label: "Director", order: 3, required: true }],
+      fields: [{ type: "signature", role: "employee", page: 1, x: 0.1, y: 0.7, w: 0.3, h: 0.06 }, { type: "date", role: "employee", page: 1, x: 0.45, y: 0.7, w: 0.2, h: 0.03 },
+        { type: "text", role: "employee", page: 1, x: 0.1, y: 0.8, w: 0.4, h: 0.03, label: "Tax residency" }, { type: "checkbox", role: "employee", page: 1, x: 0.1, y: 0.85, w: 0.03, h: 0.02, label: "I agree" },
+        { type: "signature", role: "hr", page: 1, x: 0.55, y: 0.78, w: 0.3, h: 0.06 }, { type: "initials", role: "director", page: 1, x: 0.8, y: 0.9, w: 0.1, h: 0.04 }],
+      signing_mode: "sequential", expiry_days: 10, reminder_days: 2 });
+    const tpl = tSave.body;
+    check("template: created with roles, fields, expiry and reminder settings", tSave.status === 200 && tpl.version === 1 && tpl.roles?.length === 3 && tpl.fields?.length === 6 && tpl.expiry_days === 10, JSON.stringify(tSave.body).slice(0, 200));
+    const tEdit = await signRpc(lab, jwt, "template_save", tpl.id, { ...tpl, name: `Employment contract ${run} v2` });
+    const tVersions = await signRpc(lab, jwt, "template_versions", tpl.id);
+    check("template: an edit makes version 2 and keeps version 1", tEdit.body.version === 2 && tVersions.body?.length === 2);
+    const tRestore = await signRpc(lab, jwt, "template_restore", tpl.id, { version: 1 });
+    check("template: restoring version 1 makes version 3 with the old name", tRestore.body.version === 3 && tRestore.body.name === `Employment contract ${run}`);
+    const tBad = await signRpc(lab, jwt, "template_save", null, { name: "Bad", title: "Bad", body: "x", fields: [{ type: "signature", role: "ghost", page: 1, x: 0, y: 0, w: 0.1, h: 0.1 }] });
+    check("template: a field for a signer that does not exist is refused", tBad.status >= 400);
+    const tDup = await signCall(lab, jwt, { action: "template_duplicate", id: tpl.id });
+    check("template: duplicate makes an independent copy", tDup.status === 200 && tDup.body.id !== tpl.id && /\(copy\)$/.test(tDup.body.name ?? ""), JSON.stringify(tDup.body).slice(0, 160));
+    const tArch = await signRpc(lab, jwt, "template_archive", tDup.body.id);
+    const archivedUse = await signCall(lab, jwt, { action: "create", templateId: tDup.body.id, recipients: [{ name: "Ann Archived", email: mail("arch"), role: "employee" }], values: {} });
+    check("template: an archived template cannot start a request", tArch.body.status === "archived" && archivedUse.status === 400);
+    await signRpc(lab, jwt, "template_delete", tDup.body.id);
+    const listed = await signRpc(lab, jwt, "list");
+    check("template: a deleted template leaves the list", !listed.body.templates.some((t) => t.id === tDup.body.id) && listed.body.templates.some((t) => t.id === tpl.id));
+    const tPdf = await signCall(lab, jwt, { action: "template_upload", template: { name: `Consent form ${run}`, title: "Consent form", audience: "student", category: "consent_form",
+      roles: [{ key: "student", label: "Student", order: 1, required: true }],
+      fields: [{ type: "text", role: "sender", page: 2, x: 0.1, y: 0.2, w: 0.6, h: 0.03, value: "{{student.first_name}} {{student.last_name}} / {{course.name}}" }, { type: "signature", role: "student", page: 3, x: 0.1, y: 0.5, w: 0.3, h: 0.07 }] } }, pdf3);
+    check("template: a PDF upload becomes a PDF template with its page count", tPdf.status === 200 && tPdf.body.kind === "pdf" && tPdf.body.source_pages === 3, JSON.stringify(tPdf.body).slice(0, 200));
+    const notPdf = await signCall(lab, jwt, { action: "template_upload", template: { name: "Bad", title: "Bad" } }, new TextEncoder().encode("not a pdf"));
+    check("template: a file that is not a PDF is refused", notPdf.status === 400);
+
+    // ---- 4. dynamic variables
+    if (employeeId) {
+      const subj = await signRpc(lab, jwt, "subject_values", employeeId, { type: "employee" });
+      check("variables: an employee's record fills name, position and address", subj.body?.values?.["employee.name"] === "Signe Employee" && subj.body.values["employee.position"] === "Lab Trainer" && /1 Lab Street, Melbourne, VIC, 3000/.test(subj.body.values["employee.address"]), JSON.stringify(subj.body).slice(0, 200));
+      const preview = await signCall(lab, jwt, { action: "template_preview", id: tpl.id, subjectType: "employee", subjectId: employeeId });
+      const words = preview.status === 200 ? (await pdfWords(Buffer.from(preview.body.pdfBase64, "base64"))).flatMap((p) => p.items.map((i) => i.text)).join(" ") : "";
+      check("variables: the preview shows the record's values and marks what is still missing", /Dear Signe/.test(words) && /Lab Trainer/.test(words) && /\[salary\]/.test(words), words.slice(0, 200));
+      const missing = await signCall(lab, jwt, { action: "create", templateId: tpl.id, subjectType: "employee", subjectId: employeeId, recipients: [{ name: "Signe Employee", email: mail("employee"), role: "employee" }], values: {} });
+      check("variables: a request with a variable left empty is refused, naming it", missing.status === 400 && /salary/.test(missing.body.error ?? ""), JSON.stringify(missing.body));
+    } else console.log("NOT RUN variables from an employee record (no employee could be seeded)");
+    if (studentId) {
+      const subj = await signRpc(lab, jwt, "subject_values", studentId, { type: "student" });
+      check("variables: a student's record fills first name, last name, email and address", subj.body?.values?.["student.first_name"] === "Stu" && subj.body.values["student.last_name"] === "Dent" && subj.body.values["student.email"] === mail("student") && /9 Campus Road, Carlton/.test(subj.body.values["student.address"]), JSON.stringify(subj.body).slice(0, 240));
+      if (subj.body?.values?.["course.name"]) check("variables: the student's course name and fees come from the course", subj.body.values["course.name"] === "Certificate IV in Lab Signing" && subj.body.values["course.fees"] === "AUD 12,000");
+      else console.log("NOT RUN course variables (no application with a course could be seeded here)");
+    } else console.log("NOT RUN variables from a student record (no student could be seeded)");
+
+    // ---- 1. single signer, with placed fields, on an uploaded PDF
+    const c1 = await signCall(lab, jwt, { action: "create", title: `Single signer ${run}`, recipients: [{ name: "Sam Single", email: mail("single") }], message: "Please sign by Friday.", ...(employeeId ? { subjectType: "employee", subjectId: employeeId } : {}) }, pdf3);
+    check("single: a draft is made with a reference and one recipient", c1.status === 200 && c1.body.state === "draft" && /^SLIT-\d{4}-\d{6}$/.test(c1.body.reference ?? "") && c1.body.recipients?.length === 1, JSON.stringify(c1.body).slice(0, 200));
+    const r1 = c1.body.recipients[0].id;
+    const f1 = await signRpc(lab, jwt, "fields_save", c1.body.id, { fields: [{ recipient_id: r1, type: "signature", page: 3, x: 0.1, y: 0.6, w: 0.35, h: 0.08 }, { recipient_id: r1, type: "date", page: 3, x: 0.5, y: 0.6, w: 0.2, h: 0.03 },
+      { recipient_id: r1, type: "name", page: 3, x: 0.1, y: 0.7, w: 0.3, h: 0.03 }, { recipient_id: r1, type: "text", page: 2, x: 0.2, y: 0.25, w: 0.5, h: 0.03, label: "Student number" },
+      { recipient_id: r1, type: "checkbox", page: 2, x: 0.2, y: 0.3, w: 0.03, h: 0.02, label: "I agree" }] });
+    check("single: fields are placed on the draft", f1.status === 200, JSON.stringify(f1.body).slice(0, 160));
+    const foreign = await signRpc(lab, jwt, "fields_save", c1.body.id, { fields: [{ recipient_id: LAB_ADMIN.id, type: "signature", page: 1, x: 0.1, y: 0.1, w: 0.1, h: 0.1 }] });
+    check("single: a field for someone who is not a recipient is refused", foreign.status >= 400);
+    await signRpc(lab, jwt, "fields_save", c1.body.id, { fields: (await signRpc(lab, jwt, "detail", c1.body.id)).body.fields });
+    const s1 = await signCall(lab, jwt, { action: "send", id: c1.body.id });
+    check("single: sending invites the recipient", s1.status === 200 && s1.body.state === "sent" && s1.body.mail?.sent === 1, JSON.stringify(s1.body).slice(0, 200));
+    const again = await signCall(lab, jwt, { action: "send", id: c1.body.id });
+    check("idempotent: sending the same request twice is refused and sends nothing", again.status === 400 && (await waitMail(mail("single"), /Please sign/)) === 1);
+    const t1 = linkOf(mail("single"));
+    const inviteText = mailsTo(mail("single"))[0]?.text ?? "";
+    check("email: the invitation carries the personal link, the sender's message and the reference", /^[a-f0-9]{64}$/.test(t1) && inviteText.includes("Please sign by Friday.") && inviteText.includes(c1.body.reference));
+    const o1 = await open(t1);
+    check("single: the link opens the document with only this person's fields", o1.status === 200 && o1.body.fields?.length === 5 && o1.body.recipient?.state === "viewed" && state(c1.body.id) === "viewed", JSON.stringify(o1.body).slice(0, 200));
+    const shown = await signedFile(o1.body.url);
+    check("single: the document is served by a short signed link and matches the recorded hash", !!shown && sha256(shown) === o1.body.documentHash);
+    const textField = o1.body.fields.find((f) => f.type === "text"), boxField = o1.body.fields.find((f) => f.type === "checkbox");
+    const noConsent = await signCall(lab, lab.anonKey, { action: "sign", token: t1, name: "Sam Single", agreed: false, documentHash: o1.body.documentHash });
+    check("single: signing without the consent is refused", noConsent.status === 400);
+    const incomplete = await sign(t1, o1.body.documentHash, { name: "Sam Single", values: {} });
+    check("single: signing with a required field empty is refused", incomplete.status === 400 && /required field/.test(incomplete.body.error ?? ""), JSON.stringify(incomplete.body));
+    const wrongDoc = await sign(t1, "f".repeat(64), { name: "Sam Single", values: { [textField.id]: "S1234567", [boxField.id]: "true" } });
+    check("single: signing a document other than the one shown is refused", wrongDoc.status === 400 && state(c1.body.id) === "viewed");
+    const done1 = await sign(t1, o1.body.documentHash, { name: "Sam Single", values: { [textField.id]: "S1234567", [boxField.id]: "true" } });
+    check("single: the signature completes the request", done1.status === 200 && done1.body.complete === true && state(c1.body.id) === "signed", JSON.stringify(done1.body));
+    const replay = await sign(t1, o1.body.documentHash, { name: "Sam Single", values: { [textField.id]: "S1234567", [boxField.id]: "true" } });
+    check("idempotent: signing again is refused", replay.status === 400 && psql(`select count(*) from hr.sign_events where request_id = '${c1.body.id}' and event = 'signed';`) === "1");
+
+    // ---- 10 + 5. the completed PDF: downloadable, hash recorded, fields printed where they were placed
+    const after1 = await open(t1);
+    const signed1 = await signedFile(after1.body.url), cert1 = after1.body.certificateUrl ? await signedFile(after1.body.certificateUrl) : null;
+    const row1 = JSON.parse(psql(`select row_to_json(r) from (select signed_hash, certificate_hash, original_hash from hr.sign_requests where id = '${c1.body.id}') r;`));
+    check("completed: the signer can download the signed PDF and it matches the recorded hash", !!signed1 && sha256(signed1) === row1.signed_hash && row1.signed_hash !== row1.original_hash);
+    check("completed: the completion certificate is downloadable and matches its recorded hash", !!cert1 && sha256(cert1) === row1.certificate_hash);
+    if (signed1) {
+      const pages = await pdfWords(signed1);
+      const find = (pageNo, text) => pages[pageNo - 1]?.items.find((i) => i.text.includes(text));
+      const near = (item, page, fx, fy, fh) => item && Math.abs(item.x - fx * page.width) < 6 && item.y > page.height * (1 - fy - fh) - 2 && item.y < page.height * (1 - fy) + 2;
+      check("placement: the PDF keeps its three pages (every signature had a place)", pages.length === 3);
+      check("placement: the text answer is printed on page 2 inside its box", near(find(2, "S1234567"), pages[1], 0.2, 0.25, 0.03), JSON.stringify(find(2, "S1234567")));
+      check("placement: the typed signature is printed on page 3 inside its box", near(find(3, "Sam Single"), pages[2], 0.1, 0.6, 0.08), JSON.stringify(find(3, "Sam Single")));
+      check("placement: the signing date and the signer's name are printed on page 3 in their boxes", near(pages[2].items.find((i) => /^\d\d\/\d\d\/\d{4}$/.test(i.text.trim())), pages[2], 0.5, 0.6, 0.03) && pages[2].items.filter((i) => i.text.includes("Sam Single")).some((i) => near(i, pages[2], 0.1, 0.7, 0.03)));
+    }
+    if (cert1) { const words = (await pdfWords(cert1)).flatMap((p) => p.items.map((i) => i.text)).join(" "), tight = words.replace(/\s+/g, "");
+      check("completed: the certificate names the signer, both hashes and the history", words.includes("Sam Single") && tight.includes(row1.original_hash) && tight.includes(row1.signed_hash) && /Signed by/.test(words) && words.includes(c1.body.reference), words.slice(0, 160)); }
+    const copies = await waitMail(mail("single"), /Signed copy/), adminCopies = await waitMail(LAB_ADMIN.email, /Completed:/);
+    const copy = mailsTo(mail("single")).find((m) => /Signed copy/.test(m.subject));
+    check("email: the signer and the sender each get one completion email with the signed PDF and the certificate", copies === 1 && adminCopies === 1 && copy?.attachments?.length === 2 && sha256(Buffer.from(copy.attachments[0].Content, "base64")) === row1.signed_hash, `${copies} ${adminCopies} ${copy?.attachments?.length}`);
+    const verify1 = await signCall(lab, jwt, { action: "verify", id: c1.body.id });
+    check("audit: verification passes for an untouched request (history chain and three files)", verify1.status === 200 && verify1.body.ok === true && verify1.body.files?.length === 3, JSON.stringify(verify1.body));
+    const adminUrl = await signCall(lab, jwt, { action: "admin_url", id: c1.body.id }), certUrl = await signCall(lab, jwt, { action: "admin_url", id: c1.body.id, which: "certificate" });
+    check("completed: an administrator can retrieve the signed PDF and the certificate", adminUrl.status === 200 && certUrl.status === 200 && sha256(await signedFile(adminUrl.body.url)) === row1.signed_hash);
+    const detail1 = (await signRpc(lab, jwt, "detail", c1.body.id)).body;
+    const signer1 = detail1.recipients[0];
+    check("audit: the signer's time, IP, browser, signature hash and the event history are recorded", !!signer1.signed_at && !!signer1.ip && !!signer1.signature_hash && detail1.chain_ok === true && ["created", "sent", "viewed", "signed", "completed"].every((e) => detail1.events.some((x) => x.event === e)), JSON.stringify(signer1).slice(0, 200));
+    let frozen = false; try { psql(`update hr.sign_events set event = 'forged' where request_id = '${c1.body.id}';`); } catch { frozen = true; }
+    let undeletable = false; try { psql(`delete from hr.sign_events where request_id = '${c1.body.id}';`); } catch { undeletable = true; }
+    check("tamper: the history cannot be edited or deleted, even by the database owner's ordinary statements", frozen && undeletable);
+    const pub = await fetch(`${lab.apiUrl}/storage/v1/object/public/signing-documents/${c1.body.id}/original.pdf`);
+    const anonGet = await fetch(`${lab.apiUrl}/storage/v1/object/signing-documents/${c1.body.id}/original.pdf`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } });
+    check("storage: no public URL and no anonymous read of a signing document", !pub.ok && !anonGet.ok, `${pub.status} ${anonGet.status}`);
+    const signedPath = psql(`select signed_path from hr.sign_requests where id = '${c1.body.id}';`);
+    const tamper = await fetch(`${lab.apiUrl}/storage/v1/object/signing-documents/${signedPath}`, { method: "PUT", headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}`, "content-type": "application/pdf", "x-upsert": "true" }, body: await realPdf(1) });
+    if (tamper.ok) {
+      const verify2 = await signCall(lab, jwt, { action: "verify", id: c1.body.id }), refused = await signCall(lab, jwt, { action: "admin_url", id: c1.body.id });
+      check("tamper: a changed stored PDF is detected and no longer served", verify2.body.ok === false && verify2.body.files.find((f) => f.name === "Signed document")?.ok === false && refused.status === 400 && /integrity/.test(refused.body.error ?? ""), JSON.stringify(verify2.body));
+    } else console.log(`NOT RUN tamper detection on a stored file (the lab could not overwrite it: ${tamper.status})`);
+
+    // ---- 2. sequential: Employee > HR Manager > Director, from the template
+    const people = [{ name: "Signe Employee", email: mail("employee"), role: "employee", label: "Employee", order: 1 }, { name: "Hana Manager", email: mail("hr"), role: "hr", label: "HR Manager", order: 2 }, { name: "Dev Director", email: mail("director"), role: "director", label: "Director", order: 3 }];
+    const c2 = await signCall(lab, jwt, { action: "create", templateId: tpl.id, recipients: people, values: { salary: "AUD 85,000", ...(employeeId ? {} : { "employee.name": "Signe Employee", "employee.first_name": "Signe", "employee.position": "Lab Trainer", "employee.department": "Training" }) }, ...(employeeId ? { subjectType: "employee", subjectId: employeeId } : {}) });
+    check("sequential: a request from the template takes its mode, expiry, reminder and fields", c2.status === 200 && c2.body.signing_mode === "sequential" && c2.body.expiry_days === 10 && c2.body.reminder_days === 2 && c2.body.title === "Employment contract for Signe Employee", JSON.stringify(c2.body).slice(0, 240));
+    const id2 = c2.body.id;
+    check("sequential: template fields land on the matching recipients", psql(`select count(*) from hr.sign_fields where request_id = '${id2}' and recipient_id is not null;`) === "6");
+    await signCall(lab, jwt, { action: "send", id: id2 });
+    check("sequential: only the first signer is invited", recState(id2) === "sent,pending,pending" && (await waitMail(mail("employee"), /Please sign/)) === 1 && mailsTo(mail("hr")).length === 0 && mailsTo(mail("director")).length === 0, recState(id2));
+    const tE = linkOf(mail("employee")); const oE = await open(tE);
+    const eText = oE.body.fields.find((f) => f.type === "text"), eBox = oE.body.fields.find((f) => f.type === "checkbox");
+    check("sequential: the first signer sees their four fields and nobody else's", oE.body.fields.length === 4 && oE.body.signers.length === 3);
+    const hrField = psql(`select f.id from hr.sign_fields f join hr.sign_recipients c on c.id = f.recipient_id where f.request_id = '${id2}' and c.role_key = 'employee' and f.type = 'signature';`);
+    const otherText = psql(`select id from hr.sign_fields where request_id = '${c1.body.id}' and type = 'text' and recipient_id is not null;`);
+    const cross = await sign(tE, oE.body.documentHash, { name: "Signe Employee", values: { [eText.id]: "Australian resident", [eBox.id]: "true", [otherText]: "hijack" } });
+    check("unauthorized: a signer cannot fill a field that is not theirs", cross.status === 403 && /own fields/.test(cross.body.error ?? "") && recState(id2) === "viewed,pending,pending" && !!hrField, `${cross.status} ${JSON.stringify(cross.body)}`);
+    const sE = await sign(tE, oE.body.documentHash, { name: "Signe Employee", signatureKind: "drawn", signatureImage: signaturePng(), values: { [eText.id]: "Australian resident", [eBox.id]: "true" } });
+    check("sequential: the first signature (drawn) leaves the request partially signed and invites the second signer", sE.status === 200 && sE.body.complete === false && state(id2) === "partial" && recState(id2) === "signed,sent,pending" && (await waitMail(mail("hr"), /Please sign/)) === 1 && mailsTo(mail("director")).length === 0, `${JSON.stringify(sE.body)} ${recState(id2)}`);
+    const tH = linkOf(mail("hr")); const oH = await open(tH);
+    const partial = await signedFile(oH.body.url);
+    check("sequential: the second signer sees the document with the first signature already on it", !!partial && sha256(partial) !== oH.body.documentHash && sha256(partial) === psql(`select current_hash from hr.sign_requests where id = '${id2}';`));
+    const sH = await sign(tH, oH.body.documentHash, { name: "Hana Manager", signatureKind: "uploaded", signatureImage: `data:image/png;base64,${signaturePng()}` });
+    check("sequential: the second signature (uploaded picture) invites the third signer", sH.status === 200 && recState(id2) === "signed,signed,sent" && (await waitMail(mail("director"), /Please sign/)) === 1);
+    check("sequential: not complete until every required signer has signed", state(id2) === "partial" && psql(`select count(*) from hr.sign_notifications where request_id = '${id2}' and kind = 'completed';`) === "0");
+    const tD = linkOf(mail("director")); const oD = await open(tD);
+    const sD = await sign(tD, oD.body.documentHash, { name: "Dev Director" });
+    check("sequential: the third signature completes it", sD.body.complete === true && state(id2) === "signed" && recState(id2) === "signed,signed,signed");
+    const done2 = await waitMail(mail("employee"), /Signed copy/) + await waitMail(mail("hr"), /Signed copy/) + await waitMail(mail("director"), /Signed copy/);
+    check("sequential: each of the three signers gets exactly one completion email, and exactly one invitation each", done2 === 3 && [mail("employee"), mail("hr"), mail("director")].every((a) => mailsTo(a).filter((m) => /Please sign/.test(m.subject)).length === 1), String(done2));
+    const final2 = await signedFile((await open(tD)).body.url);
+    if (final2) { const words = (await pdfWords(final2))[0].items.map((i) => i.text).join(" ");
+      check("sequential: the final PDF carries the answers and signatures of all signers on page 1", words.includes("Australian resident") && /DD/.test(words) && /AUD 85,000/.test(words) && /Hana Manager/.test(words), words.slice(0, 300)); }
+
+    // ---- 3. parallel: two required and one optional, signing at the same moment
+    const par = [{ name: "Pat Parallel", email: mail("p1") }, { name: "Quinn Parallel", email: mail("p2") }, { name: "Olly Optional", email: mail("p3"), required: false }];
+    const c3 = await signCall(lab, jwt, { action: "create", title: `Parallel ${run}`, signingMode: "parallel", recipients: par }, pdf3);
+    const id3 = c3.body.id;
+    await signCall(lab, jwt, { action: "send", id: id3 });
+    check("parallel: everyone is invited at once", recState(id3) === "sent,sent,sent" && (await waitMail(mail("p1"), /Please sign/)) + (await waitMail(mail("p2"), /Please sign/)) + (await waitMail(mail("p3"), /Please sign/)) === 3, recState(id3));
+    const tP1 = linkOf(mail("p1")), tP2 = linkOf(mail("p2")), tP3 = linkOf(mail("p3"));
+    const hash3 = (await open(tP1)).body.documentHash; await open(tP2);
+    const both = await Promise.all([sign(tP1, hash3, { name: "Pat Parallel" }), sign(tP2, hash3, { name: "Quinn Parallel" })]);
+    check("parallel: two people signing at the same moment both succeed and the request completes once", both.every((b) => b.status === 200) && both.filter((b) => b.body.complete).length === 1 && state(id3) === "signed", JSON.stringify(both.map((b) => b.body)));
+    check("parallel: the optional recipient who did not sign is skipped, not waited for", recState(id3) === "signed,signed,skipped" && (await open(tP3)).status === 403);
+    const final3 = await signedFile((await open(tP1)).body.url);
+    if (final3) { const pages = await pdfWords(final3); const last = pages[pages.length - 1].items.map((i) => i.text).join(" ");
+      check("parallel: with no placed fields both signatures are on an added signature page", pages.length === 4 && last.includes("Pat Parallel") && last.includes("Quinn Parallel"), last.slice(0, 200)); }
+    check("parallel: completion mail goes to the two who signed and the sender, not to the skipped recipient", (await waitMail(mail("p1"), /Signed copy/)) === 1 && (await waitMail(mail("p2"), /Signed copy/)) === 1 && mailsTo(mail("p3")).filter((m) => /Signed copy/.test(m.subject)).length === 0);
+
+    // ---- 6. reminders (and that they stop)
+    const c6 = await signCall(lab, jwt, { action: "create", title: `Reminder ${run}`, reminderDays: 2, recipients: [{ name: "Rem Inder", email: mail("rem") }, { name: "Later Signer", email: mail("rem2"), order: 2 }] }, pdf3);
+    const id6 = c6.body.id; await signCall(lab, jwt, { action: "send", id: id6 });
+    await waitMail(mail("rem"), /Please sign/);
+    const tick0 = await signCall(lab, jwt, { action: "tick" });
+    check("reminders: nothing is sent before the reminder interval", tick0.status === 200 && mailsTo(mail("rem")).filter((m) => /Reminder to sign/.test(m.subject)).length === 0, JSON.stringify(tick0.body));
+    psql(`update hr.sign_recipients set last_notified_at = now() - interval '3 days' where request_id = '${id6}';`);
+    const tick1 = await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("reminders: the schedule sends one reminder to the person whose turn it is, and none to the one still waiting", tick1.body.reminders === 1 && (await waitMail(mail("rem"), /Reminder to sign/)) === 1 && mailsTo(mail("rem2")).length === 0, JSON.stringify(tick1.body));
+    await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("idempotent: running the schedule again sends no second reminder", mailsTo(mail("rem")).filter((m) => /Reminder to sign/.test(m.subject)).length === 1);
+    const tInvite = tokenIn(mailsTo(mail("rem")).find((m) => /Please sign/.test(m.subject)).text), tRemind = linkOf(mail("rem"), /Reminder to sign/);
+    check("reminders: the reminder has its own link and the first link still works", tInvite !== tRemind && (await open(tInvite)).status === 200 && (await open(tRemind)).status === 200);
+    const resend = await signCall(lab, jwt, { action: "resend", id: id6, recipientId: c6.body.recipients[0].id });
+    check("dashboard: Resend sends the invitation again to a waiting recipient only", resend.status === 200 && (await waitMail(mail("rem"), /Please sign/, 2)) === 2 && (await signCall(lab, jwt, { action: "resend", id: id6, recipientId: c6.body.recipients[1].id })).status === 400);
+    const o6 = await open(tRemind); await sign(tRemind, o6.body.documentHash, { name: "Rem Inder" });
+    psql(`update hr.sign_recipients set last_notified_at = now() - interval '3 days' where request_id = '${id6}' and state = 'signed';`);
+    await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("reminders: they stop for someone who has signed", mailsTo(mail("rem")).filter((m) => /Reminder to sign/.test(m.subject)).length === 1);
+    const nonAdminTick = await signCall(lab, lab.anonKey, { action: "tick" });
+    check("unauthorized: a visitor cannot run the schedule", nonAdminTick.status === 403);
+
+    // ---- 9. voided
+    const tV = linkOf(mail("rem2"));
+    const voided = await signCall(lab, jwt, { action: "void", id: id6, reason: "Sent in error" });
+    check("void: the request is voided and every link stops working", voided.status === 200 && state(id6) === "void" && (await open(tV)).status === 403 && (await open(tRemind)).status === 403, `${voided.status} ${state(id6)}`);
+    check("void: signing a voided request is refused", (await sign(tV, o6.body.documentHash, { name: "Later Signer" })).status === 403);
+    psql(`update hr.sign_recipients set last_notified_at = now() - interval '9 days' where request_id = '${id6}';`);
+    const before = postmark.messages.length; await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("void: reminders stop at once, and the people already asked are told once", postmark.messages.slice(before).every((m) => !/Reminder to sign/.test(m.subject)) && (await waitMail(mail("rem2"), /cancelled/)) === 1);
+    check("void: a completed request cannot be voided", (await signCall(lab, jwt, { action: "void", id: c1.body.id })).status === 400);
+
+    // ---- 8. declined
+    const c8 = await signCall(lab, jwt, { action: "create", title: `Decline ${run}`, signingMode: "parallel", recipients: [{ name: "Dee Cline", email: mail("dec") }, { name: "Other Signer", email: mail("dec2") }] }, pdf3);
+    const id8 = c8.body.id; await signCall(lab, jwt, { action: "send", id: id8 });
+    await waitMail(mail("dec"), /Please sign/); await waitMail(mail("dec2"), /Please sign/);
+    const tDec = linkOf(mail("dec")), tDec2 = linkOf(mail("dec2"));
+    const o8 = await open(tDec2); await sign(tDec2, o8.body.documentHash, { name: "Other Signer" });
+    const declined = await signCall(lab, lab.anonKey, { action: "decline", token: tDec, reason: "The salary is wrong" });
+    check("decline: a required signer declining closes the request with their reason", declined.status === 200 && state(id8) === "declined" && psql(`select decline_reason from hr.sign_recipients where request_id = '${id8}' and state = 'declined';`) === "The salary is wrong");
+    check("decline: every link stops working, including the other signer's", (await open(tDec)).status === 403 && (await open(tDec2)).status === 403);
+    check("decline: the sender is told with the reason, and the person who had signed is told", (await waitMail(LAB_ADMIN.email, /Declined:/)) >= 1 && /salary is wrong/.test(mailsTo(LAB_ADMIN.email).find((m) => /Declined:/.test(m.subject) && m.text.includes(c8.body.reference))?.text ?? "") && (await waitMail(mail("dec2"), /Signing cancelled/)) === 1);
+    psql(`update hr.sign_recipients set last_notified_at = now() - interval '9 days' where request_id = '${id8}';`);
+    const before8 = postmark.messages.length; await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("decline: no reminder is sent afterwards", postmark.messages.slice(before8).every((m) => !/Reminder to sign/.test(m.subject)));
+
+    // ---- 7. expired links
+    const c7 = await signCall(lab, jwt, { action: "create", title: `Expiry ${run}`, expiryDays: 1, recipients: [{ name: "Ex Pired", email: mail("exp") }] }, pdf3);
+    const id7 = c7.body.id; await signCall(lab, jwt, { action: "send", id: id7 }); await waitMail(mail("exp"), /Please sign/);
+    const tX = linkOf(mail("exp")); const o7 = await open(tX);
+    check("expiry: the request records when its links stop (1 day here)", o7.status === 200 && Math.abs(new Date(o7.body.expiresAt) - Date.now() - 86400000) < 120000);
+    psql(`update hr.sign_requests set expires_at = now() - interval '1 minute' where id = '${id7}';`);
+    check("expiry: an expired link opens nothing and signs nothing", (await open(tX)).status === 403 && (await sign(tX, o7.body.documentHash, { name: "Ex Pired" })).status === 403);
+    check("dashboard: an expired request shows as Expired even before the schedule runs", (await signRpc(lab, jwt, "detail", id7)).body.status === "expired");
+    psql(`update hr.sign_recipients set last_notified_at = now() - interval '9 days' where request_id = '${id7}';`);
+    const tickX = await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("expiry: the schedule closes it and tells the recipient and the sender", tickX.body.expired >= 1 && state(id7) === "expired" && (await waitMail(mail("exp"), /expired/)) === 1 && (await waitMail(LAB_ADMIN.email, /Expired:/)) >= 1, JSON.stringify(tickX.body));
+    await signCall(lab, lab.serviceKey, { action: "tick" });
+    check("idempotent: the expiry notice is sent once, and no reminder after expiry", mailsTo(mail("exp")).filter((m) => /expired/.test(m.subject)).length === 1 && mailsTo(mail("exp")).filter((m) => /Reminder to sign/.test(m.subject)).length === 0);
+
+    // ---- email failure: a link nobody received does not stay valid; Resend recovers
+    const c9 = await signCall(lab, jwt, { action: "create", title: `Mail failure ${run}`, recipients: [{ name: "Fay Lure", email: mail("fail") }] }, pdf3);
+    postmark.mode = "fail";
+    const s9 = await signCall(lab, jwt, { action: "send", id: c9.body.id });
+    postmark.mode = "ok";
+    const failedLink = tokenIn(mailsTo(mail("fail"))[0]?.text);
+    check("email: a failed invitation is shown to the administrator and its link is not left valid", s9.body.mail?.failed === 1 && (await signRpc(lab, jwt, "detail", c9.body.id)).body.recipients[0].delivery_error && (await open(failedLink)).status === 403, JSON.stringify(s9.body.mail));
+    const r9 = await signCall(lab, jwt, { action: "resend", id: c9.body.id, recipientId: c9.body.recipients[0].id });
+    check("email: Resend after a failure delivers a working link", r9.status === 200 && (await open(linkOf(mail("fail")))).status === 200);
+
+    // ---- 12. module panels: the related record lists its documents and their status
+    if (employeeId) {
+      const panel = await signRpc(lab, jwt, "subject_list", employeeId, { type: "employee" });
+      check("modules: an employee's record lists its documents with their status", panel.body?.length === 2 && panel.body.every((r) => r.status === "signed") && panel.body.some((r) => r.category === "employment_contract"), JSON.stringify(panel.body?.map((r) => [r.title, r.status])));
+    } else console.log("NOT RUN employee panel (no employee could be seeded)");
+    if (studentId) {
+      const cS = await signCall(lab, jwt, { action: "create", templateId: tPdf.body.id, subjectType: "student", subjectId: studentId, recipients: [{ name: "Stu Dent", email: mail("student"), role: "student" }], values: { "course.name": "Certificate IV in Lab Signing" } });
+      check("modules: a consent form for a student is made from the PDF template", cS.status === 200 && cS.body.subject_type === "student" && cS.body.category === "consent_form", JSON.stringify(cS.body).slice(0, 200));
+      await signCall(lab, jwt, { action: "send", id: cS.body.id }); await waitMail(mail("student"), /Please sign/);
+      const tS = linkOf(mail("student")); const oS = await open(tS);
+      const shownS = await signedFile(oS.body.url);
+      const wordsS = shownS ? (await pdfWords(shownS))[1].items.map((i) => i.text).join(" ") : "";
+      check("variables: the PDF template prints the student's name and course on page 2 before anyone signs", /Stu Dent \/ Certificate IV in Lab Signing/.test(wordsS), wordsS);
+      const panelS = await signRpc(lab, jwt, "subject_list", studentId, { type: "student" });
+      check("modules: the student's record lists the consent form as viewed", panelS.body?.length === 1 && panelS.body[0].status === "viewed" && panelS.body[0].recipients[0].state === "viewed");
+      // A signed-in student sees and opens their own document (their confirmed email), and nobody else's.
+      const studentUser = crypto.randomUUID(), strangerUser = crypto.randomUUID();
+      const mk = async (id, email) => fetch(`${lab.apiUrl}/auth/v1/admin/users`, { method: "POST", headers: { apikey: lab.serviceKey, Authorization: `Bearer ${lab.serviceKey}`, "content-type": "application/json" }, body: JSON.stringify({ id, email, password: "lab-signer-password-1", email_confirm: true }) });
+      const login = async (email) => (await (await fetch(`${lab.apiUrl}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: lab.anonKey, "content-type": "application/json" }, body: JSON.stringify({ email, password: "lab-signer-password-1" }) })).json()).access_token;
+      await mk(studentUser, mail("student")); await mk(strangerUser, mail("stranger"));
+      const sJwt = await login(mail("student")), xJwt = await login(mail("stranger"));
+      const mine = await restRpc(lab, sJwt, "signing_mine", { p_action: "list" }), theirs = await restRpc(lab, xJwt, "signing_mine", { p_action: "list" });
+      check("signed-in: a student sees the documents addressed to their own email and a stranger sees none", mine.body?.length === 1 && mine.body[0].title === "Consent form" && theirs.body?.length === 0, `${JSON.stringify(mine.body)} ${JSON.stringify(theirs.body)}`);
+      const myToken = await restRpc(lab, sJwt, "signing_mine", { p_action: "token", p_id: mine.body[0].recipient_id }), stolen = await restRpc(lab, xJwt, "signing_mine", { p_action: "token", p_id: mine.body[0].recipient_id });
+      check("signed-in: the student gets a personal link for it; another account is refused", /^[a-f0-9]{64}$/.test(myToken.body?.token ?? "") && stolen.status >= 400 && (await open(myToken.body.token)).status === 200);
+      const strangerAdmin = await signCall(lab, xJwt, { action: "admin_url", id: cS.body.id });
+      check("unauthorized: a signed-in person who is not an administrator cannot use the administrator actions", strangerAdmin.status === 403, `${strangerAdmin.status}`);
+      const sS = await sign(myToken.body.token, oS.body.documentHash, { name: "Stu Dent" });
+      check("modules: after signing, the student's record shows the consent form as completed", sS.body.complete === true && (await signRpc(lab, jwt, "subject_list", studentId, { type: "student" })).body[0].status === "signed");
+    } else console.log("NOT RUN student panel and signed-in student (no student could be seeded)");
+    if (agentId) {
+      const cA = await signCall(lab, jwt, { action: "create", title: `Agency agreement ${run}`, category: "agency_agreement", subjectType: "agent", subjectId: agentId, recipients: [{ name: "Agnes Agent", email: mail("agent") }] }, pdf3);
+      const panelA = await signRpc(lab, jwt, "subject_list", agentId, { type: "agent" });
+      const vals = await signRpc(lab, jwt, "subject_values", agentId, { type: "agent" });
+      check("modules: an agent's record lists its agency agreement, and the agent's variables are filled", cA.status === 200 && panelA.body?.length === 1 && panelA.body[0].status === "draft" && vals.body.values["agent.name"] === "Agnes Agent" && vals.body.values["agency.name"].startsWith("Sign Lab Agency"), JSON.stringify(vals.body).slice(0, 200));
+      const discard = await signRpc(lab, jwt, "delete_draft", cA.body.id);
+      check("dashboard: a draft can be discarded", discard.status === 200 && discard.body.state === "void");
+    } else console.log("NOT RUN agent panel (no agent could be seeded)");
+
+    // ---- 7 (dashboard): every status is reported
+    const all = (await signRpc(lab, jwt, "list")).body.requests.filter((r) => r.title.includes(run) || r.title.startsWith("Employment contract for") || r.title === "Consent form");
+    const statuses = new Set(all.map((r) => r.status));
+    check("dashboard: the list reports completed, declined, expired, voided and viewed requests with their recipients", ["signed", "declined", "expired", "void", "viewed"].every((s) => statuses.has(s)) && all.every((r) => Array.isArray(r.recipients) && r.recipients.length >= 1), [...statuses].join(","));
+    const dup = psql("select count(*) - count(distinct dedupe_key) from hr.sign_notifications;");
+    check("idempotent: notification jobs are unique by key", dup === "0");
+    check("audit: every request's history chain verifies", psql("select count(*) from hr.sign_requests r where not hr.sign_chain_ok(r.id);") === "0");
+  } finally {
+    await stopMockPostmark();
+  }
+  console.log(failures ? `\n${failures} signing check(s) FAILED` : "\nAll signing checks passed.");
+  process.exitCode = failures ? 1 : 0;
+}
+
+
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
@@ -1496,6 +1867,7 @@ try {
   else if (command === "retention") await retention();
   else if (command === "flow") await flow();
   else if (command === "wizard") await wizard();
+  else if (command === "signing") await signing();
   else if (command === "e2e") {
     const lab = readLab();
     const env = { ...process.env, E2E_SUPABASE_URL: lab.apiUrl, E2E_SUPABASE_ANON_KEY: lab.anonKey, E2E_SUPABASE_SERVICE_KEY: lab.serviceKey, E2E_MAIL_URL: lab.mailUrl,

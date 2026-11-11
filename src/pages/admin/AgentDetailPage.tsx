@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Button, Card, ConfirmDialog, PageHeader, Select } from "@/pages/admin/components/ui";
 import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
@@ -162,6 +163,8 @@ export default function AgentDetailPage() {
           ))}
         </div>
       )}
+
+      <div className="mt-4"><SubjectSigningPanel type="agent" id={agent.agentId} name={agent.name} /></div>
 
       <ActivateAgentDialog open={dialog} onClose={() => setDialog(false)} onDone={() => void load()}
         agent={{ agentId: agent.agentId, name: agent.name, email: agent.email, phone: agent.phone, marn: agent.marn, role: agent.role,

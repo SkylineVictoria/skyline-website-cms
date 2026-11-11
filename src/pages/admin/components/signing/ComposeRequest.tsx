@@ -79,7 +79,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         ? (await signingAction<{ pdfBase64: string }>({ action: "preview", templateId, values, ...body() })).pdfBase64
         : (await signingAction<{ pdfBase64: string }>({ action: "template_preview", id: templateId, values, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) })).pdfBase64)))}>Preview document</Button>}
       {source === "template" && template?.kind === "text" && copyText === null && <Button variant="outline" disabled={busy} data-testid="edit-copy" onClick={() => void run(async () => setCopyText((await signingAction<{ text: string }>({ action: "preview", templateId, values, ...body() })).text))}>Edit the text of this copy</Button>}
-      <Button disabled={busy} onClick={() => void create()}>{busy ? "Saving…" : "Save draft"}</Button></>}>
+      <Button disabled={busy} data-testid="continue-to-place-fields" onClick={() => void create()}>{busy ? "Preparing fields…" : "Continue to place fields"}</Button></>}>
     <div className="space-y-5">
       {error && <p role="alert" className="rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
       <section className="grid gap-4 md:grid-cols-2">

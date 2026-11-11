@@ -9,13 +9,21 @@ const time = (value: string | null) => value ? new Date(value).toLocaleString() 
 type Check = { ok: boolean; chainOk: boolean; files: Array<{ name: string; ok: boolean; sha256: string }> };
 
 /** One request: its recipients and where each is up to, the document, the fields (while it is a draft), send / resend / void, the integrity check and the full history. */
-export default function RequestDetail({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
+export default function RequestDetail({ id, onClose, onChanged, startPlacing = false }: { id: string; onClose: () => void; onChanged: () => void; startPlacing?: boolean }) {
   const [detail, setDetail] = useState<SigningDetail | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
   const [placing, setPlacing] = useState<{ url: string; fields: EditorField[] } | null>(null);
+  const [autoPlacementStarted, setAutoPlacementStarted] = useState(false);
   const [voiding, setVoiding] = useState(false); const [reason, setReason] = useState(""); const [verified, setVerified] = useState<Check | null>(null);
   const load = useCallback(async () => setDetail(await signingAdmin<SigningDetail>("detail", id)), [id]);
   useEffect(() => { void load().catch((e: Error) => setError(e.message)); }, [load]);
+  useEffect(() => {
+    if (!startPlacing || !detail || detail.state !== "draft" || autoPlacementStarted) return;
+    setAutoPlacementStarted(true);
+    void signingAction<{ url: string }>({ action: "admin_url", id, which: "original" }).then(({ url }) => {
+      setPlacing({ url, fields: detail.fields.map((f, i) => ({ key: `r${i}`, type: f.type, owner: f.recipient_id, page: f.page, x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h), required: f.required, label: f.label })) });
+    }).catch((e: Error) => setError(e.message));
+  }, [startPlacing, detail, autoPlacementStarted, id]);
   const act = async (work: () => Promise<unknown>, message = "") => {
     if (busy) return; setBusy(true); setError(""); setNotice("");
     try { await work(); await load(); onChanged(); setNotice(message); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); }

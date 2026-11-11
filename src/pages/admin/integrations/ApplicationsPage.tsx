@@ -1,0 +1,9 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Button, Card } from '@/pages/admin/components/ui';
+import { Frame, Empty } from './shared';
+import { useIntegrations, date } from './state';
+export default function ApplicationsPage() {
+  const state = useIntegrations(); const [detail,setDetail] = useState<string | null>(null);
+  return <Frame title="Connected Applications" state={state}><div className="space-y-4">{state.data?.connections.map(c => <Card key={c.id} className="p-5"><h2 className="font-bold">{state.data?.definitions.find(d => d.id === c.connector_id)?.name}</h2><p>{c.status.replaceAll('_',' ')} · Last successful connection: {date(c.last_success_at)}</p><div className="my-3 flex flex-wrap gap-2"><Button disabled={state.busy || c.status === 'disabled'} onClick={() => void state.run('test',{connectionId:c.id},'Connection test succeeded.')}>Test Connection</Button><Link className="p-2 underline" to={`/admin/integrations/credentials?connection=${c.id}`}>Reconnect</Link><Button variant="outline" disabled={state.busy} onClick={() => void state.run(c.status === 'disabled' ? 'enable' : 'disable',{connectionId:c.id},c.status === 'disabled' ? 'Enabled; test the connection to confirm access.' : 'Connection disabled.')}>{c.status === 'disabled' ? 'Enable' : 'Disable'}</Button><Button variant="outline" onClick={() => setDetail(detail === c.id ? null : c.id)}>View Details</Button></div>{detail === c.id && <dl className="text-sm"><dt>Connection ID</dt><dd className="break-all">{c.id}</dd><dt>Credential</dt><dd>{c.credential_configured ? '•••••••• (configured)' : 'Not configured'}</dd><dt>Updated</dt><dd>{date(c.updated_at)}</dd></dl>}</Card>)}{state.data && !state.data.connections.length && <Empty>No applications configured. <Link to="/admin/integrations/add" className="underline">Add a connection</Link>.</Empty>}</div></Frame>;
+}

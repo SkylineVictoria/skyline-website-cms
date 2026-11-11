@@ -1,3 +1,11 @@
+import IntegrationOverviewPage from "@/pages/admin/integrations/OverviewPage";
+import IntegrationApplicationsPage from "@/pages/admin/integrations/ApplicationsPage";
+import IntegrationAddPage from "@/pages/admin/integrations/AddPage";
+import IntegrationCredentialsPage from "@/pages/admin/integrations/CredentialsPage";
+import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
+import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
+import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
+import IntegrationSettingsPage from "@/pages/admin/integrations/SettingsPage";
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import SiteLayout from "@/components/feature/SiteLayout";
@@ -238,6 +246,15 @@ const routes: RouteObject[] = [
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },
           { path: "activity", element: <ActivityPage /> },
+          { path: "integrations", element: <Navigate to="/admin/integrations/overview" replace /> },
+          { path: "integrations/overview", element: <RequireAdmin><IntegrationOverviewPage /></RequireAdmin> },
+          { path: "integrations/applications", element: <RequireAdmin><IntegrationApplicationsPage /></RequireAdmin> },
+          { path: "integrations/add", element: <RequireAdmin><IntegrationAddPage /></RequireAdmin> },
+          { path: "integrations/credentials", element: <RequireAdmin><IntegrationCredentialsPage /></RequireAdmin> },
+          { path: "integrations/webhooks", element: <RequireAdmin><IntegrationWebhooksPage /></RequireAdmin> },
+          { path: "integrations/sync-history", element: <RequireAdmin><IntegrationSyncHistoryPage /></RequireAdmin> },
+          { path: "integrations/logs", element: <RequireAdmin><IntegrationLogsPage /></RequireAdmin> },
+          { path: "integrations/settings", element: <RequireAdmin><IntegrationSettingsPage /></RequireAdmin> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
           // The Document Extraction page was removed; old links land on the dashboard.
           { path: "knowledge/documents", element: <Navigate to="/admin" replace /> },

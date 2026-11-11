@@ -12,6 +12,7 @@ export interface AdminMenuItem {
 
 // Database keys never become class names or executable components.
 const icons: Record<string, string> = {
+  plug: 'ri-plug-line',
   template: 'ri-file-edit-line', dashboard: 'ri-dashboard-3-line', courses: 'ri-book-2-line', pages: 'ri-file-text-line',
   navigation: 'ri-menu-line', footer: 'ri-layout-bottom-line', settings: 'ri-settings-3-line',
   documents: 'ri-file-pdf-2-line', knowledge: 'ri-question-answer-line', extraction: 'ri-file-search-line',
@@ -26,6 +27,7 @@ export const menuIcon = (key: string) => Object.hasOwn(icons, key) ? icons[key] 
 // Only implemented internal destinations. Adding a route requires frontend code;
 // changing labels, order, enabled state and hierarchy does not.
 const routes = new Set([
+'/admin/integrations/overview','/admin/integrations/applications','/admin/integrations/add','/admin/integrations/credentials','/admin/integrations/webhooks','/admin/integrations/sync-history','/admin/integrations/logs','/admin/integrations/settings',
   '/', '/admin', '/admin/courses', '/admin/pages', '/admin/navigation', '/admin/footer',
   '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',

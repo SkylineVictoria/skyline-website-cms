@@ -330,3 +330,46 @@ test("supporting files require a current passport before provider calls or stora
     ok: false, status: 422, error: "Upload the passport identity page before uploading other documents.",
   });
 });
+
+// External connector contracts share this deterministic, network-denying provider suite.
+test('integration health checks fail closed, redact responses, and bound retries', async () => {
+ const { testProvider } = await import('../supabase/functions/_shared/integrations/provider.ts');
+ const forbidden = (async()=>{throw Error('must not call');}) as typeof fetch;
+ assert.equal((await testProvider('stripe','',3,0,forbidden)).code,'credentials_missing');
+ assert.equal((await testProvider('vevo','synthetic',3,0,forbidden)).code,'adapter_not_available');
+ let calls=0;
+ const rejected=(async()=>{calls++;return new Response('sensitive provider body',{status:401});}) as typeof fetch;
+ const result=await testProvider('stripe','synthetic',3,3,rejected);
+ assert.equal(calls,1);assert.equal(result.code,'credentials_rejected');assert.ok(!JSON.stringify(result).includes('sensitive'));
+ calls=0;
+ const retry=(async()=>{calls++;return new Response('',{status:calls===1?503:200});}) as typeof fetch;
+ assert.deepEqual(await testProvider('stripe','synthetic',3,1,retry),{ok:true,code:'connection_verified',attempts:2});
+});
+test('Stripe HMAC rejects changed bodies, expired signatures and wrong secrets',async()=>{
+ const { verifyStripeSignature }=await import('../supabase/functions/_shared/integrations/signature.ts');
+ const timestamp=Math.floor(Date.now()/1000),raw='{"id":"evt_test"}',secret='synthetic-signing-secret';
+ const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const signature=Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`${timestamp}.${raw}`)))).map(x=>x.toString(16).padStart(2,'0')).join('');
+ const header=`t=${timestamp},v1=${signature}`;
+ assert.equal(await verifyStripeSignature(raw,header,secret),true);
+ assert.equal(await verifyStripeSignature(raw+' ',header,secret),false);
+ assert.equal(await verifyStripeSignature(raw,header,'wrong'),false);
+ assert.equal(await verifyStripeSignature(raw,header,secret,(timestamp+301)*1000),false);
+ assert.equal(await verifyStripeSignature(raw,header+`,t=${timestamp}`,secret),false);
+});
+test('OAuth requires server configuration and fixed HTTPS callback path',async()=>{
+ const { oauthConfig,authorizeUrl,stateHash }=await import('../supabase/functions/_shared/integrations/oauth.ts');
+ assert.throws(()=>oauthConfig('microsoft365',()=>undefined));
+ const config=oauthConfig('microsoft365',n=>n.endsWith('CLIENT_ID')?'synthetic-id':n.endsWith('CLIENT_SECRET')?'synthetic-secret':'https://crm.example/admin/integrations/credentials');
+ const url=new URL(authorizeUrl(config,'nonce'));assert.equal(url.hostname,'login.microsoftonline.com');assert.equal(url.searchParams.get('state'),'nonce');assert.equal(url.toString().includes('synthetic-secret'),false);
+ assert.equal((await stateHash('nonce')).length,64);
+});
+test('integration navigation preserves eight distinct permitted destinations and active hierarchy',async()=>{
+ const { menuTree,menuActive,menuIcon }=await import('../src/pages/admin/lib/adminMenu.ts');
+ const routes=['overview','applications','add','credentials','webhooks','sync-history','logs','settings'];
+ const group={id:'external_integrations',parent_id:null,label:'External Integrations',route:null,icon_key:'plug',sort_order:86,is_enabled:true,open_in_new_tab:false};
+ const tree=menuTree([group,...routes.map((route,i)=>({...group,id:`integration_${i}`,parent_id:group.id,route:`/admin/integrations/${route}`,sort_order:i}))]);
+ assert.equal(tree.length,1);assert.equal(tree[0].children.length,8);assert.equal(new Set(tree[0].children.map(x=>x.route)).size,8);assert.equal(menuIcon('plug'),'ri-plug-line');
+ for(const path of routes)assert.equal(menuActive(tree[0],`/admin/integrations/${path}`),true);
+ assert.equal(menuActive(tree[0],'/admin/staff'),false);
+});

@@ -1,0 +1,4 @@
+import { Button, Card } from '@/pages/admin/components/ui';
+import { Frame } from './shared';
+import { useIntegrations } from './state';
+export default function AddPage() { const state = useIntegrations(); return <Frame title="Add Connection" state={state}><div className="grid gap-4 md:grid-cols-2">{state.data?.definitions.map(d => <Card className="p-5" key={d.id}><h2 className="font-bold">{d.name}</h2><p className="my-2">{d.description}</p><p className="mb-3 text-sm">Authentication: {d.auth_type} · {d.availability.replaceAll('_',' ')}</p><Button disabled={state.busy || state.data?.connections.some(c => c.connector_id === d.id)} onClick={() => void state.run('add',{connectorId:d.id},'Connection added as Not Connected. Configure credentials to continue.')}>{state.data?.connections.some(c => c.connector_id === d.id) ? 'Already configured' : 'Add connection'}</Button></Card>)}</div></Frame>; }

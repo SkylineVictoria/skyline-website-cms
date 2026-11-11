@@ -1450,11 +1450,13 @@ test("onboarding: only the step that is next is offered, and every stage has its
 });
 
 test("pay details form: every field is checked, the same way as the database", () => {
-  const ok = { jobTitle: "Trainer", employmentType: "full_time", startDate: "2026-12-01", payBasis: "hourly", rate: "42.50", payScheduleId: "s-1", hoursPerWeek: "38" };
+  const ok = { jobTitle: "Trainer", employmentType: "full_time", startDate: "2026-12-01", payBasis: "hourly", rate: "42.50", payScheduleId: "s-1", hoursPerWeek: "38", locationId: "l-1" };
   const check = (over: Record<string, string>) => staffStatusLib.payDetailsProblems({ ...ok, ...over }, "2026-11-10");
   assert.deepEqual(check({}), {});
   assert.ok(check({ jobTitle: " " }).jobTitle);
-  assert.ok(check({ employmentType: "contract" }).employmentType);
+  assert.ok(check({ employmentType: "casual" }).employmentType, "casual is no longer a job type (we employ no casual staff)");
+  assert.deepEqual(check({ employmentType: "contract" }), {}, "contract is a job type");
+  assert.equal(check({ locationId: "" }).locationId, "Choose the work location.", "the work location comes from HRMS > Locations and is required");
   assert.ok(check({ startDate: "" }).startDate && check({ startDate: "2001-01-01" }).startDate && check({ startDate: "2030-01-01" }).startDate);
   assert.ok(check({ payBasis: "" }).payBasis);
   assert.ok(check({ rate: "abc" }).rate && check({ rate: "0" }).rate && check({ rate: "-5" }).rate && check({ rate: "1.234" }).rate);
@@ -1463,15 +1465,16 @@ test("pay details form: every field is checked, the same way as the database", (
   assert.deepEqual(check({ payBasis: "salary", rate: "85000" }), {});
   assert.ok(check({ payScheduleId: "" }).payScheduleId);
   assert.ok(check({ hoursPerWeek: "" }).hoursPerWeek && check({ hoursPerWeek: "99" }).hoursPerWeek && check({ hoursPerWeek: "x" }).hoursPerWeek);
-  assert.deepEqual(check({ employmentType: "casual", hoursPerWeek: "" }), {}, "a casual needs no hours");
-  const sql = read("supabase/migrations/20261111090000_hr_onboarding_stages_pay.sql");
+  assert.deepEqual(check({ employmentType: "contract", hoursPerWeek: "" }), {}, "a contract needs no hours");
+  const sql = read("supabase/migrations/20261111090000_hr_onboarding_stages_pay.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql");
+  assert.ok(sql.includes("Choose the work location.") && sql.includes("'full_time', 'part_time', 'contract'"), "the database has the location rule and the three job types");
   for (const message of ["Enter the position (job title).", "Choose the employment type.", "Enter the start date.", "The start date must be within the last year or the next two years.",
     "Enter the pay rate as a number, for example 38.50.", "That hourly rate looks too high. Check the pay basis.", "That annual salary looks too low. Check the pay basis.", "Choose the pay schedule.",
     "Enter the hours per week.", "The hours per week must be between 1 and 80."]) assert.ok(sql.includes(message), `the database has the same rule: ${message}`);
 });
 
 const PERSON = { firstName: "Asha", lastName: "Patel", email: "asha@example.test", position: "Trainer <Cookery>", employmentType: "part_time", startDate: "2027-02-02", payRate: 42.5,
-  payBasis: "hourly", paySchedule: "Fortnightly", hoursPerWeek: 22.5, companyName: "Skyline Institute of Technology", today: "2026-11-10" };
+  payBasis: "hourly", paySchedule: "Fortnightly", payType: "fortnightly", hoursPerWeek: 22.5, companyName: "Skyline Institute of Technology", today: "2026-11-10" };
 
 test("templates: placeholders fill from the person, values are escaped, missing data and unknown placeholders are caught before sending", () => {
   const values = tpl.templateValues(PERSON, { signing_link: "https://x.example/staff/welcome#t=abc" });
@@ -1484,6 +1487,16 @@ test("templates: placeholders fill from the person, values are escaped, missing 
   assert.equal(values.today, "10 November 2026");
   assert.equal(tpl.templateValues({ payRate: 85000, payBasis: "salary" }).pay_rate + " " + tpl.templateValues({ payRate: 85000, payBasis: "salary" }).pay_basis, "$85,000.00 per year");
   assert.equal(tpl.templateValues({}).position, "", "nothing is invented for a value the person does not have");
+  // The owner's variable names (2026-11-11) resolve from the same record; pay_type is the pay schedule's frequency.
+  assert.deepEqual([values.employee_full_name, values.employee_email, values.job_title, values.job_type, values.job_location, values.pay_type, values.today_date],
+    ["Asha Patel", "asha@example.test", "Trainer <Cookery>", "Part time", "", "Fortnightly", "10 November 2026"], "employee_*, job_* , pay_type and today_date fill from the record");
+  assert.equal(tpl.templateValues({ employmentType: "contract" }).job_type, "Contract");
+  assert.equal(tpl.templateValues({ payType: "monthly" }).pay_type, "Monthly");
+  assert.equal(tpl.templateValues({ payType: "weekly" }).pay_type, "", "an unknown pay type is empty, so the renderer refuses to send it");
+  const owners = tpl.renderMessage({ subject: "Agreement: {{job_title}}", bodyHtml: "<p>{{employee_full_name}} ({{employee_email}}) works {{job_type}} at {{job_location}}, paid {{pay_type}}, from {{start_date}}. Dated {{today_date}}.</p>" }, values);
+  assert.deepEqual([owners.missing, owners.unknown], [["job_location"], []], "an empty record value is reported as missing (never sent as raw {{job_location}})");
+  assert.ok(owners.html.includes("Asha Patel (asha@example.test) works Part time"), "the rest is filled in");
+  for (const key of ["employee_full_name", "employee_email", "job_title", "job_location", "job_type", "pay_type", "today_date"]) assert.ok(tpl.PLACEHOLDERS.some((p) => p.key === key), `{{${key}}} is in the picker`);
 
   const letter = tpl.renderMessage({ subject: "Offer: {{position}} for {{ full_name }}", bodyHtml: "<p>Dear {{first_name}},</p><p>You start on <strong>{{start_date}}</strong> at {{pay_rate}} {{pay_basis}} ({{pay_schedule}}), {{hours_per_week}} hours. Manager: {{manager_name}}.</p>" }, values);
   assert.deepEqual([letter.missing, letter.unknown], [[], []], "an optional value (the manager) may be empty");
@@ -1515,7 +1528,7 @@ test("templates: placeholders fill from the person, values are escaped, missing 
   for (const key of ["first_name", "full_name", "position", "employment_type", "start_date", "pay_rate", "pay_basis", "pay_schedule", "hours_per_week", "manager_name", "company_name", "today", "signing_link", "login_url"]) {
     assert.ok(tpl.PLACEHOLDERS.some((p) => p.key === key), `{{${key}}} is in the list an Admin inserts from`);
   }
-  const sql = read("supabase/migrations/20261111100000_hr_templates.sql");
+  const sql = read("supabase/migrations/20261111100000_hr_templates.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql");
   for (const t of tpl.TEMPLATE_TYPES) assert.ok(sql.includes(`'${t.type}'`), `the database knows the ${t.type} template`);
   for (const p of tpl.PLACEHOLDERS) assert.ok(sql.includes(`'${p.key}'`), `the database allows {{${p.key}}}`);
 });
@@ -1589,6 +1602,7 @@ function flowDeps(options: Parameters<typeof adminDeps>[0] & { template?: Record
     createLogin: async (email: string, name: string) => { base.calls.push(["createLogin", { email, name }]); return options.createError ? { userId: null, error: options.createError } : { userId: "made-login", error: null }; },
     deleteLogin: async (userId: string) => { base.calls.push(["deleteLogin", userId]); },
     letterPdf: async (input: { title: string; html: string; footer: string }) => { base.calls.push(["letterPdf", input]); return { bytes: new Uint8Array([37, 80, 68, 70, 45, 1, 2, 3]), pages: 2 }; },
+    unsupportedText: async (texts: string[]) => { base.calls.push(["unsupportedText", texts]); return texts.find((t) => /[^\u0000-\u024F\u2010-\u2027\u20AC]/.test(t)) ?? null; },
   };
   return { ...base, deps, sent };
 }
@@ -1625,6 +1639,102 @@ test("staff-admin offer_generate: fills the template, refuses missing data befor
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, dbRefuses.deps as never)).status, 400);
   assert.deepEqual(dbRefuses.calls.find(([n]) => n === "remove")![1], [`${PROFILE}/offer/rnd.pdf`], "a refused record removes the stored file");
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: "nope" }, ok.deps as never)).status, 400);
+});
+
+test("staff-admin offer_preview and edited letters: the preview is the letter that is sent; edits change this copy only; unprintable text is refused before anything is made", async () => {
+  // Preview: the same letter the generate step makes (same title, html and footer go to the PDF builder); nothing is stored.
+  const previewed = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT } } });
+  const p = await staffAdmin.handleAdmin({ action: "offer_preview", profileId: PROFILE, templateId: TEMPLATE_ID }, previewed.deps as never);
+  assert.equal(p.status, 200);
+  assert.deepEqual([p.body.pages, p.body.title, p.body.edited, p.body.templateName], [2, "Offer of employment: Trainer <Cookery>", false, "Standard offer letter"]);
+  assert.equal(p.body.pdfBase64, Buffer.from([37, 80, 68, 70, 45, 1, 2, 3]).toString("base64"), "the PDF bytes come back for the iframe");
+  assert.ok(!previewed.names().includes("upload") && !previewed.names().includes("admin:hr_admin_offer_letter_add"), "a preview stores nothing");
+  const generated = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT }, hr_admin_offer_letter_add: { data: { offer: { id: "o-1" } } } } });
+  await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID }, generated.deps as never);
+  assert.deepEqual(previewed.calls.find(([n]) => n === "letterPdf")![1], generated.calls.find(([n]) => n === "letterPdf")![1], "preview = final: the PDF builder gets exactly the same input");
+  const recorded = generated.calls.find(([n]) => n === "admin:hr_admin_offer_letter_add")![1] as Record<string, unknown>;
+  assert.deepEqual([recorded.p_edited, recorded.p_template_html], [false, null], "an unedited letter is recorded as the template's render");
+
+  // Edited for this copy: sanitised, stored with the template's own render, the template itself untouched (no template_save call).
+  const html = "<p>Dear Asha, you start on 2 February 2027 at $42.50 per hour.</p><p>We also cover your <strong>relocation</strong>.</p><script>alert(1)</script>";
+  const edited = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT }, hr_admin_offer_letter_add: { data: { offer: { id: "o-2" } } } } });
+  const e = await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID, html }, edited.deps as never);
+  assert.equal(e.status, 200);
+  assert.equal(e.body.edited, true);
+  const added = edited.calls.find(([n]) => n === "admin:hr_admin_offer_letter_add")![1] as Record<string, unknown>;
+  assert.equal(added.p_html, "<p>Dear Asha, you start on 2 February 2027 at $42.50 per hour.</p><p>We also cover your <strong>relocation</strong>.</p>", "the edited text is sanitised and is what the PDF is made from");
+  assert.deepEqual([added.p_edited, added.p_template_html], [true, "<p>Dear Asha, you start on 2 February 2027 at $42.50 per hour.</p>"], "the template's render is kept beside the edited copy");
+  assert.deepEqual((edited.calls.find(([n]) => n === "letterPdf")![1] as { html: string }).html, added.p_html, "the PDF is the edited letter");
+  assert.ok(!edited.names().some((n) => /template_save/.test(n)), "the saved template is not changed by a per-letter edit");
+  const previewEdited = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT } } });
+  const pe = await staffAdmin.handleAdmin({ action: "offer_preview", profileId: PROFILE, templateId: TEMPLATE_ID, html }, previewEdited.deps as never);
+  assert.deepEqual([pe.body.edited, pe.body.html], [true, added.p_html], "the preview of an edited letter shows the edited copy");
+  const same = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT }, hr_admin_offer_letter_add: { data: { offer: { id: "o-3" } } } } });
+  await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID, html: "<p>Dear Asha, you start on 2 February 2027 at $42.50 per hour.</p>" }, same.deps as never);
+  assert.equal((same.calls.find(([n]) => n === "admin:hr_admin_offer_letter_add")![1] as Record<string, unknown>).p_edited, false, "text identical to the template's render is not an edit");
+
+  // A placeholder left in the edited text, or text the PDF font cannot print, stops before anything is made or stored.
+  const left = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT } } });
+  const l = await staffAdmin.handleAdmin({ action: "offer_preview", profileId: PROFILE, templateId: TEMPLATE_ID, html: "<p>Dear {{first_name}}, {{bonus}}</p>" }, left.deps as never);
+  assert.deepEqual([l.status, l.body.missing], [400, ["first_name", "bonus"]]);
+  assert.match(String(l.body.error), /still has \{\{first_name\}\}, \{\{bonus\}\}/);
+  const glyphs = flowDeps({ db: { hr_admin_offer_letter_context: { data: LETTER_CONTEXT } } });
+  const g = await staffAdmin.handleAdmin({ action: "offer_generate", profileId: PROFILE, templateId: TEMPLATE_ID, html: "<p>Dear Asha, नमस्ते.</p>" }, glyphs.deps as never);
+  assert.deepEqual([g.status, g.body.code, g.body.unsupported], [400, "unsupported_text", "Dear Asha, नमस्ते."]);
+  assert.match(String(g.body.error), /cannot be printed in the PDF/);
+  assert.ok(!glyphs.names().includes("letterPdf") && !glyphs.names().includes("upload"), "nothing is made or stored");
+});
+
+const EMPLOYEE_ACTIVE = { id: PROFILE, status: "active", email: "asha@example.test", firstName: "Asha", lastName: "Patel", hasLogin: false, passwordSet: false };
+const LOGIN_LINKED = { profileId: PROFILE, email: "asha@example.test", name: "Asha Patel", needsPassword: true, expiresAt: "2026-11-18T00:00:00Z", invite: { id: "inv-login" } };
+test("staff-admin invite_login: an existing (Active) employee gets one email with a one-time set-password link; the login is linked to them; no password anywhere", async () => {
+  const d = flowDeps({ db: { hr_admin_emp_get: { data: EMPLOYEE_ACTIVE }, hr_admin_emp_login_invite: { data: LOGIN_LINKED } } });
+  const r = await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, d.deps as never);
+  assert.deepEqual([r.status, r.body.emailSent, r.body.needsPassword, r.body.expiresAt], [200, true, true, "2026-11-18T00:00:00Z"]);
+  assert.deepEqual(d.calls.find(([n]) => n === "createLogin")![1], { email: "asha@example.test", name: "Asha Patel" }, "a login is created when the person has none");
+  assert.deepEqual(d.calls.find(([n]) => n === "admin:hr_admin_emp_login_invite")![1], { p_id: PROFILE, p_auth_user_id: "made-login", p_account_hash: "h".repeat(64) }, "the database links the login and gets only the HASH of the link");
+  const link = `https://x.example/staff/welcome#t=${"T".repeat(43)}`;
+  assert.equal(d.sent.length, 1);
+  assert.ok(d.sent[0].message.text.includes(link) && d.sent[0].message.text.includes("until 18 November 2026"), "one email carries the personal link and its expiry");
+  assert.equal((d.calls.find(([n]) => n === "svc:hr_svc_email_log")![1] as Record<string, unknown>).p_kind, "login_link");
+  assert.ok(!JSON.stringify(d.calls).includes("T".repeat(43)) && !JSON.stringify(r.body).includes("T".repeat(43)), "the token is never stored, logged or shown when the email went out");
+  assert.ok(!/password\s*(is|:)/i.test(d.sent[0].message.text), "no password is sent: only a link to choose one");
+
+  // Only an active employee without a chosen password; people being onboarded get their link with the offer.
+  const invited = flowDeps({ db: { hr_admin_emp_get: { data: { ...EMPLOYEE_ACTIVE, status: "invited" } } } });
+  const i = await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, invited.deps as never);
+  assert.equal(i.status, 400); assert.match(String(i.body.error), /active employee/); assert.ok(!invited.names().includes("createLogin"));
+  const done = flowDeps({ db: { hr_admin_emp_get: { data: { ...EMPLOYEE_ACTIVE, hasLogin: true, passwordSet: true } } } });
+  assert.match(String((await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, done.deps as never)).body.error), /already chosen a password/);
+
+  // A login they already use (an administrator, agent or student): linked, no new login, the email points at the login page.
+  const existing = flowDeps({ login: { id: "their-login", confirmed: true, invited: false, signedIn: true },
+    db: { hr_admin_emp_get: { data: EMPLOYEE_ACTIVE }, hr_admin_emp_login_invite: { data: { ...LOGIN_LINKED, needsPassword: false, expiresAt: null, invite: null } } } });
+  const x = await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, existing.deps as never);
+  assert.deepEqual([x.status, x.body.needsPassword], [200, false]);
+  assert.ok(!existing.names().includes("createLogin"));
+  assert.equal((existing.calls.find(([n]) => n === "admin:hr_admin_emp_login_invite")![1] as Record<string, unknown>).p_account_hash, null);
+  assert.ok(existing.sent[0].message.text.includes("https://x.example/login?next=%2Fstaff"));
+
+  // Email switched off: the link is handed to the admin once. A failed email cancels the link.
+  const off = flowDeps({ mail: "skipped", db: { hr_admin_emp_get: { data: EMPLOYEE_ACTIVE }, hr_admin_emp_login_invite: { data: LOGIN_LINKED } } });
+  const o = await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, off.deps as never);
+  assert.deepEqual([o.status, o.body.emailSent, o.body.link], [200, false, link]);
+  const failed = flowDeps({ mail: "failed", db: { hr_admin_emp_get: { data: EMPLOYEE_ACTIVE }, hr_admin_emp_login_invite: { data: LOGIN_LINKED } } });
+  const f = await staffAdmin.handleAdmin({ action: "invite_login", profileId: PROFILE }, failed.deps as never);
+  assert.equal(f.status, 502);
+  assert.deepEqual(failed.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-login" }, "the link that nobody received is cancelled");
+});
+
+test("punch times across the Melbourne daylight-saving changes: a 22:00 to 06:00 shift is 7 hours when clocks go forward and 9 when they go back", async () => {
+  const hrTime = await load.import<typeof import("../src/lib/hrTime.ts")>("../src/lib/hrTime.ts");
+  const minutes = (from: string, to: string) => (Date.parse(hrTime.zonedToInstant(to)) - Date.parse(hrTime.zonedToInstant(from))) / 60000;
+  assert.equal(minutes("2026-10-03T22:00", "2026-10-04T06:00"), 420, "DST starts 2026-10-04 02:00: the night loses an hour");
+  assert.equal(minutes("2027-04-03T22:00", "2027-04-04T06:00"), 540, "DST ends 2027-04-04 03:00: the night gains an hour");
+  assert.equal(minutes("2026-11-10T09:00", "2026-11-10T17:30"), 510, "an ordinary day is unchanged");
+  assert.equal(hrTime.instantToZoned(hrTime.zonedToInstant("2026-10-04T02:30")), "2026-10-04T03:30", "a wall-clock time that does not exist on the spring-forward night moves forward an hour, never to a different day");
+  assert.equal(hrTime.instantToZoned(hrTime.zonedToInstant("2027-04-04T02:30")).slice(0, 16), "2027-04-04T02:30", "a repeated autumn hour round-trips to the same wall-clock time");
+  assert.deepEqual([hrTime.tzAbbrev("2026-10-03T12:00:00Z"), hrTime.tzAbbrev("2026-10-04T12:00:00Z")], ["AEST", "AEDT"], "the label follows the zone (the database stores instants; hr.local_date decides the work day)");
 });
 
 const DETAIL_READY = { profile: { status: "documents_submitted", email: "asha@example.test", first_name: "Asha", last_name: "Patel" } };

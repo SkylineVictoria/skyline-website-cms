@@ -345,7 +345,8 @@ select lives_ok($$select public.notification_save_attachment_mode(null,'link')$$
 select is(public.notification_attachment_state(null)->>'submissionPdf','link','the option is stored');
 reset role;
 set local role service_role;
-select ok((public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid)->>'link')='https://slit.edu.au/agency/applications/43000000-0000-0000-0000-000000000050' and (public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid)->'snapshot')='null'::jsonb,'link mode returns the sign-in-protected link and no snapshot');
+select ok((select (r->>'link') = 'https://slit.edu.au/' || case when r->>'recipientKind' = 'portal' then 'agency' else 'admin' end || '/applications/43000000-0000-0000-0000-000000000050' and (r->'snapshot') = 'null'::jsonb
+  from public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid) r),'link mode returns the sign-in-protected link of the recipient''s own site (portal or CMS) and no snapshot');
 reset role;
 update public.notification_deliveries set state='sent' where id=current_setting('p0806.d1')::uuid;
 set local role service_role;
@@ -455,19 +456,20 @@ select is((select array_agg(user_id::text) from public.agency_memberships where 
 select is((select array_agg(r->>'id') from jsonb_array_elements(public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000a',null,'','','updated','desc',25,0)->'rows') r),array['4c000000-0000-0000-0000-00000000000a'],'agency A lists only its own applications');
 select is((public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000b',null,'','','updated','desc',25,0)->>'total')::int,1,'agency B count covers only its own applications');
 -- Migration 118: student sign-in. A student is invited from their record, accepts, sees only their own applications and starts their own.
+-- The inviting agency admin is Admin A2 (auth 33…0014): Admin A stepped down (Inactive) in the member-management block above.
 reset role;
 insert into public.enrollment_students(id,agency_id,full_name,email,status) values
  ('73000000-0000-0000-0000-000000000001','13000000-0000-0000-0000-000000000001','Stu Dent','stu.dent@example.test','Active'),
  ('73000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-000000000002','Other Stu','other.stu@example.test','Active'),
  ('73000000-0000-0000-0000-000000000003','13000000-0000-0000-0000-000000000001','No Mail',null,'Active');
-select lives_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'stu.dent@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'agency admin invites their student to sign in');
+select lives_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'stu.dent@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'agency admin invites their student to sign in');
 select is((select role||':'||student_id::text from public.agency_invitations where email='stu.dent@example.test'),'student:73000000-0000-0000-0000-000000000001','student invitation carries the role and the student record');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'other.stu@example.test','Other Stu','student','73000000-0000-0000-0000-000000000002')$$,'42501',null,'a student of another business cannot be invited');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'','No Mail','student','73000000-0000-0000-0000-000000000003')$$,'22023',null,'a student without an email cannot be invited');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'x@example.test','X','student')$$,'22023',null,'a student invitation names the student');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'x@example.test','X','agent','73000000-0000-0000-0000-000000000001')$$,'22023',null,'an agent invitation names no student');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'stu.dent@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'23505',null,'an already-invited student is not invited twice');
-select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'wrong@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'22023',null,'the invitation goes to the email on the student record');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'other.stu@example.test','Other Stu','student','73000000-0000-0000-0000-000000000002')$$,'42501',null,'a student of another business cannot be invited');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'','No Mail','student','73000000-0000-0000-0000-000000000003')$$,'22023',null,'a student without an email cannot be invited');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'x@example.test','X','student')$$,'22023',null,'a student invitation names the student');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'x@example.test','X','agent','73000000-0000-0000-0000-000000000001')$$,'22023',null,'an agent invitation names no student');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'stu.dent@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'23505',null,'an already-invited student is not invited twice');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000014',null,'wrong@example.test','Stu Dent','student','73000000-0000-0000-0000-000000000001')$$,'22023',null,'the invitation goes to the email on the student record');
 insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000077','stu.dent@example.test',now());
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000077';
@@ -524,16 +526,16 @@ set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((select count(*)::int from jsonb_array_elements(public.admin_registration_list()) r where r->>'abn'='85165345717'),1,'the CMS lists the pending registration');
 reset role;
-insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000030','reg.istrar@example.test',now());
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000090','reg.istrar@example.test',now());
 set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000090';
 select is(public.portal_resolve_access()->>'accepted','true','the registrant accepts their invitation before the review');
 select is(public.portal_resolve_access()->>'state','pending_review','and is told the review is pending');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((public.admin_business_set_status((select id from public.agencies where registration_number='85165345717'),'Active'))->>'reviewed','true','activating the business records the approval');
 select is((select registration_decision from public.agencies where registration_number='85165345717'),'approved','the decision is approved');
 select is((select count(*)::int from jsonb_array_elements(public.admin_registration_list()) r where r->>'abn'='85165345717'),0,'it leaves the pending list');
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000090';
 select is(public.portal_resolve_access()->>'state','active','the registrant can now use the portal');
 select is(public.portal_identity()->>'role','agency_admin','as its administrator');
 reset role;
@@ -569,7 +571,11 @@ set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000043';
 select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"85165345718","businessName":"Bad Abn","contactName":"Goo Agent","phone":"0398765400"}')$$,'22023',null,'an invalid ABN is refused');
 select lives_ok($$select public.portal_self_register_agent_complete('{"abn":"53004085616","businessName":"Google Agency","contactName":"Goo Agent","phone":"0398765400"}')$$,'a Google sign-up registers its agency');
+-- Read as the owner: an inactive business is not visible to its own pending agent (20261104090000).
+reset role;
 select is((select status||':'||(registration_requested_at is not null)::text from public.agencies where registration_number='53004085616'),'Inactive:true','the business waits for review');
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000043';
 select is(public.portal_resolve_access()->>'state','pending_review','the agent is told the review is pending');
 select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"51824753556","businessName":"Second","contactName":"Goo Agent","phone":"0398765400"}')$$,'23505',null,'one business per account');
 -- A Google student gives only a mobile (migration 20261105100000): no date of birth needed.

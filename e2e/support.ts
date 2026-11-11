@@ -138,8 +138,9 @@ export function markStudentDocumentRead(applicationId: string, category: string,
 /** The pay details an offer needs (hr_admin_onboarding_pay_save), as the admin form sends them. */
 export async function payDetails(adminClient: SupabaseClient, profileId: string, over: Record<string, string> = {}): Promise<void> {
   const schedule = sql("select id from hr.pay_schedules where is_active order by name limit 1");
+  const location = sql("with l as (insert into hr.locations(name) values ('E2E Campus') on conflict (lower(btrim(name))) do update set name = excluded.name returning id) select id from l");
   const { error } = await adminClient.rpc("hr_admin_onboarding_pay_save", { p_id: profileId, p_details: { jobTitle: "Trainer", employmentType: "full_time", startDate: inDays(21), payBasis: "hourly", rate: "42.50",
-    payScheduleId: schedule, hoursPerWeek: "38", ...over } });
+    payScheduleId: schedule, hoursPerWeek: "38", locationId: location, ...over } });
   if (error) throw new Error(`pay details: ${error.message}`);
 }
 

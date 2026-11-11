@@ -1,4 +1,5 @@
--- Documents & Signatures, second stage (SIGN-02). LOCAL until the owner releases it. Additive on 20261110154917:
+-- Documents & Signatures, second stage (SIGN-02). LOCAL until the owner releases it. Additive on 20261110154917 and 20261113100000
+-- (a request's staff member `profile_id`, the edited copy `edited` / `template_text`: kept, and a staff member becomes the request's employee):
 --   * templates: PDF or text, audience, category, signer roles, field placements, versions, archive, soft delete
 --   * a request is an envelope: several recipients (sequential or parallel, required or optional), placed fields per recipient
 --   * every email carries its own link token (only the sha256 is stored); reminders, expiry, decline and completion mail are jobs
@@ -223,6 +224,7 @@ insert into hr.sign_tokens(token_hash, recipient_id)
  select r.token_hash, c.id from hr.sign_requests r join hr.sign_recipients c on c.request_id = r.id where r.token_hash is not null;
 update hr.sign_requests set state = 'sent' where state in ('sending','email_failed');
 update hr.sign_requests set current_path = signed_path, current_hash = signed_hash, completed_at = signed_at where state = 'signed';
+update hr.sign_requests set subject_type = 'employee', subject_id = profile_id where profile_id is not null and subject_id is null;
 
 -- The bucket also holds template source PDFs; still private, still PDF only, no browser policies.
 update storage.buckets set file_size_limit = 8388608, allowed_mime_types = array['application/pdf'] where id = 'signing-documents';
@@ -310,7 +312,7 @@ language sql stable set search_path = pg_catalog as $f$
 $f$;
 create function hr.sign_request_json(r hr.sign_requests) returns jsonb
 language sql stable set search_path = pg_catalog, hr as $f$
- select (to_jsonb(r) - 'token_hash' - 'field_values' - 'rendered_text') || jsonb_build_object('status', hr.sign_status(r),
+ select (to_jsonb(r) - 'token_hash' - 'field_values' - 'rendered_text' - 'template_text') || jsonb_build_object('status', hr.sign_status(r),
   'recipients', coalesce((select jsonb_agg(to_jsonb(c) - 'signature_image' order by c.signing_order, c.id) from hr.sign_recipients c where c.request_id = r.id), '[]'::jsonb));
 $f$;
 
@@ -456,17 +458,28 @@ begin
   end if;
   return to_jsonb(t);
  elsif p_action = 'create' then
+  -- The first-stage form (one recipient_name / recipient_email, 20261110154917 and 20261113100000) is one recipient.
+  if p_data->'recipients' is null and p_data ? 'recipient_email' then
+   p_data := p_data || jsonb_build_object('recipients', jsonb_build_array(jsonb_build_object('name', p_data->>'recipient_name', 'email', p_data->>'recipient_email')));
+  end if;
+  -- A staff member (20261113100000) is the request's employee.
+  if nullif(p_data->>'profile_id', '') is not null then
+   if not exists (select 1 from hr.staff_profiles where id = (p_data->>'profile_id')::uuid) then raise exception 'Staff member not found'; end if;
+   if p_data->>'subject_type' is null then p_data := p_data || jsonb_build_object('subject_type', 'employee', 'subject_id', p_data->>'profile_id'); end if;
+  end if;
   if jsonb_typeof(p_data->'recipients') <> 'array' or jsonb_array_length(p_data->'recipients') not between 1 and 10 then raise exception 'Add between 1 and 10 recipients'; end if;
   if not exists (select 1 from jsonb_array_elements(p_data->'recipients') x where coalesce((x->>'required')::boolean, true)) then raise exception 'At least one recipient must be required'; end if;
   v_first := p_data->'recipients'->0;
   if p_data->>'subject_type' is not null then v_subject := hr.sign_subject(p_data->>'subject_type', (p_data->>'subject_id')::uuid); end if;
   insert into hr.sign_requests(id, reference, title, recipient_name, recipient_email, template_id, template_version, rendered_text, field_values, original_path, original_hash, created_by,
-    signing_mode, subject_type, subject_id, tenant_id, category, expiry_days, reminder_days, message)
+    signing_mode, subject_type, subject_id, tenant_id, category, expiry_days, reminder_days, message, profile_id, edited, template_text)
    values (p_id, 'SLIT-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('hr.sign_reference_seq')::text, 6, '0'), p_data->>'title', btrim(v_first->>'name'), lower(btrim(v_first->>'email')),
     (p_data->>'template_id')::uuid, (select version from hr.sign_templates where id = (p_data->>'template_id')::uuid), p_data->>'rendered_text', coalesce(p_data->'field_values', '{}'::jsonb),
     p_id::text || '/original.pdf', p_data->>'original_hash', v_admin, coalesce(p_data->>'signing_mode', 'sequential'), p_data->>'subject_type', (p_data->>'subject_id')::uuid,
     (v_subject->>'tenant_id')::uuid, coalesce(p_data->>'category', 'other'), coalesce((p_data->>'expiry_days')::integer, 14), coalesce((p_data->>'reminder_days')::integer, 3),
-    nullif(btrim(coalesce(p_data->>'message', '')), '')) returning * into r;
+    nullif(btrim(coalesce(p_data->>'message', '')), ''),
+    case when p_data->>'subject_type' = 'employee' then (p_data->>'subject_id')::uuid end, coalesce((p_data->>'edited')::boolean, false),
+    case when coalesce((p_data->>'edited')::boolean, false) then p_data->>'template_text' end) returning * into r;
   v_n := 0;
   for v in select * from jsonb_array_elements(p_data->'recipients') loop
    v_n := v_n + 1;

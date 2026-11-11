@@ -64,6 +64,12 @@ export interface EmployeePay {
 }
 export interface EmployeePayForm { payScheduleId: string; payBasis: "" | "salary" | "hourly"; rate: string; ordinaryHoursWeek: string; usualWorkDays: number[]; award: string; xeroEmployeeId: string }
 
+/* ------------------------------------------------------------------ locations (HRMS > Locations) */
+export interface HrLocation { id: string; name: string; address: string; isActive: boolean; updatedAt: string; employeeCount?: number }
+export const listLocations = () => rpc<HrLocation[]>("hr_admin_locations", undefined, "The locations could not be loaded.");
+export const saveLocation = (id: string | null, location: { name?: string; address?: string; isActive?: boolean }) =>
+  rpc<HrLocation>("hr_admin_location_save", { p_id: id, p_location: location }, "The location could not be saved.");
+
 export const listSchedules = () => rpc<PaySchedule[]>("hr_admin_schedules", undefined, "The pay schedules could not be loaded.");
 export const saveSchedule = (id: string | null, schedule: { name?: string; frequency?: string; anchorDate?: string; payDateOffsetDays?: number; isActive?: boolean }) =>
   rpc<PaySchedule>("hr_admin_schedule_save", { p_id: id, p_schedule: schedule }, "The pay schedule could not be saved.");

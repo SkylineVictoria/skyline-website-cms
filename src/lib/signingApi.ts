@@ -25,6 +25,13 @@ export interface SigningDetail extends SigningRequest {
   fields: RequestField[]; events: SigningEvent[]; chain_ok: boolean;
   notifications: Array<{ id: number; kind: string; audience: string; state: string; recipient_id: string | null; created_at: string; sent_at: string | null; error: string | null }>;
 }
+/* The released first-stage shapes (20261110154917 + 20261113100000), used by the fallback pages while the hosted backend is that version. */
+export interface LegacySigningTemplate { id: string; name: string; title: string; body: string }
+export interface LegacySigningRequest { id: string; title: string; recipient_name: string; recipient_email: string; state: string; created_at: string; expires_at: string | null; signed_at: string | null; delivery_error: string | null; profile_id?: string | null; edited?: boolean }
+export interface LegacySigningContext { templates: LegacySigningTemplate[]; requests: LegacySigningRequest[] }
+export interface LegacySigningView { id: string; title: string; recipientName: string; state: string; signedAt: string | null; consent: string; documentHash: string; url: string }
+/** document-signing `preview`: the PDF as it will be sent (base64), the filled text, the template's own render and the variables the template uses. */
+export interface SigningPreview { pdfBase64: string; title: string; text: string; templateText: string; edited: boolean; recipientName: string; recipientEmail: string; variables: string[]; templateName: string }
 export interface SigningContext { templates: SigningTemplate[]; requests: SigningRequest[] }
 export interface SigningSubject { name: string; email: string; values: Record<string, string> }
 /** What a link holder gets: their own fields only, and who else is signing. */
@@ -76,4 +83,16 @@ export async function docxText(file: File): Promise<string> {
   catch { throw new Error("This file is not a Word .docx document."); }
   if (!xml) throw new Error("This file is not a Word .docx document.");
   return docxXmlToText(strFromU8(xml));
+}
+
+/**
+ * True when the database answers the second-stage signing actions (20261113140000). Until that migration is released on hosted, the
+ * admin and signing pages show the released first-stage screens, so a frontend release before the database release breaks nothing.
+ */
+export async function signingUpgraded(): Promise<boolean> {
+  const result = await supabase.rpc("signing_admin", { p_action: "subject_search", p_id: null, p_data: { type: "none" } });
+  if (!result.error) return true;
+  // The released function looks the id up before it rejects an action it does not know.
+  if (/Unknown signing action|Signing request not found/i.test(result.error.message)) return false;
+  throw new Error(result.error.message);
 }

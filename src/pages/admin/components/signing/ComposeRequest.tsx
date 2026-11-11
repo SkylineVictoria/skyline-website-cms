@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Modal, Select, TextArea, TextInput } from "../ui";
 import PdfPages from "@/components/signing/PdfPages";
 import { pdfBytes, signingAction, signingAdmin, type SigningRequest, type SigningSubject, type SigningTemplate } from "@/lib/signingApi";
-import { SIGN_CATEGORIES, templateVariables } from "../../../../../supabase/functions/_shared/signing";
+import { SIGN_CATEGORIES, signingVariables, templateVariables } from "../../../../../supabase/functions/_shared/signing";
+import { templateValues } from "../../../../../supabase/functions/_shared/hr-template";
+import { templatePerson } from "@/lib/hrTemplatesApi";
 
 export interface SubjectPreset { type: "student" | "employee" | "agent"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
@@ -24,6 +26,8 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const [mode, setMode] = useState<"sequential" | "parallel">("sequential"); const [expiry, setExpiry] = useState(14); const [reminder, setReminder] = useState(3);
   const [message, setMessage] = useState(""); const [typed, setTyped] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [preview, setPreview] = useState<Uint8Array | null>(null);
+  /** The text of THIS copy when the administrator edits it (text templates only; the template is untouched). */
+  const [copyText, setCopyText] = useState<string | null>(null);
   const usable = useMemo(() => templates.filter((t) => t.status === "active" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
 
@@ -31,7 +35,11 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   useEffect(() => {
     if (!subjectType || !subjectId) { setSubject(null); return; }
     let live = true;
-    void signingAdmin<SigningSubject>("subject_values", subjectId, { type: subjectType }).then((s) => {
+    void signingAdmin<SigningSubject>("subject_values", subjectId, { type: subjectType }).then(async (s) => {
+      // An employee's letter variables of HRMS > Templates ({{job_title}}, {{job_location}}…) fill too.
+      if (subjectType === "employee") {
+        try { const letter = templateValues(await templatePerson(subjectId)); s = { ...s, values: { ...Object.fromEntries(Object.entries(letter).filter(([, v]) => String(v ?? "").trim())), ...s.values } }; } catch { /* the signing names still fill */ }
+      }
       if (!live) return; setSubject(s);
       setPeople((rows) => rows.map((r, i) => i === 0 && !r.name && !r.email ? { ...r, name: s.name, email: s.email } : r));
     }).catch((e: Error) => { if (live) setError(e.message); });
@@ -46,7 +54,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   useEffect(() => {
     if (source !== "template" || !template) return;
     setPeople((rows) => template.roles.map((role, i) => ({ role: role.key, label: role.label, order: role.order, required: role.required, name: rows[i]?.name ?? "", email: rows[i]?.email ?? "" })));
-    setMode(template.signing_mode); setExpiry(template.expiry_days); setReminder(template.reminder_days); setTyped({});
+    setMode(template.signing_mode); setExpiry(template.expiry_days); setReminder(template.reminder_days); setTyped({}); setCopyText(null);
   }, [source, template]);
 
   let variables: string[] = [];
@@ -55,7 +63,9 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const values = Object.fromEntries(variables.map((v) => [v, valueOf(v)]).filter(([, value]) => value.trim()));
   const setPerson = (index: number, patch: Partial<Person>) => setPeople(people.map((p, i) => i === index ? { ...p, ...patch } : p));
   const run = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); setError(""); try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); } };
-  const body = () => ({ recipients: people, signingMode: mode, expiryDays: expiry, reminderDays: reminder, message, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) });
+  const body = () => ({ recipients: people, signingMode: mode, expiryDays: expiry, reminderDays: reminder, message, ...(subjectType && subjectId ? { subjectType, subjectId } : {}), ...(copyText !== null ? { text: copyText } : {}) });
+  let copyLeft: string[] = [];
+  if (copyText !== null) { try { copyLeft = signingVariables(copyText); } catch { copyLeft = ["…"]; } }
   const create = () => run(async () => {
     if (source === "upload" && !file) throw new Error("Choose the PDF to send.");
     if (source === "template" && !template) throw new Error("Choose a template.");
@@ -65,7 +75,10 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
 
   if (preview) return <Modal open title="Preview with these values" width="max-w-4xl" onClose={() => setPreview(null)}><p className="mb-3 text-sm text-foreground-600">[name] marks a variable that still has no value.</p><PdfPages source={preview} /></Modal>;
   return <Modal open title="New signing request" width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
-    footer={<>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes((await signingAction<{ pdfBase64: string }>({ action: "template_preview", id: templateId, values, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) })).pdfBase64)))}>Preview document</Button>}
+    footer={<>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes(copyText !== null
+        ? (await signingAction<{ pdfBase64: string }>({ action: "preview", templateId, values, ...body() })).pdfBase64
+        : (await signingAction<{ pdfBase64: string }>({ action: "template_preview", id: templateId, values, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) })).pdfBase64)))}>Preview document</Button>}
+      {source === "template" && template?.kind === "text" && copyText === null && <Button variant="outline" disabled={busy} data-testid="edit-copy" onClick={() => void run(async () => setCopyText((await signingAction<{ text: string }>({ action: "preview", templateId, values, ...body() })).text))}>Edit the text of this copy</Button>}
       <Button disabled={busy} onClick={() => void create()}>{busy ? "Saving…" : "Save draft"}</Button></>}>
     <div className="space-y-5">
       {error && <p role="alert" className="rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
@@ -82,7 +95,12 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         <label className="flex items-center gap-2"><input type="radio" checked={source === "upload"} onChange={() => { setSource("upload"); setPeople(people.length ? people : [person(1)]); }} /> Upload a ready-made PDF</label></div>
       {source === "template" ? <>
         <Field label="Template" required><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template"><option value="">Choose a template</option>{usable.map((t) => <option key={t.id} value={t.id}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category})</option>)}</Select></Field>
-        {variables.length > 0 && <section><h3 className="mb-2 font-semibold">Variables</h3><div className="grid gap-3 md:grid-cols-2">{variables.map((key) => <Field key={key} label={`{{${key}}}`} required hint={subject?.values[key] && typed[key] === undefined ? "Filled from the record. You can correct it here." : undefined}>
+        {copyText !== null && <section className="space-y-2"><h3 className="font-semibold">Text of this copy</h3>
+          <p className="text-sm text-foreground-600">Changes apply to this request only; the template is not changed. The history records that this copy was edited.</p>
+          <TextArea rows={10} value={copyText} maxLength={40000} onChange={(e) => setCopyText(e.target.value)} data-testid="copy-text" />
+          {copyLeft.length > 0 && <p role="alert" className="text-sm text-red-700">Still to fill in: {copyLeft.map((k) => `{{${k}}}`).join(", ")}</p>}
+          <button type="button" className="text-sm text-primary-700 underline" onClick={() => setCopyText(null)}>Discard my edits</button></section>}
+        {variables.length > 0 && copyText === null && <section><h3 className="mb-2 font-semibold">Variables</h3><div className="grid gap-3 md:grid-cols-2">{variables.map((key) => <Field key={key} label={`{{${key}}}`} required hint={subject?.values[key] && typed[key] === undefined ? "Filled from the record. You can correct it here." : undefined}>
           <TextInput value={valueOf(key)} maxLength={2000} onChange={(e) => setTyped({ ...typed, [key]: e.target.value })} /></Field>)}</div></section>}
       </> : <div className="grid gap-4 md:grid-cols-2">
         <Field label="PDF document" required hint="Up to 7 MB, sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>

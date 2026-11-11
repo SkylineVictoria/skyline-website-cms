@@ -40,7 +40,7 @@ export async function templatePerson(profileId: string): Promise<TemplatePerson>
 /** Everything "Send offer letter" needs: the templates to choose from, the person's values and what still blocks the letter. */
 export interface OfferLetterContext {
   status: string; problem: string | null; values: TemplatePerson; templates: HrTemplate[];
-  letter: { offerId: string; templateId: string | null; templateName: string; title: string; bodyHtml: string; createdAt: string } | null;
+  letter: { offerId: string; templateId: string | null; templateName: string; title: string; bodyHtml: string; edited?: boolean; createdAt: string } | null;
 }
 export async function offerLetterContext(profileId: string): Promise<OfferLetterContext> {
   const { data, error } = await supabase.rpc("hr_admin_offer_letter_context", { p_id: profileId });

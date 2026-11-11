@@ -12,6 +12,7 @@ import HolidaysList from "./components/HolidaysList";
 import OfferPanel from "./components/OfferPanel";
 import { myDocumentUrl, myOfferApi, myOnboarding, type MyOnboarding } from "@/lib/staffOnboardingApi";
 import { STAFF_DOC_LABEL, type StaffDocCategory } from "@/lib/staffStatus";
+import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
 import MySigningDocuments from "@/components/signing/MySigningDocuments";
 
 /**
@@ -172,8 +173,9 @@ export default function StaffHomePage() {
                 <dl>
                   <Row label="Job title" value={me.employment.jobTitle} />
                   <Row label="Department" value={me.employment.department} />
-                  <Row label="Employment type" value={me.employment.employmentType === "full_time" ? "Full time" : me.employment.employmentType === "part_time" ? "Part time" : ""} />
+                  <Row label="Job type" value={me.employment.employmentType ? JOB_TYPE_LABEL[me.employment.employmentType] ?? "" : ""} />
                   <Row label="Work location" value={me.employment.workLocation} />
+                  <Row label="Pay type" value={me.employment.payType ? PAY_TYPE_LABEL[me.employment.payType] : ""} />
                   <Row label="Manager" value={me.employment.managerName ?? ""} />
                 </dl>
               </Section>

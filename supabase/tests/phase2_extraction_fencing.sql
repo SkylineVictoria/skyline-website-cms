@@ -1,7 +1,7 @@
 begin;
 select plan(34);
 insert into public.agencies(id,name,code) values('14000000-0000-0000-0000-000000000001','Fence fixture','P2-FENCE');
-insert into public.enrollment_applications(id,agency_id,status,data) values('44000000-0000-0000-0000-000000000001','14000000-0000-0000-0000-000000000001','draft','{"values":{"first_name":"Manual"},"wizard":{"confirmed":["first_name"]}}');
+insert into public.enrollment_applications(id,agency_id,status,data) values('44000000-0000-0000-0000-000000000001','14000000-0000-0000-0000-000000000001','draft','{"values":{"first_name":"Manual"},"fieldProvenance":{"first_name":{"kind":"manual"}},"wizard":{"confirmed":["first_name"]}}');
 -- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
 create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
@@ -27,8 +27,8 @@ update public.enrollment_application_documents set metadata='{"extraction":{"con
 select is(public.portal_finish_document_extraction_job('64000000-0000-0000-0000-000000000001',(select token from leases),'{"extracted":{"first_name":"Candidate","last_name":"Lovelace"},"confirmed":{},"status":"unreviewed","source":{}}','synthetic','{}'),true,'current lease completes atomically');
 select is((select metadata#>>'{extraction,confirmed,first_name}' from public.enrollment_application_documents where id='54000000-0000-0000-0000-000000000001'),'Manual during provider','latest manual confirmation preserved');
 select is((select metadata->>'manual_note' from public.enrollment_application_documents where id='54000000-0000-0000-0000-000000000001'),'keep','unrelated metadata preserved');
-select is((select data#>>'{values,first_name}' from public.enrollment_applications where id='44000000-0000-0000-0000-000000000001'),'Manual','confirmed application value preserved');
-select is((select data#>>'{values,last_name}' from public.enrollment_applications where id='44000000-0000-0000-0000-000000000001'),'Lovelace','empty field receives candidate');
+select is((public.application_data('44000000-0000-0000-0000-000000000001')->'values'->>'first_name'),'Manual','confirmed application value preserved');
+select is((public.application_data('44000000-0000-0000-0000-000000000001')->'values'->>'last_name'),'Lovelace','empty field receives candidate');
 select is((select count(*)::int from public.enrollment_document_extraction_attempts where job_id='64000000-0000-0000-0000-000000000001'),1,'one successful attempt recorded');
 select is(public.portal_finish_document_extraction_job('64000000-0000-0000-0000-000000000001',(select token from leases),'{"extracted":{}}',null,'{}'),false,'duplicate completion denied');
 update public.enrollment_document_extraction_jobs set state='cancelled',lease_token=(select token from leases),lease_expires_at=now()+interval '4 minutes' where id='64000000-0000-0000-0000-000000000001';

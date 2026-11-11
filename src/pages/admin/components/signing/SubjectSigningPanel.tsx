@@ -11,7 +11,10 @@ export default function SubjectSigningPanel({ type, id, name }: { type: "student
   const [error, setError] = useState(""); const [openId, setOpenId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<SigningContext["templates"] | null>(null);
   const load = useCallback(async () => setRequests(await signingAdmin<SigningRequest[]>("subject_list", id, { type })), [id, type]);
-  useEffect(() => { void load().catch((e: Error) => setError(e.message)); }, [load]);
+  const [hidden, setHidden] = useState(false);
+  // Until the hosted database has the second-stage actions there is nothing to list: the panel stays out of the way.
+  useEffect(() => { void load().catch((e: Error) => { if (/Unknown signing action|Signing request not found/i.test(e.message)) setHidden(true); else setError(e.message); }); }, [load]);
+  if (hidden) return null;
   const examples = Object.values(SIGN_CATEGORIES).filter((c) => c.audience === type).map((c) => c.label.toLowerCase()).join(", ");
   return <Card className="p-5" >
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3" data-testid="subject-signing-panel">

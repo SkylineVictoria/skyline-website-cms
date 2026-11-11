@@ -3,16 +3,18 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
 import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminSaveEmployment, adminStaffDetail, staffAdminActions, staffDocumentUrl,
-  type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow, type StaffOnboarding,
+  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminStaffDetail, staffAdminActions, staffDocumentUrl,
+  type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffOnboarding,
 } from "@/lib/staffApi";
 import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
 import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
+import EmploymentDialog from "@/pages/admin/components/hrms/EmploymentDialog";
 import SendOfferDialog from "@/pages/admin/components/hrms/SendOfferDialog";
 import { EXTRACTED_LABEL, SECTION, accountText, timelineText } from "@/pages/admin/lib/onboardingText";
 import { READABLE_CATEGORIES, taxSuperRows } from "@/lib/staffOnboardingWizard";
 import { money } from "@/lib/hrTime";
 import { EMPLOYMENT_TYPE_LABEL, JOB_APPLICATION_STATUS_LABEL } from "@/lib/jobs";
+import { PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
 import {
@@ -387,8 +389,9 @@ export default function StaffOnboardingDetail() {
         {employment ? (
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Row label="Job title">{employment.jobTitle}</Row><Row label="Department">{employment.department}</Row>
-            <Row label="Employment type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
-            <Row label="Work location">{employment.workLocation}</Row>
+            <Row label="Job type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
+            <Row label="Work location">{employment.workLocation || (employment.locationId ? "" : <span className="text-foreground-500">Choose one from HRMS › Locations</span>)}</Row>
+            <Row label="Pay type">{employment.payType ? PAY_TYPE_LABEL[employment.payType] : <span className="text-foreground-500">Set with the pay details</span>}</Row>
             <Row label="Manager">{employment.managerId ? <Link to={`${STAFF_EMPLOYEES_PATH}/${employment.managerId}`} className="font-semibold text-primary-700 hover:underline">{employment.managerName ?? "Manager"}</Link> : ""}</Row>
             <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set with the pay details</span>}</Row>
           </dl>
@@ -404,11 +407,12 @@ export default function StaffOnboardingDetail() {
           {pay.completedAt ? (
             <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Row label="Position">{pay.employment?.jobTitle}</Row>
-              <Row label="Employment type">{pay.employment?.employmentType ? EMPLOYMENT_TYPE_LABEL[pay.employment.employmentType] : ""}</Row>
+              <Row label="Job type">{pay.employment?.employmentType ? EMPLOYMENT_TYPE_LABEL[pay.employment.employmentType] : ""}</Row>
+              <Row label="Work location">{pay.employment?.workLocation}</Row>
               <Row label="Start date">{pay.employment?.joiningDate ? new Date(`${pay.employment.joiningDate}T00:00:00`).toLocaleDateString() : ""}</Row>
               <Row label="Pay">{pay.pay.payBasis === "salary" ? `${money(pay.pay.rate)} a year` : pay.pay.payBasis === "hourly" ? `${money(pay.pay.rate)} an hour` : ""}</Row>
-              <Row label="Pay schedule">{pay.pay.payScheduleName}</Row>
-              <Row label="Hours per week">{pay.pay.ordinaryHoursWeek ?? (pay.employment?.employmentType === "casual" ? "As rostered" : "")}</Row>
+              <Row label="Pay type">{pay.pay.payScheduleName}{pay.employment?.payType ? ` (${PAY_TYPE_LABEL[pay.employment.payType]})` : ""}</Row>
+              <Row label="Hours per week">{pay.pay.ordinaryHoursWeek ?? (pay.employment?.employmentType === "contract" || pay.employment?.employmentType === "casual" ? "As agreed" : "")}</Row>
               <Row label="Reporting manager">{pay.employment?.managerName}</Row>
               <Row label="Xero employee id">{pay.pay.xeroEmployeeId || <span className="text-foreground-500">Not set yet</span>}</Row>
             </dl>
@@ -634,53 +638,3 @@ function doneMessage(action: EmployeeAction, result: StaffAdminResult | null): s
   }
 }
 
-/** The employment fields of hr.employment (HR-02j). The manager is an active employee (searched by name); the joining date is set at activation. */
-function EmploymentDialog({ profileId, employment, onClose, onSaved }: { profileId: string; employment: StaffEmployment | null; onClose: () => void; onSaved: (detail: StaffDetail) => void }) {
-  const [form, setForm] = useState<StaffEmploymentForm>({
-    department: employment?.department ?? "", jobTitle: employment?.jobTitle ?? "", employmentType: employment?.employmentType ?? "", managerId: employment?.managerId ?? "", workLocation: employment?.workLocation ?? "",
-  });
-  const [managerSearch, setManagerSearch] = useState("");
-  const [managers, setManagers] = useState<StaffListRow[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const patch = (p: Partial<StaffEmploymentForm>) => setForm((f) => ({ ...f, ...p }));
-
-  useEffect(() => {
-    let current = true;
-    const timer = window.setTimeout(() => {
-      void adminListStaff(["active"], managerSearch, 25, 0).then((data) => { if (current) setManagers(data.rows.filter((m) => m.id !== profileId)); }, () => { if (current) setManagers([]); });
-    }, 200);
-    return () => { current = false; window.clearTimeout(timer); };
-  }, [managerSearch, profileId]);
-
-  const save = async () => {
-    setBusy(true); setError("");
-    try { onSaved(await adminSaveEmployment(profileId, form)); }
-    catch (e) { setError(e instanceof Error ? e.message : "The employment details could not be saved."); }
-    finally { setBusy(false); }
-  };
-  const currentManager = employment?.managerId && !managers.some((m) => m.id === employment.managerId) ? { id: employment.managerId, name: employment.managerName ?? "Current manager" } : null;
-  return (
-    <Modal open title="Employment details" onClose={() => { if (!busy) onClose(); }}
-      footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button disabled={busy} onClick={() => void save()} data-testid="staff-employment-save">{busy ? "Saving…" : "Save"}</Button></>}>
-      <div className="space-y-3" data-testid="staff-employment-dialog">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Job title"><TextInput maxLength={150} value={form.jobTitle} onChange={(e) => patch({ jobTitle: e.target.value })} data-testid="staff-employment-title" /></Field>
-          <Field label="Department"><TextInput maxLength={120} value={form.department} onChange={(e) => patch({ department: e.target.value })} data-testid="staff-employment-department" /></Field>
-          <Field label="Employment type"><Select value={form.employmentType} onChange={(e) => patch({ employmentType: e.target.value as StaffEmploymentForm["employmentType"] })} data-testid="staff-employment-type">
-            <option value="">Not set</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="casual">Casual</option>
-          </Select></Field>
-          <Field label="Work location"><TextInput maxLength={150} value={form.workLocation} onChange={(e) => patch({ workLocation: e.target.value })} data-testid="staff-employment-location" /></Field>
-          <Field label="Find a manager" hint="Active employees only."><TextInput placeholder="Search by name or email" value={managerSearch} onChange={(e) => setManagerSearch(e.target.value)} /></Field>
-          <Field label="Manager"><Select value={form.managerId} onChange={(e) => patch({ managerId: e.target.value })} data-testid="staff-employment-manager">
-            <option value="">No manager assigned</option>
-            {currentManager ? <option value={currentManager.id}>{currentManager.name}</option> : null}
-            {managers.map((m) => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
-          </Select></Field>
-        </div>
-        <p className="text-xs text-foreground-600">The start date comes from the pay details and is confirmed at activation{employment?.joiningDate ? ` (${new Date(`${employment.joiningDate}T00:00:00`).toLocaleDateString()})` : ""}.</p>
-        {error ? <p role="alert" className={ALERT} data-testid="staff-employment-error">{error}</p> : null}
-      </div>
-    </Modal>
-  );
-}

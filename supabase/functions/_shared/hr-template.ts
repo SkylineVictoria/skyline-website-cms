@@ -32,8 +32,16 @@ export const PLACEHOLDERS: readonly PlaceholderSpec[] = [
   { key: "hours_per_week", label: "Hours per week", sample: "38", group: "Job and pay" },
   { key: "manager_name", label: "Reporting manager", sample: "Jordan Lee", group: "Job and pay" },
   { key: "work_location", label: "Work location", sample: "Melbourne", group: "Job and pay" },
+  // The owner's names (2026-11-11) for the same facts: an employee's name and email, the job and its location, type and pay cycle.
+  { key: "employee_full_name", label: "Employee full name", sample: "Asha Patel", group: "Person" },
+  { key: "employee_email", label: "Employee email", sample: "asha.patel@example.com", group: "Person" },
+  { key: "job_title", label: "Job title", sample: "Trainer (Commercial Cookery)", group: "Job and pay" },
+  { key: "job_location", label: "Job location", sample: "Melbourne", group: "Job and pay" },
+  { key: "job_type", label: "Job type", sample: "Full time", group: "Job and pay" },
+  { key: "pay_type", label: "Pay type (cycle)", sample: "Fortnightly", group: "Job and pay" },
   { key: "company_name", label: "Company name", sample: "Skyline Institute of Technology", group: "Company" },
   { key: "today", label: "Today's date", sample: "10 November 2026", group: "Company" },
+  { key: "today_date", label: "Today's date", sample: "10 November 2026", group: "Company" },
   { key: "signing_link", label: "Offer sign-in link", sample: "https://example.com/staff/welcome", group: "Links", only: ["offer_email", "welcome_login"] },
   { key: "login_url", label: "Login page", sample: "https://example.com/login", group: "Links" },
   { key: "document_link", label: "Document upload link", sample: "https://example.com/staff/onboard", group: "Links", only: ["document_request", "document_reupload"] },
@@ -289,10 +297,17 @@ export const emailHtmlDocument = (bodyHtml: string): string =>
 export interface TemplatePerson {
   firstName?: string | null; lastName?: string | null; fullName?: string | null; email?: string | null;
   position?: string | null; department?: string | null; employmentType?: string | null; startDate?: string | null;
-  payRate?: number | string | null; payBasis?: string | null; paySchedule?: string | null; hoursPerWeek?: number | string | null;
+  payRate?: number | string | null; payBasis?: string | null; paySchedule?: string | null; payType?: string | null; hoursPerWeek?: number | string | null;
   managerName?: string | null; workLocation?: string | null; companyName?: string | null; today?: string | null;
 }
-const EMPLOYMENT_TYPE: Record<string, string> = { full_time: "Full time", part_time: "Part time", casual: "Casual" };
+/** Job types: Full time, Part time, Contract (no casual staff are employed; "casual" is read for records written before 2026-11-11). */
+export const JOB_TYPES = ["full_time", "part_time", "contract"] as const;
+export type JobType = (typeof JOB_TYPES)[number];
+export const JOB_TYPE_LABEL: Record<string, string> = { full_time: "Full time", part_time: "Part time", contract: "Contract", casual: "Casual" };
+export const isJobType = (value: unknown): value is JobType => JOB_TYPES.includes(value as JobType);
+/** Pay types are the pay schedule's frequency: Fortnightly or Monthly. */
+export const PAY_TYPE_LABEL: Record<string, string> = { fortnightly: "Fortnightly", monthly: "Monthly" };
+const EMPLOYMENT_TYPE = JOB_TYPE_LABEL;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 /** "2027-02-02" (or an ISO timestamp) as "2 February 2027"; anything else is returned empty. */
 export function longDate(value: string | null | undefined): string {
@@ -308,7 +323,7 @@ export function moneyText(value: number | string | null | undefined): string {
   return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents}`;
 }
 /** The placeholder values for a person. Link values (signing_link, document_link, link_expiry, …) are added by the sender. */
-export function templateValues(person: TemplatePerson, links: Record<string, string> = {}): Record<string, string> {
+function baseTemplateValues(person: TemplatePerson, links: Record<string, string> = {}): Record<string, string> {
   const hours = Number(person.hoursPerWeek);
   return {
     first_name: String(person.firstName ?? "").trim(),
@@ -327,6 +342,22 @@ export function templateValues(person: TemplatePerson, links: Record<string, str
     work_location: String(person.workLocation ?? "").trim(),
     company_name: String(person.companyName ?? "").trim() || "Skyline Institute of Technology",
     today: longDate(person.today) || longDate(new Date().toISOString()),
+    ...links,
+  };
+}
+/** The placeholder values for a person. Link values (signing_link, document_link, link_expiry, …) are added by the sender. */
+export function templateValues(person: TemplatePerson, links: Record<string, string> = {}): Record<string, string> {
+  const base = baseTemplateValues(person);
+  return {
+    ...base,
+    // The same facts under the names a template may also use.
+    employee_full_name: base.full_name,
+    employee_email: base.email,
+    job_title: base.position,
+    job_location: base.work_location,
+    job_type: base.employment_type,
+    pay_type: PAY_TYPE_LABEL[String(person.payType ?? "").trim().toLowerCase()] ?? "",
+    today_date: base.today,
     ...links,
   };
 }

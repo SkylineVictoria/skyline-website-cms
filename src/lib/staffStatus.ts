@@ -212,13 +212,14 @@ export const ONBOARDING_STAGE_HINT: Record<OnboardingStage, string> = {
 
 /** Problems with the pay details form, by field (the database checks the same rules in hr_admin_onboarding_pay_save). */
 export interface PayDetailsInput {
-  jobTitle: string; employmentType: string; startDate: string; payBasis: string; rate: string; payScheduleId: string; hoursPerWeek: string;
+  jobTitle: string; employmentType: string; startDate: string; payBasis: string; rate: string; payScheduleId: string; hoursPerWeek: string; locationId: string;
 }
 export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): Partial<Record<keyof PayDetailsInput, string>> {
   const problems: Partial<Record<keyof PayDetailsInput, string>> = {};
   if (!input.jobTitle.trim()) problems.jobTitle = "Enter the position (job title).";
   else if (input.jobTitle.trim().length > 150) problems.jobTitle = "Keep the position under 150 characters.";
-  if (!["full_time", "part_time", "casual"].includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
+  if (!["full_time", "part_time", "contract"].includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
+  if (!input.locationId) problems.locationId = "Choose the work location.";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) || Number.isNaN(Date.parse(`${input.startDate}T00:00:00Z`))) problems.startDate = "Enter the start date.";
   else {
     const days = Math.round((Date.parse(`${input.startDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
@@ -231,7 +232,7 @@ export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): 
   else if (input.payBasis === "salary" && rate < 1000) problems.rate = "That annual salary looks too low. Check the pay basis.";
   if (!input.payScheduleId) problems.payScheduleId = "Choose the pay schedule.";
   const hours = Number(input.hoursPerWeek);
-  if (!input.hoursPerWeek.trim()) { if (input.employmentType !== "casual") problems.hoursPerWeek = "Enter the hours per week."; }
+  if (!input.hoursPerWeek.trim()) { if (input.employmentType !== "contract") problems.hoursPerWeek = "Enter the hours per week."; }
   else if (!/^\d{1,2}(\.\d{1,2})?$/.test(input.hoursPerWeek.trim()) || !(hours > 0) || hours > 80) problems.hoursPerWeek = "The hours per week must be between 1 and 80.";
   return problems;
 }

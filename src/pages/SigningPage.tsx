@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button, Field, TextArea, TextInput } from "@/pages/admin/components/ui";
 import PdfPages from "@/components/signing/PdfPages";
+import LegacySignPage from "@/components/signing/LegacySignPage";
 import { RECIPIENT_STATE, signingAction, type SigningView } from "@/lib/signingApi";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 
@@ -49,11 +50,14 @@ export default function SigningPage() {
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const [declined, setDeclined] = useState(false); const [declining, setDeclining] = useState(false); const [reason, setReason] = useState("");
   const [justSigned, setJustSigned] = useState(false);
+  const [legacy, setLegacy] = useState(false);
   const signPanel = useRef<HTMLFormElement>(null);
   const load = useCallback(async () => {
     setError("");
     try {
       const next = await signingAction<SigningView>({ action: "open", token });
+      // The released first-stage function answers without the recipient and fields: its own page handles that version.
+      if (!next.recipient) { setLegacy(true); return; }
       setView(next); setName((current) => current || next.recipient.name);
     } catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
   }, [token]);
@@ -82,6 +86,7 @@ export default function SigningPage() {
     catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); }
   };
 
+  if (legacy) return <LegacySignPage />;
   return <main className="min-h-screen bg-background-100 px-3 pb-28 pt-6 sm:px-4 sm:py-10">
     <div className="mx-auto max-w-4xl space-y-5 rounded-xl bg-white p-4 sm:p-6 md:p-8">
       <p className="text-sm font-semibold text-foreground-600">Skyline Institute of Technology · Document signing</p>

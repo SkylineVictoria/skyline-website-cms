@@ -3,14 +3,25 @@ import { Badge, Button, EmptyState, Field, PageHeader, SectionTabs, Select, Text
 import ComposeRequest from "./components/signing/ComposeRequest";
 import RequestDetail from "./components/signing/RequestDetail";
 import TemplateEditor from "./components/signing/TemplateEditor";
-import { signedCount, signingAction, signingAdmin, signingStatus, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
+import LegacySigningPage from "./components/signing/LegacySigningPage";
+import { signedCount, signingAction, signingAdmin, signingStatus, signingUpgraded, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 
 const SUBJECT = { student: "Student", employee: "Employee", agent: "Agent" } as const;
 const AUDIENCE = { any: "Anyone", student: "Students", employee: "Employees", agent: "Agents" } as const;
 
-/** Documents & Signatures: every request by status with search and filters, and the templates they are made from. */
+/** Documents & Signatures. Shows the released first-stage page until the hosted database has the second-stage actions. */
 export default function SigningPage() {
+  const [upgraded, setUpgraded] = useState<boolean | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void signingUpgraded().then(setUpgraded).catch((e: Error) => setError(e.message)); }, []);
+  if (error) return <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>;
+  if (upgraded === null) return <p role="status">Loading…</p>;
+  return upgraded ? <EnvelopeSigningPage /> : <LegacySigningPage />;
+}
+
+/** Documents & Signatures: every request by status with search and filters, and the templates they are made from. */
+function EnvelopeSigningPage() {
   const [context, setContext] = useState<SigningContext>({ templates: [], requests: [] });
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);

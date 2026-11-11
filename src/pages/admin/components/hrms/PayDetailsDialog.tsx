@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
+import { STAFF_LOCATIONS_PATH } from "@/pages/admin/lib/staffRoutes";
 import { adminListStaff, adminSavePayDetails, type OnboardingPayDetails, type PayDetailsForm, type StaffListRow, type StaffOnboarding } from "@/lib/staffApi";
 import { payDetailsProblems, type PayDetailsInput } from "@/lib/staffStatus";
 
@@ -16,8 +18,8 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
   const e = current.employment;
   const p = current.pay;
   const [form, setForm] = useState<PayDetailsForm>({
-    jobTitle: e?.jobTitle ?? "", department: e?.department ?? "", employmentType: e?.employmentType ?? "", startDate: e?.joiningDate ?? "",
-    workLocation: e?.workLocation ?? "", managerId: e?.managerId ?? "", payBasis: p.payBasis ?? "", rate: p.rate === null || p.rate === undefined ? "" : String(p.rate),
+    jobTitle: e?.jobTitle ?? "", department: e?.department ?? "", employmentType: e?.employmentType === "casual" ? "" : (e?.employmentType ?? ""), startDate: e?.joiningDate ?? "",
+    locationId: e?.locationId ?? "", managerId: e?.managerId ?? "", payBasis: p.payBasis ?? "", rate: p.rate === null || p.rate === undefined ? "" : String(p.rate),
     payScheduleId: p.payScheduleId ?? "", hoursPerWeek: p.ordinaryHoursWeek === null || p.ordinaryHoursWeek === undefined ? "" : String(p.ordinaryHoursWeek),
     award: p.award ?? "", xeroEmployeeId: p.xeroEmployeeId ?? "",
   });
@@ -57,11 +59,15 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
         <p className="text-sm text-foreground-700">These details fill the offer letter and set the person up for payroll. Nothing is sent when you save.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div><Field label="Position (job title)" required><TextInput maxLength={150} value={form.jobTitle} onChange={(ev) => patch({ jobTitle: ev.target.value })} aria-invalid={Boolean(problems.jobTitle)} data-testid="pay-job-title" /></Field>{problem("jobTitle")}</div>
-          <div><Field label="Employment type" required><Select value={form.employmentType} onChange={(ev) => patch({ employmentType: ev.target.value as PayDetailsForm["employmentType"] })} aria-invalid={Boolean(problems.employmentType)} data-testid="pay-employment-type">
-            <option value="">Choose…</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="casual">Casual</option>
+          <div><Field label="Job type" required><Select value={form.employmentType} onChange={(ev) => patch({ employmentType: ev.target.value as PayDetailsForm["employmentType"] })} aria-invalid={Boolean(problems.employmentType)} data-testid="pay-employment-type">
+            <option value="">Choose…</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="contract">Contract</option>
           </Select></Field>{problem("employmentType")}</div>
+          <div><Field label="Work location" required hint={current.locations.length === 0 ? "No locations yet: add one under HRMS › Locations." : undefined}>
+            <Select value={form.locationId} onChange={(ev) => patch({ locationId: ev.target.value })} aria-invalid={Boolean(problems.locationId)} data-testid="pay-location">
+              <option value="">Choose…</option>{current.locations.filter((l) => l.isActive || l.id === form.locationId).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </Select></Field>{problem("locationId")}</div>
           <div><Field label="Start date" required><TextInput type="date" value={form.startDate} onChange={(ev) => patch({ startDate: ev.target.value })} aria-invalid={Boolean(problems.startDate)} data-testid="pay-start-date" /></Field>{problem("startDate")}</div>
-          <div><Field label="Pay schedule" required><Select value={form.payScheduleId} onChange={(ev) => patch({ payScheduleId: ev.target.value })} aria-invalid={Boolean(problems.payScheduleId)} data-testid="pay-schedule">
+          <div><Field label="Pay type (schedule)" required hint="Fortnightly or monthly: the pay cycle this person is paid on."><Select value={form.payScheduleId} onChange={(ev) => patch({ payScheduleId: ev.target.value })} aria-invalid={Boolean(problems.payScheduleId)} data-testid="pay-schedule">
             <option value="">Choose…</option>{current.schedules.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.frequency})</option>)}
           </Select></Field>{problem("payScheduleId")}</div>
           <div><Field label="Pay basis" required><Select value={form.payBasis} onChange={(ev) => patch({ payBasis: ev.target.value as PayDetailsForm["payBasis"] })} aria-invalid={Boolean(problems.payBasis)} data-testid="pay-basis">
@@ -70,10 +76,9 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
           <div><Field label={hourly ? "Hourly rate (AUD)" : form.payBasis === "salary" ? "Annual salary (AUD)" : "Pay rate (AUD)"} required>
             <TextInput inputMode="decimal" placeholder={hourly ? "38.50" : "85000"} value={form.rate} onChange={(ev) => patch({ rate: ev.target.value })} aria-invalid={Boolean(problems.rate)} data-testid="pay-rate" />
           </Field>{problem("rate")}</div>
-          <div><Field label="Hours per week" required={form.employmentType !== "casual"} hint={form.employmentType === "casual" ? "Optional for a casual." : undefined}>
+          <div><Field label="Hours per week" required={form.employmentType !== "contract"} hint={form.employmentType === "contract" ? "Optional for a contract." : undefined}>
             <TextInput inputMode="decimal" placeholder="38" value={form.hoursPerWeek} onChange={(ev) => patch({ hoursPerWeek: ev.target.value })} aria-invalid={Boolean(problems.hoursPerWeek)} data-testid="pay-hours" />
           </Field>{problem("hoursPerWeek")}</div>
-          <Field label="Work location"><TextInput maxLength={150} value={form.workLocation} onChange={(ev) => patch({ workLocation: ev.target.value })} data-testid="pay-location" /></Field>
           <Field label="Department"><TextInput maxLength={120} value={form.department} onChange={(ev) => patch({ department: ev.target.value })} data-testid="pay-department" /></Field>
           <Field label="Award (optional)"><TextInput maxLength={150} value={form.award} onChange={(ev) => patch({ award: ev.target.value })} /></Field>
           <Field label="Find a reporting manager" hint="Active employees only."><TextInput placeholder="Search by name or email" value={managerSearch} onChange={(ev) => setManagerSearch(ev.target.value)} /></Field>
@@ -85,6 +90,7 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
           <Field label="Xero employee id" hint="Needed for the Xero export; you can add it later."><TextInput maxLength={80} value={form.xeroEmployeeId} onChange={(ev) => patch({ xeroEmployeeId: ev.target.value })} data-testid="pay-xero" /></Field>
         </div>
         {current.schedules.length === 0 ? <p className={ALERT}>There is no active pay schedule yet. Add one under HRMS › Pay Schedules first.</p> : null}
+        {current.locations.length === 0 ? <p className={ALERT}>There is no work location yet. <Link to={STAFF_LOCATIONS_PATH} className="font-semibold underline">Add one under HRMS › Locations</Link> first.</p> : null}
         {error ? <p role="alert" className={ALERT} data-testid="pay-details-error">{error}</p> : null}
       </div>
     </Modal>

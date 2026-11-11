@@ -27,9 +27,13 @@ export interface StaffDocSummary { required: number; uploaded: number; approved:
 export interface StaffEvent { from: StaffStatus | null; to: StaffStatus; actorKind: string; note: string; at: string }
 /** hr.employment (HR-02j): the employment details; the joining date is set at activation. */
 export interface StaffEmployment {
-  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "casual" | null; joiningDate: string | null;
+  department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "contract" | "casual" | null; joiningDate: string | null;
   managerId: string | null; managerName: string | null; workLocation: string; candidateId: string | null; since: string;
+  /** The work location from HRMS > Locations (null while none is chosen) and the pay type, i.e. the pay schedule's frequency. */
+  locationId: string | null; payType: "fortnightly" | "monthly" | null;
 }
+/** A work location (hr.locations): the list admins manage under HRMS > Locations. */
+export interface StaffLocation { id: string; name: string; address: string; isActive: boolean; updatedAt?: string; employeeCount?: number }
 /** hr_staff_me: the signed-in person's own staff record (documents, employment and the signed offer once they are active). */
 export interface MyStaff {
   profile: StaffProfile; status: StaffStatus; role: StaffRole | null; joiningDate: string | null; documents: StaffDocument[];
@@ -137,7 +141,7 @@ export interface StaffDetail {
   invites: StaffInvite[]; offers: StaffOffer[]; emails: StaffEmail[]; emailFailed: boolean; jobApplications: StaffJobApplication[]; employment: StaffEmployment | null;
 }
 /** The editable employment fields (hr_admin_staff_employment_save); the joining date is set at activation, not here. */
-export interface StaffEmploymentForm { department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "casual" | ""; managerId: string; workLocation: string }
+export interface StaffEmploymentForm { department: string; jobTitle: string; employmentType: "full_time" | "part_time" | "contract" | ""; managerId: string; locationId: string }
 
 /** One or more statuses (p_statuses); an empty list means every status. */
 export async function adminListStaff(statuses: readonly StaffStatus[], search: string, limit = 50, offset = 0): Promise<{ total: number; rows: StaffListRow[] }> {
@@ -168,6 +172,8 @@ export interface StaffAdminResult {
   ok?: boolean; which?: "resume" | "cover_letter"; filename?: string;
   /** Onboarding flow: a generated letter (title, template), the offer sent with the login, an email that failed and was undone. */
   title?: string; templateName?: string; needsPassword?: boolean; firstSend?: boolean; rolledBack?: boolean; missing?: string[];
+  /** offer_preview: the PDF exactly as it will be sent (base64), the letter's HTML and whether it differs from the template's render. */
+  pdfBase64?: string; html?: string; edited?: boolean; unsupported?: string; code?: string;
 }
 export class StaffAdminError extends Error {
   readonly status: number;
@@ -202,7 +208,11 @@ export const staffAdminActions = {
   /** Onboarding flow: the document link from the employee page (a Careers applicant is hired for their open job application). */
   sendDocuments: (profileId: string) => staffAdmin({ action: "send_documents", profileId }),
   /** Fills an offer letter template for the person and stores the PDF with the rendered letter. */
-  generateOffer: (profileId: string, templateId: string) => staffAdmin({ action: "offer_generate", profileId, templateId }),
+  generateOffer: (profileId: string, templateId: string, html?: string | null) => staffAdmin({ action: "offer_generate", profileId, templateId, ...(html ? { html } : {}) }),
+  /** The letter as the PDF will look (same letterhead, fonts and header), filled in, with the admin's edits when given. Nothing is stored. */
+  previewOffer: (profileId: string, templateId: string, html?: string | null) => staffAdmin({ action: "offer_preview", profileId, templateId, ...(html ? { html } : {}) }),
+  /** Staff > Employees: a sign-in link for an ACTIVE employee who never came through onboarding (My HR: punch in / out, timesheet, leave). */
+  inviteLogin: (profileId: string) => staffAdmin({ action: "invite_login", profileId }),
   /** Sends the prepared offer with the person's login (one email with a one-time set-password link). Also the resend. */
   sendOfferWithLogin: (profileId: string, emailTemplateId: string | null) => staffAdmin({ action: "offer_send_login", profileId, emailTemplateId }),
   /** A new one-time set-password link, while the person has not chosen a password. */
@@ -225,7 +235,7 @@ export const staffAdminActions = {
 
 /** The employment details on Staff > Employees (department, title, type, manager, location). */
 export async function adminSaveEmployment(id: string, form: StaffEmploymentForm): Promise<StaffDetail> {
-  const { data, error } = await supabase.rpc("hr_admin_staff_employment_save", { p_id: id, p_employment: { ...form, employmentType: form.employmentType || null, managerId: form.managerId || null } });
+  const { data, error } = await supabase.rpc("hr_admin_staff_employment_save", { p_id: id, p_employment: { ...form, employmentType: form.employmentType || null, managerId: form.managerId || null, locationId: form.locationId || null } });
   if (error) fail(error, "The employment details could not be saved.");
   return data as StaffDetail;
 }
@@ -253,6 +263,7 @@ export interface OnboardingPay {
 }
 export interface OnboardingPayDetails {
   employment: StaffEmployment | null; pay: OnboardingPay; completedAt: string | null; schedules: Array<{ id: string; name: string; frequency: string }>;
+  locations: StaffLocation[];
 }
 export interface OnboardingAccount {
   hasLogin: boolean; passwordSet: boolean; lastSignInAt: string | null;
@@ -297,7 +308,7 @@ export async function adminOnboardingCheck(id: string, section: OnboardingSectio
 
 /** The pay details form (hr_admin_onboarding_pay_save): everything the offer letter and payroll need, validated again by the database. */
 export interface PayDetailsForm {
-  jobTitle: string; department: string; employmentType: "full_time" | "part_time" | "casual" | ""; startDate: string; workLocation: string; managerId: string;
+  jobTitle: string; department: string; employmentType: "full_time" | "part_time" | "contract" | ""; startDate: string; locationId: string; managerId: string;
   payBasis: "hourly" | "salary" | ""; rate: string; payScheduleId: string; hoursPerWeek: string; award: string; xeroEmployeeId: string;
 }
 export async function adminSavePayDetails(id: string, form: PayDetailsForm): Promise<StaffOnboarding> {

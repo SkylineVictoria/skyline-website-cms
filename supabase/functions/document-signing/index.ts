@@ -27,6 +27,7 @@ Deno.serve(async (req) => {
   const ports: SigningPorts = {
     service: async (action, args = {}) => unwrap(await service.rpc("signing_service", { p_action: action, p_hash: args.hash ?? null, p_id: args.id ?? null, p_data: args.data ?? {} })),
     admin: async (action, id = null, data = {}) => unwrap(await caller.rpc("signing_admin", { p_action: action, p_id: id, p_data: data })),
+    callerRpc: async (name, args) => unwrap(await caller.rpc(name, args)),
     storage: {
       download: async (path) => { const { data, error } = await bucket.download(path); return error || !data ? null : new Uint8Array(await data.arrayBuffer()); },
       upload: async (path, bytes) => !(await bucket.upload(path, bytes, { contentType: "application/pdf", upsert: false })).error,

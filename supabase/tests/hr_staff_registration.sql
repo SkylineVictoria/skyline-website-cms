@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(613);
+select plan(645);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -36,15 +36,19 @@ create function pg_temp.checked_uploads() returns void language sql as $$
 -- Onboarding flow (20261111090000): the pay details an offer needs. pg_temp.pay() is the form with defaults (p_over replaces fields);
 -- pg_temp.set_pay() stores what hr_admin_onboarding_pay_save stores, for fixtures that are not about the form.
 insert into t select 'sched', id::text from hr.pay_schedules where is_active order by name limit 1;
+-- Work locations (20261113090000): the pay form picks one from HRMS > Locations.
+with l as (insert into hr.locations(name) values ('Test Campus') returning id) insert into t select 'loc', id::text from l;
 create function pg_temp.sched_name() returns text language sql stable security definer as $$ select name from hr.pay_schedules where id = (select v::uuid from t where k = 'sched') $$;
+create function pg_temp.sched_freq() returns text language sql stable security definer as $$ select frequency from hr.pay_schedules where id = (select v::uuid from t where k = 'sched') $$;
 create function pg_temp.pay(p_over jsonb) returns jsonb language sql stable as $$
  select jsonb_build_object('jobTitle', 'Trainer', 'employmentType', 'full_time', 'startDate', (current_date + 30)::text, 'payBasis', 'hourly', 'rate', '42.50',
-  'payScheduleId', (select v from t where k = 'sched'), 'hoursPerWeek', '38') || p_over $$;
+  'payScheduleId', (select v from t where k = 'sched'), 'hoursPerWeek', '38', 'locationId', (select v from t where k = 'loc')) || p_over $$;
 create function pg_temp.set_pay(p_id uuid) returns void language plpgsql as $$
 begin
- insert into hr.employment(profile_id, job_title, employment_type, joining_date, pay_details_at) values (p_id, 'Trainer', 'full_time', current_date + 30, now())
+ insert into hr.employment(profile_id, job_title, employment_type, joining_date, pay_details_at, location_id, work_location) values (p_id, 'Trainer', 'full_time', current_date + 30, now(), (select v::uuid from t where k = 'loc'), 'Test Campus')
   on conflict (profile_id) do update set job_title = case when hr.employment.job_title = '' then 'Trainer' else hr.employment.job_title end,
-   employment_type = coalesce(hr.employment.employment_type, 'full_time'), joining_date = current_date + 30, pay_details_at = now();
+   employment_type = coalesce(hr.employment.employment_type, 'full_time'), joining_date = current_date + 30, pay_details_at = now(),
+   location_id = (select v::uuid from t where k = 'loc'), work_location = 'Test Campus';
  insert into hr.employee_pay(profile_id, pay_schedule_id, pay_basis, rate, ordinary_hours_week) values (p_id, (select v::uuid from t where k = 'sched'), 'hourly', 42.5, 38)
   on conflict (profile_id) do update set pay_schedule_id = excluded.pay_schedule_id, pay_basis = 'hourly', rate = 42.5, ordinary_hours_week = 38;
 end $$;
@@ -603,7 +607,10 @@ select throws_ok($$select public.hr_admin_staff_add('Ada', 'Again', 'ada.added@e
 select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'not-an-email', '0400 000 815')$$, '22023', 'Enter a valid email address.', 'the address is checked');
 select lives_ok($$select public.hr_admin_staff_invite((select id from hr.staff_profiles where email = 'ada.added@example.test'), 'documents', pg_temp.h('ada-link'))$$, 'an added person (no job application) gets the document link from Employees');
 -- Employment details on Employees.
-select is(public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{"department":"Hospitality","jobTitle":"Senior Trainer","employmentType":"part_time","workLocation":"Melbourne CBD"}')->'employment'->>'department', 'Hospitality', 'the employment details are editable on Employees');
+select throws_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{"jobTitle":"Senior Trainer","employmentType":"part_time","workLocation":"Melbourne CBD"}')$$, '22023', 'Choose the work location from the list (HRMS > Locations).', 'a work location that is not on the list is refused');
+select throws_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{"jobTitle":"Senior Trainer","employmentType":"casual"}')$$, '22023', 'Choose Full time, Part time or Contract.', 'casual is no longer a job type');
+select is(public.hr_admin_staff_employment_save(pg_temp.v('jc1'), jsonb_build_object('department', 'Hospitality', 'jobTitle', 'Senior Trainer', 'employmentType', 'part_time', 'locationId', pg_temp.v('loc')))->'employment'->>'workLocation', 'Test Campus', 'the chosen location''s name is kept on the record (for letters and exports)');
+select is(public.hr_admin_staff_employment_save(pg_temp.v('jc1'), jsonb_build_object('department', 'Hospitality', 'jobTitle', 'Senior Trainer', 'employmentType', 'part_time', 'locationId', pg_temp.v('loc')))->'employment'->>'department', 'Hospitality', 'the employment details are editable on Employees');
 select throws_ok(format($$select public.hr_admin_staff_employment_save(%L, '{"jobTitle":"x","employmentType":"full_time","managerId":"%s"}')$$, pg_temp.v('jc1'), pg_temp.v('jc1')), '23514', 'A person cannot be their own manager.', 'no self-management');
 select throws_ok(format($$select public.hr_admin_staff_employment_save(%L, '{"jobTitle":"x","employmentType":"full_time","managerId":"%s"}')$$, pg_temp.v('jc1'), pg_temp.v('jc2')), '22023', 'Choose an active employee as the manager.', 'the manager must be an active employee');
 reset role;
@@ -627,8 +634,8 @@ select is((select count(*)::int from information_schema.columns where table_sche
  'job applications no longer point at staff documents');
 select is((select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled) || ' | '
   || (select string_agg(id, ',' order by sort_order) from public.admin_menu_items where parent_id = 'website' and id in ('agency_jobs', 'staff_candidates') and is_enabled),
- 'agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_holidays,staff_xero,staff_templates | agency_jobs,staff_candidates',
- 'HRMS holds Employees, the HRMS pages and Templates; Jobs and Candidates are under Website (20261110200000 / 210000, 20261111100000)');
+ 'agency_staff,staff_timesheets,staff_leave,staff_pay_schedules,staff_locations,staff_holidays,staff_xero,staff_templates | agency_jobs,staff_candidates',
+ 'HRMS holds Employees, the HRMS pages, Locations and Templates; Jobs and Candidates are under Website (20261110200000 / 210000, 20261111100000, 20261113090000)');
 select is((select count(*)::int from public.admin_menu_items where id in ('agency_candidates', 'agency_employees') and is_enabled), 0, 'the Master Data copies of Candidates and Employees are disabled');
 
 -- ---------------------------------------------------------------- org chart (20261110100000)
@@ -737,7 +744,9 @@ select is(public.hr_admin_onboarding(pg_temp.v('f1'))->>'payProblem', 'Add the p
 
 -- ---- Pay details: every field is checked
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"jobTitle":"  "}'))$$, '22023', 'Enter the position (job title).', 'pay details: the position is required');
-select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"contract"}'))$$, '22023', 'Choose the employment type.', 'pay details: an unknown employment type is refused');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"casual"}'))$$, '22023', 'Choose the employment type.', 'pay details: casual is refused (Full time, Part time or Contract)');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"locationId":""}'))$$, '22023', 'Choose the work location.', 'pay details: the work location is required');
+select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"locationId":"00000000-0000-0000-0000-000000000000"}'))$$, '22023', 'Choose an active work location from the list.', 'pay details: the location must be on the list');
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"startDate":"2027-02-31"}'))$$, '22023', 'Enter a valid start date.', 'pay details: an impossible date is refused');
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"startDate":"2001-01-01"}'))$$, '22023', 'The start date must be within the last year or the next two years.', 'pay details: a start date far away is refused');
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"payBasis":"weekly"}'))$$, '22023', 'Choose the pay basis (hourly or annual).', 'pay details: the basis is hourly or annual');
@@ -751,7 +760,8 @@ select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), p
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"hoursPerWeek":"99"}'))$$, '22023', 'The hours per week must be between 1 and 80.', 'pay details: hours stay in range');
 select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay(format('{"managerId":"%s"}', pg_temp.v('f1'))::jsonb))$$, '23514', 'A person cannot be their own manager.', 'pay details: nobody reports to themselves');
 select is(public.hr_admin_onboarding(pg_temp.v('f1'))->'payDetails'->>'completedAt', null, 'a refused save changes nothing');
-select is(public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"casual","hoursPerWeek":""}'))->>'stage', 'pay_details', 'a casual needs no hours: the stage is Pay details added');
+select is(public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"employmentType":"contract","hoursPerWeek":""}'))->>'stage', 'pay_details', 'a contract needs no hours: the stage is Pay details added');
+select is((public.hr_admin_onboarding(pg_temp.v('f1'))->'payDetails'->'employment'->>'workLocation') || '/' || (public.hr_admin_onboarding(pg_temp.v('f1'))->'payDetails'->'employment'->>'payType'), 'Test Campus/' || pg_temp.sched_freq(), 'the record shows the location and the pay type (the schedule''s frequency)');
 select is(public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{"jobTitle":"Senior Trainer","managerId":""}'))->>'payComplete', 'true', 'the pay details can be changed before the offer');
 reset role;
 select is((select e.job_title || '/' || e.employment_type || '/' || (e.joining_date = current_date + 30)::text || '/' || ep.pay_basis || '/' || ep.rate || '/' || ep.ordinary_hours_week
@@ -787,6 +797,13 @@ select is(public.hr_admin_template_values(pg_temp.v('f1'))->>'position', 'Senior
 select is((public.hr_admin_template_values(pg_temp.v('f1'))->>'firstName') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'payBasis') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'payRate')
   || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'paySchedule') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'employmentType'), 'Flo/hourly/42.50/' || pg_temp.sched_name() || '/full_time', 'template values: name, pay and schedule');
 select is(public.hr_admin_template_values(pg_temp.v('f1'))->>'managerName', null, 'template values: missing data stays empty (the renderer refuses to send it)');
+select is((public.hr_admin_template_values(pg_temp.v('f1'))->>'payType') || '/' || (public.hr_admin_template_values(pg_temp.v('f1'))->>'workLocation'), pg_temp.sched_freq() || '/Test Campus', 'template values: the pay type and the work location');
+reset role;
+select ok('job_title' = any(hr.template_placeholders('offer_letter')) and 'job_location' = any(hr.template_placeholders('offer_letter')) and 'job_type' = any(hr.template_placeholders('offer_letter'))
+  and 'pay_type' = any(hr.template_placeholders('offer_letter')) and 'employee_full_name' = any(hr.template_placeholders('offer_letter')) and 'today_date' = any(hr.template_placeholders('rejection')), 'the owner''s variable names are allowed in every template kind');
+select is(hr.template_problem('offer_letter', 'Agreement: {{job_title}}', '<p>{{employee_full_name}} works {{job_type}} at {{job_location}}, paid {{pay_type}}, from {{start_date}}. {{today_date}}</p>'), null, 'a template using them is accepted');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->>'problem', null, 'the offer letter can be made now');
 select is((select count(*)::int from jsonb_array_elements(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->'templates') x where x->>'type' = 'offer_letter'), 3, 'the letter templates to choose from (archived ones are not offered)');
 reset role;
@@ -797,12 +814,25 @@ select throws_ok($$select public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_t
  '23514', 'The letter still has placeholders that were not filled in.', 'a letter with an unfilled placeholder is never recorded');
 select throws_ok($$select public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer.pdf', 1000, repeat('d', 64), pg_temp.tpl('Standard rejection'), 'Offer', '<p>Dear Flo</p>', '{}')$$,
  '22023', 'Choose an offer letter template.', 'only an offer letter template makes a letter');
+select throws_ok($$select public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer.pdf', 1000, repeat('d', 64), pg_temp.v('tpl2'), 'Offer', '<p>Dear Flo, edited.</p>', '{}', true, null)$$,
+ '22023', 'An edited letter is recorded with what the template rendered.', 'an edited letter needs the template''s own render beside it');
 select ok((public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter.pdf', 'Offer - Flo One.pdf', 1000, repeat('d', 64), pg_temp.v('tpl2'), 'Offer: Senior Trainer', '<p>Dear Flo, you start as Senior Trainer.</p>', '{"first_name":"Flo"}')->'offer'->>'id') is not null,
  'the generated letter is recorded as the offer');
 select lives_ok($$select public.hr_admin_template_save(pg_temp.v('tpl2'), '{"name":"Short offer","subject":"Changed","bodyHtml":"<p>Completely different text for {{first_name}}.</p>"}')$$, 'the template is edited afterwards');
 reset role;
-select is((select l.template_name || '|' || l.title || '|' || l.body_html from hr.staff_offer_letters l where l.profile_id = pg_temp.v('f1')), 'Short offer|Offer: Senior Trainer|<p>Dear Flo, you start as Senior Trainer.</p>',
+select is((select l.template_name || '|' || l.title || '|' || l.body_html || '|' || l.edited || '|' || coalesce(l.template_html, '-') from hr.staff_offer_letters l where l.profile_id = pg_temp.v('f1')), 'Short offer|Offer: Senior Trainer|<p>Dear Flo, you start as Senior Trainer.</p>|false|-',
  'the letter made for the person keeps its own copy: a later template edit does not change it');
+-- An edited copy (preview and edit before sending, 20261113100000): the sent text and the template's render are both kept; the template is untouched.
+reset role; insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.v('f1') || '/offer/letter2.pdf');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select ok((public.hr_admin_offer_letter_add(pg_temp.v('f1'), pg_temp.v('f1') || '/offer/letter2.pdf', 'Offer - Flo One.pdf', 1200, repeat('e', 64), pg_temp.v('tpl2'), 'Offer: Senior Trainer', '<p>Dear Flo, you start as Senior Trainer. We cover relocation.</p>', '{"first_name":"Flo"}', true, '<p>Dear Flo, you start as Senior Trainer.</p>')->'offer'->>'id') is not null,
+ 'an edited letter replaces the unsent one');
+reset role;
+select is((select l.body_html || '|' || l.edited || '|' || l.template_html from hr.staff_offer_letters l join hr.staff_offers o on o.id = l.offer_id where l.profile_id = pg_temp.v('f1') and o.withdrawn_at is null order by l.created_at desc limit 1),
+ '<p>Dear Flo, you start as Senior Trainer. We cover relocation.</p>|true|<p>Dear Flo, you start as Senior Trainer.</p>', 'the sent text and what the template rendered are both kept');
+select is((select body_html from hr.templates where id = pg_temp.v('tpl2')), '<p>Completely different text for {{first_name}}.</p>', 'the template itself is not changed by a per-letter edit');
+select is((select (detail->>'edited') from hr.staff_audit where profile_id = pg_temp.v('f1') and action = 'offer_letter_generated' order by id desc limit 1), 'true', 'the history says the letter was edited');
 
 -- ---- Offer sent, with the login
 set local role authenticated;
@@ -922,7 +952,7 @@ select throws_ok($$select public.hr_svc_account_open(pg_temp.h('flow2-acct-4'))$
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_onboarding(pg_temp.v('f2'))->>'stage', 'pay_details', 'after a withdrawal the stage is back at Pay details added');
-select lives_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('f2'), '{"jobTitle":"Trainer","employmentType":"casual"}')$$, 'Casual is an employment type');
+select lives_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('f2'), '{"jobTitle":"Trainer","employmentType":"contract"}')$$, 'Contract is an employment type');
 select throws_ok($$select public.hr_admin_staff_reject(pg_temp.v('f2'), '  ', false)$$, '22023', 'Add a note explaining the decision.', 'withdrawing needs a reason');
 select lives_ok($$select public.hr_admin_staff_reject(pg_temp.v('f2'), 'Took another role', false)$$, 'an application is withdrawn at any stage with a reason');
 select is((public.hr_admin_onboarding(pg_temp.v('f2'))->>'closed') || '/' || (public.hr_admin_onboarding(pg_temp.v('f2'))->'steps'->4->>'state') || '/' || (public.hr_admin_onboarding(pg_temp.v('f2'))->'steps'->6->>'state'), 'rejected/done/todo',
@@ -1118,6 +1148,44 @@ select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-
 select is(public.signing_service('tick')->>'expired','0','expiry is not repeated');
 -- A signed-in person sees only requests addressed to their own confirmed email.
 select is(jsonb_array_length(public.signing_mine('list')),0,'the administrator has no documents addressed to them');
+-- A request for a staff member, edited for this copy (20261113100000).
+select lives_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000011',jsonb_build_object('title','Agreement','recipient_name','Flo One','recipient_email','flo.one@example.test','original_hash',repeat('a',64),
+  'profile_id',pg_temp.v('f1'),'rendered_text','Dear Flo, edited.','template_text','Dear Flo.','edited',true))$$, 'a request is linked to the staff member whose record filled it');
+select is((select r.profile_id::text || '|' || r.edited || '|' || r.rendered_text || '|' || r.template_text from hr.sign_requests r where r.id='d0000000-0000-0000-0000-000000000011'), pg_temp.v('f1')::text || '|true|Dear Flo, edited.|Dear Flo.', 'the sent text and the template''s render are both kept');
+select throws_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000012',jsonb_build_object('title','Agreement','recipient_name','Flo One','recipient_email','flo.one@example.test','original_hash',repeat('a',64),'profile_id','00000000-0000-0000-0000-000000000000'))$$,
+ 'P0001','Staff member not found','an unknown staff member is refused');
+select ok(not (public.signing_admin('list')->'requests'->0 ? 'template_text'), 'the list carries neither the text nor the template render');
+
+-- ---------------------------------------------------------------- an EXISTING employee gets a sign-in link (20261113090000) and can punch
+reset role;
+alter table hr.staff_profiles disable trigger staff_status_guard;
+insert into hr.staff_profiles(id, first_name, last_name, email, phone_e164, status) values ('e1000000-0000-0000-0000-000000000001', 'Eve', 'Existing', 'eve.existing@example.test', '+61400000991', 'active');
+alter table hr.staff_profiles enable trigger staff_status_guard;
+insert into auth.users(id, email) values ('a0000000-0000-0000-0000-00000000e001', 'eve.existing@example.test');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select throws_ok($$select public.hr_admin_emp_login_invite(pg_temp.v('a1'), 'a0000000-0000-0000-0000-00000000e001', pg_temp.h('eve-acct'))$$, '23514', 'A sign-in link is for an active employee. People being onboarded get theirs with the offer.', 'only an active employee gets a sign-in link this way');
+select throws_ok($$select public.hr_admin_emp_login_invite('e1000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-00000000e001', null)$$, '22023', 'A sign-in link is needed for this person.', 'a login that was never set up needs the link');
+select throws_ok($$select public.hr_admin_emp_login_invite('e1000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', pg_temp.h('eve-acct'))$$, '42501', 'That login does not belong to this person.', 'someone else''s login is refused');
+select is(public.hr_admin_emp_login_invite('e1000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-00000000e001', pg_temp.h('eve-acct'))->>'needsPassword', 'true', 'the login is linked and a set-password link is recorded');
+reset role;
+select is((select auth_user_id::text from hr.staff_profiles where id = 'e1000000-0000-0000-0000-000000000001'), 'a0000000-0000-0000-0000-00000000e001', 'the active employee is linked to the login');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
+select is((public.hr_admin_emp_get('e1000000-0000-0000-0000-000000000001')->>'hasLogin') || '/' || (public.hr_admin_emp_get('e1000000-0000-0000-0000-000000000001')->>'passwordSet'), 'true/false', 'Employees shows: login made, password not chosen');
+reset role;
+select is(public.hr_svc_account_open(pg_temp.h('eve-acct'))->>'status', 'active', 'the set-password link opens for an active employee');
+select is(public.hr_svc_account_done(pg_temp.h('eve-acct'))->>'ok', 'true', 'the link is used up once the password is set');
+update auth.users set email_confirmed_at = now() where id = 'a0000000-0000-0000-0000-00000000e001';
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-00000000e001';
+select is((public.hr_time_punch('punch_in', 'mobile'))->>'state', 'punch_in', 'the existing employee punches in from their phone');
+select is((public.hr_time_punch('break_start'))->>'state', 'break_start', '...starts a break');
+select is((public.hr_time_punch('break_end'))->>'state', 'break_end', '...ends it');
+select is((public.hr_time_punch('punch_out'))->>'state', 'punch_out', '...and punches out');
+select is(public.hr_my_timesheet()->>'hasPaySetup', 'false', 'without a pay schedule the punches are kept and the timesheet says HR has not set one up');
+reset role;
+select is((select count(*)::int from hr.time_events where profile_id = 'e1000000-0000-0000-0000-000000000001'), 4, 'four punches are on the record');
 -- Checked categories (20261112100000): a staff document is recorded only for a file the uploader checked as that category.
 reset role;
 insert into t select 'cu1', public.hr_svc_apply('Chi', 'Checked', 'cu.checked@example.test', '0400 000 971')->>'profileId';

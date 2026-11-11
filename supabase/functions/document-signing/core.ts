@@ -5,9 +5,10 @@
 // stored bytes were re-hashed against the recorded sha256.
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
 import type { Letterhead } from "../_shared/letterhead.ts";
-import { checkRecipients, fillSigningTemplate, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, templateVariables, SIGNING_CONSENT,
+import { checkRecipients, fillSigningTemplate, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
   type SigningMailJob } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
+import { templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 import type { EmailProvider } from "../_shared/notification/delivery.ts";
 import { outcomeState, type HrMailConfig } from "../_shared/hr-mail.ts";
 
@@ -20,6 +21,9 @@ export interface SigningPorts {
   /** public.signing_admin as the caller (their JWT): the database refuses anyone who is not a CMS Admin. */
   // deno-lint-ignore no-explicit-any
   admin(action: string, id?: string | null, data?: unknown): Promise<any>;
+  /** Any other RPC as the caller (the staff record's letter variables, hr_admin_template_values: Admin only in the database). */
+  // deno-lint-ignore no-explicit-any
+  callerRpc?(name: string, args: Record<string, unknown>): Promise<any>;
   storage: {
     download(path: string): Promise<Uint8Array | null>;
     upload(path: string, bytes: Uint8Array): Promise<boolean>;
@@ -47,7 +51,10 @@ const signingPdfModule = () => import("../_shared/signing-pdf.ts");
 const safeName = (title: string) => (title.replace(/[^A-Za-z0-9 ._-]/g, "").trim().slice(0, 80) || "document");
 
 export async function handleSigning(call: SigningCall, ports: SigningPorts): Promise<unknown> {
-  const { body } = call;
+  const body = { ...call.body };
+  // The released single-recipient form (20261110154917, 20261113100000): recipientName / recipientEmail and a staff member's profileId.
+  if (typeof body.profileId === "string" && UUID.test(body.profileId) && !body.subjectType) { body.subjectType = "employee"; body.subjectId = body.profileId; }
+  if (!Array.isArray(body.recipients) && (body.recipientName || body.recipientEmail)) body.recipients = [{ name: body.recipientName, email: body.recipientEmail }];
   const action = String(body.action ?? "");
   const staged: string[] = [];
   const store = async (path: string, bytes: Uint8Array) => {
@@ -151,17 +158,37 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
     };
     /** A template's document for a set of values: a letter from its text, or its PDF. `sample` shows [name] for what is still missing. */
     // deno-lint-ignore no-explicit-any
-    const templateDocument = async (template: Record<string, any>, values: Record<string, unknown>, sample: boolean) => {
+    const templateDocument = async (template: Record<string, any>, values: Record<string, unknown>, sample: boolean, editedText: unknown = null) => {
       const fill = (source: string) => sample ? sampleFill(source, values) : fillSigningTemplate(source, values);
       const title = fill(String(template.title ?? ""));
+      // The administrator may edit the filled text of THIS copy (text templates; the template is untouched): no {{variable}} may remain.
+      let text: string | null = null;
+      if (template.kind !== "pdf" && typeof editedText === "string" && editedText.trim()) {
+        if (editedText.length > 40000) throw new SigningError("Keep the document text under 40,000 characters.");
+        const left = signingVariables(editedText);
+        if (left.length) throw new SigningError(`The edited text still has ${left.map((k) => `{{${k}}}`).join(", ")} in it. Fill it in or remove it.`);
+        text = editedText.replace(/\r\n/g, "\n");
+      }
       const senderFields = (Array.isArray(template.fields) ? template.fields : []).map((f: Record<string, unknown>) => f.role === "sender" ? { ...f, value: String(f.value ?? "").trim() ? fill(String(f.value)).trim() : "" } : f);
-      if (template.kind === "pdf") return { title, rendered: null as string | null, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields };
-      const rendered = fill(String(template.body ?? ""));
+      if (template.kind === "pdf") return { title, rendered: null as string | null, templateText: null as string | null, edited: false, bytes: await fileBytes(template.source_path, template.source_hash), fields: senderFields };
+      const templateText = fill(String(template.body ?? "")), rendered = text ?? templateText;
       const letterPdf = await letterPdfModule();
-      if (await letterPdf.unsupportedText([title, rendered])) throw new SigningError("Template text currently supports Latin letters. For other scripts, upload a ready-made PDF.");
-      return { title, rendered, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
+      const bad = await letterPdf.unsupportedText([title, rendered]);
+      if (bad !== null) throw new SigningError(`Some characters ${bad === title ? "in the title" : "in the text"} cannot be printed in the PDF: "${bad.slice(0, 80)}". Replace them, or upload a ready-made PDF.`);
+      return { title, rendered, templateText, edited: rendered !== templateText, bytes: (await letterPdf.buildLetterPdf({ title, html: signingHtml(rendered), letterhead: await ports.letterhead(), kind: "Document" })).bytes, fields: senderFields };
     };
-    const subjectValues = async (type: unknown, id: unknown) => type ? (await admin("subject_values", id, { type })) as { name: string; email: string; values: Record<string, string> } : null;
+    /** The record's values: the signing names (student.*, employee.*, agent.*) and, for an employee, the letter names of HRMS Templates ({{job_title}}…). */
+    const subjectValues = async (type: unknown, id: unknown) => {
+      if (!type) return null;
+      const subject = (await admin("subject_values", id, { type })) as { name: string; email: string; values: Record<string, string> };
+      if (type === "employee" && ports.callerRpc) {
+        try {
+          const letter = templateValues(((await ports.callerRpc("hr_admin_template_values", { p_id: id })) ?? {}) as TemplatePerson);
+          subject.values = { ...Object.fromEntries(Object.entries(letter).filter(([, v]) => String(v ?? "").trim())), ...subject.values };
+        } catch { /* the signing names still fill */ }
+      }
+      return subject;
+    };
     const inspect = async (bytes: Uint8Array) => {
       const inspected = await (await offerPdfModule()).inspectOfferPdf(bytes);
       if (!inspected.ok) throw new SigningError(inspected.error.replaceAll("offer letter", "document"));
@@ -209,12 +236,25 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       if (!template || template.kind !== "pdf") throw new SigningError("Template not found.", 404);
       return { url: await fileUrl(template.source_path, template.source_hash) };
     }
+    if (action === "preview") {
+      // The released compose flow (20261113100000): the PDF exactly as it will be sent, the filled text and the template's own render.
+      const context = await admin("list");
+      const recipients = checkRecipients(body.recipients);
+      const template = context.templates.find((t: { id: string; status: string }) => t.id === body.templateId && t.status === "active");
+      if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
+      const subject = await subjectValues(body.subjectType, body.subjectId);
+      const values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
+      const made = await templateDocument(template, values, false, body.text);
+      return { pdfBase64: toBase64(made.bytes), title: made.title, text: made.rendered, templateText: made.templateText, edited: made.edited,
+        recipientName: recipients[0].name, recipientEmail: recipients[0].email, variables: templateVariables(template), templateName: template.name };
+    }
     if (action === "create") {
       const context = await admin("list");
       const recipients = checkRecipients(body.recipients);
       const subject = await subjectValues(body.subjectType, body.subjectId);
       let title = String(body.title ?? "").trim(), rendered: string | null = null, templateId: string | null = null, category = String(body.category ?? "other");
       let values: Record<string, unknown> = {}; let bytes: Uint8Array; let fields: Array<Record<string, unknown>> = [];
+      let edited = false, templateText: string | null = null;
       const options: Record<string, unknown> = { signing_mode: body.signingMode === "parallel" ? "parallel" : "sequential" };
       if (call.upload) {
         bytes = call.upload.bytes;
@@ -224,8 +264,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
         // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
         values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
-        const made = await templateDocument(template, values, false);
+        const made = await templateDocument(template, values, false, body.text);
         title = made.title; rendered = made.rendered; bytes = made.bytes; templateId = template.id; category = template.category;
+        edited = made.edited; templateText = made.templateText;
         // What the sender prints on a PDF template (its variables) becomes part of the document itself, before anyone sees or signs it.
         const printed = made.fields.filter((f: Record<string, unknown>) => f.role === "sender" && f.value).map((f: Record<string, unknown>) => ({ ...f, recipient_id: null, done: true })) as unknown as import("../_shared/signing-pdf.ts").StampField[];
         if (printed.length) bytes = await (await signingPdfModule()).stampDocument(bytes, { reference: "", title, fields: printed, recipients: [] });
@@ -237,7 +278,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const id = ports.uuid();
       await store(`${id}/original.pdf`, bytes);
       const record = await admin("create", id, { title, template_id: templateId, rendered_text: rendered, field_values: values, original_hash: await sha256Hex(bytes), recipients, fields,
-        subject_type: body.subjectType ?? null, subject_id: body.subjectId ?? null, category, message: body.message ?? null,
+        subject_type: body.subjectType ?? null, subject_id: body.subjectId ?? null, category, message: body.message ?? null, edited, template_text: edited ? templateText : null,
         expiry_days: body.expiryDays ?? undefined, reminder_days: body.reminderDays ?? undefined, ...options });
       staged.length = 0;
       return record;

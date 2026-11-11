@@ -3,7 +3,7 @@ begin;
 -- period lock), pay schedules and periods (fortnightly / monthly), overtime maths, leave (balances, requests, approvals, accrual
 -- on lock), timesheet approvals, the Xero export, and who may see what. Fixtures only; rolled back. Run: npx supabase test db
 -- RPCs run as role authenticated with a JWT subject (pg_temp.as); table checks run as postgres again (pg_temp.su).
-select plan(177);
+select plan(178);
 
 -- ---------------------------------------------------------------- fixtures
 insert into auth.users(id, email, email_confirmed_at, raw_user_meta_data, aud, role) values
@@ -319,6 +319,7 @@ select is((select sum((l->>'hours')::numeric) from hr.xero_exports x, jsonb_arra
 -- ---------------------------------------------------------------- the employee's own views and privileges
 select pg_temp.as('b0000000-0000-0000-0000-000000000003');
 select is((public.hr_my_timesheet(pg_temp.v('p_oct')))->'summary'->>'overtimeHours', '19.20', 'the employee sees their own period summary');
+select is((public.hr_my_timesheet())->>'today', (now() at time zone 'Australia/Melbourne')::date::text, 'the default period is picked by today in the HR timezone, not UTC (20261113090000)');
 select throws_ok($$select public.hr_my_timesheet(pg_temp.v('p_sep'))$$, 'Pay period not found.', 'another schedule''s period is not theirs');
 select is(jsonb_array_length((public.hr_time_my_shifts(pg_temp.d('p_oct_start'), pg_temp.d('p_oct_end')))->'shifts'), 10, 'my shifts lists the ten October shifts');
 select throws_ok($$select public.hr_admin_employee_punches('c0000000-0000-0000-0000-000000000004', '2026-09-01', '2026-09-30')$$, 'Only HR or the person''s manager can do this.', 'an employee cannot read a colleague''s punches');
@@ -339,8 +340,8 @@ select pg_temp.su();
 
 -- ---------------------------------------------------------------- admin sidebar rows
 select is((select string_agg(id || ':' || route, ',' order by sort_order) from public.admin_menu_items where parent_id = 'staff' and is_enabled and sort_order >= 40),
- 'staff_timesheets:/admin/staff/timesheets,staff_leave:/admin/staff/leave,staff_pay_schedules:/admin/staff/pay-schedules,staff_holidays:/admin/staff/holidays,staff_xero:/admin/staff/xero-export,staff_templates:/admin/staff/templates',
- 'the HRMS menu rows in order (Templates added by 20261111100000)');
+ 'staff_timesheets:/admin/staff/timesheets,staff_leave:/admin/staff/leave,staff_pay_schedules:/admin/staff/pay-schedules,staff_locations:/admin/staff/locations,staff_holidays:/admin/staff/holidays,staff_xero:/admin/staff/xero-export,staff_templates:/admin/staff/templates',
+ 'the HRMS menu rows in order (Templates added by 20261111100000, Locations by 20261113090000)');
 
 select * from finish();
 rollback;

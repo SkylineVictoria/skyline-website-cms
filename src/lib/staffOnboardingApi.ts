@@ -21,9 +21,12 @@ export interface OnboardingProfile {
 }
 /** The person's bank details as the server gives them back: the BSB and account number are always masked (06••••, •••• 4321). */
 export interface OnboardingBank { accountName: string; bsb: string; accountNumber: string; bankName: string; updatedAt: string; masked: boolean }
+/** The role HR recorded for the person (read-only in the wizard): job title, work location, job type, pay type, start date. */
+export interface OnboardingEmployment { jobTitle: string; workLocation: string; employmentType: string | null; joiningDate: string | null; payType: "fortnightly" | "monthly" | null }
 export interface OnboardingView {
   profile: OnboardingProfile; status: StaffStatus; mode: "documents" | "reupload"; readOnly: boolean; expiresAt: string;
   documents: StaffDocument[]; requiredCategories: StaffDocCategory[]; summary: StaffDocSummary; bank: OnboardingBank | null;
+  employment?: OnboardingEmployment | null;
 }
 /** A refused save or upload: the message and, when the server names it, the field it belongs to. */
 export class FieldError extends Error { field?: string; constructor(message: string, field?: string) { super(message); this.field = field; } }

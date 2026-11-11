@@ -30,6 +30,29 @@ const appSettings: Record<string, { label: string; link: string; instruction: st
   },
 };
 
+const australianEducationApps: Record<string, { name: string; purpose: string; nextStep: string }> = {
+  usi: {
+    name: 'USI',
+    purpose: 'Verify a student’s Unique Student Identifier.',
+    nextStep: 'Confirm SLIT’s access to the USI web services.',
+  },
+  vevo: {
+    name: 'VEVO',
+    purpose: 'Check a student’s visa details and conditions.',
+    nextStep: 'Confirm what automated access Home Affairs can provide to SLIT.',
+  },
+  prisms: {
+    name: 'PRISMS',
+    purpose: 'Manage Confirmations of Enrolment (CoEs).',
+    nextStep: 'Confirm whether SLIT can use an approved API for its CoE workflows.',
+  },
+  datazoo: {
+    name: 'DataZoo',
+    purpose: 'Verify student identity through a commercial provider.',
+    nextStep: 'Confirm the DataZoo products and API environment covered by SLIT’s account.',
+  },
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The connection could not be updated.';
 }
@@ -150,6 +173,10 @@ export default function ConnectionsPage() {
     !state.data?.connections.some(item => item.connector_id === provider.id)
   ) ?? [];
 
+  const pendingEducationApps = state.data?.definitions.filter(provider =>
+    provider.availability === 'requires_approval' && Object.hasOwn(australianEducationApps, provider.id)
+  ) ?? [];
+
   return (
     <Frame title="Connections" state={state} showNavigation={false}>
       <div className="mb-4 flex flex-wrap gap-2">
@@ -166,6 +193,20 @@ export default function ConnectionsPage() {
           {available.map(provider => <Button key={provider.id} variant="outline" disabled={busy}
             onClick={() => void addConnection(provider.id)}>{provider.name}</Button>)}
         </div> : <p>All available applications are already listed in Connections.</p>}
+        {pendingEducationApps.length > 0 && <section className="space-y-3 border-t border-background-300 pt-4" aria-labelledby="education-apps-title">
+          <h3 id="education-apps-title" className="font-semibold">Australian education integrations</h3>
+          <p className="text-sm">These apps need confirmed provider access and a connector before you can enter credentials.</p>
+          <ul className="space-y-3">
+            {pendingEducationApps.map(provider => {
+              const details = australianEducationApps[provider.id];
+              return <li key={provider.id} className="rounded border border-background-300 p-3">
+                <p className="font-semibold">{details.name}</p>
+                <p className="text-sm">{details.purpose}</p>
+                <p className="text-sm">{details.nextStep}</p>
+              </li>;
+            })}
+          </ul>
+        </section>}
       </Card>}
       {state.data && !state.data.connections.length && !adding && <p>No connections yet.</p>}
       <ul className="mb-4 max-w-2xl space-y-2">

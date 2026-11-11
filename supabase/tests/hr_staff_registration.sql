@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(593);
+select plan(613);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -1065,28 +1065,59 @@ select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-wiz'), '{"accountName":
 select hr.staff_anonymise(pg_temp.v('w1p'));
 select is((select count(*)::int from hr.employee_bank where profile_id = pg_temp.v('w1p')) || '/' || (select passport_number || nationality || visa_subclass || tax_residency || super_choice || super_fund_abn || super_member_number from hr.staff_profiles where id = pg_temp.v('w1p')), '0/', 'retention removes the bank details, the identity fields and the tax and super answers');
 
--- General document signing: deterministic fixtures, no email or Storage calls.
+-- Document signing (SIGN-01, SIGN-02): deterministic fixtures, no email or Storage calls. Admin a0..04, recipients by role and order.
 reset role;
 select ok(not has_function_privilege('anon','public.signing_admin(text,uuid,jsonb)','execute'), 'signing admin denied to anon');
 select ok(not has_function_privilege('authenticated','public.signing_service(text,text,uuid,jsonb)','execute'), 'signing service denied to browsers');
-select ok(not has_table_privilege('authenticated','hr.sign_requests','select'), 'request tables are private');
+select ok(not has_table_privilege('authenticated','hr.sign_requests','select') and not has_table_privilege('authenticated','hr.sign_recipients','select')
+ and not has_table_privilege('authenticated','hr.sign_tokens','select') and not has_table_privilege('authenticated','hr.sign_fields','select'), 'signing tables are private');
+select is((select public from storage.buckets where id = 'signing-documents'), false, 'the signing bucket is private');
+select is((select active from cron.job where jobname = 'signing-notifications'), false, 'the reminder job is created inactive');
 select set_config('request.jwt.claim.sub','a0000000-0000-0000-0000-000000000004',true);
 select set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-000000000004","role":"authenticated"}',true);
-select lives_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000001',jsonb_build_object('title','Fixture','recipient_name','Asha Patel','recipient_email','asha@example.test','original_hash',repeat('a',64)))$$, 'admin creates draft');
-select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'draft','new request is draft');
-select lives_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001',jsonb_build_object('token_hash',repeat('b',64),'delivery_id','d0000000-0000-0000-0000-000000000002'))$$,'send claims request');
-select throws_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001','{}')$$,'P0001','An email is already being sent','concurrent send refused');
-select is(public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000099","state":"sent"}')->>'stale','true','stale delivery fenced');
-select public.signing_service('delivery_result',null,'d0000000-0000-0000-0000-000000000001','{"delivery_id":"d0000000-0000-0000-0000-000000000002","state":"sent"}');
-select is(public.signing_service('open',repeat('b',64))->>'state','viewed','first open records viewed');
+select lives_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000001',jsonb_build_object('title','Fixture','original_hash',repeat('a',64),'signing_mode','sequential',
+ 'recipients',jsonb_build_array(jsonb_build_object('name','Asha Patel','email','asha@example.test','role','employee','order',1),jsonb_build_object('name','Hari Manager','email','hari@example.test','role','hr','order',2)),
+ 'fields',jsonb_build_array(jsonb_build_object('role','employee','type','text','page',1,'x',0.1,'y',0.1,'w',0.3,'h',0.03),jsonb_build_object('role','hr','type','signature','page',1,'x',0.5,'y',0.8,'w',0.3,'h',0.06))))$$, 'admin creates a two-signer draft');
+select is((select state || '/' || (reference ~ '^SLIT-\d{4}-\d{6}$')::text from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'draft/true','new request is a draft with a reference');
+select throws_ok($$select public.signing_admin('create','d0000000-0000-0000-0000-000000000009',jsonb_build_object('title','Bad','original_hash',repeat('a',64),'recipients','[]'::jsonb))$$,'P0001','Add between 1 and 10 recipients','a request needs a recipient');
+select lives_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001')$$,'send');
+select throws_ok($$select public.signing_admin('send','d0000000-0000-0000-0000-000000000001')$$,'P0001','This request has already been sent','a second send is refused');
+select is((select string_agg(state, ',' order by signing_order) from hr.sign_recipients where request_id='d0000000-0000-0000-0000-000000000001'),'sent,pending','sequential: only the first signer is invited');
+create temp table sign_mail as select * from jsonb_to_recordset(public.signing_service('notify_claim')) as x(id bigint, kind text, "to" text, token text);
+select is((select count(*)::int || '/' || bool_and(token ~ '^[a-f0-9]{64}$') from sign_mail where kind='invite'),'1/true','the invitation is claimed once, with its own link');
+select is(jsonb_array_length(public.signing_service('notify_claim')),0,'a claimed invitation is not claimed again');
+select public.signing_service('notify_result',null,null,jsonb_build_object('id',(select id from sign_mail),'state','sent'));
+select is(public.signing_service('notify_result',null,null,jsonb_build_object('id',(select id from sign_mail),'state','sent'))->>'stale','true','a delivery result is recorded once');
+select is(public.signing_service('open',encode(sha256(convert_to((select token from sign_mail),'UTF8')),'hex'))->>'state','viewed','first open records viewed');
 select throws_ok($$select public.signing_service('open',repeat('c',64))$$,'P0001','This signing link is invalid or expired','unknown token refused');
-select throws_ok($$select public.signing_service('sign',repeat('b',64),null,'{}')$$,'P0001','Your full name and agreement are required','missing consent refused');
-select public.signing_service('sign',repeat('b',64),null,jsonb_build_object('signer_name','Asha Patel','signed_at',now(),'signed_path','d0000000-0000-0000-0000-000000000001/signed-fixture.pdf','signed_hash',repeat('d',64),'original_hash',repeat('a',64),'consent','I have read this document and agree to its contents. I consent to use my typed full name as my electronic signature.'));
-select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000001'),'signed','signature committed');
-select throws_ok($$select public.signing_service('sign',repeat('b',64),null,'{}')$$,'P0001','This document is already signed','replay refused');
-select throws_ok($$select public.signing_admin('void','d0000000-0000-0000-0000-000000000001')$$,'P0001','This request is closed','signed document cannot be voided');
-select is(public.signing_service('path_referenced',null,null,'{"path":"d0000000-0000-0000-0000-000000000001/signed-fixture.pdf"}'),'true'::jsonb,'committed PDF protected from cleanup');
-select is((select count(*)::int from hr.sign_events where request_id='d0000000-0000-0000-0000-000000000001' and event='signed'),1,'one signature audit event');
+select throws_ok($$select public.signing_service('sign',encode(sha256(convert_to((select token from sign_mail),'UTF8')),'hex'),null,'{}')$$,'P0001','Your full name and agreement are required','missing consent refused');
+create temp table sign_ok as select encode(sha256(convert_to(token,'UTF8')),'hex') as h, jsonb_build_object('signer_name','Asha Patel','consent','I have read this document and agree to its contents. I consent to sign it electronically and adopt the signature I provide here as my electronic signature.',
+ 'document_hash',repeat('a',64),'signed_at',now(),'current_path','d0000000-0000-0000-0000-000000000001/signed-1.pdf','current_hash',repeat('d',64)) as d from sign_mail;
+select throws_ok($$select public.signing_service('sign',(select h from sign_ok),null,(select d from sign_ok) || jsonb_build_object('revision',0,'values',jsonb_build_object((select id::text from hr.sign_fields where type='signature' and request_id='d0000000-0000-0000-0000-000000000001'),'x')))$$,
+ '42501','You can only fill in your own fields','a signer cannot fill another signer''s field');
+select throws_ok($$select public.signing_service('sign',(select h from sign_ok),null,(select d from sign_ok) || '{"revision":0}')$$,'P0001','Complete every required field before signing','a required field must be filled');
+select is(public.signing_service('sign_plan',(select h from sign_ok),null,(select d from sign_ok) || jsonb_build_object('values',jsonb_build_object((select id::text from hr.sign_fields where type='text' and request_id='d0000000-0000-0000-0000-000000000001'),'Resident')))->>'complete','false','the plan knows another signer is still needed');
+select throws_ok($$select public.signing_service('sign',(select h from sign_ok),null,(select d from sign_ok) || jsonb_build_object('revision',7,'values',jsonb_build_object((select id::text from hr.sign_fields where type='text' and request_id='d0000000-0000-0000-0000-000000000001'),'Resident')))$$,'SG409','Another signature was just added','a PDF made for an older revision is refused');
+select is(public.signing_service('sign',(select h from sign_ok),null,(select d from sign_ok) || jsonb_build_object('revision',0,'values',jsonb_build_object((select id::text from hr.sign_fields where type='text' and request_id='d0000000-0000-0000-0000-000000000001'),'Resident')))->>'state','partial','the first signature leaves it partially signed');
+select is((select string_agg(state, ',' order by signing_order) from hr.sign_recipients where request_id='d0000000-0000-0000-0000-000000000001'),'signed,sent','the next signer is invited');
+select throws_ok($$select public.signing_service('sign',(select h from sign_ok),null,(select d from sign_ok) || '{"revision":1}')$$,'P0001','You have already signed this document','replay refused');
+select is((select count(*)::int from hr.sign_notifications where request_id='d0000000-0000-0000-0000-000000000001' and kind='invite'),2,'one invitation per signer');
+select throws_ok($$update hr.sign_events set event='forged' where request_id='d0000000-0000-0000-0000-000000000001'$$,'42501','Signing history cannot be changed','history cannot be edited');
+select ok(hr.sign_chain_ok('d0000000-0000-0000-0000-000000000001'),'the history hash chain verifies');
+select lives_ok($$select public.signing_admin('void','d0000000-0000-0000-0000-000000000001','{"reason":"Sent in error"}')$$,'an open request can be voided');
+select is((select count(*)::int from hr.sign_tokens t join hr.sign_recipients c on c.id=t.recipient_id where c.request_id='d0000000-0000-0000-0000-000000000001'),0,'voiding removes every link');
+select is((select count(*)::int from hr.sign_notifications where request_id='d0000000-0000-0000-0000-000000000001' and kind in ('invite','reminder') and state='queued'),0,'voiding stops queued invitations and reminders');
+select throws_ok($$select public.signing_admin('void','d0000000-0000-0000-0000-000000000001')$$,'P0001','This request is closed','a closed request cannot be voided again');
+select is(public.signing_service('path_referenced',null,null,'{"path":"d0000000-0000-0000-0000-000000000001/signed-1.pdf"}'),'true'::jsonb,'committed PDF protected from cleanup');
+-- Expiry closes once and tells the recipient and the sender.
+select public.signing_admin('create','d0000000-0000-0000-0000-000000000002',jsonb_build_object('title','Expiry','original_hash',repeat('a',64),'recipients',jsonb_build_array(jsonb_build_object('name','Eve Expired','email','eve@example.test'))));
+select public.signing_admin('send','d0000000-0000-0000-0000-000000000002');
+update hr.sign_requests set expires_at = now() - interval '1 minute' where id='d0000000-0000-0000-0000-000000000002';
+select is(public.signing_service('tick')->>'expired','1','the schedule expires an overdue request');
+select is((select state from hr.sign_requests where id='d0000000-0000-0000-0000-000000000002') || '/' || (select count(*) from hr.sign_notifications where request_id='d0000000-0000-0000-0000-000000000002' and kind='expired'),'expired/2','expired, with one notice to the recipient and one to the sender');
+select is(public.signing_service('tick')->>'expired','0','expiry is not repeated');
+-- A signed-in person sees only requests addressed to their own confirmed email.
+select is(jsonb_array_length(public.signing_mine('list')),0,'the administrator has no documents addressed to them');
 -- Checked categories (20261112100000): a staff document is recorded only for a file the uploader checked as that category.
 reset role;
 insert into t select 'cu1', public.hr_svc_apply('Chi', 'Checked', 'cu.checked@example.test', '0400 000 971')->>'profileId';

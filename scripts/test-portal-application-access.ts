@@ -35,6 +35,10 @@ test('admin menu: order, nesting and active deep links follow backend rows', () 
   assert.equal(menuActive(tree[1], '/admin/pages/a-page'), true);
   assert.equal(menuActive(tree[0], '/admin/pages'), false);
   assert.equal(menuActive(tree[1], '/admin/pages-lookalike'), false);
+  // The Documents & Signatures row (20261110154917) is a top-level link: it must be shown, and active on its pages.
+  const signing = menuTree([row('document_signing', null, '/admin/signing', 85)]);
+  assert.deepEqual(signing.map(n => n.id), ['document_signing']);
+  assert.equal(menuActive(signing[0], '/admin/signing'), true);
 });
 test('admin menu: denied parents, disabled rows, cycles and unsafe routes fail closed', () => {
   const row = (id: string, parent_id: string | null, route: string | null): AdminMenuItem =>

@@ -32,6 +32,7 @@ const routes = new Set([
   '/agency/all-applications', '/agency/agencies', '/agency/users',
   '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
   STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH,
+  '/admin/signing', // Documents & Signatures (menu row 'document_signing', 20261110154917)
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

@@ -19,6 +19,7 @@
 //   node scripts/lab/staff-lab.mjs signing  Documents & Signatures: templates and versions, variables from a student / employee / agent, one signer, three in
 //                                           order, two at once, placed fields in the signed PDF, invitations, reminders, expiry, decline, void, completion
 //                                           mail with the signed PDF and certificate, tamper checks and refused access (mock Postmark)
+//   node scripts/lab/staff-lab.mjs signing-browser  the same screens in Chromium: dashboard, template editor, field placement, send; signing on an iPhone-size screen
 //   node scripts/lab/staff-lab.mjs e2e      the Playwright suite (e2e/*.spec.ts) against this lab, with the mock Postmark and reader
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
@@ -1476,9 +1477,10 @@ async function wizard() {
 
 /* ------------------------------------------------------------------ Documents & Signatures (SIGN-02) */
 async function signCall(lab, bearer, body, file, headers = {}) {
-  let payload = JSON.stringify(body); const h = { apikey: lab.anonKey, Authorization: `Bearer ${bearer}`, ...headers };
+  let payload = JSON.stringify(body); const h = { apikey: lab.anonKey, Authorization: `Bearer ${bearer}`, ...(process.env.LAB_SIGNING_FUNCTION_URL ? { "x-forwarded-for": "203.0.113.10" } : {}), ...headers };
   if (file) { payload = new FormData(); payload.set("data", JSON.stringify(body)); payload.set("file", new Blob([file], { type: "application/pdf" }), "document.pdf"); } else h["content-type"] = "application/json";
-  const res = await fetch(`${lab.apiUrl}/functions/v1/document-signing`, { method: "POST", headers: h, body: payload });
+  // LAB_SIGNING_FUNCTION_URL: the function served by a host Deno against this stack, when the stack's edge runtime cannot load its imports.
+  const res = await fetch(process.env.LAB_SIGNING_FUNCTION_URL || `${lab.apiUrl}/functions/v1/document-signing`, { method: "POST", headers: h, body: payload });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 const signRpc = async (lab, bearer, action, id = null, data = {}) => restRpc(lab, bearer, "signing_admin", { p_action: action, p_id: id, p_data: data });
@@ -1524,7 +1526,7 @@ async function signing() {
     const employeeId = seed("employee", `with p as (insert into hr.staff_profiles(first_name, last_name, email, phone_e164, address_street, address_suburb, address_state, address_postcode)
       values ('Signe', 'Employee', '${mail("employee")}', '+6149${String(parseInt(run, 16)).padStart(8, "0").slice(0, 8)}', '1 Lab Street', 'Melbourne', 'VIC', '3000') returning id),
       e as (insert into hr.employment(profile_id, job_title, department) select id, 'Lab Trainer', 'Training' from p returning profile_id) select profile_id from e;`);
-    const agencyId = seed("agency", `with a as (insert into public.agencies(name) values ('Sign Lab Agency ${run}') returning id) select id from a;`) ?? seed("agency (existing)", "select id from public.agencies order by created_at limit 1;");
+    const agencyId = seed("agency", `with a as (insert into public.agencies(name, code) values ('Sign Lab Agency ${run}', 'SIGN${run.toUpperCase()}') returning id) select id from a;`) ?? seed("agency (existing)", "select id from public.agencies order by created_at limit 1;");
     const agentId = agencyId && seed("agent", `with g as (insert into public.agents(business_id, full_name, email) values ('${agencyId}', 'Agnes Agent', '${mail("agent")}') returning id) select id from g;`);
     const studentId = agencyId && seed("student", `with s as (insert into public.enrollment_students(agency_id, full_name, email, details) values ('${agencyId}', 'Stu Dent', '${mail("student")}',
       '{"first_name":"Stu","last_name":"Dent","au_street":"9 Campus Road","au_suburb":"Carlton","au_state":"VIC","au_postcode":"3053"}') returning id) select id from s;`);
@@ -1839,6 +1841,127 @@ async function signing() {
   process.exitCode = failures ? 1 : 0;
 }
 
+/** Documents & Signatures in a real browser: the admin dashboard, field placement and sending (desktop), then signing on a phone screen. */
+async function signingBrowser() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  await startMockPostmark();
+  const { chromium, devices } = await import("playwright");
+  const shots = path.join(os.tmpdir(), "skyline-signing-shots"); fs.mkdirSync(shots, { recursive: true });
+  const vite = spawn(process.platform === "win32" ? "npx.cmd" : "npx", ["vite", "--port", "57330", "--strictPort", "--host", "127.0.0.1"], { cwd: REPO, shell: isWin, stdio: "ignore",
+    env: { ...process.env, VITE_PUBLIC_SUPABASE_URL: lab.apiUrl, VITE_PUBLIC_SUPABASE_ANON_KEY: lab.anonKey, VITE_PUBLIC_SITE_URL: SITE } });
+  // LAB_CHROMIUM: a Chromium binary to use when the pinned Playwright has not downloaded its own.
+  const browser = await chromium.launch(process.env.LAB_CHROMIUM ? { executablePath: process.env.LAB_CHROMIUM } : {});
+  const run = nodeCrypto.randomBytes(3).toString("hex"), mail = (n) => `ui.${n}.${run}@example.test`;
+  // The function may be served outside the stack (LAB_SIGNING_FUNCTION_URL): the browser's calls to it are forwarded there.
+  const forward = async (context) => { if (!process.env.LAB_SIGNING_FUNCTION_URL) return;
+    await context.route("**/functions/v1/document-signing", async (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" }, body: "ok" });
+      const res = await fetch(process.env.LAB_SIGNING_FUNCTION_URL, { method: "POST", headers: { ...route.request().headers(), "x-forwarded-for": "203.0.113.20" }, body: route.request().postDataBuffer() });
+      await route.fulfill({ status: res.status, headers: { "content-type": "application/json", "access-control-allow-origin": "*" }, body: Buffer.from(await res.arrayBuffer()) });
+    }); };
+  const noSideScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+  try {
+    for (let i = 0; i < 60; i++) { try { if ((await fetch(SITE)).ok) break; } catch { /* starting */ } await new Promise((r) => setTimeout(r, 1000)); }
+    const jwt = await adminToken(lab);
+    // ---- desktop: an administrator prepares, places fields and sends
+    const desk = await browser.newContext({ viewport: { width: 1366, height: 900 } }); await forward(desk);
+    const page = await desk.newPage();
+    await page.goto(`${SITE}/login`);
+    await page.getByRole("tab", { name: "Sign in" }).click();
+    await page.locator('input[name="email"]').fill(LAB_ADMIN.email); await page.locator('input[name="password"]').fill(LAB_ADMIN.password);
+    await page.getByRole("button", { name: /^sign in$/i }).last().click();
+    await page.waitForURL(/\/admin/, { timeout: 30000 });
+    const nav = page.getByRole("link", { name: "Documents & Signatures" }).first();
+    const inNav = await nav.waitFor({ timeout: 20000 }).then(() => true, () => false);
+    if (!inNav) await page.screenshot({ path: path.join(shots, "admin-nav.png"), fullPage: true });
+    check("browser: Documents & Signatures is in the admin navigation", inNav);
+    if (!inNav) await page.goto(`${SITE}/admin/signing`);
+    if (inNav) await nav.click(); await page.waitForURL(/\/admin\/signing/);
+    await page.getByTestId("status-all").waitFor({ timeout: 20000 });
+    check("browser: the dashboard shows the eight status filters", (await Promise.all(["draft", "sent", "viewed", "partial", "signed", "declined", "expired", "void"].map((k) => page.getByTestId(`status-${k}`).isVisible()))).every(Boolean));
+    // A template through the editor: text with an inserted variable, previewed.
+    await page.getByTestId("new-template").click();
+    const modal = page.getByRole("heading", { name: "New template" }).locator("xpath=ancestor::div[contains(@class,'relative')][1]");
+    await modal.getByLabel(/Template name/).fill(`UI consent ${run}`); await modal.getByLabel(/Document title/).fill("Consent form for {{student.full_name}}");
+    await page.getByTestId("template-body").fill("I, ");
+    await page.getByTestId("insert-variable").selectOption("student.full_name");
+    check("browser: a variable is inserted into the template text", (await page.getByTestId("template-body").inputValue()).includes("{{student.full_name}}"));
+    await page.getByRole("button", { name: "Preview" }).click();
+    check("browser: the template preview renders the document", await page.locator("[data-pdf-page='1'] canvas").waitFor({ timeout: 30000 }).then(() => true, () => false));
+    await page.screenshot({ path: path.join(shots, "template-preview.png") });
+    await page.getByRole("button", { name: "Close" }).last().click();
+    if (!(await page.getByRole("button", { name: "Save template" }).waitFor({ timeout: 5000 }).then(() => true, () => false))) await page.screenshot({ path: path.join(shots, "after-preview.png") });
+    await page.getByRole("button", { name: "Save template" }).click();
+    check("browser: the template is saved and listed", await page.getByTestId("template-table").getByText(`UI consent ${run}`).waitFor({ timeout: 15000 }).then(() => true, () => false));
+    // A two-person request made through the function, then fields placed and sent from the screen.
+    const made = await signCall(lab, jwt, { action: "create", title: `UI agreement ${run}`, recipients: [{ name: "Una Phone", email: mail("one") }, { name: "Theo Second", email: mail("two"), order: 2 }] }, await realPdf(2));
+    await page.reload(); await page.getByTestId("request-search").fill(run);
+    await page.getByTestId("request-table").getByText(`UI agreement ${run}`).click();
+    await page.getByTestId("place-fields").click();
+    await page.locator("[data-pdf-page='1'] canvas").waitFor({ timeout: 30000 });
+    // Drag a signature onto page 1 for the first signer, then choose the second signer and click-place theirs.
+    const target = page.getByTestId("field-page-1"); const box = await target.boundingBox();
+    await page.getByTestId("field-kind-signature").dragTo(target, { targetPosition: { x: box.width * 0.3, y: box.height * 0.75 } });
+    await page.getByTestId("field-owner").selectOption({ index: 1 });
+    await page.getByTestId("field-kind-signature").click(); await target.click({ position: { x: box.width * 0.7, y: box.height * 0.75 } });
+    await page.getByTestId("field-owner").selectOption({ index: 0 });
+    await page.getByTestId("field-kind-text").click(); await target.click({ position: { x: box.width * 0.3, y: box.height * 0.5 } });
+    check("browser: three fields are placed by drag and by click", (await page.getByTestId("placed-field").count()) === 3);
+    await page.screenshot({ path: path.join(shots, "field-editor.png") });
+    await page.getByTestId("save-fields").click();
+    await page.getByRole("status").filter({ hasText: "Fields saved." }).waitFor({ timeout: 15000 });
+    const placed = JSON.parse(psql(`select json_agg(json_build_object('type', f.type, 'who', c.name, 'page', f.page, 'x', f.x, 'y', f.y)) from hr.sign_fields f join hr.sign_recipients c on c.id = f.recipient_id where f.request_id = '${made.body.id}';`));
+    check("browser: the placed fields are stored for the right signers and pages", placed.length === 3 && placed.filter((f) => f.who === "Una Phone").length === 2 && placed.some((f) => f.who === "Theo Second" && f.type === "signature" && f.x > 0.4) && placed.every((f) => f.page === 1), JSON.stringify(placed));
+    page.once("dialog", (d) => d.accept());
+    await page.getByTestId("send-request").click();
+    await page.getByRole("status").filter({ hasText: "Sent for signature." }).waitFor({ timeout: 20000 });
+    check("browser: sending from the screen emails the first signer only", mailsTo(mail("one")).length === 1 && mailsTo(mail("two")).length === 0);
+    await page.screenshot({ path: path.join(shots, "request-detail.png") });
+    // ---- phone: the first signer fills the text field, draws a signature and signs
+    const phone = await browser.newContext({ ...devices["iPhone 13"] }); await forward(phone);
+    const mobile = await phone.newPage();
+    await mobile.goto(`${SITE}/sign#t=${tokenIn(mailsTo(mail("one"))[0].text)}`);
+    await mobile.locator("[data-pdf-page='1'] canvas").waitFor({ timeout: 30000 });
+    check("phone: the document opens with no sideways scrolling", await noSideScroll(mobile));
+    check("phone: the token is removed from the address bar", !mobile.url().includes("#t="));
+    check("phone: the bottom bar asks for the missing field first", await mobile.getByRole("button", { name: /Fill in 1 field/ }).isVisible());
+    await mobile.getByRole("button", { name: /Fill in 1 field/ }).tap();
+    await mobile.locator("input[data-field]").fill("Student 4471");
+    await mobile.getByRole("tab", { name: "Draw" }).tap();
+    const pad = mobile.getByTestId("signature-pad"); await pad.scrollIntoViewIfNeeded(); const pb = await pad.boundingBox();
+    await mobile.mouse.move(pb.x + 20, pb.y + pb.height / 2); await mobile.mouse.down();
+    for (let x = 20; x < pb.width - 20; x += 12) await mobile.mouse.move(pb.x + x, pb.y + pb.height / 2 + Math.sin(x / 15) * 15);
+    await mobile.mouse.up();
+    await mobile.getByRole("checkbox", { name: /I have read this document/ }).check();
+    await mobile.screenshot({ path: path.join(shots, "phone-before-sign.png"), fullPage: false });
+    await mobile.getByRole("button", { name: "Sign document" }).last().tap();
+    check("phone: the drawn signature is accepted", await mobile.getByText(/your signature is recorded/).waitFor({ timeout: 30000 }).then(() => true, () => false));
+    check("phone: the record shows a drawn signature and the next signer is invited", psql(`select signature_kind from hr.sign_recipients where request_id = '${made.body.id}' and name = 'Una Phone';`) === "drawn" && (await (async () => { for (let i = 0; i < 40 && !mailsTo(mail("two")).length; i++) await new Promise((r) => setTimeout(r, 250)); return mailsTo(mail("two")).length; })()) === 1);
+    // ---- phone: the second signer types and completes, then downloads
+    const second = await phone.newPage();
+    await second.goto(`${SITE}/sign#t=${tokenIn(mailsTo(mail("two"))[0].text)}`);
+    await second.locator("[data-pdf-page='1'] canvas").waitFor({ timeout: 30000 });
+    await second.getByRole("button", { name: "Go to signature" }).tap();
+    await second.getByRole("checkbox", { name: /I have read this document/ }).check();
+    await second.getByRole("button", { name: "Sign document" }).last().tap();
+    check("phone: the last signature completes the document and offers the downloads", await second.getByTestId("download-signed").waitFor({ timeout: 30000 }).then(() => true, () => false) && await second.getByText("Download the completion certificate").isVisible());
+    check("phone: still no sideways scrolling when complete", await noSideScroll(second));
+    await second.screenshot({ path: path.join(shots, "phone-complete.png") });
+    const download = await (await fetch(await second.getByTestId("download-signed").getAttribute("href"))).arrayBuffer();
+    check("phone: the downloaded PDF is the recorded signed copy", nodeCrypto.createHash("sha256").update(Buffer.from(download)).digest("hex") === psql(`select signed_hash from hr.sign_requests where id = '${made.body.id}';`));
+    // ---- the request on the dashboard as Completed
+    await page.keyboard.press("Escape").catch(() => undefined); await page.goto(`${SITE}/admin/signing`); await page.getByTestId("status-signed").click(); await page.getByTestId("request-search").fill(run);
+    check("browser: the dashboard lists it under Completed", await page.getByTestId("request-table").getByText(`UI agreement ${run}`).isVisible().catch(() => false));
+    console.log(`Screenshots: ${shots}`);
+  } finally {
+    await browser.close(); vite.kill(); await stopMockPostmark();
+  }
+  console.log(failures ? `\n${failures} browser check(s) FAILED` : "\nAll browser signing checks passed.");
+  process.exitCode = failures ? 1 : 0;
+}
+
+
 
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
@@ -1868,6 +1991,7 @@ try {
   else if (command === "flow") await flow();
   else if (command === "wizard") await wizard();
   else if (command === "signing") await signing();
+  else if (command === "signing-browser") await signingBrowser();
   else if (command === "e2e") {
     const lab = readLab();
     const env = { ...process.env, E2E_SUPABASE_URL: lab.apiUrl, E2E_SUPABASE_ANON_KEY: lab.anonKey, E2E_SUPABASE_SERVICE_KEY: lab.serviceKey, E2E_MAIL_URL: lab.mailUrl,

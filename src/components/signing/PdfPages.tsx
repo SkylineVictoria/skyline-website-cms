@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 interface PageInfo { number: number; width: number; height: number }
-type PdfDocument = { numPages: number; getPage(n: number): Promise<PdfPage>; destroy(): Promise<void> };
+type PdfDocument = { numPages: number; getPage(n: number): Promise<PdfPage> };
 type PdfPage = { getViewport(o: { scale: number }): { width: number; height: number }; render(o: Record<string, unknown>): { promise: Promise<void>; cancel(): void } };
 
 /**
@@ -19,21 +19,22 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900 }: 
   const loaded = useRef(onLoaded); loaded.current = onLoaded;
 
   useEffect(() => {
-    let cancelled = false; let opened: PdfDocument | null = null;
+    let cancelled = false; let task: { promise: Promise<unknown>; destroy(): Promise<void> } | null = null;
     setDoc(null); setPages([]); setError("");
     void (async () => {
       try {
         const [pdf, worker] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]);
         pdf.GlobalWorkerOptions.workerSrc = worker.default;
-        const task = pdf.getDocument(typeof source === "string" ? { url: source } : { data: source.slice() });
-        opened = await task.promise as unknown as PdfDocument;
+        task = pdf.getDocument(typeof source === "string" ? { url: source } : { data: source.slice() }) as unknown as typeof task;
+        const opened = await task!.promise as PdfDocument;
         const infos: PageInfo[] = [];
         for (let n = 1; n <= opened.numPages; n++) { const view = (await opened.getPage(n)).getViewport({ scale: 1 }); infos.push({ number: n, width: view.width, height: view.height }); }
         if (cancelled) return;
         setDoc(opened); setPages(infos); loaded.current?.(infos.length);
       } catch { if (!cancelled) setError("The document could not be shown here. Use the download link to open it."); }
     })();
-    return () => { cancelled = true; void opened?.destroy().catch(() => undefined); };
+    // The loading task owns the document and its worker: destroying it frees both (also when it is still loading).
+    return () => { cancelled = true; void task?.destroy().catch(() => undefined); };
   }, [source]);
 
   useEffect(() => {

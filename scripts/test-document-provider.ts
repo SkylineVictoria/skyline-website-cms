@@ -373,3 +373,22 @@ test('integration navigation preserves eight distinct permitted destinations and
  for(const path of routes)assert.equal(menuActive(tree[0],`/admin/integrations/${path}`),true);
  assert.equal(menuActive(tree[0],'/admin/staff'),false);
 });
+test('OAuth refresh rotates provider credentials without exposing secrets or racing a second refresh',async()=>{
+ const {accessToken}=await import('../supabase/functions/_shared/integrations/credentials.ts');
+ let stored=JSON.stringify({access_token:'old-access',refresh_token:'old-refresh',expires_at:Date.now()-1000});let acquired=0,saved=0;
+ const rpc=async(name:string,args:Record<string,unknown>)=>{
+  if(name==='integration_credential_read')return {data:stored,error:null};
+  if(name==='integration_refresh_claim'){acquired++;return {data:acquired===1?'one-use-lease':null,error:null};}
+  if(name==='integration_refresh_finish'&&args.p_secret){saved++;stored=String(args.p_secret);return {data:'2026-11-11T12:00:00Z',error:null};}
+  return {data:null,error:null};
+ };
+ const request=(async (_url:RequestInfo|URL,init?:RequestInit)=>{
+  assert.equal(new URLSearchParams(String(init?.body)).get('grant_type'),'refresh_token');
+  return new Response(JSON.stringify({access_token:'new-access',refresh_token:'new-refresh',expires_in:1800}),{status:200});
+ }) as typeof fetch;
+ const config=(name:string)=>name.endsWith('CLIENT_ID')?'synthetic-id':name.endsWith('CLIENT_SECRET')?'synthetic-secret':'https://crm.example/admin/integrations/credentials';
+ assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z'});
+ assert.equal(saved,1);assert.equal(JSON.parse(stored).refresh_token,'new-refresh');
+ await assert.rejects(accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),/oauth_refresh_busy/);
+ assert.equal(acquired,2);
+});

@@ -24,3 +24,16 @@ export async function exchange(c:Config,code:string){
  if(typeof token.access_token!=='string')throw Error('oauth_exchange_failed');
  return {access_token:token.access_token,refresh_token:typeof token.refresh_token==='string'?token.refresh_token:null,expires_at:Date.now()+Number(token.expires_in??3600)*1000};
 }
+
+export type OAuthToken = { access_token:string; refresh_token:string|null; expires_at:number };
+export async function refreshToken(c:Config, previous:OAuthToken, request:typeof fetch=fetch):Promise<OAuthToken> {
+ if(!previous.refresh_token)throw Error('oauth_reconnect_required');
+ const body=new URLSearchParams({grant_type:'refresh_token',refresh_token:previous.refresh_token});
+ const headers:Record<string,string>={'Content-Type':'application/x-www-form-urlencoded'};
+ if(c.basic)headers.Authorization=`Basic ${btoa(c.clientId+':'+c.clientSecret)}`;else{body.set('client_id',c.clientId);body.set('client_secret',c.clientSecret);}
+ const response=await request(c.token,{method:'POST',headers,body,signal:AbortSignal.timeout(15000),redirect:'error'});
+ if(!response.ok){await response.body?.cancel();throw Error(response.status===400||response.status===401?'oauth_reconnect_required':'oauth_refresh_unavailable');}
+ const token=await response.json();
+ if(typeof token.access_token!=='string'||!token.access_token||!Number.isFinite(Number(token.expires_in))||Number(token.expires_in)<=0)throw Error('oauth_refresh_invalid');
+ return {access_token:token.access_token,refresh_token:typeof token.refresh_token==='string'?token.refresh_token:previous.refresh_token,expires_at:Date.now()+Number(token.expires_in)*1000};
+}

@@ -29,6 +29,11 @@ verify_jwt = false
 # tokens, another project's key or a malformed token). The key is not compared with SUPABASE_SERVICE_ROLE_KEY, which can hold the opaque sb_secret_ key. No worker secret. The /webhook route is disabled (410) until Postmark callbacks can be authenticated.
 verify_jwt = true
 
+[functions.support-ticket-mail]
+# Ticket emails (HTML + text) via Postmark. Server-to-server only, called every minute by public.support_mail_dispatch(); verify_jwt stays on
+# plus the same in-function service_role check as notification-delivery.
+verify_jwt = true
+
 [functions.staff-register]
 # Public staff application (no login is created): rate limit per caller and per email, CAPTCHA (EF_CAPTCHA_SECRET_KEY), resume
 # type/size checks, then hr_svc_apply / hr_svc_apply_resume. All data access is service-role only inside the function.

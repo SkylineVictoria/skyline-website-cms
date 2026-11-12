@@ -1,4 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Card, ConfirmDialog } from "@/pages/admin/components/ui";
@@ -198,6 +199,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                         <Link to={`/admin/students/${row.id}`} className="font-semibold text-foreground-900 hover:text-primary-700">
                           {row.name || <span className="italic text-foreground-500">Name not read from passport yet</span>}
                         </Link>
+                        <WhatsAppLink phone={row.phone} name={row.name} />
                         <p className="mt-0.5 text-xs text-foreground-600">{row.email || "No email"}</p>
                         {row.phone ? <p className="text-xs text-foreground-600">{formatPhone(row.phone)}</p> : null}
                         {row.passportNumber || row.nationality ? (

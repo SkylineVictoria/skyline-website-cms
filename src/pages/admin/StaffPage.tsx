@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { useNavigate } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, PageHeader, TextInput } from "@/pages/admin/components/ui";
 import { HrLink } from "@/pages/admin/components/Recruitment";
@@ -68,7 +69,7 @@ export default function StaffPage() {
             </tr></thead>
             <tbody>{onboarding.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`onboarding-row-${r.id}`}>
-                <td data-label="Name" className="px-4 py-3"><HrLink to={staffEmployeePath(r.id)}>{r.name || r.email}</HrLink></td>
+                <td data-label="Name" className="px-4 py-3"><HrLink to={staffEmployeePath(r.id)}>{r.name || r.email}</HrLink><WhatsAppLink phone={r.phone} name={r.name} /></td>
                 <td data-label="Email" className="px-4 py-3">{r.email}</td>
                 <td data-label="Job" className="px-4 py-3">{[r.jobTitle, r.department].filter(Boolean).join(" · ") || "—"}</td>
                 <td data-label="Documents approved" className="px-4 py-3">{r.docs.approved}/{r.docs.required}{r.docs.rejected ? ` (${r.docs.rejected} rejected)` : ""}</td>
@@ -90,7 +91,7 @@ export default function StaffPage() {
             </tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`employee-row-${r.id}`}>
-                <td data-label="Name" className="px-4 py-3"><HrLink to={staffEmployeePath(r.id)}>{[r.firstName, r.lastName].filter(Boolean).join(" ") || r.email}</HrLink></td>
+                <td data-label="Name" className="px-4 py-3"><HrLink to={staffEmployeePath(r.id)}>{[r.firstName, r.lastName].filter(Boolean).join(" ") || r.email}</HrLink><WhatsAppLink phone={r.phone} name={[r.firstName, r.lastName].filter(Boolean).join(" ")} /></td>
                 <td data-label="Email" className="px-4 py-3">{r.email}</td>
                 <td data-label="Mobile" className="px-4 py-3">{formatMobile(r.phone)}</td>
                 <td data-label="Documents" className="px-4 py-3">{r.documents}</td>

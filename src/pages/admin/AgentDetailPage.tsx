@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { Link, useParams } from "react-router-dom";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Button, Card, ConfirmDialog, PageHeader, Select } from "@/pages/admin/components/ui";
@@ -86,6 +87,7 @@ export default function AgentDetailPage() {
         <i className="ri-arrow-left-line" aria-hidden="true" /> Agents
       </Link>
       <PageHeader
+        titleSuffix={<WhatsAppLink phone={agent.phone} name={agent.name} />}
         title={agent.name}
         description={[agent.marn ? `MARN ${agent.marn}` : null, agent.role === "agency_admin" ? "Agency admin" : "Agent", `with ${agent.business.name}`].filter(Boolean).join(", ")}
         actions={<>

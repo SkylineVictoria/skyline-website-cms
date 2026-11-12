@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
@@ -77,7 +78,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
   const active = employee.status === "active";
   return (
     <div>
-      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)}
+      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)} titleSuffix={<WhatsAppLink phone={employee.phone} name={fullName(employee)} />}
         actions={<>
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>
           <Link to="?view=onboarding" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-3 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100" data-testid="employee-onboarding">

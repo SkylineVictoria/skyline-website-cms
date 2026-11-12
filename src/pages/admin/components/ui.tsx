@@ -70,8 +70,11 @@ export function PageHeader({
   description,
   breadcrumb,
   actions,
+  titleSuffix,
 }: {
   title: string;
+  /** Shown right after the title, e.g. a WhatsApp link next to a person's name. */
+  titleSuffix?: ReactNode;
   description?: string;
   breadcrumb?: string;
   actions?: ReactNode;
@@ -82,7 +85,7 @@ export function PageHeader({
         {breadcrumb ? (
           <p className="mb-1 text-xs font-medium uppercase tracking-wide text-foreground-500">{breadcrumb}</p>
         ) : null}
-        <h1 className="font-heading text-2xl font-bold text-foreground-950">{title}</h1>
+        <h1 className="font-heading text-2xl font-bold text-foreground-950">{title}{titleSuffix}</h1>
         {description ? <p className="mt-1.5 max-w-2xl text-sm text-foreground-600">{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

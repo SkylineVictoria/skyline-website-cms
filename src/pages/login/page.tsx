@@ -207,7 +207,7 @@ export default function LoginPage() {
           <h1 className="font-heading text-3xl font-bold leading-tight">{tab === "enroll" ? "Join Skyline" : "Welcome back"}</h1>
           <p className="mt-4 max-w-md text-sm text-background-50/85">
             {tab === "enroll"
-              ? "Students enroll in minutes. Education agents register their business and are reviewed by our team. Staff apply and are approved by an administrator, or join by invitation."
+              ? "Students enroll in minutes. Agencies and staff are set up by Skyline; if that's you, contact us and we'll send you an invitation."
               : "Students, agents and staff all sign in here. We take you to your portal automatically."}
           </p>
         </div>

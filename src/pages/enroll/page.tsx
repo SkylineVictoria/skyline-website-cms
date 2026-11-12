@@ -62,10 +62,10 @@ export default function EnrollPage() {
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
-                to="/login?mode=enroll&as=agent"
+                to="/contact"
                 className="inline-flex w-fit items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"
               >
-                Register your agency
+                Contact us to register
                 <i className="ri-arrow-right-line" aria-hidden="true" />
               </Link>
               <Link
@@ -76,7 +76,7 @@ export default function EnrollPage() {
               </Link>
             </div>
             <p className="mt-3 text-xs text-foreground-500">
-              Registrations are reviewed by SLIT before the agency can sign in. Prefer the full application form?{" "}
+              Agencies are registered by SLIT. Contact us, or send the full application form:{" "}
               <Link to="/become-an-agent" className="font-medium text-primary-700 hover:text-primary-800">
                 Become an agent
               </Link>

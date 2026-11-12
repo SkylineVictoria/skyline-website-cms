@@ -9,10 +9,14 @@ import { readSignUpIntent, rememberSignUpIntent, type SignUpIntent } from "@/lib
  * A Google / Facebook / phone account that is not set up yet: student or agent (remembered from where they started,
  * changeable here), then that form. A student goes straight in; an agent's business waits for review.
  */
+const AGENT_SELF_SIGN_UP = false;
+
 export default function CompleteSignUp({ user, onStudentDone, onAgentDone, onCancel }: {
   user: User; onStudentDone: (apply: boolean) => void; onAgentDone: (businessName: string) => void; onCancel: () => void;
 }) {
-  const [kind, setKind] = useState<SignUpIntent>(readSignUpIntent);
+  // Agencies are set up by SLIT for now (the server refuses agent self-registration), so only the student form is offered.
+  // Set AGENT_SELF_SIGN_UP to true to bring the Agent tab back.
+  const [kind, setKind] = useState<SignUpIntent>(() => (AGENT_SELF_SIGN_UP ? readSignUpIntent() : "student"));
   const [studentReady, setStudentReady] = useState(false);
   const pick = (next: SignUpIntent) => { setKind(next); rememberSignUpIntent(next); };
   const tab = (value: SignUpIntent, label: string) => (
@@ -27,10 +31,12 @@ export default function CompleteSignUp({ user, onStudentDone, onAgentDone, onCan
       <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">Almost done</p>
       <h2 className="mt-1 font-heading text-2xl font-bold text-foreground-950">{kind === "agent" ? "Agency details" : "Your details"}</h2>
       <p className="mt-1.5 text-sm text-foreground-600">You're signed in{user.email ? ` as ${user.email}` : user.phone ? ` with +${String(user.phone).replace(/^\+/, "")}` : ""}. Tell us who you are.</p>
-      <div role="tablist" aria-label="Account type" className="mt-5 flex rounded-lg border border-background-300 bg-background-200 p-1">
-        {tab("student", "Student")}
-        {tab("agent", "Agent")}
-      </div>
+      {AGENT_SELF_SIGN_UP ? (
+        <div role="tablist" aria-label="Account type" className="mt-5 flex rounded-lg border border-background-300 bg-background-200 p-1">
+          {tab("student", "Student")}
+          {tab("agent", "Agent")}
+        </div>
+      ) : null}
       <div className="mt-5">
         {kind === "agent"
           ? <CompleteAgentProfile user={user} onDone={(name) => { rememberSignUpIntent(null); onAgentDone(name); }} />

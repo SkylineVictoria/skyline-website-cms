@@ -27,10 +27,18 @@ type Step = 1 | 2 | 3;
  * resume and are reviewed (no login until they are hired). Nothing here grants access: the password link and the
  * review are what let someone in.
  */
+/**
+ * Who may sign themselves up from "Enroll now". Agents/businesses and staff are added manually by SLIT for now
+ * (the server refuses agent self-registration too); add "agent" / "staff" back here to reopen them.
+ */
+const SELF_ENROL_KINDS: readonly EnrolKind[] = ["student"];
+
 export default function EnrolWizard({ initialKind, onSignIn, onSignedIn }: { initialKind: EnrolKind | null; onSignIn: () => void; onSignedIn: (userId: string) => void }) {
-  const [kind, setKind] = useState<EnrolKind>(initialKind ?? "student");
-  // Everyone starts on "Who are you enrolling as?"; a link from the Enrol Now page only pre-selects Student or Agent.
-  const [step, setStep] = useState<Step>(1);
+  const only = SELF_ENROL_KINDS.length === 1 ? SELF_ENROL_KINDS[0] : null;
+  const [kind, setKind] = useState<EnrolKind>(initialKind && SELF_ENROL_KINDS.includes(initialKind) ? initialKind : SELF_ENROL_KINDS[0]);
+  // With one kind open there is nothing to choose, so the wizard opens on its form; Back returns to Sign in.
+  const [step, setStep] = useState<Step>(only ? 2 : 1);
+  const back = () => (only ? onSignIn() : setStep(1));
   const [result, setResult] = useState<EnrolResult | null>(null);
   const top = useRef<HTMLDivElement>(null);
 
@@ -41,9 +49,9 @@ export default function EnrolWizard({ initialKind, onSignIn, onSignedIn }: { ini
   return (
     <div ref={top}>
       {step === 1 ? <KindStep kind={kind} onChange={setKind} onContinue={() => setStep(2)} onSignIn={onSignIn} /> : null}
-      {step === 2 && kind === "student" ? <StudentStep onBack={() => setStep(1)} onDone={done} onSignedIn={onSignedIn} /> : null}
-      {step === 2 && kind === "agent" ? <AgentStep onBack={() => setStep(1)} onDone={done} onSignedIn={onSignedIn} /> : null}
-      {step === 2 && kind === "staff" ? <StaffStep onBack={() => setStep(1)} /> : null}
+      {step === 2 && kind === "student" ? <StudentStep onBack={back} onDone={done} onSignedIn={onSignedIn} /> : null}
+      {step === 2 && kind === "agent" ? <AgentStep onBack={back} onDone={done} onSignedIn={onSignedIn} /> : null}
+      {step === 2 && kind === "staff" ? <StaffStep onBack={back} /> : null}
       {step === 3 && result ? <DoneStep result={result} onSignIn={onSignIn} /> : null}
     </div>
   );
@@ -76,7 +84,7 @@ function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; o
       <h2 className="mt-1 font-heading text-2xl font-bold text-foreground-950">Who are you enrolling as?</h2>
       <Progress step={1} />
       <div role="radiogroup" aria-label="Account type" className="mt-6 space-y-3">
-        {KINDS.map((item) => {
+        {KINDS.filter((item) => SELF_ENROL_KINDS.includes(item.id)).map((item) => {
           const selected = item.id === kind;
           return (
             <button key={item.id} type="button" role="radio" aria-checked={selected} onClick={() => onChange(item.id)}

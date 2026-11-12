@@ -1,4 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
@@ -231,7 +232,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
               {rows.map((r) => (
                 <tr key={r.agentId}>
                   <td>
-                    <Link to={`/admin/agents/${r.agentId}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link>
+                    <Link to={`/admin/agents/${r.agentId}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link><WhatsAppLink phone={r.phone} name={r.name} />
                     <p className="mt-0.5 text-xs text-foreground-500">{[r.role === "agency_admin" ? "Agency admin" : "Agent", r.email].filter(Boolean).join(", ")}</p>
                     {r.registered === false ? <p className="text-xs font-medium text-amber-700">No longer registered with OMARA</p> : null}
                   </td>

@@ -859,3 +859,31 @@ test("identity email: EmailField maps a submit error to the field, pinned to the
   assert.match(field({ context: "admin", value: "new@example.test" }), /data-email-status="checking"/, "a signed-in form blocks until the check answers");
   assert.match(field({ context: "admin", savedEmail: "STU.X@example.test" }), /data-email-status="idle"/, "the saved email is not checked");
 });
+
+// ---- Staged application form: the steps grouped into stages by config (applicationStages.ts)
+import { APPLICATION_STAGES, SECTION_SUMMARY, groupSections, sectionKey } from "../src/pages/agency/lib/applicationStages.ts";
+
+// The portal form's 14 steps in form order, as portalSections builds them from the shared enrolment sections (checked below).
+const PORTAL_STEP_TITLES = ["1. PERSONAL DETAILS & PASSPORT", "2. ADDRESS", "AUSTRALIAN VISA", "ENGLISH TEST", "4. STUDENT IDENTIFIER (AVETMISS)", "4a. ACADEMIC DOCUMENTS",
+  "5. UNIQUE STUDENT IDENTIFIER (USI)", "6. EMERGENCY CONTACT", "7. COURSE INFORMATION", "8. STUDY REASON", "9. COURSE CREDIT", "10. OSHC / HEALTH INSURANCE",
+  "11. HOW DID YOU HEAR ABOUT SLIT?", "13. STUDENT DECLARATION"];
+const portalSteps = PORTAL_STEP_TITLES.map((title) => ({ title, fields: [] }));
+
+test("stages: the 14 form steps are grouped into 4 stages by the config, each step exactly once", () => {
+  const forms = readFileSync(new URL("../src/data/applicationForms.ts", import.meta.url), "utf8") + readFileSync(new URL("../src/pages/agency/lib/portalSections.ts", import.meta.url), "utf8");
+  for (const title of PORTAL_STEP_TITLES) assert.ok(forms.includes(`title: "${title}"`), `${title} is a step title`);
+  const stages = groupSections(portalSteps);
+  const keysOf = (ids: number[]) => ids.map((index) => sectionKey(portalSteps[index], index));
+  assert.deepEqual(stages.map((stage) => stage.title), ["About you", "Visa & identity", "Education & course", "Finish"]);
+  assert.deepEqual(stages.map((stage) => keysOf(stage.sections)), APPLICATION_STAGES.map((stage) => [...stage.sections]));
+  assert.deepEqual(stages.flatMap((stage) => stage.sections).sort((a, b) => a - b), portalSteps.map((_, index) => index), "every step is on one stage, none twice");
+  for (const key of Object.keys(SECTION_SUMMARY)) assert.ok(portalSteps.some((section, index) => sectionKey(section, index) === key), `summary key ${key} names a step`);
+});
+
+test("stages: a step the config does not name joins the stage of the step before it", () => {
+  const extra = [...portalSteps.slice(0, 3), { title: "NEW CHECKS", fields: [] }, ...portalSteps.slice(3)];
+  const stages = groupSections(extra);
+  const holder = stages.find((stage) => stage.sections.includes(3));
+  assert.ok(holder?.sections.includes(2), "placed next to the step before it");
+  assert.equal(stages.flatMap((stage) => stage.sections).length, extra.length);
+});

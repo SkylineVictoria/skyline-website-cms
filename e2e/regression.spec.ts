@@ -174,9 +174,12 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await intake.selectOption({ index: 1 });
   await wizard.getByRole("button", { name: "Finish" }).click();
   await expect(page.getByTestId("form-step-nav")).toBeVisible({ timeout: 30_000 });
+  // The drawer lists each stage with its steps nested underneath; a step is one click away.
   await page.getByRole("button", { name: "All steps" }).click();
-  await page.getByRole("dialog", { name: "All steps" }).getByRole("button", { name: /^4\. English Test/ }).click();
-  const step = page.locator('[data-current-step="true"]');
+  await page.getByRole("dialog", { name: "All steps" }).getByRole("button", { name: /^English Test/ }).click();
+  await expect(page).toHaveURL(/[?&]stage=3/);
+  const step = page.locator('[data-section="english-test"]');
+  await expect(step).toHaveAttribute("data-expanded", "true");
   await expect(step.getByText(`english-${student.local}.pdf`)).toBeVisible();
   const chooser = page.waitForEvent("filechooser");
   await step.getByRole("button", { name: /^Replace / }).click();
@@ -188,11 +191,15 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   markStudentDocumentRead(applicationId, "English Test", { english_type: "IELTS Academic", english_score: "7.5", english_date: "2025-03-01" });
   await expect(page.getByText(/We filled \d+ fields? from your English test result\. Please review\./)).toBeVisible({ timeout: 30_000 });
   await expect(step.getByTestId("document-reading")).toHaveCount(0);
-  await expect(step.getByText(`english-new-${student.local}.pdf`)).toBeVisible();
   await expect.poll(() => sql(`select string_agg(filename, ',') from public.enrollment_application_documents where application_id = '${applicationId}' and category = 'English Test' and is_current`)).toBe(`english-new-${student.local}.pdf`);
-  // Once the old file is gone, one compact row is left.
-  await expect(step.getByText("Ready for review")).toHaveCount(1);
+  // The read completed the step: it closes to one line with its answers, and Edit opens it again (one compact row is left).
+  await expect(step).toHaveAttribute("data-expanded", "false");
+  await expect(step).toContainText("IELTS Academic, 7.5");
   await shot(page, "student-form-document-read");
+  await step.getByRole("button", { name: /Edit English Test/ }).click();
+  await expect(step).toHaveAttribute("data-expanded", "true");
+  await expect(step.getByText(`english-new-${student.local}.pdf`, { exact: true })).toBeVisible();
+  await expect(step.getByText("Ready for review")).toHaveCount(1);
 });
 
 test("the enrolment wizard's intake follows the course: only open intakes from the database, cleared on a course change, a tampered pair refused (INT-01)", async ({ page }) => {
@@ -282,17 +289,28 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
     p_patch: { courses: [{ courseId: courseB, code: "E2EB", title: "E2E intake B", intakeId: sql(`select id from public.course_intakes where course_id = '${courseA}' and label = 'Early start'`) }] } });
   expect(tampered.error?.message).toBe("This intake is not open for the chosen course. Choose the course again and pick one of its intakes.");
 
-  // The full form the wizard opens (on its declaration step): the slim top bar and the All steps drawer, from the step config.
-  const nav = page.getByTestId("form-step-nav");
-  await expect(nav).toContainText(/Step \d+ of \d+/);
+  // The full form the wizard opens on its Finish stage (the declaration): four stages from the config, as segments in the top bar.
+  const stagesBar = page.getByRole("navigation", { name: "Stages" });
+  for (const title of ["About you", "Visa & identity", "Education & course", "Finish", "Review & submit"]) await expect(stagesBar.getByRole("button", { name: new RegExp(title) })).toBeVisible();
+  await expect(stagesBar.getByRole("button", { name: /Finish/ })).toHaveAttribute("aria-current", "step");
+  await expect(page.locator('[data-section="student-declaration"]')).toHaveAttribute("data-expanded", "true");
+  // Any stage, any time: a segment opens it and the URL follows.
+  await stagesBar.getByRole("button", { name: /Visa & identity/ }).click();
+  await expect(page).toHaveURL(/[?&]stage=2/);
+  await expect(page.locator('[data-section="australian-visa"]')).toBeVisible();
+  await expect(page.locator('[data-section="student-declaration"]')).toBeHidden();
+  // The drawer: stages with their steps nested; Escape closes it; a step opens its stage.
   await page.getByRole("button", { name: "All steps" }).click();
   const drawer = page.getByRole("dialog", { name: "All steps" });
-  await expect(drawer.getByRole("button", { name: /^2\. Address/ })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: /^1\. About you/ })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: /^Address/ })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(drawer).toHaveCount(0);
   await page.getByRole("button", { name: "All steps" }).click();
-  await drawer.getByRole("button", { name: /^2\. Address/ }).click();
-  await expect(nav).toContainText("Address");
+  await drawer.getByRole("button", { name: /^Address/ }).click();
+  await expect(page).toHaveURL(/[?&]stage=1/);
+  const address = page.locator('[data-section="address"]');
+  await expect(address).toHaveAttribute("data-expanded", "true");
   // Address search: the suggestions open above the sticky footer (what is under their last row is the list), Enter picks the first.
   // The lab does not serve the signed-in address-search function, so its answer is given here (the page's request is unchanged).
   await page.route("**/functions/v1/address-search", (route) => route.request().method() === "OPTIONS"
@@ -306,11 +324,15 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   await page.locator("#address-search").press("Enter");
   await expect(page.locator('[name="au_street"]')).not.toHaveValue("");
   await expect(page.locator("#address-search-results")).toHaveCount(0);
+  // The pick completed the step: it closes to one line with the address.
+  await expect(address).toHaveAttribute("data-expanded", "false");
+  await expect(address).toContainText("12 Smith St");
   // Replace keeps the old file when the new one is refused. (This test's documents were recorded without their files, so the
   // server's passport check refuses any new upload here; the wizard test covers a replacement that is accepted.)
   await page.getByRole("button", { name: "All steps" }).click();
-  await drawer.getByRole("button", { name: /^4\. English Test/ }).click();
-  const step = page.locator('[data-current-step="true"]');
+  await drawer.getByRole("button", { name: /^English Test/ }).click();
+  const step = page.locator('[data-section="english-test"]');
+  await expect(step).toHaveAttribute("data-expanded", "true");
   await expect(step.getByText("Ready for review")).toBeVisible();
   const chooser = page.waitForEvent("filechooser");
   await step.getByRole("button", { name: /^Replace / }).click();
@@ -319,6 +341,34 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   await page.waitForTimeout(1500);
   expect(sql(`select string_agg(filename, ',') from public.enrollment_application_documents where application_id = '${applicationId}' and category = 'English Test' and is_current`)).toBe("English Test.pdf");
   await expect(step.getByText("English Test.pdf")).toBeVisible();
+
+  // Next never blocks: from Finish (the declaration is not signed yet) it moves on to Review with a soft notice.
+  await stagesBar.getByRole("button", { name: /Finish/ }).click();
+  await expect(page).toHaveURL(/[?&]stage=4/);
+  await expect(page.getByTestId("form-footer")).toContainText(/still needs? details/);
+  await page.getByTestId("stage-next").click();
+  await expect(page).toHaveURL(/[?&]stage=review/);
+  await expect(page.getByTestId("review-complete")).toBeVisible();
+  await expect(page.getByTestId("stage-notice")).toContainText("Finish:");
+  // Only Submit is blocked: every missing item is listed, and its link opens the stage with the cursor in that exact field.
+  await expect(page.getByTestId("submit-application")).toBeDisabled();
+  const issues = page.getByTestId("review-issues");
+  await expect(issues).toContainText("Student Declaration:");
+  await shot(page, "student-form-review-issues");
+  const declarationIssue = issues.getByRole("button", { name: /^Student Declaration:/ }).first();
+  const label = ((await declarationIssue.innerText()).split(":")[1] ?? "").trim();
+  await declarationIssue.click();
+  await expect(page).toHaveURL(/[?&]stage=4.*#student-declaration/);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-section]")?.getAttribute("data-section"))).toBe("student-declaration");
+  const focusedLabel = await page.evaluate(() => { const wrapper = document.activeElement?.closest("[data-field]"); return wrapper?.querySelector("label")?.textContent ?? ""; });
+  expect(focusedLabel.replace("*", "").trim()).toBe(label);
+  // The URL keeps the place: a refresh returns to the same stage, and Back to the review.
+  await page.reload();
+  await expect(stagesBar.getByRole("button", { name: /Finish/ })).toHaveAttribute("aria-current", "step");
+  await expect(page.locator('[data-section="student-declaration"]')).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/[?&]stage=review/);
+  await expect(page.getByTestId("review-complete")).toBeVisible();
 });
 
 // ------------------------------------------------------------------ Email unique within a role (2026-11-12)

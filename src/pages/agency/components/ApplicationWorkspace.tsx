@@ -1,9 +1,10 @@
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, useLayoutEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
+import { useLocation, useNavigate } from "react-router-dom";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
 import CourseSearchField from "@/pages/agency/components/CourseSearchField";
-import { validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
+import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AppField, AppSection } from "@/data/applicationForms";
 import { ApplicationFieldControl } from "@/components/feature/applicationFieldKit";
 import { isConditionMet, isFieldFilled, sectionHeading } from "@/components/feature/applicationFieldHelpers";
@@ -44,7 +45,8 @@ import { baseFieldClass } from "@/components/feature/applicationFieldHelpers";
 import { DEGREE_LEVELS, schoolLevelFor } from "@/pages/agency/lib/educationLevels";
 import { PortalError } from "@/pages/agency/components/PortalUI";
 import StepShell, { FooterMessage } from "@/components/shared/application-form/StepShell";
-import type { NavStep } from "@/components/shared/application-form/StepDrawer";
+import type { NavStage, StepState } from "@/components/shared/application-form/StepDrawer";
+import { SECTION_SUMMARY, groupSections, sectionKey } from "@/pages/agency/lib/applicationStages";
 import SectionCard from "@/components/shared/application-form/SectionCard";
 import Field, { FieldMessage, FORM_LABEL } from "@/components/shared/application-form/Field";
 import InfoTip from "@/components/shared/application-form/InfoTip";
@@ -150,6 +152,18 @@ function revealFields(form: HTMLFormElement | null, names: readonly string[]) {
     wrapper.classList.add("field-filled");
     order += 1;
   }
+}
+/** A control that can take the cursor (not hidden, not a stored copy, not disabled, on screen). */
+const FOCUSABLE = 'input:not([type=hidden]):not([type=file]):not([tabindex="-1"]), select, textarea';
+function focusableIn(root: Element | null | undefined): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLInputElement>(FOCUSABLE)).filter((control) => !control.disabled && !control.readOnly && control.closest("[hidden]") === null && control.closest("[inert]") === null
+    && (control.type !== "radio" || control.checked || !root.querySelector(`input[type=radio][name="${CSS.escape(control.name)}"]:checked`)));
+}
+/** "2001-04-12" as "12-04-2001" for a summary line; other values as they are shown elsewhere. */
+function summaryValue(name: string, value: string): string {
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return date ? `${date[3]}-${date[2]}-${date[1]}` : formatStoredValue(name, value);
 }
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 // A step description up to this length is shown as its one subtitle line; a longer one goes into the title's (i).
@@ -263,16 +277,39 @@ export default function ApplicationWorkspace({
     return out;
   });
 
-  // Straight after the document wizard the form opens on its Student declaration page.
-  const [step, setStep] = useState(() => {
-    try {
-      if (!readOnly && window.sessionStorage.getItem(openDeclarationKey(application.id))) {
-        const declaration = sections.findIndex((section) => section.fields.some((field) => field.name === "declaration"));
-        if (declaration >= 0) return declaration;
-      }
-    } catch { /* session storage unavailable */ }
-    return 0;
+  // The steps grouped into stages (config: applicationStages.ts); one page per stage, plus the review page after the last one.
+  const stages = useMemo(() => groupSections(sections), [sections]);
+  const reviewStage = stages.length;
+  const keys = useMemo(() => sections.map((section, index) => sectionKey(section, index)), [sections]);
+  const stageOf = useCallback((index: number) => Math.max(0, stages.findIndex((stage) => stage.sections.includes(index))), [stages]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  /** The stage the URL names (?stage=2, ?stage=review), or null. */
+  const stageInUrl = (search: string): number | null => {
+    const value = new URLSearchParams(search).get("stage");
+    if (value === "review") return reviewStage;
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 1 && number <= stages.length ? number - 1 : null;
+  };
+  // Straight after the document wizard the form opens on its Student declaration step; otherwise where the URL says.
+  const declarationIndex = sections.findIndex((section) => section.fields.some((field) => field.name === "declaration"));
+  const [openedOnDeclaration] = useState(() => {
+    try { return !readOnly && declarationIndex >= 0 && Boolean(window.sessionStorage.getItem(openDeclarationKey(application.id))); } catch { return false; }
   });
+  const [stage, setStage] = useState(() => {
+    if (openedOnDeclaration) return stageOf(declarationIndex);
+    // The review page opened from the URL shows the saved answers until the form is read again.
+    return stageInUrl(location.search) ?? 0;
+  });
+  // Steps opened on the page (the rest are one-line summaries), the stages left with Next, the soft notice, and where to put the
+  // cursor once a stage has opened.
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set(stages[stage]?.sections ?? []));
+  const [touchedStages, setTouchedStages] = useState<Set<number>>(() => new Set());
+  const [notice, setNotice] = useState<{ stage: number; count: number } | null>(null);
+  const pendingFocusRef = useRef<{ section: number; field?: string } | null>(openedOnDeclaration ? { section: declarationIndex } : null);
+  const [hydrated, setHydrated] = useState(false);
+  // A document read or an address pick just filled a step: once the page has caught up, close it if complete and move on.
+  const [advanceFrom, setAdvanceFrom] = useState<{ name: string; at: number } | null>(null);
   useEffect(() => {
     try { window.sessionStorage.removeItem(openDeclarationKey(application.id)); } catch { /* session storage unavailable */ }
   }, [application.id]);
@@ -284,8 +321,6 @@ export default function ApplicationWorkspace({
     sections: sections.map(() => ({ done: 0, total: 0 })),
   });
   const [showErrors, setShowErrors] = useState(false);
-  // The page whose Next was refused: its missing answers are marked even before a submit attempt.
-  const [errorStep, setErrorStep] = useState<number | null>(null);
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
   const [consent, setConsent] = useState<ConsentState>({
     method: "electronic",
@@ -318,7 +353,6 @@ export default function ApplicationWorkspace({
   const showToast = toast.show;
   const serverFillsRef = useRef<string[]>([]);
   const readingStatesRef = useRef(new Map<string, string>());
-  const sectionRefs = useRef<Array<HTMLElement | null>>([]);
   const timerRef = useRef<number | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingRef = useRef(false);
@@ -373,6 +407,7 @@ export default function ApplicationWorkspace({
     if (finished.length && filledNow.length) {
       window.requestAnimationFrame(() => revealFields(formRef.current, filledNow));
       showToast(`We filled ${plural(filledNow.length, "field")} from your ${DOCUMENT_NOUN[finished[0].category] ?? "document"}. Please review.`);
+      setAdvanceFrom({ name: filledNow[0], at: Date.now() });
     }
     setAttachmentsLoaded(true);
     if (detail) setQualifications(readQualifications(detail.data));
@@ -543,6 +578,7 @@ export default function ApplicationWorkspace({
     const handle = window.setTimeout(() => {
       hydratingRef.current = false;
       computeProgress();
+      setHydrated(true);
     }, 160);
     return () => window.clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -663,6 +699,7 @@ export default function ApplicationWorkspace({
     setEditedFields((prev) => new Set([...prev, ...names]));
     applyFormValues(form, { ...updates, ...AUSTRALIAN_ADDRESS, address_source: source });
     window.requestAnimationFrame(() => revealFields(formRef.current, names));
+    setAdvanceFrom({ name: "au_street", at: Date.now() });
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
     return names.length;
@@ -808,6 +845,7 @@ export default function ApplicationWorkspace({
       const filled = Object.values(updates).filter(Boolean).length;
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => revealFields(formRef.current, Object.keys(updates).filter((name) => updates[name]))));
       if (filled) showToast(`We filled ${plural(filled, "field")} from your visa document. Please review.`);
+      setAdvanceFrom({ name: "visa_subclass", at: Date.now() });
       setVisaNote(`Filled ${filled} visa field${filled === 1 ? "" : "s"} from ${document.filename}. Check them before continuing.`);
     }
   }, [visas, refreshAttachments, setHoldsVisa, showToast]);
@@ -956,6 +994,7 @@ export default function ApplicationWorkspace({
     setDerivedFields((prev) => new Set([...prev, ...names]));
     window.requestAnimationFrame(() => revealFields(formRef.current, names));
     showToast(`We filled ${plural(names.length, "field")} from your academic documents. Please review.`);
+    setAdvanceFrom({ name: names[0], at: Date.now() });
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
   }, [academicDocuments, readOnly, computeProgress, scheduleSave, showToast]);
@@ -1020,6 +1059,7 @@ export default function ApplicationWorkspace({
       const filled = Object.keys(updates).length;
       window.requestAnimationFrame(() => revealFields(formRef.current, Object.keys(updates)));
       if (filled) showToast(`We filled ${plural(filled, "field")} from your English test result. Please review.`);
+      setAdvanceFrom({ name: "english_type", at: Date.now() });
       setEnglishNote(`Filled ${filled} English field${filled === 1 ? "" : "s"} from ${document.filename}. Check them before continuing.`);
     }
   }, [englishDocuments, refreshAttachments, computeProgress, scheduleSave, showToast]);
@@ -1049,7 +1089,6 @@ export default function ApplicationWorkspace({
     setVisaNote(`${document.filename} was deleted. Choose how to add the visa.`);
   };
 
-  const [usiError, setUsiError] = useState("");
   /** Required answers still missing on one form page. */
   const pageMissing = (index: number): boolean => {
     const section = sections[index];
@@ -1078,51 +1117,127 @@ export default function ApplicationWorkspace({
     }
     return "";
   };
-  // Keep checking a file on the open page until it has been read, so its result (or rejection) shows without a reload.
-  const stepReading = documentProblem(step).includes("is still being read");
+  // Keep checking a file on the open stage until it has been read, so its result (or rejection) shows without a reload.
+  const stepReading = (stages[stage]?.sections ?? []).some((index) => documentProblem(index).includes("is still being read"));
   useEffect(() => {
     if (!stepReading) return undefined;
     const timer = window.setInterval(() => { void refreshAttachments().catch(() => undefined); }, 3000);
     return () => window.clearInterval(timer);
   }, [stepReading, refreshAttachments]);
-  /** Stops leaving the current page forward until its required answers are filled and its documents are right. */
-  const blockedHere = (index: number): boolean => {
-    if (readOnly || index <= step || step >= reviewIndex || (!pageMissing(step) && !documentProblem(step))) return false;
-    setErrorStep(step);
-    // Inline: scroll to the first missing answer on the step and put the cursor in it.
-    window.requestAnimationFrame(() => {
-      const marker = formRef.current?.querySelector<HTMLElement>('[data-current-step="true"] [data-field-missing="true"]')
-        ?? formRef.current?.querySelector<HTMLElement>('[data-step-missing="true"]');
-      marker?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const wrapper = marker?.closest<HTMLElement>("[data-field]") ?? marker?.parentElement;
-      wrapper?.querySelector<HTMLElement>('input:not([type=hidden]):not([tabindex="-1"]), select, textarea, button, [role=radio]')?.focus({ preventScroll: true });
-    });
-    return true;
-  };
-
-  const goTo = (index: number) => {
-    if (blockedHere(index)) return;
-    if (index > step && sections[step]?.fields.some((field) => field.name === "usi_number") && !readOnly) {
-      const usi = formRef.current?.querySelector<HTMLInputElement>('[name="usi_number"]')?.value ?? "";
-      const problem = usi.trim() ? validateUsi(usi) : "Enter the student's USI to continue.";
-      if (problem) {
-        // A wrong USI already shows the field's own format message; this one only covers an empty field.
-        setUsiError(usi.trim() ? "" : problem);
-        formRef.current?.querySelector<HTMLInputElement>('[name="usi_number"]')?.focus();
-        return;
-      }
-    }
-    setUsiError("");
+  /**
+   * Opens a stage (Next never stops on what is missing: only Submit does). Its card slides in from the side it is reached from, the
+   * form scrolls to its top, and the URL follows (?stage=2), so refresh and Back return here.
+   */
+  function showStage(next: number, options: { fromUrl?: boolean } = {}) {
+    const target = Math.max(0, Math.min(next, reviewStage));
+    if (target === reviewStage && formRef.current) setReviewValues(collectFormValues(formRef.current));
+    setDirection(target < stage ? "back" : "forward");
+    setStage(target);
+    if (notice?.stage === target) setNotice(null);
     void flushSave().catch(() => undefined);
-    showStep(index);
-  };
-
-  /** Opens a step: its card slides in from the side it is reached from, and the form scrolls to its top. */
-  function showStep(index: number) {
-    setDirection(index < step ? "back" : "forward");
-    setStep(index);
+    if (!options.fromUrl) {
+      const params = new URLSearchParams(window.location.search);
+      params.set("stage", target === reviewStage ? "review" : String(target + 1));
+      navigate({ search: `?${params.toString()}`, hash: "" });
+    }
     window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
+  // Back / forward: follow the URL.
+  useEffect(() => {
+    const fromUrl = stageInUrl(location.search);
+    if (fromUrl !== null && fromUrl !== stage) showStageRef.current(fromUrl, { fromUrl: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
+  const showStageRef = useRef(showStage);
+  showStageRef.current = showStage;
+
+  /** Next: the stage is marked as seen (its missing answers show), a soft notice says what it still needs, and the next one opens. */
+  const nextStage = () => {
+    const open = (stages[stage]?.sections ?? []).filter((index) => sectionShown(index) && sectionIssues(index).length > 0).length;
+    setTouchedStages((prev) => new Set(prev).add(stage));
+    setNotice(open ? { stage, count: open } : null);
+    showStage(stage + 1);
+  };
+
+  /** Opens one step (and its stage) and puts the cursor in a field: the given one, else the step's first empty answer. */
+  const openSection = (index: number, field?: string) => {
+    const target = stageOf(index);
+    if (target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
+    setExpanded((prev) => new Set(prev).add(index));
+    window.setTimeout(() => focusSection(index, field), 240);
+  };
+
+  /** Scrolls to a step (or one of its fields), puts the cursor there and names the step in the URL (#address). */
+  const focusSection = (index: number, field?: string) => {
+    const card = formRef.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(keys[index])}"]`);
+    if (!card) return;
+    const wrapper = field ? card.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`) : null;
+    const controls = focusableIn(wrapper ?? card);
+    const control = wrapper ? controls[0] : controls.find((candidate) => !(candidate as HTMLInputElement).value?.trim()) ?? controls[0];
+    (wrapper ?? card).scrollIntoView({ behavior: "smooth", block: wrapper ? "center" : "start" });
+    control?.focus({ preventScroll: true });
+    // Read at call time: the router may not have rendered the stage change yet.
+    if (window.location.hash !== `#${keys[index]}`) navigate({ search: window.location.search, hash: keys[index] }, { replace: true });
+  };
+
+  // A stage has opened (or the page is ready): incomplete steps open, complete ones are one line, and the cursor goes to the first
+  // incomplete step (or the step asked for). Through a ref, so only the stage change runs it.
+  const stageOpened = () => {
+    if (stage >= reviewStage) return;
+    const pending = pendingFocusRef.current;
+    pendingFocusRef.current = null;
+    const fromHash = keys.indexOf(window.location.hash.replace(/^#/, ""));
+    const asked = pending ?? (fromHash >= 0 && stageOf(fromHash) === stage ? { section: fromHash } : null);
+    const list = (stages[stage]?.sections ?? []).filter(sectionShown);
+    const incomplete = list.filter((index) => sectionIssues(index).length > 0);
+    setExpanded(new Set([...incomplete, ...(asked ? [asked.section] : [])]));
+    const first = asked?.section ?? incomplete[0];
+    if (first !== undefined) window.setTimeout(() => focusSection(first, asked?.field), 260);
+  };
+  const stageOpenedRef = useRef(stageOpened);
+  stageOpenedRef.current = stageOpened;
+  const ready = hydrated && (attachmentsLoaded || Boolean(documentMessage));
+  useEffect(() => { if (ready) stageOpenedRef.current(); }, [stage, ready]);
+
+  // After a read or a pick: if its step is now complete, it closes, and the next incomplete step on the stage opens.
+  const advance = (name: string) => {
+    const index = sections.findIndex((section) => section.fields.some((field) => field.name === name));
+    if (index < 0 || stageOf(index) !== stage || sectionIssues(index).length > 0) return;
+    setExpanded((prev) => { const next = new Set(prev); next.delete(index); return next; });
+    const list = (stages[stage]?.sections ?? []).filter(sectionShown);
+    const following = [...list.slice(list.indexOf(index) + 1), ...list.slice(0, list.indexOf(index))].find((candidate) => sectionIssues(candidate).length > 0);
+    if (following !== undefined) openSection(following);
+  };
+  const advanceRef = useRef(advance);
+  advanceRef.current = advance;
+  useEffect(() => {
+    if (!advanceFrom) return undefined;
+    // The page needs a moment to show what was filled (the visa or address fields appear, the document row settles).
+    const timer = window.setTimeout(() => advanceRef.current(advanceFrom.name), 450);
+    return () => window.clearTimeout(timer);
+  }, [advanceFrom]);
+
+  /** Enter in a step's last field goes to the next step's first field. */
+  const onFormKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target as HTMLElement;
+    if (!(target instanceof HTMLInputElement) || ["checkbox", "radio", "file", "submit", "button"].includes(target.type) || target.getAttribute("role") === "combobox") return;
+    const card = target.closest<HTMLElement>("[data-section]");
+    if (!card) return;
+    const controls = focusableIn(card);
+    if (controls[controls.length - 1] !== target) return;
+    event.preventDefault();
+    const list = (stages[stage]?.sections ?? []).filter(sectionShown);
+    const here = keys.indexOf(card.dataset.section ?? "");
+    const next = list[list.indexOf(here) + 1];
+    if (next === undefined) return;
+    setExpanded((prev) => new Set(prev).add(next));
+    window.setTimeout(() => {
+      const nextCard = formRef.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(keys[next])}"]`);
+      nextCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+      focusableIn(nextCard)[0]?.focus({ preventScroll: true });
+    }, 240);
+  };
 
   const fieldMissing = useCallback((field: AppField): boolean => {
     const form = formRef.current;
@@ -1167,13 +1282,26 @@ export default function ApplicationWorkspace({
     return { missing, firstIndex };
   }, [sections, values, fieldMissing, fieldInvalid]);
 
-  const openReview = () => {
-    const form = formRef.current;
-    if (!form || blockedHere(reviewIndex)) return;
-    const collected = collectFormValues(form);
-    setReviewValues(collected);
-    showStep(reviewIndex);
+  /** Applies to this student (the step's own condition), so it is shown and counted. */
+  const sectionShown = (index: number) => Boolean(sections[index]) && isConditionMet(sections[index].showIf, values);
+
+  /** What a step still needs, by the same rules Submit checks: required answers missing, filled ones in a wrong format, documents. */
+  const sectionIssues = (index: number): Array<{ name: string; label: string }> => {
+    const section = sections[index];
+    if (!section || !isConditionMet(section.showIf, values)) return [];
+    const out: Array<{ name: string; label: string }> = [];
+    for (const field of section.fields) {
+      if (field.type === "static" || field.type === "table" || field.type === "terms") continue;
+      if (!field.required && !field.format) continue;
+      if (!isConditionMet(field.showIf, values)) continue;
+      if (field.required ? fieldMissing(field) : fieldInvalid(field)) out.push({ name: field.name, label: field.label });
+    }
+    const problem = documentProblem(index);
+    if (problem) out.push({ name: "", label: problem });
+    return out;
   };
+
+  const openReview = () => showStage(reviewStage);
 
   const handleSubmit = async () => {
     if (readOnly || submitting) return;
@@ -1181,13 +1309,12 @@ export default function ApplicationWorkspace({
     const { missing, firstIndex } = collectMissing();
     setShowErrors(true);
     if (missing.length > 0) {
-      showStep(firstIndex >= 0 ? firstIndex : 0);
+      openSection(firstIndex >= 0 ? firstIndex : 0);
       return;
     }
     const wrongDocumentPage = sections.findIndex((_, index) => documentProblem(index));
     if (wrongDocumentPage >= 0) {
-      showStep(wrongDocumentPage);
-      setErrorStep(wrongDocumentPage);
+      openSection(wrongDocumentPage);
       return;
     }
     if (!consent.method || !consent.confirmed || !consent.authorised) {
@@ -1257,8 +1384,9 @@ export default function ApplicationWorkspace({
     );
   }
 
-  const isReview = step === reviewIndex;
-  const errorsShown = showErrors || errorStep === step;
+  const isReview = stage === reviewStage;
+  /** Missing answers on a step are marked once its stage was left with Next, or after a submit attempt. */
+  const marksShown = (index: number) => showErrors || touchedStages.has(stageOf(index));
 
   const saveIndicator = () => {
     if (readOnly) return null;
@@ -1317,7 +1445,7 @@ export default function ApplicationWorkspace({
     && !["address_type", "holds_visa", "visa_copy", "english_upload", "checklist"].includes(field.name)
     && !["static", "table", "terms"].includes(field.type) && isConditionMet(field.showIf, values) && !hiddenField(field.name);
 
-  const renderField = (field: AppField) => {
+  const renderField = (field: AppField, marks: boolean) => {
     // The student's email and mobile are set once, uniquely, when the application is started; they are kept with the
     // form (saved, counted as filled) but not shown or editable here.
     if (contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) {
@@ -1350,10 +1478,10 @@ export default function ApplicationWorkspace({
       return <input key={field.name} type="hidden" name={field.name} defaultValue={Array.isArray(kept) ? kept.join(", ") : String(kept ?? "")} />;
     }
     const autoFilled = !readOnly && !fixedAustralia && field.type !== "file" && isAutoFilled(field.name);
-    return renderFieldBody(field, locked, autoFilled, fixedAustralia, hiddenField(field.name));
+    return renderFieldBody(field, locked, autoFilled, fixedAustralia, marks, hiddenField(field.name));
   };
 
-  const renderFieldBody = (field: AppField, locked: boolean, autoFilled: boolean, fixedAustralia: boolean, hidden = false) => {
+  const renderFieldBody = (field: AppField, locked: boolean, autoFilled: boolean, fixedAustralia: boolean, marks: boolean, hidden = false) => {
     // Notes from the step config are shown in the step title's (i), not as banners.
     if (field.type === "static") return null;
     if (field.type === "table") {
@@ -1377,7 +1505,7 @@ export default function ApplicationWorkspace({
       );
     }
     const spanFull = field.full || field.type === "textarea" || field.type === "checkbox";
-    const missing = errorsShown && field.required && fieldMissing(field);
+    const missing = marks && field.required && fieldMissing(field);
     const fixedNote = fixedAustralia ? (field.name === "has_usi" ? "A USI is always required." : "Only an Australian address is accepted.") : "";
     const help = [field.description, fixedNote].filter(Boolean).join(" ");
     return (
@@ -1395,7 +1523,6 @@ export default function ApplicationWorkspace({
         hidden={hidden}
         messages={
           <>
-            {field.name === "usi_number" && usiError ? <FieldMessage>{usiError}</FieldMessage> : null}
             {missing ? <FieldMessage alert={false} missingMarker>This field is required.</FieldMessage> : null}
           </>
         }
@@ -1447,7 +1574,8 @@ export default function ApplicationWorkspace({
     });
   };
 
-  const renderSectionBody = (section: AppSection) => {
+  const renderSectionBody = (section: AppSection, index: number) => {
+    const errorsShown = marksShown(index);
     const hasVisa = section.fields.some((field) => field.name === "visa_subclass");
     const hasAcademic = section.fields.some((field) => field.name === "academic_upload");
     return (
@@ -1594,7 +1722,7 @@ export default function ApplicationWorkspace({
         <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
           {section.fields
             .filter((field) => isConditionMet(field.showIf, values))
-            .map((field) => renderField(field))}
+            .map((field) => renderField(field, errorsShown))}
         </div>
         {hasAcademic && qualifications.length > 0 ? (
           <div className="mt-4 border-t border-background-200 pt-3">
@@ -1629,22 +1757,47 @@ export default function ApplicationWorkspace({
     return { subtitle: short ? description : "", tip: [short ? "" : description, ...notes].filter(Boolean).join(" ") };
   };
 
-  const navSteps: NavStep[] = [
-    ...sections.map((section, index): NavStep => {
-      // The same check that holds a step back (required answers, documents), so the list agrees with Review & submit.
-      const complete = !pageMissing(index) && !documentProblem(index);
-      const issue = (showErrors || errorStep === index) && !complete;
-      return { key: `step-${index}`, title: stepTitle(section.title, index), state: index === step ? "current" : complete ? "done" : issue ? "issue" : "pending" };
-    }),
-    { key: "review", title: "Review & submit", state: isReview ? "current" : "pending", final: true },
+  // Per step: applies, complete (by the Submit rules), and its one-line summary; per stage: done, needs details, current.
+  const issuesBySection = sections.map((_, index) => (sectionShown(index) ? sectionIssues(index) : []));
+  const snapshot: DraftValues = formRef.current ? collectFormValues(formRef.current) : {};
+  const shownValue = (name: string) => {
+    const raw = snapshot[name];
+    const text = Array.isArray(raw) ? raw.filter(Boolean).join("; ") : String(raw ?? "").trim();
+    return text ? summaryValue(name, text) : "";
+  };
+  const summaryOf = (index: number): string => {
+    const groups = SECTION_SUMMARY[keys[index]];
+    if (groups) return groups.map((group) => group.map(shownValue).filter(Boolean).join(" ")).filter(Boolean).join(", ");
+    const files = sections[index].fields.filter((field) => field.type === "file").flatMap((field) => attachments.filter((document) => document.category === documentCategoryForField(field.name)));
+    const answers = sections[index].fields.filter((field) => visibleField(field) && !LOCKED_AGENT_FIELDS.has(field.name)).map((field) => shownValue(field.name)).filter(Boolean).slice(0, 2);
+    return [...(files.length ? [plural(files.length, "document")] : []), ...answers].join(", ");
+  };
+  const stageState = (index: number): StepState => {
+    const list = stages[index].sections.filter(sectionShown);
+    if (list.every((section) => issuesBySection[section].length === 0)) return "done";
+    return touchedStages.has(index) || showErrors ? "issue" : "pending";
+  };
+  const navStages: NavStage[] = [
+    ...stages.map((item, index): NavStage => ({
+      key: item.id,
+      title: item.title,
+      state: index === stage ? "current" : stageState(index),
+      sections: item.sections.filter(sectionShown).map((section) => ({
+        index: section,
+        key: keys[section],
+        title: stepTitle(sections[section].title, section),
+        state: issuesBySection[section].length === 0 ? "done" : marksShown(section) ? "issue" : "pending",
+      })),
+    })),
+    { key: "review", title: "Review & submit", state: isReview ? "current" : "pending", sections: [], final: true },
   ];
+  const stageOpen = isReview ? 0 : (stages[stage]?.sections ?? []).filter((index) => sectionShown(index) && issuesBySection[index].length > 0).length;
 
   const missingNow = isReview ? collectMissing().missing : [];
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
-  const stepProblem = isReview ? "" : documentProblem(step);
-  const footerMessage = stepProblem || (!isReview && errorStep === step && pageMissing(step) ? "Fill in the required fields marked on this page to continue." : "");
+  const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
   const canSubmitHere = canSubmitApplicationStatus(application.status);
-  const lastSection = step >= sections.length - 1;
+  const lastStage = stage >= reviewStage - 1;
 
   return (
     <form
@@ -1652,16 +1805,26 @@ export default function ApplicationWorkspace({
       ref={formRef}
       noValidate
       onChange={handleChange}
+      onKeyDown={onFormKeyDown}
       className="form-compact mx-auto w-full max-w-[960px] scroll-mt-20"
     >
       <StepShell
-        steps={navSteps}
-        current={step}
+        stages={navStages}
+        current={stage}
         percent={progress.overall}
         status={saveIndicator()}
-        onSelect={(index) => (index === reviewIndex ? (readOnly ? goTo(reviewIndex) : openReview()) : goTo(index))}
-        onPrevious={() => goTo(Math.max(0, step - 1))}
-        previousDisabled={step === 0}
+        notice={notice && notice.stage !== stage && !readOnly ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900" role="status" data-testid="stage-notice">
+            <i className="ri-information-line text-base leading-none" aria-hidden="true" />
+            <span>{stages[notice.stage]?.title}: {notice.count === 1 ? "1 section still needs" : `${notice.count} sections still need`} details. You can come back to it any time.</span>
+            <button type="button" onClick={() => showStage(notice.stage)} className="cursor-pointer font-medium underline underline-offset-2 hover:text-amber-950">Go back</button>
+            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="ml-auto flex h-5 w-5 cursor-pointer items-center justify-center rounded hover:bg-amber-100"><i className="ri-close-line text-sm leading-none" aria-hidden="true" /></button>
+          </p>
+        ) : null}
+        onSelectStage={(index) => (index === reviewStage ? openReview() : showStage(index))}
+        onSelectSection={(index) => openSection(index)}
+        onPrevious={() => showStage(stage - 1)}
+        previousDisabled={stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
         message={footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
@@ -1679,9 +1842,10 @@ export default function ApplicationWorkspace({
               }
               : null
             : {
-              label: lastSection ? "Review" : "Next",
+              label: lastStage ? "Review" : "Next",
               icon: "ri-arrow-right-line",
-              onClick: () => (lastSection ? openReview() : goTo(step + 1)),
+              testId: "stage-next",
+              onClick: nextStage,
             }
         }
       >
@@ -1712,7 +1876,9 @@ export default function ApplicationWorkspace({
               agencyName={agencyName}
               consent={consent}
               onConsentChange={(patch) => setConsent((prev) => ({ ...prev, ...patch }))}
-              onEditSection={(index) => goTo(index)}
+              onEditSection={(index) => openSection(index)}
+              onJumpToField={(index, field) => openSection(index, field)}
+              stages={stages}
               missing={missingNow}
               documentProblems={documentProblems}
               submitError={submitError}
@@ -1723,40 +1889,44 @@ export default function ApplicationWorkspace({
         ) : null}
         {/* Keep controls mounted across navigation/review so snapshots and
             validation include every section and never discard earlier input. */}
-        {sections.map((section, index) => {
-          const { subtitle, tip } = stepHelp(section);
-          const open = index === step && !isReview;
-          return (
-            <SectionCard
-              key={index}
-              id={`${FORM_ID}-step-${index}`}
-              title={stepTitle(section.title, index)}
-              tip={tip || undefined}
-              subtitle={subtitle || undefined}
-              open={open}
-              hidden={!isConditionMet(section.showIf, values)}
-              direction={direction}
-              note={!readOnly && section.fields.some((field) => visibleField(field) && field.type !== "file" && !(field.name in FIXED_VALUES) && isAutoFilled(field.name)) ? (
-                <p className="flex items-center gap-1.5 text-xs text-foreground-500">
-                  <span className="h-1.5 w-1.5 rounded-full bg-foreground-400" aria-hidden="true" />
-                  Auto-filled from your document. Click any field to edit.
-                </p>
-              ) : null}
-            >
-              {renderSectionBody(section)}
-            </SectionCard>
-          );
-        })}
+        {/* Every step stays mounted, in stage order (snapshots and validation include all of them and never lose input); only
+            the current stage's steps are shown. */}
+        <div className="space-y-3">
+          {stages.flatMap((item) => item.sections).map((index) => {
+            const section = sections[index];
+            const { subtitle, tip } = stepHelp(section);
+            const shown = !isReview && stageOf(index) === stage && sectionShown(index);
+            const complete = issuesBySection[index].length === 0;
+            const open = expanded.has(index) || !ready;
+            return (
+              <SectionCard
+                key={index}
+                id={`${FORM_ID}-step-${index}`}
+                sectionKey={keys[index]}
+                title={stepTitle(section.title, index)}
+                tip={tip || undefined}
+                subtitle={subtitle || undefined}
+                shown={shown}
+                expanded={open}
+                complete={complete}
+                summary={open ? undefined : summaryOf(index)}
+                direction={direction}
+                onToggle={(next) => (next ? openSection(index) : setExpanded((prev) => { const out = new Set(prev); out.delete(index); return out; }))}
+                note={!readOnly && section.fields.some((field) => visibleField(field) && field.type !== "file" && !(field.name in FIXED_VALUES) && isAutoFilled(field.name)) ? (
+                  <p className="flex items-center gap-1.5 text-xs text-foreground-500">
+                    <span className="h-1.5 w-1.5 rounded-full bg-foreground-400" aria-hidden="true" />
+                    Auto-filled from your document. Click any field to edit.
+                  </p>
+                ) : null}
+              >
+                {renderSectionBody(section, index)}
+              </SectionCard>
+            );
+          })}
+        </div>
       </StepShell>
 
       <Toast message={toast.message} onDismiss={toast.dismiss} />
-      <span
-        ref={(element) => {
-          sectionRefs.current[step] = element;
-        }}
-        className="hidden"
-        aria-hidden="true"
-      />
     </form>
   );
 }

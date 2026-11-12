@@ -1,4 +1,4 @@
-import { sectionHeading } from "@/components/feature/applicationFieldHelpers";
+import { sectionHeading } from "../../feature/applicationFieldHelpers";
 
 const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "via"]);
 const ACRONYMS = new Set(["USI", "AVETMISS", "OSHC", "SLIT", "VEVO", "RPL", "CRICOS", "COE", "AU"]);

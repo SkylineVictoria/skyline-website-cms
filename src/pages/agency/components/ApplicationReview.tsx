@@ -1,7 +1,8 @@
 import type { AppField, AppSection } from "@/data/applicationForms";
 import { isConditionMet, sectionHeading } from "@/components/feature/applicationFieldHelpers";
 import { stepTitle } from "@/components/shared/application-form/stepTitle";
-import ReviewSummary, { type ReviewStep } from "@/components/shared/application-form/ReviewSummary";
+import ReviewSummary, { type ReviewIssue, type ReviewStep } from "@/components/shared/application-form/ReviewSummary";
+import type { Stage } from "@/pages/agency/lib/applicationStages";
 import type { DraftValues } from "@/lib/applicationDraft";
 import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
@@ -21,9 +22,9 @@ const NOT_SHOWN_TYPES = new Set<AppField["type"]>(["static", "table", "terms", "
 const NOT_SHOWN_FIELDS = new Set(["checklist", "address_source", "via_agent", "agent_agency", "agent_contact_name", "agent_email", "agent_phone"]);
 
 /**
- * Review & submit: one row per step (from the step config) with ✓ or ⚠ and Edit, collapsed until clicked; an open row shows that
- * step's answers as label / value pairs. Steps that still need something are listed first. The two confirmations sit at the
- * bottom; the Submit button is the form's footer button.
+ * Review & submit: every missing or invalid item first, each a link to its exact field; then one row per step (from the step
+ * config), grouped by stage, with ✓ or ⚠ and Edit, collapsed until clicked (an open row shows the step's answers as label / value
+ * pairs). The two confirmations sit at the bottom; the Submit button is the form's footer button.
  */
 export default function ApplicationReview({
   values,
@@ -36,6 +37,8 @@ export default function ApplicationReview({
   consent,
   onConsentChange,
   onEditSection,
+  onJumpToField,
+  stages,
   missing,
   documentProblems = [],
   submitError,
@@ -52,6 +55,10 @@ export default function ApplicationReview({
   consent: ConsentState;
   onConsentChange: (patch: Partial<ConsentState>) => void;
   onEditSection: (index: number) => void;
+  /** Opens the step and puts the cursor in the field (no field: the step's first answer). */
+  onJumpToField: (index: number, field?: string) => void;
+  /** The stages the steps are grouped by. */
+  stages: readonly Stage[];
   missing: string[];
   /** Per step: a wrong or unread document, as its message ("" when fine). */
   documentProblems?: string[];
@@ -88,17 +95,23 @@ export default function ApplicationReview({
     return rows;
   };
 
-  const steps: ReviewStep[] = sections
-    .map((section, index) => ({ section, index }))
-    .filter(({ section }) => isConditionMet(section.showIf, flat))
-    .map(({ section, index }) => ({ index, title: stepTitle(section.title, index), issues: issuesOf(index), rows: rowsOf(section) }));
+  const stepOf = (index: number): ReviewStep => ({ index, title: stepTitle(sections[index].title, index), issues: issuesOf(index), rows: rowsOf(sections[index]) });
+  const groups = stages
+    .map((stage) => ({ key: stage.id, title: stage.title, steps: stage.sections.filter((index) => isConditionMet(sections[index]?.showIf, flat)).map(stepOf) }))
+    .filter((group) => group.steps.length > 0);
+  // Every missing or invalid item in form order of the stages, each pointing at its field (found by its label on that step).
+  const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.flatMap((step) => step.issues.map((text, n) => {
+    const field = sections[step.index].fields.find((candidate) => candidate.label === text);
+    const documentField = sections[step.index].fields.find((candidate) => candidate.type === "file")?.name;
+    return { key: `${step.index}-${n}`, step: step.title, text, onJump: () => onJumpToField(step.index, field?.name ?? documentField) };
+  })));
 
   const declarationName = val("declaration_name");
   const signature = val("digital_signature");
   const signatureMismatch = (declarationName || signature) && declarationName.trim().toLowerCase() !== signature.trim().toLowerCase();
 
   return (
-    <ReviewSummary steps={steps} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}>
+    <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}>
       {signatureMismatch ? (
         <p className="mt-3 flex items-start gap-1.5 text-xs text-amber-800">
           <i className="ri-error-warning-line text-base leading-none" aria-hidden="true" />

@@ -16,7 +16,7 @@ import EnrolWizard from "@/pages/login/EnrolWizard";
 import { staffAccessState } from "@/lib/staffApi";
 import QuickSignIn from "@/pages/login/QuickSignIn";
 import CompleteSignUp from "@/pages/login/CompleteSignUp";
-import { isSelfSignUpAccount } from "@/lib/authProviders";
+import { isSelfSignUpAccount, portalRole, QUICK_SIGN_IN_STUDENTS_ONLY, sessionUsedQuickSignIn } from "@/lib/authProviders";
 import type { User } from "@supabase/supabase-js";
 import type { EnrolKind } from "@/lib/enrolForm";
 
@@ -114,6 +114,19 @@ export default function LoginPage() {
       setChecking(false);
       routing.current = false;
       return;
+    }
+    // Google / Facebook / phone sign-in is for students only: an agency, staff or CMS account must use email + password.
+    if (await sessionUsedQuickSignIn()) {
+      const role = await portalRole();
+      const hasStaff = Boolean(access.staff && access.staff !== "none");
+      if (access.cms || hasStaff || (role !== null && role !== "student")) {
+        await supabase.auth.signOut({ scope: "local" });
+        markSessionSeen(false);
+        setError(QUICK_SIGN_IN_STUDENTS_ONLY);
+        setChecking(false);
+        routing.current = false;
+        return;
+      }
     }
     const decision = decideLogin(access, next, readLastDestination(userId));
     if (decision.kind === "blocked" && access.portal === "no_access" && !access.cms) {

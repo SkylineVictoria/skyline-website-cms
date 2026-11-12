@@ -88,3 +88,29 @@ export function isSelfSignUpAccount(user: { app_metadata?: Record<string, unknow
   const providers = [user.app_metadata?.provider, ...((user.app_metadata?.providers as unknown[] | undefined) ?? [])].map(String);
   return providers.some((p) => p === "google" || p === "facebook" || p === "phone");
 }
+
+/**
+ * True when the CURRENT session was started with Google, Facebook or a phone code (not email + password or an emailed
+ * link), read from the access token's `amr` claim. Used to keep those quick sign-ins to students only.
+ */
+export async function sessionUsedQuickSignIn(): Promise<boolean> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return false;
+  try {
+    const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(part.padEnd(part.length + ((4 - (part.length % 4)) % 4), "="))) as { amr?: Array<{ method?: string }> };
+    return (claims.amr ?? []).some((entry) => entry.method === "oauth" || entry.method === "sms" || entry.method === "otp_sms");
+  } catch { return false; }
+}
+
+export const QUICK_SIGN_IN_STUDENTS_ONLY =
+  "Google sign-in is for students only. Agency and staff accounts sign in with their email and password.";
+
+/** The portal role the database resolved for the signed-in user: "student", "agent", "agency_admin", "slit_admin" or null (no account yet). */
+export async function portalRole(): Promise<string | null> {
+  const { data, error } = await supabase.rpc("portal_identity");
+  if (error) return "unknown";
+  const identity = (data ?? {}) as { role?: string | null; is_slit_admin?: boolean | null };
+  return identity.is_slit_admin ? "slit_admin" : identity.role ?? null;
+}

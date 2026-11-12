@@ -212,6 +212,10 @@ const routes: RouteObject[] = [
               { path: ":id", element: <AgencyRedirect /> },
             ],
           },
+          // Admin pages that used to open only inside the agency portal; administrators now never leave the CMS.
+          { path: "audit-log", element: <RequireAdmin><ApplicationsArea /></RequireAdmin>, children: [{ index: true, element: <AdminAuditLogPage /> }] },
+          { path: "registrations", element: <RequireAdmin><ApplicationsArea /></RequireAdmin>, children: [{ index: true, element: <RegistrationWorkbenchPage /> }] },
+          { path: "portal-users", element: <RequireAdmin><ApplicationsArea /></RequireAdmin>, children: [{ index: true, element: <AdminUsersPage /> }] },
           { path: "businesses", element: <RequireAdmin><BusinessesPage /></RequireAdmin> },
           { path: "businesses/:id", element: <RequireAdmin><BusinessDetailPage /></RequireAdmin> },
           { path: "agents", element: <RequireAdmin><AdminAgentsPage /></RequireAdmin> },

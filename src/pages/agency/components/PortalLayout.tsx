@@ -9,12 +9,14 @@ const AGENCY_NAV: NavEntry[] = [
   { to: "/agency/workspace", label: "Workspace", icon: "ri-building-2-line" },
   { to: "/agency/applications", label: "Applications", icon: "ri-file-list-3-line", end: true },
   { to: "/agency/documents", label: "Documents", icon: "ri-folder-3-line" },
+  { to: "/agency/tickets", label: "Support tickets", icon: "ri-customer-service-2-line" },
 ];
 
 // A student sees their own applications and documents only.
 const STUDENT_NAV: NavEntry[] = [
   { to: "/agency/applications", label: "My applications", icon: "ri-file-list-3-line", end: true },
   { to: "/agency/documents", label: "My documents", icon: "ri-folder-3-line" },
+  { to: "/agency/tickets", label: "Support tickets", icon: "ri-customer-service-2-line" },
 ];
 
 const SLIT_NAV: NavEntry[] = [
@@ -26,6 +28,7 @@ const SLIT_NAV: NavEntry[] = [
 ];
 
 const CRUMB_LABELS: Record<string, string> = {
+  tickets: "Support tickets",
   dashboard: "Dashboard",
   applications: "Applications",
   new: "Add candidate",
@@ -47,7 +50,7 @@ function buildCrumbs(pathname: string): { label: string; to?: string }[] {
   let acc = "/agency";
   parts.forEach((part, index) => {
     acc += `/${part}`;
-    const label = CRUMB_LABELS[part] ?? (index > 0 && parts[index - 1] === "applications" ? "Application" : part);
+    const label = CRUMB_LABELS[part] ?? (index > 0 && parts[index - 1] === "applications" ? "Application" : index > 0 && parts[index - 1] === "tickets" ? "Ticket" : part);
     crumbs.push({ label, to: acc });
   });
   return crumbs;

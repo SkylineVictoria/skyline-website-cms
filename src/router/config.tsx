@@ -72,6 +72,8 @@ import AdminAgentsPage from "@/pages/admin/AgentsPage";
 import AgentDetailPage from "@/pages/admin/AgentDetailPage";
 import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
+import TicketsPage, { TicketDetailPage } from "@/pages/admin/TicketsPage";
+import PortalTicketsPage, { PortalTicketDetailPage } from "@/pages/agency/tickets/page";
 import StaffPage from "@/pages/admin/StaffPage";
 import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import TemplatesPage from "@/pages/admin/TemplatesPage";
@@ -157,6 +159,8 @@ const routes: RouteObject[] = [
           { path: "applications/:id", element: <ApplicationDetailPage /> },
           { path: "documents", element: <PortalDocumentsPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
+          { path: "tickets", element: <PortalTicketsPage /> },
+          { path: "tickets/:id", element: <PortalTicketDetailPage /> },
           { path: "agency-profile", element: <AgencyProfilePage /> },
           { path: "profile", element: <PortalProfilePage /> },
           { path: "agencies", element: <AdminAgenciesPage /> },
@@ -213,6 +217,8 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
+          { path: "tickets", element: <RequireAdmin><TicketsPage /></RequireAdmin> },
+          { path: "tickets/:id", element: <RequireAdmin><TicketDetailPage /></RequireAdmin> },
           // Staff group (HR-02j): Candidates, Employees, Jobs. The old Agencies > Staff addresses and the Master Data addresses of
           // 20261109153953 (/admin/candidates, /admin/employees) redirect here.
           { path: "staff", element: <Navigate to="/admin/staff/employees" replace /> },

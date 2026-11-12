@@ -12,7 +12,7 @@ export interface AdminMenuItem {
 
 // Database keys never become class names or executable components.
 const icons: Record<string, string> = {
-  plug: 'ri-plug-line',
+  plug: 'ri-plug-line', tickets: 'ri-customer-service-2-line',
   template: 'ri-file-edit-line', dashboard: 'ri-dashboard-3-line', courses: 'ri-book-2-line', pages: 'ri-file-text-line',
   navigation: 'ri-menu-line', footer: 'ri-layout-bottom-line', settings: 'ri-settings-3-line',
   documents: 'ri-file-pdf-2-line', knowledge: 'ri-question-answer-line', extraction: 'ri-file-search-line',
@@ -32,7 +32,7 @@ const routes = new Set([
   '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
-  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
+  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/tickets', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
   STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH, STAFF_LOCATIONS_PATH,
   '/admin/signing', '/admin/signing/templates', '/admin/signing/sent', '/admin/signing/partial', '/admin/signing/signed', '/admin/signing/declined', '/admin/signing/expired', '/admin/signing/void', // Sign child routes
 ]);

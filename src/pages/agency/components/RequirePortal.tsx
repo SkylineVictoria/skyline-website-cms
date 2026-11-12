@@ -14,6 +14,27 @@ function WorkspaceLoader() {
   );
 }
 
+/** The CMS page for a portal address an administrator opened (old links, bookmarks, emails). */
+function adminPathFor(pathname: string): string {
+  const path = pathname.replace(/\/+$/, "");
+  const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+    [/^\/agency\/applications\/new$/, () => "/admin/applications/new"],
+    [/^\/agency\/applications\/([^/]+)$/, (m) => `/admin/applications/${m[1]}`],
+    [/^\/agency(?:\/(?:applications|all-applications|dashboard|workspace|documents))?$/, () => "/admin/applications"],
+    [/^\/agency\/tickets\/([^/]+)$/, (m) => `/admin/tickets/${m[1]}`],
+    [/^\/agency\/tickets$/, () => "/admin/tickets"],
+    [/^\/agency\/(agencies|agency-profile)$/, () => "/admin/businesses"],
+    [/^\/agency\/audit-log$/, () => "/admin/audit-log"],
+    [/^\/agency\/registrations$/, () => "/admin/registrations"],
+    [/^\/agency\/users$/, () => "/admin/portal-users"],
+  ];
+  for (const [pattern, to] of rules) {
+    const match = path.match(pattern);
+    if (match) return to(match);
+  }
+  return "/admin";
+}
+
 /**
  * Auth + authorization gate for every /agency workspace route.
  *  - Not signed in            → the portal sign-in page.
@@ -93,5 +114,7 @@ export default function RequirePortal() {
     );
   }
 
+  // SLIT administrators work only in the CMS: any portal address opens its CMS counterpart.
+  if (role === "slit_admin") return <Navigate to={adminPathFor(location.pathname) + location.search} replace />;
   return <PortalLayout />;
 }

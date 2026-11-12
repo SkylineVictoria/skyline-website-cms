@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import WhatsAppLink from "@/components/base/WhatsAppLink";
 import {
-  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, replyTicket, updateTicket, uploadTicketFiles,
+  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, replyTicket, ticketRequesterPhone, updateTicket, uploadTicketFiles,
   type TicketDetail, type TicketPriority, type TicketStatus,
 } from "@/lib/supportTickets";
 
@@ -15,11 +16,19 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
   const [fileKey, setFileKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [phone, setPhone] = useState("");
 
   const load = useCallback(async () => {
     try { setData(await getTicket(id)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load this ticket."); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  const isHandler = data?.isHandler ?? false, requesterEmail = data?.ticket.requesterEmail ?? null, studentId = data?.ticket.studentId ?? null, requesterRole = data?.ticket.requesterRole ?? "agent";
+  useEffect(() => {
+    if (!isHandler) return undefined;
+    let active = true;
+    ticketRequesterPhone({ requesterEmail, studentId, requesterRole }).then((p) => { if (active) setPhone(p); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [isHandler, requesterEmail, studentId, requesterRole]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); setActionError("");
@@ -47,7 +56,7 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
         <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-foreground-700">
           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[t.status]}`}>{STATUS_LABEL[t.status]}</span>
           <span>{CATEGORY_LABEL[t.category]}</span><span aria-hidden="true">&middot;</span><span>Priority {PRIORITY_LABEL[t.priority]}</span>
-          <span aria-hidden="true">&middot;</span><span>Raised by {t.requesterName}{t.requesterRole === "student" ? " (student)" : t.agencyName ? ` (${t.agencyName})` : ""}</span>
+          <span aria-hidden="true">&middot;</span><span>Raised by {t.requesterName}{t.requesterRole === "student" ? " (student)" : t.agencyName ? ` (${t.agencyName})` : ""}{data.isHandler ? <WhatsAppLink phone={phone} name={t.requesterName} /> : null}</span>
           {t.studentName && t.requesterRole !== "student" ? <><span aria-hidden="true">&middot;</span><span>About {t.studentName}</span></> : null}
           {data.isHandler && t.requesterEmail ? <><span aria-hidden="true">&middot;</span><a className="underline" href={`mailto:${t.requesterEmail}`}>{t.requesterEmail}</a></> : null}
         </p>

@@ -78,3 +78,17 @@ export async function openTicketFile(path: string): Promise<void> {
   if (error || !data?.signedUrl) throw new Error("The file could not be opened.");
   window.open(data.signedUrl, "_blank", "noopener,noreferrer");
 }
+
+/** Administrators only: the requester's phone for the WhatsApp link (portal profile first, then the student record). Empty when unknown. */
+export async function ticketRequesterPhone(ticket: Pick<TicketRow, "requesterEmail" | "studentId" | "requesterRole">): Promise<string> {
+  if (ticket.requesterEmail) {
+    const { data } = await supabase.from("portal_profiles").select("phone").eq("email", ticket.requesterEmail).limit(1).maybeSingle();
+    const phone = String((data as { phone?: string | null } | null)?.phone ?? "").trim();
+    if (phone) return phone;
+  }
+  if (ticket.requesterRole === "student" && ticket.studentId) {
+    const { data } = await supabase.rpc("admin_student_detail", { p_student: ticket.studentId });
+    return String((data as { phone?: string | null } | null)?.phone ?? "").trim();
+  }
+  return "";
+}

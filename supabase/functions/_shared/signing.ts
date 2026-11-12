@@ -1,4 +1,5 @@
 import { escapeHtml } from "./hr-template.ts";
+import { simpleEmailHtml } from "./email-html.ts";
 
 
 /** The agreement a signer accepts. The database compares the exact text (public.signing_service), so the two change together. */
@@ -99,11 +100,24 @@ export function checkRecipients(input: unknown): SignRecipientInput[] {
   return out;
 }
 
-export type SigningMailKind = "invite" | "reminder" | "expired" | "declined" | "voided" | "completed";
+export type SigningMailKind = "invite" | "reminder" | "expired" | "declined" | "voided" | "completed" | "link_requested";
 export interface SigningMailJob { kind: SigningMailKind; audience: "recipient" | "admin"; title: string; reference: string; name?: string | null; role?: string | null; message?: string | null;
   expires_at?: string | null; reason?: string | null; declined_by?: string | null; signers?: Array<{ name: string; role: string; state: string }> | null }
 const mailLine = (value: unknown, max = 200) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max); // eslint-disable-line no-control-regex
 const MAIL_SIGN_OFF = "\n\nSkyline Institute of Technology\nThis is an automated message.";
+/** The one-time code that confirms the signer's email before an offer letter is signed. The code is the only thing in it that matters. */
+export function renderSigningCodeEmail(input: { name?: string | null; code: string; title: string; minutes?: number | null }): { subject: string; text: string; html: string } {
+  const minutes = Number(input.minutes) > 0 ? Number(input.minutes) : 10;
+  const hello = `Hello ${mailLine(input.name, 80) || "there"},`;
+  const lead = `Use this code to confirm it is you before you sign "${mailLine(input.title)}".`;
+  const note = `The code works for ${minutes} minutes. If you did not ask for it, you can ignore this email: nothing is signed without it.`;
+  return {
+    subject: "Your signing code",
+    text: `${hello}\n\n${lead}\n\n${input.code}\n\n${note}${MAIL_SIGN_OFF}`,
+    html: simpleEmailHtml({ brand: "Skyline Institute of Technology", heading: "Your signing code", paragraphs: [hello, lead], code: input.code, note, footer: "This is an automated message." }),
+  };
+}
+
 /** Plain-text signing emails. Only an invitation or a reminder carries the personal link; nothing else contains a URL. */
 export function renderSigningEmail(job: SigningMailJob, link: string | null): { subject: string; text: string } | null {
   const title = mailLine(job.title), ref = mailLine(job.reference, 40), hello = `Hello ${mailLine(job.name, 80) || "there"},`;
@@ -125,6 +139,8 @@ export function renderSigningEmail(job: SigningMailJob, link: string | null): { 
   if (job.kind === "expired") return job.audience === "admin"
     ? { subject: mailLine(`Expired: ${title}`), text: `"${title}" (reference ${ref}) expired before everyone signed. Its links no longer work.\n\n${people}${MAIL_SIGN_OFF}` }
     : { subject: mailLine(`Signing link expired: ${title}`), text: `${hello}\n\nThe time to sign "${title}" (reference ${ref}) has passed and your link no longer works. Please contact the sender if you still need to sign it.${MAIL_SIGN_OFF}` };
+  if (job.kind === "link_requested") return { subject: mailLine(`New signing link requested: ${title}`),
+    text: `${mailLine(job.name, 80) || "The signer"} opened a link to sign "${title}" (reference ${ref}) that has expired or was replaced, and asked for a new one.\n\nFor an offer letter: open the application and use Take action > Resend offer letter. The new email replaces every earlier link.${MAIL_SIGN_OFF}` };
   if (job.kind === "voided") return { subject: mailLine(`Signing request cancelled: ${title}`),
     text: `${hello}\n\nThe request to sign "${title}" (reference ${ref}) was cancelled by the sender and your link no longer works. You do not need to do anything.${MAIL_SIGN_OFF}` };
   return null;

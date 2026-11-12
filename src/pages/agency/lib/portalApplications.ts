@@ -722,7 +722,19 @@ export const issueOfferLetter = (input: { applicationId: string; source: "templa
 export const resendOfferLetter = (applicationId: string, note = "") => rpcOrThrow<void>("portal_offer_letter_resend", { p_application: applicationId, p_note: note });
 export const currentOfferLetter = (applicationId: string) => rpcOrThrow<OfferLetter | null>("portal_offer_letter_current", { p_application: applicationId });
 export const offerLetterList = (applicationId: string) =>
-  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null }>>("portal_offer_letter_list", { p_application: applicationId });
+  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null;
+    acceptedVia?: string | null; signedAt?: string | null; hasSigned?: boolean; hasCertificate?: boolean; prepaidMore?: "YES" | "NO" | null;
+    signing?: { status: string; expiresAt: string | null; viewedAt: string | null; reference: string } | null }>>("portal_offer_letter_list", { p_application: applicationId });
+/** The signed offer letter or its signing certificate (signed online), opened in a new tab. */
+export async function openOfferLetterFile(letterId: string, kind: "signed" | "certificate"): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const file = await rpcOrThrow<{ fileName: string; contentBase64: string }>("portal_offer_letter_file", { p_letter: letterId, p_kind: kind });
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(file.contentBase64), (c) => c.charCodeAt(0))], { type: "application/pdf" }));
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) { tab?.close(); throw error; }
+}
 /** Opens an offer letter PDF in a new tab (the tab is opened first, while the click still counts). */
 export async function openOfferLetter(letterId: string): Promise<void> {
   const tab = window.open("", "_blank");

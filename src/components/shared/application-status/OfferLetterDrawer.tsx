@@ -12,6 +12,7 @@ import {
 import { baseKey, blockingDetails, formatTyped, missingDetails, withCourseValues, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
+import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
 import { issueOfferLetter, offerLetterRecipient, type OfferRecipient } from "@/pages/agency/lib/portalApplications";
 
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -29,7 +30,6 @@ export interface OfferApplication {
 /** What staff typed for one missing detail (the input as typed; printed formatted). */
 interface Entry { input: string; mode: "letter" | "source" | "blank"; saved?: boolean }
 
-const fileToBase64 = async (file: File) => toBase64(new Uint8Array(await file.arrayBuffer()));
 
 /**
  * Issue offer letter. From a template: every {{variable}} is resolved from the application, its course / intake, the fee setup, the
@@ -139,13 +139,18 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     setFinalCheck(false);
     setBusy("send"); setError("");
     try {
+      let issued: { id: string; bytes: Uint8Array } | null = null;
       if (mode === "upload" && file) {
-        await issueOfferLetter({ applicationId: application.id, source: "upload", fileName: file.name, contentBase64: await fileToBase64(file), templateId: null, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" });
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        issued = { id: (await issueOfferLetter({ applicationId: application.id, source: "upload", fileName: file.name, contentBase64: toBase64(bytes), templateId: null, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" })).id, bytes };
       } else if (template && letter) {
-        await issueTemplateLetter({ applicationId: application.id, templateId: template.id, templateVersion: template.version, fileName, contentBase64: toBase64(letter.bytes),
-          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" });
+        issued = { id: (await issueTemplateLetter({ applicationId: application.id, templateId: template.id, templateVersion: template.version, fileName, contentBase64: toBase64(letter.bytes),
+          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" })).id, bytes: letter.bytes };
       }
       if (ccOn) await sendCc(application.id, "offer_letter_issued", cc);
+      // The student signs online: where (initials, signature, date, YES / NO) is read from the letter and stored before the email goes
+      // (the notification worker waits for it, up to 3 minutes).
+      if (issued) await saveOfferSigningLayout(issued.id, issued.bytes);
       onSent();
     } catch (e) { setError(e instanceof Error ? e.message : "The offer letter could not be sent."); setBusy(""); }
   };

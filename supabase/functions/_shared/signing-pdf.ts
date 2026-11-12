@@ -8,7 +8,7 @@ import { paletteOf } from "./offer-letter-pdf.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
 import { initialsOf } from "./signing.ts";
 
-export interface StampField { id?: string; recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; value: string | null; done: boolean }
+export interface StampField { id?: string; recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; value: string | null; done: boolean; label?: string | null }
 export interface StampSigner {
   id: string; name: string; email: string; role: string; order?: number; required?: boolean; state: string; signer_name?: string | null; signed_at?: string | null;
   signature_kind?: string | null; signature_image?: string | null; viewed_at?: string | null; sent_at?: string | null; ip?: string | null; user_agent?: string | null;
@@ -71,7 +71,7 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
       } else {
         const text = writer.clean(field.type === "initials" ? initialsOf(signer.signer_name ?? signer.name) : signer.signer_name ?? signer.name, true);
         const { font, size } = fit(text, true, box.w - 4, box.h - captionH);
-        page.drawText(text, { x: box.x + 2, y: box.y + captionH + (box.h - captionH - size) / 2 + size * 0.22, size, font, color: INK, xSkew: degrees(12) });
+        page.drawText(text, { x: box.x + 2, y: box.y + captionH + (box.h - captionH - size) / 2 + size * 0.22, size, font, color: INK, ySkew: degrees(12) }); // ySkew slants the letters (italic); xSkew tilted the whole line upwards
       }
       if (captionH) page.drawText(caption.slice(0, 120), { x: box.x, y: box.y + 0.5, size: Math.min(4.5, fit(caption, false, box.w, 100, 4.5).size), font: writer.regular, color: GREY });
     } else if (field.type === "checkbox") {
@@ -111,7 +111,9 @@ export interface CertificateInput extends StampInput {
 }
 const EVENT_LABEL: Record<string, string> = { created: "Request created", sent: "Sent for signature", recipient_invited: "Invitation queued", viewed: "Opened by", signed: "Signed by", declined: "Declined by",
   completed: "Completed", resent: "Invitation sent again", reminder_queued: "Reminder queued", email_sent: "Email sent to", email_failed: "Email failed for", email_queued: "Email retried for",
-  fields_changed: "Fields changed", opened_signed_in: "Opened while signed in by" };
+  fields_changed: "Fields changed", opened_signed_in: "Opened while signed in by",
+  link_emailed: "Signing link emailed to", code_sent: "Identity code emailed to", code_wrong: "Wrong identity code entered for", code_verified: "Identity confirmed by emailed code for",
+  link_requested: "New link requested for", voided: "Closed", expired: "Expired" };
 export const signingEventLabel = (event: string) => EVENT_LABEL[event] ?? event.replaceAll("_", " ");
 
 /** The completion certificate: the document and its hashes, every signer with how and when they signed, and the history with its hash chain. */
@@ -149,6 +151,9 @@ export async function buildCertificate(input: CertificateInput, letterhead?: Let
       ] satisfies Row[] : []),
     ]);
   }
+  // YES / NO answers given when signing (an offer letter's pre-paid fee election).
+  const answers = input.fields.filter((f) => f.type === "choice" && f.value);
+  if (answers.length) writer.section("Answers", answers.map((f) => ({ label: (f.label || "Answer").slice(0, 120), paras: [{ spans: [{ text: String(f.value) }], bold: true }] })));
   const names = new Map(input.recipients.map((r) => [r.id, r.name]));
   writer.section("History", [
     ...input.events.map((e) => ({ label: `${new Date(e.at).toISOString().slice(0, 19).replace("T", " ")} UTC`,

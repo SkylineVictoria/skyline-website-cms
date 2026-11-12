@@ -10,6 +10,7 @@ import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusActio
 import { changeApplicationStatus, revertApplicationStatus } from "@/pages/agency/lib/portalApplications";
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
+import { prepareOfferResend } from "@/lib/offerSigningLayout";
 
 type Variant = "menu" | "row";
 
@@ -103,6 +104,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     if (!active) return;
     setBusy(true); setError("");
     try {
+      if (active.kind === "resend_offer") await prepareOfferResend(application.id);
       const result = await changeApplicationStatus(application.id, active.action, { note: note.trim() });
       if (active.kind === "reminder") { onResult?.("Reminder sent.", true); setActive(null); onDone?.(); }
       else if (active.kind === "resend_offer") {
@@ -167,7 +169,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
       {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
       {active && !["offer_letter", "coe"].includes(active.kind) && !(active.kind === "status" && active.requiresReason) && !isEnrol(active) ? (
         <ConfirmDialog title={`${active.label}?`} confirmLabel={active.label} tone={active.tone === "danger" ? "danger" : "primary"} busy={busy} onClose={close} onConfirm={() => void runSimple()}
-          body={active.kind === "resend_offer" ? "The same offer letter is emailed to the same recipient again." : active.kind === "reminder" ? "The student or agent is emailed what this application still needs."
+          body={active.kind === "resend_offer" ? "The same offer letter is emailed again, with a new link for the student to review and sign it. Earlier links stop working." : active.kind === "reminder" ? "The student or agent is emailed what this application still needs."
             : active.to ? `${application.studentName || "The application"} moves to ${statusInfo(workflow, active.to).label}.` : undefined}>
           {active.note !== "none" ? (
             <div className="mt-2">

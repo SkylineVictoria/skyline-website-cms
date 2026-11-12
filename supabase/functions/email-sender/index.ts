@@ -10,9 +10,19 @@ const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const enabled = (Deno.env.get("EF_NOTIFICATION_EMAIL_ENABLED") ?? "").trim() === "true";
 const postmarkToken = (Deno.env.get("EF_POSTMARK_SERVER_TOKEN") ?? "").trim();
-const POSTMARK_API = "https://api.postmarkapp.com/email";
+const POSTMARK_HOST = "https://api.postmarkapp.com";
+const isLocal = (() => { try { return ["127.0.0.1", "localhost", "kong", "host.docker.internal"].includes(new URL(url).hostname); } catch { return false; } })();
+// A local stack only: mail goes to the lab's mock Postmark (never on a hosted project).
+const POSTMARK_API = `${isLocal && (Deno.env.get("EF_POSTMARK_API_URL") ?? "").trim() ? (Deno.env.get("EF_POSTMARK_API_URL") ?? "").trim().replace(/\/+$/, "") : POSTMARK_HOST}/email`;
 const MESSAGE_ID = /^[A-Za-z0-9-]{8,64}$/;
 const BATCH = 20;
+// OFFER-SIGN: the app's address for the student's signing link (APP_URL/sign#t=<token>), the setting the Sign module uses.
+const signingSite = (() => {
+  try {
+    const site = new URL((Deno.env.get("EF_HR_PUBLIC_SITE_URL") ?? "").trim());
+    return (site.protocol === "https:" || isLocal) && !site.username && !site.password ? site.toString().replace(/\/+$/, "") : null;
+  } catch { return null; }
+})();
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -68,6 +78,41 @@ async function attachmentsFor(admin: any, d: Record<string, unknown>): Promise<{
   return { attachments: [], note: "" };
 }
 
+const sha256Hex = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/**
+ * OFFER-SIGN: the student's own copy of an offer letter email (delivery.signing) gets their personal signing link. The database makes the
+ * signing request for the letter the first time (this function stores the letter as its original in signing-documents), retires every
+ * earlier link and returns the email's text and branded HTML with the "Review and sign your offer" button; the link is stored nowhere.
+ * "retry" (the signing places are still being stored, a failure) sends the email later rather than without its link; null: send as it is.
+ */
+// deno-lint-ignore no-explicit-any
+async function offerSigning(admin: any, d: Record<string, unknown>, letterBase64: string): Promise<{ text: string; html: string } | "retry" | null> {
+  if (d.event !== "offer_letter_issued" || d.signing !== true) return null;
+  if (!signingSite || !letterBase64) return "retry";
+  const bytes = Uint8Array.from(atob(letterBase64), (c) => c.charCodeAt(0));
+  let pages: number | null = null;
+  try { const { PDFDocument } = await import("npm:pdf-lib@1.17.1"); pages = (await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })).getPageCount(); } catch { pages = null; }
+  const call = async (stored: boolean) => {
+    const { data, error } = await admin.rpc("notification_delivery_offer_signing", { p_id: d.id, p_lease: d.lease_token, p_pages: pages, p_original_stored: stored, p_site: signingSite });
+    if (error) throw new Error("offer signing");
+    return data as Record<string, unknown> | null;
+  };
+  try {
+    let link = await call(false);
+    if (!link || link.closed) return null; // the offer is no longer open: the letter goes without a link
+    if (link.wait) return "retry";
+    if (link.needs_original) {
+      if (typeof link.path !== "string" || await sha256Hex(bytes) !== link.hash) return "retry";
+      const { error } = await admin.storage.from("signing-documents").upload(link.path, bytes, { contentType: "application/pdf", upsert: true });
+      if (error) return "retry";
+      link = await call(true);
+      if (!link || link.closed) return null;
+    }
+    return typeof link.text === "string" && typeof link.html === "string" && /#t=[a-f0-9]{64}/.test(link.text) ? { text: link.text, html: link.html } : "retry";
+  } catch { return "retry"; }
+}
+
 type Outcome = { outcome: "accepted"; messageId: string } | { outcome: "failed" | "unknown"; code: string; retry: boolean };
 
 async function send(d: Record<string, unknown>, extra: { attachments: Attachment[]; note: string }): Promise<Outcome> {
@@ -117,7 +162,12 @@ async function worker(): Promise<Response> {
     if (error) return json({ ok: false, error: "claim failed", sent, failed }, 500);
     const d = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined;
     if (!d) break;
-    const extra = await attachmentsFor(admin, d);
+    let extra = await attachmentsFor(admin, d);
+    if (extra !== "retry") {
+      const signed = await offerSigning(admin, d, extra.attachments[0]?.Content ?? "");
+      if (signed === "retry") extra = "retry";
+      else if (signed) { d.body = signed.text; d.html_body = signed.html; }
+    }
     const result: Outcome = extra === "retry" ? { outcome: "failed", code: "attachment_unavailable", retry: true } : await send(d, extra);
     const { error: recordError } = await admin.rpc("notification_record_attempt", {
       p_id: d.id, p_lease: d.lease_token, p_outcome: result.outcome,

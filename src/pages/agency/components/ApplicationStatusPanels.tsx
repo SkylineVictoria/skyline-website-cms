@@ -4,7 +4,7 @@ import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { actionsFor, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
-import { acceptOffer, currentOfferLetter, offerLetterList, openOfferLetter, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
+import { acceptOffer, currentOfferLetter, offerLetterList, openOfferLetter, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 
@@ -167,6 +167,11 @@ export function AgentMetaEditor({ agentId, agentName, agents, busy, onAssign }: 
   );
 }
 
+/** Where the student's online signing stands (the link they were emailed). */
+const signingState = (signing: { status: string; expiresAt: string | null; viewedAt: string | null }) =>
+  signing.status === "viewed" ? "Opened by the student" : signing.status === "expired" ? "Signing link expired" : signing.status === "void" ? "Signing link closed"
+    : signing.status === "draft" ? "Signing link being sent" : `Sent to sign${signing.expiresAt ? ` · until ${formatDate(signing.expiresAt)}` : ""}`;
+
 /** The application's offer letters (Documents tab). */
 export function OfferLettersList({ applicationId, refreshKey }: { applicationId: string; refreshKey?: unknown }) {
   const [letters, setLetters] = useState<Awaited<ReturnType<typeof offerLetterList>>>([]);
@@ -182,8 +187,12 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
             <i className="ri-file-pdf-2-line text-base text-foreground-500" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate font-medium text-foreground-900">{letter.fileName}</span>
             <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}{letter.templateName ? <> &middot; {letter.templateName} v{letter.templateVersion}</> : null}</span>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>{letter.acceptedAt ? `Accepted ${formatDate(letter.acceptedAt)}` : "Awaiting acceptance"}</span>
+            <span data-testid="offer-letter-state" className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>
+              {letter.acceptedAt ? `${letter.acceptedVia === "signing" ? "Signed online" : "Accepted"} ${formatDate(letter.acceptedAt)}` : letter.signing ? signingState(letter.signing) : "Awaiting acceptance"}</span>
+            {letter.prepaidMore ? <span className="text-xs text-foreground-500">Pays more than the pre-paid fee: {letter.prepaidMore}</span> : null}
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">View</button>
+            {letter.hasSigned ? <button type="button" data-testid="offer-letter-signed" onClick={() => void openOfferLetterFile(letter.id, "signed").catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Signed copy</button> : null}
+            {letter.hasCertificate ? <button type="button" data-testid="offer-letter-certificate" onClick={() => void openOfferLetterFile(letter.id, "certificate").catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Certificate</button> : null}
           </li>
         ))}
       </ul>

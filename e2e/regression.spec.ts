@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT } from "./env";
-import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, latestLink, markStudentDocumentRead, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
+import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT, E2E_SERVICE_KEY } from "./env";
+import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, hrMails, latestLink, linkToken, markStudentDocumentRead, offerPdf, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
 import { courses } from "../src/data/courses";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
@@ -742,7 +742,9 @@ test("status workflow: an offer letter is uploaded and sent to the agent who sta
   await expect(page.getByText("Offer letter sent.")).toBeVisible();
   await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
   expect(sql(`select source || '|' || recipient_kind || '|' || recipient_email from public.enrollment_offer_letters where application_id = '${id}'`)).toBe(`upload|agent|${agent.email}`);
-  expect(sql(`select string_agg(recipient_email, ',') from public.notification_deliveries where application_id = '${id}' and event = 'offer_letter_issued'`)).toBe(agent.email);
+  // OFFER-SIGN: the agent keeps their own email (once, even with the CC ticked); the student gets their own copy with the signing link.
+  expect(sql(`select string_agg(recipient_email || ':' || signing::text, ',' order by signing, recipient_email) from public.notification_deliveries where application_id = '${id}' and event = 'offer_letter_issued'`))
+    .toBe(`${agent.email}:false,${name.toLowerCase().replace(/\W+/g, ".")}@example.test:true`);
   expect(sql(`select count(*) from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_issued' and note like 'Offer letter sent to agent%'`)).toBe("1");
   // The agent sees the letter in the portal and accepts it: a confirmation, no signature.
   const agentContext = await browser.newContext({ baseURL: `http://127.0.0.1:${E2E_PORT}` });
@@ -833,6 +835,8 @@ async function pdfPages(bytes: Uint8Array): Promise<string[]> {
 function seedSlitLetter(): string {
   sql(readFileSync("supabase/migrations/20261113300000_standard_letter_of_offer.sql", "utf8"));
   sql(readFileSync("supabase/migrations/20261113320000_slit_letter_of_offer.sql", "utf8"));
+  // 20261113330000 (online signing) redefines the CC copy that 20261113320000 just put back.
+  sql(readFileSync("supabase/migrations/20261113330000_offer_letter_signing.sql", "utf8"));
   sql(`update hr.sign_templates set is_default = (name = 'SLIT Letter of Offer and Written Agreement') where category = 'student_offer_letter' and deleted_at is null`);
   const id = sql(`select id from hr.sign_templates where category = 'student_offer_letter' and name = 'SLIT Letter of Offer and Written Agreement' and deleted_at is null`);
   expect(sql(`select status || '|' || cardinality(public.letter_template_unmapped(concat_ws(' ', title, header_html, body_html, footer_html))) from hr.sign_templates where id = '${id}'`)).toBe("active|0");
@@ -1149,4 +1153,199 @@ test("offer letter: values from the application, course, intake and fees; missin
   });
   const all = pages.join(" ");
   for (const expected of ["Dear Ms Asha Rani O'Neil, born 12/04/2001, passport P7654321.", "(CRICOS 0101234) starts 03/02/2027 (February 2027)", "Tuition AUD$14,500.00, total AUD$14,750.00, material ."]) expect(all).toContain(expected);
+});
+
+// ------------------------------------------------------------------ OFFER-SIGN: the student signs the offer letter from the email, without logging in
+// email-sender makes the student's personal link when it sends the email; the public /sign page shows only that letter; a 6-digit code
+// emailed to the student confirms them; signing stores the signed letter and the certificate on the application and moves it to Offer accepted.
+const runNotificationWorker = async () => {
+  const response = await fetch(`${E2E_API_URL}/functions/v1/email-sender`, { method: "POST", headers: { Authorization: `Bearer ${E2E_SERVICE_KEY}`, "Content-Type": "application/json" }, body: "{}" });
+  expect(response.status, await response.clone().text()).toBe(200);
+};
+const deliveryState = (id: string, email: string) => sql(`select coalesce(string_agg(state, ',' order by created_at), '') from public.notification_deliveries where application_id = '${id}' and event = 'offer_letter_issued' and recipient_email = '${email}'`);
+/** Runs the worker until `count` of the student's offer emails are sent (the first runs may wait for the signing places). */
+async function sendOfferEmails(id: string, email: string, count = 1, timeout = 60_000) {
+  await expect.poll(async () => { await runNotificationWorker(); return deliveryState(id, email).split(",").filter((s) => s === "sent").length; }, { timeout, intervals: [1000, 2000, 5000] }).toBe(count);
+}
+const signing = async (body: Record<string, unknown>) => {
+  const response = await fetch(`${E2E_API_URL}/functions/v1/document-signing`, { method: "POST", headers: { Authorization: `Bearer ${E2E_ANON_KEY}`, apikey: E2E_ANON_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+};
+async function codeFromMail(email: string, before: number): Promise<string> {
+  let code = "";
+  await expect.poll(async () => {
+    const mails = (await hrMails(email)).filter((m) => m.subject === "Your signing code");
+    code = mails.length > before ? (mails.at(-1)!.text.match(/^(\d{6})$/m)?.[1] ?? "") : "";
+    return code;
+  }, { timeout: 20_000 }).toMatch(/^\d{6}$/);
+  return code;
+}
+const offerMails = async (email: string) => (await hrMails(email)).filter((m) => /^Offer letter for application/.test(m.subject));
+const letterBytes = (id: string, column = "content") => Uint8Array.from(Buffer.from(sql(`select encode(${column}, 'base64') from public.enrollment_offer_letters where application_id = '${id}' order by issued_at desc limit 1`).replace(/\s+/g, ""), "base64"));
+const activateNotifications = () => sql(`insert into public.notification_activation(tenant_id, note) select null, 'e2e offer signing' where not exists (select 1 from public.notification_activation where tenant_id is null and revoked_at is null)`);
+
+test("offer signing: the SLIT letter is emailed to the student with a personal link; viewed and signed without logging in (code, initials, YES / NO); Offer accepted; signed copy and certificate in Documents; the link then says Already signed", async ({ page, browser }) => {
+  activateNotifications();
+  const admin = await createAdmin("loo-sign");
+  seedSlitLetter();
+  const agency = wfAgency("loo sign");
+  sql(`update public.agencies set business_email = 'office.${agency.slice(0, 8)}@example.test' where id = '${agency}'`);
+  const tag = person("loo-sign").local.slice(-6);
+  const course = `c-${tag}`, slug = `msf${tag}-certificate-iii-in-glass-and-glazing`;
+  sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing', 'Published')`);
+  const values = { title: "Miss", first_name: "Hima", middle_name: "G", last_name: "Patel", dob: "1995-03-13", nationality: "India", passport_number: "P0000000",
+    au_street: "10 Example Gra", au_suburb: "Tarneit", au_state: "VIC", au_zip: "3029", preferred_intake: "December 2026" };
+  const student = `hima.sign.${tag}@example.test`;
+  const id = wfApplication(agency, "submitted", `Hima Sign ${tag}`, { student_email: student, intake: "December 2026", data: JSON.stringify({ values }) });
+  sql(`begin; select set_config('portal.draft_command', '${id}', true); insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title) values ('${id}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing'); commit;`);
+  const reference = sql(`select coalesce(nullif(reference, ''), left(id::text, 8)) from public.enrollment_applications where id = '${id}'`);
+
+  // Staff issue the letter as before (with a message), CC to the agency.
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
+  const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
+  const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));
+  for (const key of keys) {
+    if (registry[key].required) await drawer.getByTestId(`letter-input-${key}`).fill(registry[key].input === "date" ? "2027-02-03" : registry[key].input === "money" ? "1000" : "0101234");
+    else await drawer.getByTestId(`leave-blank-${key}`).check();
+  }
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-missing", "", { timeout: 30_000 });
+  await drawer.locator("#offer-message").fill("Welcome to SLIT");
+  await drawer.getByLabel(/Note to issue anyway/).fill("Checked with the student");
+  await drawer.getByTestId("send-offer-letter").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Send offer letter" }).click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
+
+  // The signing places were read from the letter: initials on every page, the signature and date at "Student Signature", YES / NO.
+  await expect.poll(() => sql(`select (sign_layout is not null)::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("true");
+  const letterText = await pdfPages(letterBytes(id));
+  const layout = (type: string) => sql(`select string_agg(f->>'page', ',') from jsonb_array_elements((select sign_layout from public.enrollment_offer_letters where application_id = '${id}')) f where f->>'type' = '${type}'`);
+  expect(layout("initials").split(",").length, "initials on every page").toBe(letterText.length);
+  const sigPage = Number(layout("signature"));
+  expect(letterText[sigPage - 1], "the signature is placed on the page with the signature block").toMatch(/Student Signature/);
+  expect(layout("date")).toBe(String(sigPage));
+  expect(letterText[Number(layout("choice")) - 1], "YES / NO next to the election").toMatch(/elect to pay more/);
+
+  // The email: HTML with the button and the personal link, the PDF attached, the message labelled; the agency copy has the portal link only.
+  await sendOfferEmails(id, student);
+  const mail = (await offerMails(student)).at(-1)!;
+  expect(mail.html ?? "", "an HTML email with the button").toContain("Review and sign your offer");
+  expect(mail.text).toMatch(/\/sign#t=[a-f0-9]{64}/);
+  expect(mail.text).toContain("Message from admissions:\nWelcome to SLIT");
+  expect(mail.attachments.map((a) => a.ContentType)).toEqual(["application/pdf"]);
+  const token = linkToken(mail.text);
+  expect(sql(`select count(*) from hr.sign_tokens where token_hash = encode(sha256(convert_to('${token}', 'UTF8')), 'hex')`), "only the hash is stored").toBe("1");
+  expect(sql(`select count(*) from public.notification_deliveries where body like '%${token}%'`), "the link is in no stored email").toBe("0");
+  const office = `office.${agency.slice(0, 8)}@example.test`;
+  await expect.poll(async () => { await runNotificationWorker(); return deliveryState(id, office); }, { timeout: 30_000 }).toBe("sent");
+  const copy = (await offerMails(office)).at(-1)!;
+  expect(copy.text).toContain(`/agency/applications/${id}`);
+  expect(copy.text, "the CC never carries the student's link").not.toMatch(/#t=/);
+
+  // A private window: no session. Only the letter, the student's name and the application reference; nothing else of the application.
+  const opened = await signing({ action: "open", token });
+  expect(opened.status).toBe(200);
+  expect(Object.keys(opened.body).sort()).toEqual(["certificateUrl", "codeTo", "consent", "documentHash", "expiresAt", "fields", "id", "message", "offer", "recipient", "reference", "requireCode", "signedAt", "signers", "state", "title", "url"]);
+  expect(opened.body.offer).toEqual({ studentName: expect.stringContaining("Hima"), applicationReference: reference, prepaidMore: null });
+  const visitor = await (await browser.newContext()).newPage();
+  await visitor.goto(`/sign#t=${token}`);
+  await expect(visitor.getByTestId("offer-summary")).toContainText(reference);
+  await expect(visitor.getByTestId("offer-summary")).toContainText("Hima");
+  await shot(visitor, "offer-sign-open");
+  // Signing needs the code: without it the server refuses.
+  const unverified = await signing({ action: "sign", token, name: "Hima G Patel", agreed: true, signatureKind: "typed", values: {}, documentHash: opened.body.documentHash });
+  expect(unverified.status).toBe(400);
+  // A wrong code counts down; a second code within a minute is refused.
+  const before = (await hrMails(student)).filter((m) => m.subject === "Your signing code").length;
+  await visitor.getByTestId("offer-choices").getByText("YES").click();
+  await visitor.getByTestId("consent").check();
+  await visitor.getByTestId("send-code").click();
+  const code = await codeFromMail(student, before);
+  expect(String((await signing({ action: "code_send", token })).body.error)).toMatch(/Wait a minute/);
+  await visitor.getByTestId("code-input").fill(code === "000000" ? "111111" : "000000");
+  await visitor.getByTestId("verify-code").click();
+  await expect(visitor.getByTestId("code-check")).toContainText("4 attempts left");
+  await visitor.getByTestId("code-input").fill(code);
+  await visitor.getByTestId("verify-code").click();
+  await expect(visitor.getByTestId("code-verified")).toBeVisible();
+  await shot(visitor, "offer-sign-ready");
+  await visitor.getByTestId("sign-submit").click();
+  await expect(visitor.getByTestId("offer-signed")).toBeVisible({ timeout: 60_000 });
+  await expect(visitor.getByTestId("download-signed")).toHaveText(/Download signed copy/);
+  await shot(visitor, "offer-sign-done");
+
+  // Offer accepted through the applicant's path; the signed letter and certificate on the application; staff and the agent are told.
+  expect(sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_accepted");
+  expect(sql(`select accepted_via || '|' || prepaid_more || '|' || (signed_content is not null)::text || '|' || (certificate_content is not null)::text || '|' || (signed_sha256 = encode(sha256(signed_content), 'hex'))::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("signing|YES|true|true|true");
+  expect(sql(`select action_key || '|' || actor_role from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_accepted'`)).toBe("accept_offer|student");
+  expect(sql(`select count(*) from public.admission_event_outbox where application_id = '${id}' and event = 'offer_accepted' and payload->>'via' = 'signing'`)).toBe("1");
+  const events = sql(`select string_agg(e.event, ',' order by e.id) from hr.sign_events e join hr.sign_requests r on r.id = e.request_id join public.enrollment_offer_letters l on l.id = r.offer_letter_id where l.application_id = '${id}'`);
+  for (const e of ["created", "sent", "link_emailed", "viewed", "code_sent", "code_wrong", "code_verified", "signed", "completed"]) expect(events, e).toContain(e);
+  expect(sql(`select (c.ip is not null)::text || '|' || (c.user_agent is not null)::text from hr.sign_recipients c join hr.sign_requests r on r.id = c.request_id join public.enrollment_offer_letters l on l.id = r.offer_letter_id where l.application_id = '${id}'`)).toBe("true|true");
+  const signedText = await pdfPages(letterBytes(id, "signed_content"));
+  expect(signedText.length, "the signed letter has the letter's pages").toBe(letterText.length);
+  expect(signedText[sigPage - 1]).toContain("Hima G Patel");
+  const certificate = (await pdfPages(letterBytes(id, "certificate_content"))).join(" ");
+  for (const expected of ["Identity confirmed by emailed code", "IP address", "I elect to pay more than the required pre-paid fee", "YES"]) expect(certificate, expected).toContain(expected);
+
+  // The link again: Already signed, with the download; it cannot sign twice.
+  const again = await (await browser.newContext()).newPage();
+  await again.goto(`/sign#t=${token}`);
+  await expect(again.getByTestId("offer-already-signed")).toBeVisible();
+  await expect(again.getByTestId("download-signed")).toBeVisible();
+  expect((await signing({ action: "sign", token, name: "Hima G Patel", agreed: true, signatureKind: "typed", values: {}, documentHash: opened.body.documentHash })).status).toBe(400);
+});
+
+test("offer signing: a resend replaces the link (the old one shows the friendly page, Request a new link tells admissions); an expired or unknown link shows the same page and nothing else", async ({ browser }) => {
+  activateNotifications();
+  const admin = await createAdmin("loo-resend");
+  const client = await signedInClient(admin.email);
+  const agency = wfAgency("loo resend");
+  const tag = person("loo-resend").local.slice(-6);
+  const student = `resend.${tag}@example.test`;
+  const id = wfApplication(agency, "submitted", `Resend Student ${tag}`, { student_email: student });
+  // An uploaded letter of two pages without a signature block, issued without the browser's layout: after the wait, the default places.
+  const issued = await client.rpc("portal_offer_letter_issue", { p_application: id, p_source: "upload", p_file_name: "Offer.pdf", p_content_base64: (await offerPdf(2)).toString("base64"),
+    p_template: null, p_message: "", p_override_note: "Checked" });
+  expect(issued.error?.message ?? "").toBe("");
+  sql(`update public.admission_event_outbox set created_at = now() - interval '4 minutes' where application_id = '${id}' and event = 'offer_letter_issued'`);
+  await sendOfferEmails(id, student);
+  const first = linkToken((await offerMails(student)).at(-1)!.text);
+  expect(sql(`select string_agg(type || ':' || page, ',' order by type, page) from hr.sign_fields f join hr.sign_requests r on r.id = f.request_id join public.enrollment_offer_letters l on l.id = r.offer_letter_id where l.application_id = '${id}'`))
+    .toBe("choice:2,date:2,initials:1,initials:2,signature:2");
+  expect((await signing({ action: "open", token: first })).status).toBe(200);
+
+  // Resend: a new link; the first one stops working.
+  const resent = await client.rpc("change_application_status", { p_application: id, p_action: "resend_offer", p_payload: { note: "" } });
+  expect(resent.error?.message ?? "").toBe("");
+  await sendOfferEmails(id, student, 2);
+  const second = linkToken((await offerMails(student)).at(-1)!.text);
+  expect(second).not.toBe(first);
+  expect((await signing({ action: "open", token: first })).status).toBe(403);
+  expect((await signing({ action: "open", token: second })).status).toBe(200);
+  const visitor = await (await browser.newContext()).newPage();
+  await visitor.goto(`/sign#t=${first}`);
+  await expect(visitor.getByTestId("signing-link-problem")).toContainText("This link no longer works");
+  await expect(visitor.getByTestId("offer-summary")).toHaveCount(0);
+  await visitor.getByTestId("request-new-link").click();
+  await expect(visitor.getByTestId("link-requested")).toBeVisible();
+  await shot(visitor, "offer-sign-link-problem");
+  expect(sql(`select count(*) from hr.sign_notifications n join hr.sign_requests r on r.id = n.request_id join public.enrollment_offer_letters l on l.id = r.offer_letter_id where l.application_id = '${id}' and n.kind = 'link_requested' and n.audience = 'admin'`)).toBe("1");
+  expect(sql(`select count(*) from public.portal_audit_log where application_id = '${id}' and action = 'offer_signing_link_requested'`)).toBe("1");
+
+  // Expired: the same friendly page. An unknown link: the same page, the same answer to Request a new link.
+  sql(`update hr.sign_requests r set expires_at = now() - interval '1 minute' from public.enrollment_offer_letters l where l.id = r.offer_letter_id and l.application_id = '${id}' and r.state in ('sent', 'viewed')`);
+  const expired = await (await browser.newContext()).newPage();
+  await expired.goto(`/sign#t=${second}`);
+  await expect(expired.getByTestId("signing-link-problem")).toContainText("This link no longer works");
+  const unknown = "ab".repeat(32);
+  const stranger = await (await browser.newContext()).newPage();
+  await stranger.goto(`/sign#t=${unknown}`);
+  await expect(stranger.getByTestId("signing-link-problem")).toBeVisible();
+  expect((await signing({ action: "link_request", token: unknown })).body).toEqual({ requested: true });
 });

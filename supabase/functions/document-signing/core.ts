@@ -5,7 +5,7 @@
 // stored bytes were re-hashed against the recorded sha256.
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
 import type { Letterhead } from "../_shared/letterhead.ts";
-import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
+import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningCodeEmail, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
   type SigningMailJob } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
@@ -53,6 +53,11 @@ export const sha256Hex = async (bytes: Uint8Array) => [...new Uint8Array(await c
 const TOKEN = /^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_INVALID = "This signing link is invalid or expired.";
+const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
+/** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
+const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request"];
+/** s***@example.com: enough for the signer to recognise the address, nothing more. */
+export const maskEmail = (email: string) => { const [user, domain] = String(email).split("@"); return domain ? `${user.slice(0, 1)}${"*".repeat(Math.max(2, Math.min(6, user.length - 1)))}@${domain}` : ""; };
 // The PDF engine (pdf-lib + fontkit) loads on the first request that makes, checks or signs a PDF, not at boot.
 const letterPdfModule = () => import("../_shared/offer-letter-pdf.ts");
 const offerPdfModule = () => import("../_shared/offer-pdf.ts");
@@ -85,15 +90,45 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
   };
   try {
     // ------------------------------------------------------------------ link holders (no account)
-    if (["open", "sign", "decline"].includes(action)) {
+    if (LINK_ACTIONS.includes(action)) {
+      // Rate limits (their own transactions, so a refused call still counts): per address and per link.
       const token = String(body.token ?? "");
+      const limited = async (key: string, limit: number, seconds: number) => {
+        try { return (await ports.service("rate", { data: { key, limit, seconds } })) === false; } catch { return false; }
+      };
+      if (call.ip && await limited(`ip:${call.ip.replace(/[^A-Za-z0-9.:_-]/g, "").slice(0, 60) || "unknown"}`, 120, 600)) throw new SigningError(TOO_MANY, 429);
+      if (TOKEN.test(token) && await limited(`link:${(await sha256Hex(new TextEncoder().encode(token))).slice(0, 40)}`, 60, 600)) throw new SigningError(TOO_MANY, 429);
+      if (action === "link_request") {
+        // "Request a new link": the same answer whether or not the link was ours; admissions are told when it was.
+        if (TOKEN.test(token)) {
+          await ports.service("link_request", { hash: await sha256Hex(new TextEncoder().encode(token)), data: { ip: call.ip } }).catch(() => undefined);
+          await ports.later(drainSigningMail(ports));
+        }
+        return { requested: true };
+      }
       if (!TOKEN.test(token)) throw new SigningError(LINK_INVALID, 403);
       const hash = await sha256Hex(new TextEncoder().encode(token));
       const linkCall = async (name: string, data: unknown = {}) => {
         try { return await ports.service(name, { hash, data }); }
-        catch (error) { const e = error as RpcError; if (e.code === "SG409") throw error; throw new SigningError(/invalid or expired/.test(e.message) ? LINK_INVALID : e.message, /invalid or expired/.test(e.message) || e.code === "42501" ? 403 : 400); }
+        catch (error) {
+          const e = error as RpcError; if (e.code === "SG409") throw error;
+          throw new SigningError(/invalid or expired/.test(e.message) ? LINK_INVALID : e.message, /invalid or expired/.test(e.message) || e.code === "42501" ? 403 : e.code === "SG429" ? 429 : 400);
+        }
       };
       const record = await linkCall("open", { ip: call.ip });
+      if (action === "code_send") {
+        const { provider, config } = ports.mail;
+        if (!provider || !config.from) throw new SigningError("The code cannot be emailed right now. Please try again later or contact admissions.", 503);
+        const sent = await linkCall("code_send", { ip: call.ip });
+        const message = renderSigningCodeEmail({ name: sent.name, code: sent.code, title: sent.title, minutes: sent.expires_in_minutes });
+        const outcome = outcomeState(await provider.send({ deliveryId: `sign-code-${record.recipient.id}-${Date.now()}`, from: config.from, to: sent.to, subject: message.subject, textBody: message.text, htmlBody: message.html }));
+        if (outcome.state !== "sent") throw new SigningError("The code could not be emailed. Please try again in a minute.", 502);
+        return { sent: true, to: maskEmail(sent.to), minutes: sent.expires_in_minutes };
+      }
+      if (action === "code_verify") {
+        const result = await linkCall("code_verify", { code: String(body.code ?? "").replace(/\D/g, "").slice(0, 6), ip: call.ip });
+        return { ok: result.ok === true, session: result.session ?? null, reason: result.reason ?? null, remaining: result.remaining ?? null };
+      }
       if (action === "decline") {
         const after = await linkCall("decline", { reason: String(body.reason ?? "").slice(0, 500) });
         await ports.later(drainSigningMail(ports));
@@ -119,7 +154,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         const typed = [name, ...Object.values(values).filter((v): v is string => typeof v === "string" && v !== "true" && v !== "false")];
         if (await letter.unsupportedText(typed)) throw new SigningError("Please use Latin letters for your name and answers on this PDF. You can draw your signature in any script.");
         const data = { signer_name: name, signature_kind: kind, signature_image: image, signature_hash: signatureHash, consent: SIGNING_CONSENT, values,
-          document_hash: body.documentHash, ip: call.ip, user_agent: call.userAgent };
+          document_hash: body.documentHash, ip: call.ip, user_agent: call.userAgent, code_session: typeof body.codeSession === "string" ? body.codeSession.slice(0, 64) : null };
         for (let attempt = 0; ; attempt++) {
           // What the document looks like once this person has signed; nothing is written yet.
           const plan = await linkCall("sign_plan", data);
@@ -130,17 +165,19 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const mine: string[] = [];
           const currentPath = `${plan.id}/signed-${ports.uuid()}.pdf`;
           await store(currentPath, signed); mine.push(currentPath);
-          let certificatePath: string | null = null, certificateHash: string | null = null;
+          let certificatePath: string | null = null, certificateHash: string | null = null, certificateBytes: Uint8Array | null = null;
           if (plan.complete) {
             const certificate = await pdf.buildCertificate({ ...stamp, id: plan.id, createdAt: plan.created_at, sentAt: plan.sent_at, completedAt: plan.signed_at, signingMode: plan.signing_mode,
               originalHash: plan.original_hash, signedHash, consent: SIGNING_CONSENT, chainOk: plan.chain_ok,
               events: [...plan.events, { event: "signed", at: plan.signed_at, recipient_id: plan.recipient_id }, { event: "completed", at: plan.signed_at }] }, await ports.letterhead());
-            certificatePath = `${plan.id}/certificate-${ports.uuid()}.pdf`; certificateHash = await sha256Hex(certificate);
+            certificatePath = `${plan.id}/certificate-${ports.uuid()}.pdf`; certificateHash = await sha256Hex(certificate); certificateBytes = certificate;
             await store(certificatePath, certificate); mine.push(certificatePath);
           }
+          // An offer letter: the signed copy and the certificate are also kept on the application (Documents), in the same transaction.
+          const documents = plan.offer && plan.complete && certificateBytes ? { signed_base64: toBase64(signed), certificate_base64: toBase64(certificateBytes) } : {};
           try {
             const after = await ports.service("sign", { hash, data: { ...data, revision: plan.revision, signed_at: plan.signed_at, current_path: currentPath, current_hash: signedHash,
-              certificate_path: certificatePath, certificate_hash: certificateHash } });
+              certificate_path: certificatePath, certificate_hash: certificateHash, ...documents } });
             staged.length = 0; // Committed: these files are the record now and are never removed on a later error.
             await ports.later(drainSigningMail(ports));
             return { signed: true, complete: after.state === "signed", state: after.state };
@@ -157,6 +194,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const expected = done ? record.signed_hash : record.current_hash ?? record.original_hash;
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
         recipient: record.recipient, fields: record.fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
+        requireCode: record.require_code === true, offer: record.offer ?? null, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
         certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };
     }

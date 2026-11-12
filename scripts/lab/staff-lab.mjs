@@ -197,8 +197,11 @@ async function up() {
   const migrations = path.join(WORK, "supabase", "migrations");
   fs.mkdirSync(migrations, { recursive: true });
   for (const [file, sql] of Object.entries(LAB_SHIMS)) fs.writeFileSync(path.join(migrations, file), `-- LAB ONLY (scripts/lab/staff-lab.mjs)\n${sql}`);
+  // Hosted applied these after 20261113320000 although their versions sort earlier (they rewrite functions that later files define):
+  // the lab replays them in the hosted order, under a lab-only version just after 20261113320000.
+  const HOSTED_LATER = { "20261112144811_main_site_host.sql": "20261113320001_main_site_host.sql" };
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
-    fs.copyFileSync(path.join(REPO, "supabase", "migrations", file), path.join(migrations, file));
+    fs.copyFileSync(path.join(REPO, "supabase", "migrations", file), path.join(migrations, HOSTED_LATER[file] ?? file));
   }
   copyFunctions(path.join(REPO, "supabase", "functions"), path.join(WORK, "supabase", "functions"));
   fs.writeFileSync(path.join(WORK, "supabase", "functions", ".env"), Object.entries(LAB_SECRETS).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");

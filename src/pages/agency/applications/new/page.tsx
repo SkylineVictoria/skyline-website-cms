@@ -25,7 +25,7 @@ import {
 import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
-import { isEditableApplicationStatus } from "@/pages/agency/lib/applicationAccess";
+import { isEditableStatus, loadApplicationStatuses } from "@/lib/applicationStatuses";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
@@ -238,7 +238,7 @@ export default function NewApplicationPage() {
         const existing = readSession(authUser.id);
         if (existing) {
           const app = await getApplication(existing).catch(() => null);
-          if (app && isEditableApplicationStatus(app.status)) {
+          if (app && isEditableStatus(await loadApplicationStatuses(), app.status)) {
             setApplicationId(app.id);
             // Drafts started before the student step existed must still collect the contact details before the wizard.
             const values = (app.data?.values ?? {}) as Record<string, unknown>;

@@ -41,6 +41,7 @@ export default function ApplicationReview({
   stages,
   missing,
   documentProblems = [],
+  fieldProblems = [],
   submitError,
   readOnly = false,
   canSubmit = true,
@@ -62,6 +63,8 @@ export default function ApplicationReview({
   missing: string[];
   /** Per step: a wrong or unread document, as its message ("" when fine). */
   documentProblems?: string[];
+  /** Per step: problems across fields (the declarant name and signature differ), each with the field to fix. */
+  fieldProblems?: Array<Array<{ field: string; text: string }>>;
   submitError: string;
   readOnly?: boolean;
   /** Only a draft is submitted by agents; after that SLIT administration moves the application on. */
@@ -78,7 +81,8 @@ export default function ApplicationReview({
   const issuesOf = (index: number): string[] => {
     const prefix = `${sectionHeading(sections[index]?.title, index)}: `;
     const fields = missing.filter((item) => item.startsWith(prefix)).map((item) => item.slice(prefix.length));
-    return documentProblems[index] ? [...fields, documentProblems[index]] : fields;
+    const cross = (fieldProblems[index] ?? []).map((problem) => problem.text);
+    return [...fields, ...cross, ...(documentProblems[index] ? [documentProblems[index]] : [])];
   };
 
   const rowsOf = (section: AppSection): ReviewStep["rows"] => {
@@ -101,23 +105,14 @@ export default function ApplicationReview({
     .filter((group) => group.steps.length > 0);
   // Every missing or invalid item in form order of the stages, each pointing at its field (found by its label on that step).
   const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.flatMap((step) => step.issues.map((text, n) => {
-    const field = sections[step.index].fields.find((candidate) => candidate.label === text);
+    const field = sections[step.index].fields.find((candidate) => candidate.label === text) ?? (fieldProblems[step.index] ?? []).filter((problem) => problem.text === text).map((problem) => ({ name: problem.field }))[0];
     const documentField = sections[step.index].fields.find((candidate) => candidate.type === "file")?.name;
     return { key: `${step.index}-${n}`, step: step.title, text, onJump: () => onJumpToField(step.index, field?.name ?? documentField) };
   })));
 
-  const declarationName = val("declaration_name");
-  const signature = val("digital_signature");
-  const signatureMismatch = (declarationName || signature) && declarationName.trim().toLowerCase() !== signature.trim().toLowerCase();
 
   return (
     <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}>
-      {signatureMismatch ? (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-amber-800">
-          <i className="ri-error-warning-line text-base leading-none" aria-hidden="true" />
-          The declarant name and digital signature do not match. The student declaration must be signed with the student&rsquo;s own name.
-        </p>
-      ) : null}
 
       {readOnly ? (
         <div className="mt-4 text-xs text-foreground-600">

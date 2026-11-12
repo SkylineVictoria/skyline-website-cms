@@ -48,6 +48,13 @@ async function worker() {
       const doc = data as Record<string, unknown>;
       return { kind: doc.kind === "voe" ? "voe" : "coe", sizeBytes: Number(doc.sizeBytes ?? 0), contentBase64: String(doc.contentBase64 ?? ""), reference: String(doc.reference ?? "") };
     },
+    offerLetter: async (d) => {
+      const { data, error } = await admin.rpc("notification_delivery_offer_letter", { p_id: d.id, p_lease: d.leaseToken });
+      if (error) throw new Error("offer letter");
+      if (!data || typeof data !== "object") return null;
+      const letter = data as Record<string, unknown>;
+      return { fileName: String(letter.fileName ?? "Offer letter.pdf"), sizeBytes: Number(letter.sizeBytes ?? 0), contentBase64: String(letter.contentBase64 ?? "") };
+    },
     record: async (d, outcome, messageId, errorCode, retry, delay) => {
       const { data, error } = await admin.rpc("notification_record_attempt", { p_id: d.id, p_lease: d.leaseToken, p_outcome: outcome, p_message_id: messageId, p_error: errorCode, p_retry: retry, p_delay: delay });
       if (error) throw new Error("record");

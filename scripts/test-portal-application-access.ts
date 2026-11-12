@@ -24,7 +24,21 @@ test('agency directory fills real business fields, starts the added business ina
   assert.equal(directoryAgencyToForm({ ...agency, phone: '', primaryContact: '' }).phone, '');
 });
 import { menuTree, menuActive, menuIcon, type AdminMenuItem } from "../src/pages/admin/lib/adminMenu.ts";
-import { canManagePortalUsers, isEditableApplicationStatus, portalAccessMessage, portalLanding } from "../src/pages/agency/lib/applicationAccess.ts";
+import { canManagePortalUsers, portalAccessMessage, portalLanding } from "../src/pages/agency/lib/applicationAccess.ts";
+// ---- Application statuses from the database (20261113260000): the frontend helpers read the catalogue the migration seeds ----
+import { actionsFor, canSubmitFrom, currentStatuses, isEditableStatus, parseWorkflow, statusInfo } from "../src/lib/applicationStatuses.ts";
+
+const workflowSql = readFileSync(new URL("../supabase/migrations/20261113260000_application_status_workflow.sql", import.meta.url), "utf8");
+const seededWorkflow = (() => {
+  const statusRows = /insert into public\.application_statuses\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";
+  const actionRows = /insert into public\.application_status_actions\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";
+  const tuples = (block: string) => [...block.matchAll(/\(([^()]*)\)/g)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'|(null|true|false|\d+)/g)].map((v) => v[1] !== undefined ? v[1].replace(/''/g, "'") : v[2]));
+  return parseWorkflow({
+    statuses: tuples(statusRows).map(([value, label, sort, tone, hint, editable, legacy]) => ({ value, label, sort: Number(sort), tone, hint, editable: editable === "true", legacy: legacy === "true" })),
+    actions: tuples(actionRows).map(([from, action, to, actor, label, kind, note, tone, sort]) => ({ from, action, to: to === "null" ? null : to, actor, label, kind, note, tone, sort: Number(sort) })),
+  });
+})();
+
 import { availableActions, csvCell, EXPORT_COLUMNS, exportCsv, EXCEPTION_TEXT, normaliseCoeNumber, registrationChecklist, registrationWarning, validateCorrection, verifyBlockers } from "../src/pages/agency/lib/registrationWorkbench.ts";
 
 test('admin menu: order, nesting and active deep links follow backend rows', () => {
@@ -55,17 +69,19 @@ test('admin menu: denied parents, disabled rows, cycles and unsafe routes fail c
 });
 
 test("only database-editable portal statuses enable draft UI", () => {
-  assert.equal(isEditableApplicationStatus("draft"), true);
-  assert.equal(isEditableApplicationStatus("action_required"), true);
-  assert.equal(isEditableApplicationStatus("submitted"), false);
-  assert.equal(isEditableApplicationStatus("under_review"), false);
-  assert.equal(isEditableApplicationStatus("enrolled"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "draft"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "action_required"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "submitted"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "under_review"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "offer_issued"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "enrolled"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "anything-unknown"), false, "an unknown status is never editable");
 });
 
 test("completion and submission-date lookalikes never affect editability", () => {
   // The helper deliberately receives status only: 0%, 3%, an absent date, and
   // document extraction state are presentation data, not authorisation input.
-  assert.equal(isEditableApplicationStatus("draft"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "draft"), true);
 });
 
 // ---- P08-02 manual registration workbench (REG-REGISTER browser validation, export minimization) ----
@@ -395,50 +411,48 @@ test("edge input: cms-admin-users rejects unknown roles instead of defaulting to
   assert.ok(!source.includes('String(parsed.role ?? "Editor")'));
 });
 
-// ---- P08-04: status model, labels and agent read-only after submission ----
-import { LEGACY_STATUSES, SELECTABLE_STATUSES, STATUS_LABELS, canSubmitApplicationStatus, nextStatusOptions } from "../src/pages/agency/lib/applicationAccess.ts";
-
-test("status model: stored values are unchanged and only coe_issued is relabelled", () => {
-  assert.equal(STATUS_LABELS.coe_issued, "CoE / VoE issued");
-  assert.deepEqual(Object.keys(STATUS_LABELS).sort(), ["action_required", "coe_issued", "draft", "enrolled", "offer_accepted", "offer_issued", "rejected", "submitted", "under_review", "withdrawn"]);
-  assert.equal(STATUS_LABELS.enrolled, "Enrolled");
+// ---- Status model (20261113260000): statuses, labels and moves come from the database; the frontend has none of its own ----
+test("status model: the catalogue lists ten statuses in order, Offer letter issued between Action required and Offer accepted", () => {
+  assert.deepEqual(seededWorkflow.statuses.map((s) => s.value), ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted", "coe_issued", "enrolled", "rejected", "withdrawn"]);
+  assert.equal(statusInfo(seededWorkflow, "offer_issued").label, "Offer letter issued");
+  assert.equal(statusInfo(seededWorkflow, "coe_issued").label, "CoE / VoE issued");
+  assert.deepEqual(currentStatuses(seededWorkflow).map((s) => s.value).includes("under_review"), false, "the legacy status is not offered in filters");
+  assert.equal(statusInfo(seededWorkflow, "submitted").hint, "Ready for offer letter");
 });
 
-test("status model: Under review and Offer issued are in no selectable list, but legacy labels stay readable", () => {
-  for (const removed of LEGACY_STATUSES) {
-    assert.ok(!(SELECTABLE_STATUSES as readonly string[]).includes(removed), removed);
-    assert.ok(STATUS_LABELS[removed]);
-    for (const status of Object.keys(STATUS_LABELS)) assert.ok(!nextStatusOptions(status).some((target) => target === removed), `${status} -> ${removed}`);
-  }
-  assert.deepEqual([...SELECTABLE_STATUSES], ["draft", "submitted", "action_required", "offer_accepted", "coe_issued", "enrolled", "rejected", "withdrawn"]);
+test("status model: Take action shows exactly the staff actions of each status, in order", () => {
+  const menu = (status: string) => actionsFor(seededWorkflow, status, "staff").map((x) => x.label);
+  assert.deepEqual(menu("submitted"), ["Issue offer letter", "Action required", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("action_required"), ["Send reminder", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("offer_issued"), ["Resend offer letter", "Mark offer accepted", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("offer_accepted"), ["Issue CoE / VoE", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("coe_issued"), ["Mark enrolled", "Withdraw"]);
+  assert.deepEqual(menu("enrolled"), [], "No action");
+  assert.deepEqual(menu("rejected"), [], "No action");
+  // Reasons are required where the drawer asks for one.
+  const note = (status: string, action: string) => seededWorkflow.actions.find((x) => x.from === status && x.action === action)?.note;
+  assert.equal(note("submitted", "action_required"), "required");
+  assert.equal(note("submitted", "reject"), "required");
+  assert.equal(note("offer_issued", "mark_accepted"), "required");
 });
 
-test("status model: the UI options equal the default graph in migration 91; legacy rows only move forward", () => {
-  const sql = readFileSync(new URL("../supabase/migrations/20261027050000_admissions_status_model_revision.sql", import.meta.url), "utf8");
-  const workflow = /when 'workflow' then jsonb_build_object\([\s\S]*?\]'::jsonb\)/.exec(sql)?.[0] ?? "";
-  const pairs = [...workflow.matchAll(/\{"from":"(\w+)","to":"(\w+)"\}/g)].map((m) => `${m[1]}>${m[2]}`).filter((p) => !p.startsWith("draft>"));
-  // Drafts are compared separately: migration 108 lets an administrator close one (withdrawn / rejected).
-  const fromUi = Object.keys(STATUS_LABELS).flatMap((from) => ["under_review", "offer_issued", "draft"].includes(from) ? [] : nextStatusOptions(from).map((to) => `${from}>${to}`));
-  assert.deepEqual([...pairs].sort(), [...fromUi].sort());
-  assert.ok(workflow.includes('"draft","to":"submitted"'));
-  assert.deepEqual([...nextStatusOptions("under_review")].sort(), ["action_required", "offer_accepted", "rejected", "withdrawn"]);
-  assert.deepEqual([...nextStatusOptions("offer_issued")].sort(), ["offer_accepted", "rejected", "withdrawn"]);
-  assert.deepEqual(nextStatusOptions("enrolled"), []);
-  assert.deepEqual(nextStatusOptions("rejected"), []);
-  // A draft is submitted only from its form; the status command can only close it, as migration 108 allows.
-  assert.deepEqual([...nextStatusOptions("draft")].sort(), ["rejected", "withdrawn"]);
-  const draftSql = readFileSync(new URL("../supabase/migrations/20261104170000_draft_can_be_withdrawn_or_rejected.sql", import.meta.url), "utf8");
-  assert.ok(draftSql.includes("when 'draft' then p_to in ('withdrawn','rejected')"));
-  assert.ok(!nextStatusOptions("draft").includes("submitted"));
-});
-
-test("status model: only a draft can be submitted by an agent or agency admin; the status control is read-only for them", () => {
-  assert.equal(canSubmitApplicationStatus("draft"), true);
-  for (const status of Object.keys(STATUS_LABELS).filter((s) => s !== "draft")) assert.equal(canSubmitApplicationStatus(status), false, status);
-  const detail = readFileSync(new URL("../src/pages/agency/applications/detail/page.tsx", import.meta.url), "utf8");
-  assert.ok(detail.includes("Read-only. Status changes are made by SLIT administration."));
+test("status model: the applicant submits a draft, resubmits after Action required and accepts an issued offer; nothing else", () => {
+  assert.equal(canSubmitFrom(seededWorkflow, "draft"), true);
+  for (const status of seededWorkflow.statuses.map((s) => s.value).filter((s) => s !== "draft")) assert.equal(canSubmitFrom(seededWorkflow, status), false, status);
+  assert.deepEqual(seededWorkflow.actions.filter((x) => x.actor === "applicant").map((x) => `${x.from}>${x.to}`).sort(), ["action_required>submitted", "draft>submitted", "offer_issued>offer_accepted"]);
   const workspace = readFileSync(new URL("../src/pages/agency/components/ApplicationWorkspace.tsx", import.meta.url), "utf8");
-  assert.ok(workspace.includes("canSubmit={canSubmitApplicationStatus(application.status)}"));
+  assert.ok(workspace.includes("canSubmitFrom(workflow, application.status)"));
+});
+
+test("status model: no status list, label or move is written into the frontend", () => {
+  for (const file of ["src/pages/agency/lib/applicationAccess.ts", "src/pages/agency/lib/portalData.ts", "src/pages/agency/applications/detail/page.tsx", "src/pages/agency/components/ApplicationsTable.tsx", "src/pages/admin/lib/agencyStatus.ts"]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.ok(!/["'](offer_accepted|coe_issued|under_review|offer_issued)["']\s*[:,\]]/.test(text), `${file} lists statuses`);
+    assert.ok(!/STATUS_LABELS|STATUS_META|nextStatusOptions|SELECTABLE_STATUSES/.test(text), `${file} keeps a status table`);
+  }
+  const detail = readFileSync(new URL("../src/pages/agency/applications/detail/page.tsx", import.meta.url), "utf8");
+  assert.ok(!detail.includes("Change status"), "the header has no status control: every change goes through Take action");
+  assert.ok(!detail.includes("Note for the applicant"), "the header has no message box");
 });
 
 // ---- P08-05: admin-managed notification recipients (pure UI validation; the database re-validates) ----
@@ -535,11 +549,11 @@ test("shared table exposes sorting controls in the small-screen toolbar without 
 // ---- Agencies list: application status breakdown ----
 import { sortedStatusCounts } from "../src/pages/admin/lib/agencyStatus.ts";
 
-test("agencies list: status breakdown puts work needing attention first and drops empty or unknown statuses", () => {
-  assert.deepEqual(sortedStatusCounts({ offer_accepted: 1, draft: 2, action_required: 1, enrolled: 0, mystery: 4 }),
-    [["action_required", 1], ["draft", 2], ["offer_accepted", 1]]);
-  assert.deepEqual(sortedStatusCounts(undefined), []);
-  assert.deepEqual(sortedStatusCounts({}), []);
+test("agencies list: status breakdown follows the catalogue order and drops empty or unknown statuses", () => {
+  assert.deepEqual(sortedStatusCounts({ offer_accepted: 1, draft: 2, action_required: 1, enrolled: 0, mystery: 4 }, seededWorkflow.statuses),
+    [["draft", 2], ["action_required", 1], ["offer_accepted", 1]]);
+  assert.deepEqual(sortedStatusCounts(undefined, seededWorkflow.statuses), []);
+  assert.deepEqual(sortedStatusCounts({}, seededWorkflow.statuses), []);
 });
 
 // ---- Businesses, agents and students (CMS) ----

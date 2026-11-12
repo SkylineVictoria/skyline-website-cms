@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(404);
+select plan(442);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -212,36 +212,92 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
  ('43000000-0000-0000-0000-000000000035','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','action_required','{}'),
  ('43000000-0000-0000-0000-000000000036','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
  ('43000000-0000-0000-0000-000000000037','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}');
+-- Migration 20261113260000: statuses and actions from the catalogue tables; Offer letter issued only through the offer letter
+-- command; the applicant resubmits and accepts; staff marking an offer accepted, rejecting or asking for action add a note.
+update public.enrollment_applications set created_by='23000000-0000-0000-0000-000000000030' where id='43000000-0000-0000-0000-000000000030';
+update public.enrollment_applications set student_email='direct.student@example.test', student_name='Direct Student' where id='43000000-0000-0000-0000-000000000036';
+update public.enrollment_applications set student_email='mismatch@example.test', data='{"values":{"declaration_name":"Asha Patel","digital_signature":"Someone Else"}}' where id='43000000-0000-0000-0000-000000000037';
+insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
+ ('43000000-0000-0000-0000-000000000038','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
+ ('43000000-0000-0000-0000-000000000039','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}');
+-- Reads the offer letters table as its owner (the tests run as the signed-in user, who has no direct access).
+create function pg_temp.letter(p_app uuid, p_expr text) returns text language plpgsql security definer as $$ declare r text; begin execute format('select %s from public.enrollment_offer_letters where application_id = $1 order by issued_at desc limit 1', p_expr) into r using p_app; return r; end $$;
+-- Any read as the owner, for tables the signed-in user cannot read (outbox, deliveries).
+create function pg_temp.q(p_sql text) returns text language plpgsql security definer as $$ declare r text; begin execute p_sql into r; return r; end $$;
+create function pg_temp.loo() returns text language sql as $$ select encode(convert_to(E'%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n', 'UTF8'), 'base64') $$;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','under_review')$$,'22023',null,'"Under review" is no longer a target of the default graph');
-select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','offer_issued')$$,'22023',null,'"Offer issued" is no longer a target of the default graph');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','under_review')$$,'22023',null,'"Under review" is not a target of the default graph');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','offer_issued')$$,'22023',null,'Offer letter issued is reached only through Issue offer letter');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','offer_accepted','by email')$$,'22023',null,'submitted cannot jump to offer_accepted (an offer is accepted from an issued letter)');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000039','rejected')$$,'22023',null,'a rejection needs a note');
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000039','rejected','Course full')$$,'an admin can reject a submitted application with a note');
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000038','withdrawn')$$,'an admin can withdraw a submitted application');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','action_required','Please correct the passport')$$,'submitted -> action_required');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','submitted')$$,'action_required -> submitted');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','action_required','Second correction')$$,'submitted -> action_required again');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','offer_accepted')$$,'action_required -> offer_accepted');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','submitted')$$,'22023',null,'staff do not resubmit: the student or agent does');
+select throws_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-000000000030')$$,'42501',null,'staff cannot use the applicant resubmit');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
+select lives_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-000000000030','Passport replaced')$$,'the agent resubmits after the correction');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000030'),'submitted','resubmitted: back to Submitted');
+select ok(exists(select 1 from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000030' and new_status='submitted' and note='Passport replaced'),'the resubmission is in the history with its note');
+select throws_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000030','upload','LOO.pdf',pg_temp.loo())$$,'42501',null,'an agent cannot issue an offer letter');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select throws_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000030','upload','LOO.pdf',encode('not a pdf','base64'))$$,'22023',null,'the letter must be a PDF');
+select is(public.portal_offer_letter_recipient('43000000-0000-0000-0000-000000000030')->>'kind','agent','started by an agent: the letter goes to the agent');
+select is(public.portal_offer_letter_recipient('43000000-0000-0000-0000-000000000036')->>'kind','student','created by staff for the student: the letter goes to the student');
+select lives_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000030','upload','LOO.pdf',pg_temp.loo(),null,'Welcome aboard')$$,'Send offer letter (upload)');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000030'),'offer_issued','the application is now Offer letter issued');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000030',$q$recipient_kind||'|'||recipient_email$q$),'agent|status-agent@example.test','the letter is stored with the routed recipient');
+select is(pg_temp.q($q$select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000030' and event='offer_letter_issued'$q$)::int,1,'the offer letter email is queued');
+select is(pg_temp.q($q$select recipient_email from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000030' and event='offer_letter_issued' limit 1$q$),'status-agent@example.test','the email goes to the agent only');
+select ok(exists(select 1 from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000030' and new_status='offer_issued' and note like 'Offer letter sent to agent status-agent@example.test%'),'the history says who the letter went to');
+select throws_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000030','upload','LOO.pdf',pg_temp.loo())$$,'22023',null,'no second letter while one waits for acceptance');
+select lives_ok($$select public.portal_offer_letter_resend('43000000-0000-0000-0000-000000000030')$$,'Resend offer letter');
+select is(pg_temp.q($q$select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000030' and event='offer_letter_issued'$q$)::int,2,'the resend queues the email again');
+select throws_ok($$select public.portal_offer_accept('43000000-0000-0000-0000-000000000030')$$,'42501',null,'staff record acceptance with Mark offer accepted, not the applicant accept');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
+select is((public.portal_offer_letter_current('43000000-0000-0000-0000-000000000030'))->>'fileName','LOO.pdf','the agent sees the current letter');
+select lives_ok($$select public.portal_offer_accept('43000000-0000-0000-0000-000000000030')$$,'the agent accepts the offer for the student');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000030'),'offer_accepted','accepting moves the application to Offer accepted');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000030',$q$(accepted_at is not null)::text||'|'||accepted_via$q$),'true|portal','the acceptance time and channel are recorded on the letter');
+select throws_ok($$select public.portal_offer_accept('43000000-0000-0000-0000-000000000030')$$,'22023',null,'an accepted offer cannot be accepted again');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000035','submitted')$$,'42501',null,'an agent has no staff status command');
+select throws_ok($$select public.portal_submit_v2('43000000-0000-0000-0000-000000000035',0,'p0804-resubmit','{}')$$,'PT409',null,'portal_submit_v2 still submits drafts only (the resubmit command handles Action required)');
+select throws_ok($$update public.enrollment_applications set status='enrolled' where id='43000000-0000-0000-0000-000000000035'$$,'42501',null,'a direct status write by an agent is refused');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000014';
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000035','submitted')$$,'42501',null,'an agency admin has no staff status command');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','submitted')$$,'22023',null,'offer_accepted cannot go back to submitted');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','coe_issued')$$,'offer_accepted -> coe_issued');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','enrolled')$$,'coe_issued -> enrolled');
 select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','withdrawn')$$,'22023',null,'enrolled is terminal');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000036','withdrawn')$$,'an admin can withdraw a submitted application');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000037','rejected')$$,'an admin can reject a submitted application');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000031','offer_accepted')$$,'a legacy under_review row moves forward to offer_accepted');
+-- Staff mark an offer accepted (e.g. by email) with a note; a declaration mismatch needs a note to issue the letter.
+select lives_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000036','template','Offer.pdf',pg_temp.loo())$$,'Send offer letter (template) to a student');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$recipient_kind||'|'||recipient_email$q$),'student|direct.student@example.test','the letter goes to the student');
+select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000036','offer_accepted')$$,'22023',null,'Mark offer accepted needs a note');
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000036','offer_accepted','Accepted by email on 12 Nov')$$,'staff mark the offer accepted with a note');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$accepted_via||'|'||accept_note$q$),'staff|Accepted by email on 12 Nov','the manual acceptance and its note are on the letter');
+select throws_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000037','upload','LOO.pdf',pg_temp.loo())$$,'22023',null,'a declaration mismatch stops the letter without a note');
+select lives_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-000000000037','upload','LOO.pdf',pg_temp.loo(),null,'','Checked with the student by phone')$$,'staff can issue it with a note');
+select ok(exists(select 1 from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000037' and new_status='offer_issued' and note like '%Declaration mismatch accepted: Checked with the student by phone%'),'the override note is in the history');
+-- Legacy rows move forward only; a reminder keeps the status.
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000031','action_required','Need the visa')$$,'a legacy under_review row moves forward');
 select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000032','submitted')$$,'22023',null,'a legacy under_review row cannot move back to submitted');
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000033','offer_accepted')$$,'a legacy offer_issued row moves forward to offer_accepted');
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000033','offer_accepted','Accepted by phone')$$,'a legacy offer_issued row moves forward to offer_accepted');
 select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000034','under_review')$$,'22023',null,'a legacy offer_issued row cannot move back to under_review');
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
-select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000035','submitted')$$,'42501',null,'an agent has no status transition after submission');
-select throws_ok($$select public.portal_submit_v2('43000000-0000-0000-0000-000000000035',0,'p0804-resubmit','{}')$$,'PT409',null,'an agent cannot resubmit an action_required application (only drafts are submitted)');
-select throws_ok($$update public.enrollment_applications set status='enrolled' where id='43000000-0000-0000-0000-000000000035'$$,'42501',null,'a direct status write by an agent is refused');
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000014';
-select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000035','submitted')$$,'42501',null,'an agency admin has no status transition after submission');
+select lives_ok($$select public.portal_application_reminder('43000000-0000-0000-0000-000000000035','Please upload the passport')$$,'Send reminder on Action required');
+select is(pg_temp.q($q$select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000035' and event='action_required_reminder'$q$)::int,1,'the reminder email is queued');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000035'),'action_required','a reminder keeps the status');
+select throws_ok($$select public.portal_application_reminder('43000000-0000-0000-0000-000000000036')$$,'22023',null,'no reminder outside Action required');
 reset role;
-select is((select count(*)::int from jsonb_array_elements_text(public.tenant_config_defaults('workflow')->'statuses') x where x in ('under_review','offer_issued')),0,'the default workflow no longer lists the removed statuses');
-select is((select count(*)::int from jsonb_array_elements(public.tenant_config_defaults('workflow')->'transitions') t where t->>'from' in ('under_review','offer_issued') or t->>'to' in ('under_review','offer_issued')),0,'the default graph has no transition to or from the removed statuses');
-select lives_ok($$select public.tenant_config_validate('workflow', public.tenant_config_defaults('workflow'))$$,'the new default workflow passes the existing validator');
+select is(jsonb_array_length(public.application_status_workflow()->'statuses'),10,'the catalogue lists every status');
+select is((select s->>'label' from jsonb_array_elements(public.application_status_workflow()->'statuses') s where s->>'value'='offer_issued'),'Offer letter issued','the new status label');
+select is((select string_agg(x->>'action', ',' order by (x->>'sort')::int) from jsonb_array_elements(public.application_status_workflow()->'actions') x where x->>'from'='submitted' and x->>'actor'='staff'),'issue_offer,action_required,withdraw,reject','Submitted offers Issue offer letter, Action required, Withdraw, Reject');
+select is((select count(*)::int from jsonb_array_elements_text(public.tenant_config_defaults('workflow')->'statuses') x where x='under_review'),0,'the default workflow does not list the legacy status');
+select is((select count(*)::int from jsonb_array_elements(public.tenant_config_defaults('workflow')->'transitions') t where t->>'to'='offer_issued'),1,'new tenant workflows reach Offer letter issued from Submitted');
+select lives_ok($$select public.tenant_config_validate('workflow', public.tenant_config_defaults('workflow'))$$,'the default workflow passes the existing validator');
 select is(public.portal_status_label('coe_issued'),'CoE / VoE issued','coe_issued reads "CoE / VoE issued" in notification text');
-select is(public.portal_status_label('action_required'),'action required','other labels keep the sentence form');
+select is(public.portal_status_label('action_required'),'Action required','labels come from the catalogue');
 -- Migration 92 (P08-05): per-event recipients, non-user deliveries, event naming, validation, permissions.
 reset role;
 delete from public.notification_activation where tenant_id is null;
@@ -254,7 +310,7 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
  ('43000000-0000-0000-0000-000000000044','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
  ('43000000-0000-0000-0000-000000000045','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
  ('43000000-0000-0000-0000-000000000046','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000047','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
+ ('43000000-0000-0000-0000-000000000047','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_issued','{}',''),
  ('43000000-0000-0000-0000-000000000048','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_accepted','{}',''),
  ('43000000-0000-0000-0000-000000000049','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}','');
 -- Before activation: the agent's copy is created but suppressed (migration 84 rule, unchanged).
@@ -292,13 +348,13 @@ set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select lives_ok($$select public.notification_save_legacy_event('offer_accepted','{"recipients":["status-agent@example.test"]}')$$,'an internal address may equal the agent address');
 reset role;
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('43000000-0000-0000-0000-000000000045',null,'offer_accepted','{"from":"submitted","to":"offer_accepted"}');
-select is((select count(*)::int from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000045'),1,'a person already receiving a copy is not emailed twice');
+select is(pg_temp.q($q$select count(*) from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000045'$q$)::int,1,'a person already receiving a copy is not emailed twice');
 insert into public.notification_preferences(auth_user_id,event,email_enabled) values ('33000000-0000-0000-0000-000000000030','offer_accepted',false);
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('43000000-0000-0000-0000-000000000046',null,'offer_accepted','{"from":"submitted","to":"offer_accepted"}');
 select is((select string_agg(state||':'||coalesce(state_reason,''),',') from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000046'),'suppressed:recipient_opted_out','a recipient opt-out still suppresses the delivery');
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000047','offer_accepted')$$,'status command: submitted -> offer_accepted');
+select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000047','offer_accepted','Accepted by email')$$,'status command: offer_issued -> offer_accepted (marked by staff with a note)');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000048','coe_issued')$$,'status command: offer_accepted -> coe_issued');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000049','action_required','Please correct the passport')$$,'status command: submitted -> action_required');
 reset role;
@@ -307,7 +363,7 @@ select lives_ok($$select public.tenant_config_validate('notifications','{"events
 select throws_ok($$select public.tenant_config_validate('notifications','{"events":{"nope":{}}}')$$,'22023',null,'tenant configuration rejects an unknown event');
 select throws_ok($$select public.tenant_config_validate('notifications','{"events":{"offer_accepted":{"recipients":["bad"]}}}')$$,'22023',null,'tenant configuration rejects an invalid recipient');
 select throws_ok($$select public.tenant_config_validate('notifications','{"events":{"offer_accepted":{"notifyStudent":"no"}}}')$$,'22023',null,'tenant configuration rejects a non-boolean toggle');
-select is((select count(*)::int from jsonb_object_keys(public.tenant_config_defaults('notifications')->'templates')),4,'the default templates cover all four events');
+select is((select count(*)::int from jsonb_object_keys(public.tenant_config_defaults('notifications')->'templates')),6,'the default templates cover all six events (with the offer letter and the reminder)');
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000020';
 select lives_ok($$select public.tenant_config_save_draft('1b000000-0000-0000-0000-000000000001','notifications','{"events":{"coe_voe_issued":{"recipients":["tenant-ops@example.test"],"notifyStudent":false}}}'::jsonb,0)$$,'a tenant administrator saves a draft with event settings');
@@ -340,7 +396,7 @@ select is(public.notification_delivery_submission(current_setting('p0806.d1')::u
 select is(public.notification_delivery_submission(current_setting('p0806.d1')::uuid,gen_random_uuid()),null,'a wrong lease releases nothing');
 select is(public.notification_delivery_submission(current_setting('p0806.d2')::uuid,current_setting('p0806.l2')::uuid),null,'only application_submitted deliveries get a submission');
 reset role;
-select is((select count(*)::int from public.notification_deliveries where subject||body like '%Ada%'),0,'delivery rows never contain form content');
+select is(pg_temp.q($q$select count(*) from public.notification_deliveries where subject||body like '%Ada%'$q$)::int,0,'delivery rows never contain form content');
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select throws_ok($$select public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid)$$,'42501',null,'signed-in users cannot read a submission snapshot');
@@ -413,7 +469,7 @@ set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select lives_ok($$select public.portal_coe_voe_issue('43000000-0000-0000-0000-000000000060','Approved by the registrar')$$,'Approve and issue');
 reset role;
 select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000060'),'coe_issued','the application moved to coe_issued');
-select is((select count(*)::int from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000060' and event='coe_voe_issued'),1,'exactly one coe_voe_issued event was produced');
+select is(pg_temp.q($q$select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000060' and event='coe_voe_issued'$q$)::int,1,'exactly one coe_voe_issued event was produced');
 select is((select string_agg(recipient_email||':'||state,',' order by recipient_email) from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000060'),'status-agent@example.test:pending,student3@example.test:pending','the agent and the student are the recipients');
 select ok((select issued_at is not null and issued_by is not null from public.enrollment_coe_documents where application_id='43000000-0000-0000-0000-000000000060' and superseded_at is null),'the document is marked issued');
 select is((select string_agg(action||':'||(detail->>'kind'),',' order by action,created_at) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000060' and action like 'coe_voe_%'),'coe_voe_issue:voe,coe_voe_upload:coe,coe_voe_upload:voe','uploads and the issue are audited, without file content');

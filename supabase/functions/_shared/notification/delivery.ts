@@ -216,6 +216,8 @@ export interface DeliveryPort {
   now?(): Date;
   /** Optional: the issued CoE / VoE document for coe_voe_issued deliveries. Throws when it cannot be read; null when none was issued (a plain status change). */
   coeDocument?(delivery: ClaimedDelivery): Promise<CoeDocumentInfo | null>;
+  /** Optional: the offer letter PDF for offer_letter_issued deliveries. Throws when it cannot be read; null when there is none. */
+  offerLetter?(delivery: ClaimedDelivery): Promise<{ fileName: string; sizeBytes: number; contentBase64: string } | null>;
   record(delivery: ClaimedDelivery, outcome: "accepted" | "failed" | "unknown", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
 }
 export interface DispatchSummary { accepted: number; retried: number; failed: number; unknown: number; stale: number }
@@ -233,6 +235,14 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
     if (!(doc.sizeBytes > 0 && doc.sizeBytes <= 3 * 1024 * 1024) || typeof doc.contentBase64 !== "string" || !doc.contentBase64) throw new AttachmentUnavailableError("coe document size");
     const label = doc.kind === "voe" ? "VoE" : "CoE";
     return { textBody: `${delivery.body}\n\nThe ${label} is attached as a PDF.`, attachments: [{ name: `${label}-${attachmentFileName(doc.reference).replace(/^application-/, "").replace(/\.pdf$/, "")}.pdf`, contentType: "application/pdf", contentBase64: doc.contentBase64 }] };
+  }
+  if (delivery.event === "offer_letter_issued" && port.offerLetter) {
+    let letter: { fileName: string; sizeBytes: number; contentBase64: string } | null;
+    try { letter = await port.offerLetter(delivery); } catch { throw new AttachmentUnavailableError("offer letter"); }
+    if (!letter) return { textBody: delivery.body };
+    if (!(letter.sizeBytes > 0 && letter.sizeBytes <= 3 * 1024 * 1024) || !letter.contentBase64) throw new AttachmentUnavailableError("offer letter size");
+    const name = /\.pdf$/i.test(letter.fileName) ? letter.fileName : `${letter.fileName || "Offer letter"}.pdf`;
+    return { textBody: delivery.body, attachments: [{ name: name.replace(/[^\w .()-]/g, "_"), contentType: "application/pdf", contentBase64: letter.contentBase64 }] };
   }
   if (delivery.event !== "application_submitted" || !port.submission) return { textBody: delivery.body };
   let info: SubmissionInfo | null = null;

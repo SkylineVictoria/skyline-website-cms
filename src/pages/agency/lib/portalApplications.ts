@@ -699,6 +699,48 @@ export async function setApplicationStatus(applicationId: string, status: string
   if (error) throw new Error(error.message);
 }
 
+/* ------------------------------------------------- Offer letter and workflow commands */
+
+export interface OfferRecipient { kind: "agent" | "student"; name: string; email: string; reason: string; declarationMismatch: boolean }
+export interface OfferLetter {
+  id: string; fileName: string; sizeBytes: number; source: string; message: string; recipientKind: "agent" | "student"; recipientName: string; recipientEmail: string;
+  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | null;
+}
+
+const rpcOrThrow = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw new Error(error.message);
+  return data as T;
+};
+
+/** Who the offer letter will go to and why, and whether the declaration needs a staff note (staff only). */
+export const offerLetterRecipient = (applicationId: string) => rpcOrThrow<OfferRecipient>("portal_offer_letter_recipient", { p_application: applicationId });
+/** Send offer letter: the PDF (template or upload, base64), an optional message and, for a declaration mismatch, the staff note. */
+export const issueOfferLetter = (input: { applicationId: string; source: "template" | "upload"; fileName: string; contentBase64: string; templateId?: string | null; message?: string; overrideNote?: string }) =>
+  rpcOrThrow<{ id: string }>("portal_offer_letter_issue", { p_application: input.applicationId, p_source: input.source, p_file_name: input.fileName, p_content_base64: input.contentBase64,
+    p_template: input.templateId ?? null, p_message: input.message ?? "", p_override_note: input.overrideNote ?? "" });
+export const resendOfferLetter = (applicationId: string, note = "") => rpcOrThrow<void>("portal_offer_letter_resend", { p_application: applicationId, p_note: note });
+export const currentOfferLetter = (applicationId: string) => rpcOrThrow<OfferLetter | null>("portal_offer_letter_current", { p_application: applicationId });
+export const offerLetterList = (applicationId: string) =>
+  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string }>>("portal_offer_letter_list", { p_application: applicationId });
+/** Opens an offer letter PDF in a new tab (the tab is opened first, while the click still counts). */
+export async function openOfferLetter(letterId: string): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const letter = await rpcOrThrow<{ fileName: string; contentBase64: string }>("portal_offer_letter_content", { p_letter: letterId });
+    const bytes = Uint8Array.from(atob(letter.contentBase64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) { tab?.close(); throw error; }
+}
+/** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
+export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
+/** Resubmit: the student or agent sends a corrected application back from Action required. */
+export const resubmitApplication = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note });
+/** Send reminder: emails the student or agent what Action required still asks for. */
+export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });
+
 /* --------------------------------------------------------------- Agents */
 
 export interface AgentOption {

@@ -36,7 +36,7 @@ import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/d
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
 import { qualificationDetail, qualificationTitle, readQualifications } from "@/pages/agency/lib/qualifications";
-import { canSubmitApplicationStatus } from "@/pages/agency/lib/applicationAccess";
+import { canSubmitFrom, useApplicationStatuses } from "@/lib/applicationStatuses";
 import ApplicationReview, { type ConsentState } from "@/pages/agency/components/ApplicationReview";
 import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAttachmentField";
 import SchoolLevelField from "@/pages/agency/components/SchoolLevelField";
@@ -189,6 +189,8 @@ interface WorkspaceProps {
   onSaved?: () => void;
   /** Called once the application is submitted (e.g. to go back to the list). */
   onSubmitted?: (reference: string, studentName: string) => void;
+  /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
+  reviewBar?: ReactNode;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -204,7 +206,9 @@ export default function ApplicationWorkspace({
   auditAccess = false,
   onSaved,
   onSubmitted,
+  reviewBar,
 }: WorkspaceProps) {
+  const workflow = useApplicationStatuses();
   const [courseOptions, setCourseOptions] = useState<ApplicationCourseRow[]>([]);
   const sections = useMemo(() => application.tenantId ? portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseOptions.map(course => course.code + " - " + course.title) } : field) })) : portalSections, [application.tenantId, courseOptions]);
   useEffect(() => { if (application.tenantId) void listInstitutionCourses().then(setCourseOptions).catch(e => setSaveError(e.message)); }, [application.tenantId]);
@@ -1282,6 +1286,15 @@ export default function ApplicationWorkspace({
     return { missing, firstIndex };
   }, [sections, values, fieldMissing, fieldInvalid]);
 
+  /** Checks across fields of a step: the declarant name and the digital signature must match (case and spacing aside). */
+  const fieldProblems = (index: number): Array<{ field: string; text: string }> => {
+    const section = sections[index];
+    if (!section?.fields.some((field) => field.name === "declaration_name") || !section.fields.some((field) => field.name === "digital_signature")) return [];
+    const read = (name: string) => (formRef.current?.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+    const name = read("declaration_name"), signature = read("digital_signature");
+    return (name || signature) && name !== signature ? [{ field: "digital_signature", text: "The declarant name and digital signature do not match" }] : [];
+  };
+
   /** Applies to this student (the step's own condition), so it is shown and counted. */
   const sectionShown = (index: number) => Boolean(sections[index]) && isConditionMet(sections[index].showIf, values);
 
@@ -1296,6 +1309,7 @@ export default function ApplicationWorkspace({
       if (!isConditionMet(field.showIf, values)) continue;
       if (field.required ? fieldMissing(field) : fieldInvalid(field)) out.push({ name: field.name, label: field.label });
     }
+    for (const crossField of fieldProblems(index)) out.push({ name: crossField.field, label: crossField.text });
     const problem = documentProblem(index);
     if (problem) out.push({ name: "", label: problem });
     return out;
@@ -1795,8 +1809,9 @@ export default function ApplicationWorkspace({
 
   const missingNow = isReview ? collectMissing().missing : [];
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
+  const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
   const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
-  const canSubmitHere = canSubmitApplicationStatus(application.status);
+  const canSubmitHere = canSubmitFrom(workflow, application.status);
   const lastStage = stage >= reviewStage - 1;
 
   return (
@@ -1826,7 +1841,7 @@ export default function ApplicationWorkspace({
         onPrevious={() => showStage(stage - 1)}
         previousDisabled={stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
-        message={footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
+        message={isReview && reviewBar ? reviewBar : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
           isReview
             ? !readOnly && canSubmitHere
@@ -1835,7 +1850,7 @@ export default function ApplicationWorkspace({
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
                 // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document.
-                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean),
+                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
                 busyLabel: "Submitting…",
                 testId: "submit-application",
@@ -1881,9 +1896,10 @@ export default function ApplicationWorkspace({
               stages={stages}
               missing={missingNow}
               documentProblems={documentProblems}
+              fieldProblems={crossFieldProblems}
               submitError={submitError}
               readOnly={readOnly}
-              canSubmit={canSubmitApplicationStatus(application.status)}
+              canSubmit={canSubmitHere}
             />
           </div>
         ) : null}

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { statusMeta } from "@/pages/agency/lib/portalData";
+import SharedStatusBadge from "@/components/shared/application-status/StatusBadge";
 
 export function PortalLoading({ label = "Loading\u2026" }: { label?: string }) {
   return (
@@ -53,14 +53,9 @@ export function PortalEmpty({
   );
 }
 
+/** An application status (labels and colours from the database's catalogue). */
 export function StatusBadge({ status }: { status: string }) {
-  const meta = statusMeta(status);
-  return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${meta.className}`}>
-      <i className={meta.icon} aria-hidden="true" />
-      {meta.label}
-    </span>
-  );
+  return <SharedStatusBadge status={status} />;
 }
 
 export function PageHeading({

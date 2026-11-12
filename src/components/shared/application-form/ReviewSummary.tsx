@@ -41,7 +41,7 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
       </div>
       {meta ? <p className="mt-0.5 truncate text-xs text-foreground-500">{meta}</p> : null}
 
-      {issues.length && !readOnly ? (
+      {issues.length ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/60 p-3" data-testid="review-issues">
           <p className="flex items-center gap-1.5 text-sm font-medium text-amber-900">
             <i className="ri-error-warning-line text-base leading-none" aria-hidden="true" />

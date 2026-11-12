@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT } from "./env";
-import { PASSWORD, createAdmin, createAuthUser, createStudentLogin, domSnapshot, latestLink, markStudentDocumentRead, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
+import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, latestLink, markStudentDocumentRead, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
 import { courses } from "../src/data/courses";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
@@ -470,4 +470,175 @@ test("identity email: public student sign-up with an email that already has an a
   await expect(message.getByRole("link", { name: "Forgot password" })).toHaveAttribute("href", "/forgot-password");
   await expect(message).not.toContainText(/student|agent|staff/i);
   await shot(page, "identity-public-signup");
+});
+
+// ------------------------------------------------------------------ Application status workflow (20261113260000)
+// Statuses, labels and moves come from the database; Take action shows only the allowed moves; the offer letter (template or
+// upload) goes to the agent or the student; accepting it moves the application on; the backend refuses everything else.
+const wfAgency = (label: string) => sql(`insert into public.agencies(name, code, status) values ('E2E ${label}', 'E2E-' || substr(md5(random()::text), 1, 8), 'Active') returning id`).split("\n")[0];
+const wfApplication = (agency: string, status: string, name: string, extra: Record<string, string | null> = {}) => {
+  const columns = ["agency_id", "status", "student_name", "student_email", "data", ...Object.keys(extra)];
+  const values = [`'${agency}'`, `'${status}'`, `'${name.replace(/'/g, "''")}'`, `'${(extra.student_email ?? `${name.toLowerCase().replace(/\W+/g, ".")}@example.test`)}'`,
+    `'${(extra.data ?? "{}").replace(/'/g, "''")}'::jsonb`, ...Object.values(extra).map((v) => (v === null ? "null" : `'${v.replace(/'/g, "''")}'`))];
+  const cols = columns.filter((c, i) => columns.indexOf(c) === i);
+  const vals = cols.map((c) => values[columns.indexOf(c)]);
+  return sql(`insert into public.enrollment_applications(${cols.join(", ")}) values (${vals.join(", ")}) returning id`).split("\n")[0];
+};
+const wfPortalUser = async (label: string, agency: string, role: "agent" | "student", studentId?: string) => {
+  const who = person(label);
+  const authId = await createAuthUser(who.email);
+  const profile = sql(`insert into public.portal_profiles(auth_user_id, full_name, email, phone, status) values ('${authId}', 'E2E ${label}', '${who.email}', '${who.local}', 'Active') returning id`).split("\n")[0];
+  sql(`insert into public.agency_memberships(user_id, agency_id, role${studentId ? ", student_id" : ""}) values ('${profile}', '${agency}', '${role}'${studentId ? `, '${studentId}'` : ""})`);
+  return { ...who, profile };
+};
+
+test("status workflow: the list opens an application from its name; Take action lists only the backend's moves; the backend refuses the rest", async ({ page }) => {
+  const admin = await createAdmin("wf-list");
+  const agency = wfAgency("workflow list");
+  const tag = person("wf-tag").local.slice(-6);
+  const names = { submitted: `WF${tag} Submitted`, action_required: `WF${tag} Action`, offer_issued: `WF${tag} Offer`, enrolled: `WF${tag} Enrolled` };
+  const ids = Object.fromEntries(Object.entries(names).map(([status, name]) => [status, wfApplication(agency, status, name)])) as Record<keyof typeof names, string>;
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto("/admin/applications");
+  await page.getByPlaceholder("Search name, email or reference").fill(`WF${tag}`);
+  const row = (name: string) => page.locator("tr", { hasText: name });
+  await expect(row(names.submitted)).toBeVisible();
+  // Labels from the database, as read-only badges; no View button.
+  await expect(row(names.offer_issued).getByTestId("status-badge")).toHaveText("Offer letter issued");
+  await expect(row(names.submitted).getByRole("link", { name: "View" })).toHaveCount(0);
+  // The student name opens the application.
+  await row(names.submitted).getByTestId("application-open").click();
+  await expect(page).toHaveURL(new RegExp(`/admin/applications/${ids.submitted}`));
+  await page.goBack();
+  await page.getByPlaceholder("Search name, email or reference").fill(`WF${tag}`);
+  // Take action: exactly the staff moves of each status, from the backend.
+  const menuOf = async (name: string) => {
+    await row(name).getByTestId("take-action").click();
+    const items = await page.getByTestId("take-action-menu").getByRole("menuitem").allInnerTexts();
+    await page.keyboard.press("Escape");
+    return items.map((item) => item.trim());
+  };
+  expect(await menuOf(names.submitted)).toEqual(["Issue offer letter", "Action required", "Withdraw", "Reject"]);
+  expect(await menuOf(names.action_required)).toEqual(["Send reminder", "Withdraw", "Reject"]);
+  expect(await menuOf(names.offer_issued)).toEqual(["Resend offer letter", "Mark offer accepted", "Withdraw", "Reject"]);
+  await expect(row(names.enrolled).getByTestId("no-action")).toHaveText("No action");
+  await shot(page, "workflow-list");
+  // A reason is required to reject; the badge changes at once and the toast confirms.
+  await row(names.action_required).getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Reject" }).click();
+  const drawer = page.getByTestId("action-drawer");
+  await expect(drawer.getByTestId("action-confirm")).toBeDisabled();
+  await drawer.getByLabel(/Reason/).fill("Course is full");
+  await drawer.getByTestId("action-confirm").click();
+  await expect(row(names.action_required).getByTestId("status-badge")).toHaveText("Rejected");
+  await expect(page.getByText(`${names.action_required} is now Rejected.`)).toBeVisible();
+  expect(sql(`select status from public.enrollment_applications where id = '${ids.action_required}'`)).toBe("rejected");
+  // The backend refuses moves the workflow does not allow, whoever asks.
+  const client = await signedInClient(admin.email);
+  const jump = await client.rpc("portal_set_application_status", { p_application_id: ids.submitted, p_status: "offer_accepted", p_note: "skip the letter" });
+  expect(jump.error?.message).toMatch(/Invalid admissions transition/);
+  const direct = await client.rpc("portal_set_application_status", { p_application_id: ids.submitted, p_status: "offer_issued", p_note: "" });
+  expect(direct.error?.message).toMatch(/Issue offer letter/);
+  const back = await client.rpc("portal_set_application_status", { p_application_id: ids.enrolled, p_status: "submitted", p_note: "" });
+  expect(back.error?.message).toMatch(/Invalid admissions transition/);
+  const staffAccept = await client.rpc("portal_offer_accept", { p_application: ids.offer_issued });
+  expect(staffAccept.error?.message).toMatch(/Mark offer accepted/);
+});
+
+test("status workflow: an offer letter is uploaded and sent to the agent who started the application; the agent accepts it", async ({ page, browser }) => {
+  const admin = await createAdmin("wf-loo-upload");
+  const agency = wfAgency("workflow upload");
+  const agent = await wfPortalUser("wf-agent", agency, "agent");
+  const name = `WFU${agent.local.slice(-6)} Student`;
+  const id = wfApplication(agency, "submitted", name, { created_by: agent.profile, assigned_agent_id: agent.profile });
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  // Review: the staff action bar with the status, what comes next and Take action.
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  const bar = page.getByTestId("staff-review-bar");
+  await expect(bar.getByTestId("status-hint")).toContainText("Submitted · Ready for offer letter");
+  await bar.getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  await expect(drawer.getByTestId("offer-recipient")).toContainText("Agent");
+  await expect(drawer.getByTestId("offer-recipient")).toContainText(agent.email);
+  await drawer.getByTestId("offer-mode").getByRole("radio", { name: "Upload letter" }).click();
+  await drawer.locator("#offer-upload").setInputFiles({ name: "Signed LOO.pdf", mimeType: "application/pdf", buffer: PDF });
+  await drawer.getByLabel(/Message/).fill("Welcome to Skyline");
+  await shot(page, "workflow-offer-upload");
+  await drawer.getByTestId("send-offer-letter").click();
+  await expect(page.getByText("Offer letter sent.")).toBeVisible();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
+  expect(sql(`select source || '|' || recipient_kind || '|' || recipient_email from public.enrollment_offer_letters where application_id = '${id}'`)).toBe(`upload|agent|${agent.email}`);
+  expect(sql(`select string_agg(recipient_email, ',') from public.notification_deliveries where application_id = '${id}' and event = 'offer_letter_issued'`)).toBe(agent.email);
+  expect(sql(`select count(*) from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_issued' and note like 'Offer letter sent to agent%'`)).toBe("1");
+  // The agent sees the letter in the portal and accepts it: a confirmation, no signature.
+  const agentContext = await browser.newContext({ baseURL: `http://127.0.0.1:${E2E_PORT}` });
+  const agentPage = await agentContext.newPage();
+  await signInThroughTheForm(agentPage, agent.email);
+  await expect(agentPage).toHaveURL(/\/agency/, { timeout: 30_000 });
+  await agentPage.goto(`/agency/applications/${id}`);
+  await expect(agentPage.getByTestId("offer-banner")).toContainText("Your offer letter is ready");
+  await agentPage.getByTestId("accept-offer").click();
+  await agentPage.getByRole("alertdialog").getByRole("button", { name: "Accept offer" }).click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_accepted");
+  expect(sql(`select accepted_via || '|' || (accepted_at is not null)::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("portal|true");
+  await agentContext.close();
+});
+
+test("status workflow: a template letter goes to the student when staff created the application or the student applied; a declaration mismatch shows ⚠ and needs a note", async ({ page }) => {
+  const admin = await createAdmin("wf-loo-template");
+  const adminAuth = sql(`select auth_user_id from public.cms_users where email = '${admin.email}'`);
+  const agency = wfAgency("workflow template");
+  const tag = person("wf-tpl").local.slice(-6);
+  sql(`insert into hr.sign_templates(name, title, body, body_html, created_by, kind, audience, category, bracket_variables)
+    values ('E2E LOO ${tag}', 'Letter of offer', 'Dear [Student Name]', '<p>Dear [Student Name], we are pleased to offer you a place.</p>', '${adminAuth}', 'text', 'student', 'other', true)`);
+  // Staff created it for the student (no creator): the letter goes to the student.
+  const student = sql(`insert into public.enrollment_students(agency_id, full_name, email) values ('${agency}', 'Tem Plate ${tag}', 'tem.plate.${tag}@example.test') returning id`).split("\n")[0];
+  const staffMade = wfApplication(agency, "submitted", `Tem Plate ${tag}`, { student_id: student, student_email: `tem.plate.${tag}@example.test` });
+  // The student applied directly: also the student.
+  const directStudent = sql(`insert into public.enrollment_students(agency_id, full_name, email) values ('${agency}', 'Di Rect ${tag}', 'di.rect.${tag}@example.test') returning id`).split("\n")[0];
+  const studentUser = await wfPortalUser("wf-direct", agency, "student", directStudent);
+  const direct = wfApplication(agency, "submitted", `Di Rect ${tag}`, { student_id: directStudent, created_by: studentUser.profile, student_email: `di.rect.${tag}@example.test` });
+  const client = await signedInClient(admin.email);
+  const routed = await client.rpc("portal_offer_letter_recipient", { p_application: direct });
+  expect(routed.data?.kind).toBe("student");
+  expect(routed.data?.reason).toMatch(/applied directly/);
+  // A declaration whose name and signature differ.
+  const mismatch = wfApplication(agency, "submitted", `Mis Match ${tag}`, { data: '{"values":{"declaration_name":"Asha Patel","digital_signature":"Someone Else"}}' });
+
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${staffMade}?stage=review`);
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  await expect(drawer.getByTestId("offer-recipient")).toContainText("Student");
+  await expect(drawer.getByTestId("offer-recipient")).toContainText(`tem.plate.${tag}@example.test`);
+  await expect(drawer.getByTestId("offer-recipient")).toContainText("Staff created this application for the student");
+  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag}` });
+  await drawer.getByTestId("offer-preview").click();
+  await expect(drawer.getByTestId("offer-preview-frame")).toBeVisible({ timeout: 30_000 });
+  await shot(page, "workflow-offer-template");
+  await drawer.getByTestId("send-offer-letter").click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${staffMade}'`)).toBe("offer_issued");
+  expect(sql(`select source || '|' || recipient_kind || '|' || recipient_email from public.enrollment_offer_letters where application_id = '${staffMade}'`)).toBe(`template|student|tem.plate.${tag}@example.test`);
+
+  // The mismatch: Student Declaration is ⚠ on Review, counted as incomplete, listed with a link; the offer letter needs a note.
+  await page.goto(`/admin/applications/${mismatch}?stage=review`);
+  const declarationRow = page.locator("[aria-label=Steps] li", { hasText: "Student Declaration" });
+  await expect(declarationRow.getByLabel("Needs attention")).toBeVisible();
+  await expect(page.getByTestId("review-issues")).toContainText("The declarant name and digital signature do not match");
+  const [done, total] = (await page.getByTestId("review-complete").innerText()).match(/\d+/g)!.map(Number);
+  expect(done).toBeLessThan(total);
+  await shot(page, "workflow-declaration-mismatch");
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  await expect(drawer.getByTestId("offer-mismatch")).toBeVisible();
+  await drawer.getByTestId("offer-mode").getByRole("radio", { name: "Upload letter" }).click();
+  await drawer.locator("#offer-upload").setInputFiles({ name: "LOO.pdf", mimeType: "application/pdf", buffer: PDF });
+  await expect(drawer.getByTestId("send-offer-letter")).toBeDisabled();
+  await drawer.getByLabel(/Note to issue anyway/).fill("Confirmed with the student by phone");
+  await expect(drawer.getByTestId("send-offer-letter")).toBeEnabled();
 });

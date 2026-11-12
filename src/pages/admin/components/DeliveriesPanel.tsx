@@ -16,7 +16,7 @@ interface Overview {
 }
 
 const STATE_TONE: Record<string, "success" | "warn" | "muted" | "primary"> = { sent: "success", delivered: "success", pending: "primary", sending: "primary", suppressed: "muted", failed: "warn", bounced: "warn", complained: "warn", unknown: "warn" };
-const EVENT_LABEL: Record<string, string> = { application_submitted: "Application submitted", application_status_changed: "Status changed", offer_accepted: "Offer accepted", coe_voe_issued: "CoE / VoE issued" };
+const EVENT_LABEL: Record<string, string> = { application_submitted: "Application submitted", application_status_changed: "Status changed", offer_accepted: "Offer accepted", coe_voe_issued: "CoE / VoE issued", offer_letter_issued: "Offer letter", action_required_reminder: "Action required reminder" };
 
 function reason(error: { code?: string; message?: string }): string {
   if (error.code === "42501") return "You do not have permission to do that.";

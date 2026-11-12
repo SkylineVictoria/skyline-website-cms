@@ -1,12 +1,16 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
-import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import { useContext, useMemo, useState, useEffect, useRef, type ReactNode } from "react";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { queryApplications, type ApplicationListRow } from "@/pages/agency/lib/portalApplications";
-import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
-import { statusMeta, formatDate } from "@/pages/agency/lib/portalData";
+import { formatDate } from "@/pages/agency/lib/portalData";
 import { PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
-import ApplicationStatusSelect from "@/pages/agency/components/ApplicationStatusSelect";
+import { PortalAuthContext } from "@/pages/agency/lib/portalAuthContext";
+import { actionsFor, currentStatuses, useApplicationStatuses } from "@/lib/applicationStatuses";
+import StatusBadge from "@/components/shared/application-status/StatusBadge";
+import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
+import Toast from "@/components/shared/application-form/Toast";
+import { useToast } from "@/components/shared/application-form/useToast";
 
 type SortKey = "reference" | "student" | "agency" | "agent" | "status" | "completion" | "created" | "updated";
 
@@ -128,8 +132,16 @@ export default function ApplicationsTable({
     return () => { active = false; window.clearTimeout(timer); };
   }, [remote, search, status, agencyId, agentId, courseCode, intake, sort, dir, page, pageSize, retry]);
 
-  // The status filter and every row's status dropdown use the same backend catalogue.
-  const statusChoices = useStatusCatalog().application;
+  // The status filter, the badges and the Take action menus all come from the database's workflow.
+  const workflow = useApplicationStatuses();
+  const statusChoices = currentStatuses(workflow);
+  // Staff take actions; inside the portal the signed-in role decides (CMS pages are SLIT administrators only; the database checks every action).
+  const portal = useContext(PortalAuthContext);
+  const isStaff = portal ? portal.role === "slit_admin" : true;
+  const navigate = useNavigate();
+  const toast = useToast();
+  // Statuses changed here, shown at once and undone if the database refuses the change.
+  const [statusOverride, setStatusOverride] = useState<Record<string, string>>({});
 
   const filtered = useMemo(() => {
     if (remote) return rows;
@@ -275,21 +287,22 @@ export default function ApplicationsTable({
                 </tr>
               </thead>
               <tbody>
-                {paged.map((row) => {
-                  const meta = statusMeta(row.status);
+                {paged.map((source) => {
+                  const row = statusOverride[source.id] ? { ...source, status: statusOverride[source.id] } : source;
+                  const applicantAction = actionsFor(workflow, row.status, "applicant")[0];
                   return (
                     <tr key={row.id} className="border-t border-background-200 transition-colors hover:bg-background-100/60">
                       <td data-label="Student / Reference" className="px-2 py-3">
-                        <span className="font-mono text-xs font-semibold text-foreground-900">
+                        <Link to={paths.detail(row.id)} className="font-mono text-xs font-semibold text-foreground-900 underline-offset-2 hover:text-primary-700 hover:underline" data-testid="application-reference">
                           {row.reference || "\u2014"}
-                        </span>
+                        </Link>
                         {row.isTest ? (
                           <span className="ml-2 rounded-full bg-accent-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-accent-900">
                             Test
                           </span>
                         ) : null}
 
-                        <p className="font-medium text-foreground-950">{row.studentName || "Unnamed student"}</p>
+                        <p><Link to={paths.detail(row.id)} className="font-medium text-foreground-950 underline-offset-2 hover:text-primary-700 hover:underline" data-testid="application-open">{row.studentName || "Unnamed student"}</Link></p>
                         <p className="text-xs text-foreground-500">{row.studentEmail || "\u2014"}</p>
                       </td>
                       <td data-label="Course / Intake" className="px-3 py-3">
@@ -307,12 +320,12 @@ export default function ApplicationsTable({
                         {row.agentName || <span className="text-foreground-400">Unassigned</span>}
                       </td>
                       <td data-label="Status" className="px-3 py-3">
-                        <ApplicationStatusSelect applicationId={row.id} status={row.status} allowed={row.nextStatuses} openHref={paths.detail(row.id)} />
+                        <StatusBadge status={row.status} />
                       </td>
                       <td data-label="Progress" className="px-3 py-3">
                         <div className="flex flex-wrap items-center gap-1">
                           <div className="h-1.5 w-full max-w-16 overflow-hidden rounded-full bg-background-200">
-                            <div className={`h-full rounded-full ${meta.icon ? "bg-primary-500" : ""}`} style={{ width: `${row.completion}%` }} />
+                            <div className="h-full rounded-full bg-primary-500" style={{ width: `${row.completion}%` }} />
                           </div>
                           <span className="text-xs text-foreground-600">{row.completion}%</span>
                         </div>
@@ -323,25 +336,21 @@ export default function ApplicationsTable({
                         <p className="mt-1">Updated: {formatDate(row.updatedAt)}</p>
                       </td>
                       <td data-label="Actions" className="whitespace-nowrap px-3 py-3 text-right">
-                        <div className="inline-flex flex-col items-end gap-2">
-                          {row.status === "draft" ? (
-                            <Link
-                              to={paths.detail(row.id)}
-                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-background-300 px-2.5 py-1.5 text-xs font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
-                              title="Resume draft"
-                            >
-                              <i className="ri-play-line" aria-hidden="true" />
-                              Resume
-                            </Link>
-                          ) : null}
-                          <Link
-                            to={paths.detail(row.id)}
-                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-primary-500 px-2.5 py-1.5 text-xs font-semibold text-background-50 transition-colors hover:bg-primary-600"
-                          >
-                            <i className="ri-eye-line" aria-hidden="true" />
-                            View
+                        {isStaff ? (
+                          <TakeActionMenu
+                            application={{ id: row.id, status: row.status, reference: row.reference, studentName: row.studentName, studentId: null,
+                              course: row.courses[0] ? { title: row.courses[0].title, code: row.courses[0].code } : null, intake: row.intake }}
+                            onStatus={(next) => setStatusOverride((prev) => ({ ...prev, [row.id]: next }))}
+                            onResult={(message) => toast.show(message)}
+                            onCoe={() => navigate("/agency/registrations")}
+                          />
+                        ) : applicantAction ? (
+                          <Link to={paths.detail(row.id)} className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-lg border border-background-300 px-2.5 text-xs font-medium text-foreground-800 transition-colors hover:bg-background-100">
+                            {applicantAction.kind === "submit" ? "Resume draft" : applicantAction.label}
                           </Link>
-                        </div>
+                        ) : (
+                          <span className="text-xs text-foreground-400" data-testid="no-action">No action</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -381,6 +390,7 @@ export default function ApplicationsTable({
           </div>
         </>
       )}
+      <Toast message={toast.message} onDismiss={toast.dismiss} />
     </div>
   );
 }

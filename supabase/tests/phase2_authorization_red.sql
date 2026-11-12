@@ -218,9 +218,9 @@ reset role;
 insert into auth.users(id,email) values ('a0000000-0000-0000-0000-000000000006','viewer-a@example.test');
 insert into public.tenant_memberships(tenant_id,auth_user_id,role) values ('1a000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000006','viewer');
 insert into public.cms_pages(id,slug,title,tenant_id) values ('p06-page','p06-page','Original','1a000000-0000-0000-0000-000000000001');
--- P08-04 (deliberate): the default workflow no longer contains under_review / offer_issued, so parity is over the 8 default statuses (64 pairs).
-select is((select count(*)::int from (select f,t from unnest(array['draft','submitted','action_required','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) f cross join unnest(array['draft','submitted','action_required','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) t
-  where public.portal_legacy_transition_allowed(f,t) is distinct from public.portal_pinned_transition_allowed(public.tenant_config_defaults('workflow'),f,t,null,true)) x),0,'the default workflow allows exactly the hard-coded transitions (64 pairs)');
+-- P08-04 (deliberate): the default workflow no longer contains under_review; 20261113260000 adds offer_issued, so parity is over the 9 default statuses (81 pairs).
+select is((select count(*)::int from (select f,t from unnest(array['draft','submitted','action_required','offer_issued','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) f cross join unnest(array['draft','submitted','action_required','offer_issued','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) t
+  where public.portal_legacy_transition_allowed(f,t) is distinct from public.portal_pinned_transition_allowed(public.tenant_config_defaults('workflow'),f,t,null,true)) x),0,'the default workflow allows exactly the catalogue transitions (81 pairs)');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"draft","to":"submitted"}]}','draft','submitted','tenant_admin',true),false,'a configured workflow cannot move a draft through the reviewer command');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"submitted","to":"rejected","roles":["tenant_admin"]}]}','submitted','rejected','staff',false),false,'a role-limited transition denies other roles');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"submitted","to":"rejected","roles":["tenant_admin"]}]}','submitted','rejected','tenant_admin',false),true,'a role-limited transition admits the named role');
@@ -395,7 +395,7 @@ select lives_ok($$select public.portal_set_application_status('42000000-0000-000
 reset role;
 select is((select count(*)::int from public.admission_event_outbox where application_id='42000000-0000-0000-0000-0000000000b2' and event='application_status_changed')-(select events from p07_base),1,'a committed transition yields exactly one outbox event, even when requested twice');
 select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),1,'one delivery for the one recipient');
-select is((select recipient_email||'|'||subject||'|'||template_source||'|'||state from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),'notify-admin@example.test|Application 42000000 is now action required|default|pending','the delivery is rendered from the built-in template and addressed in lower case');
+select is((select recipient_email||'|'||subject||'|'||template_source||'|'||state from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),'notify-admin@example.test|Application 42000000 is now Action required|default|pending','the delivery is rendered from the built-in template and addressed in lower case');
 select is((select count(*)::int from public.notification_deliveries where recipient_user in ('a0000000-0000-0000-0000-00000000000a','a0000000-0000-0000-0000-00000000000b','a0000000-0000-0000-0000-00000000000c')),0,'inactive, other-agency and unassigned profiles receive nothing');
 select is((select count(*)::int from public.portal_notifications where recipient='a0000000-0000-0000-0000-000000000009' and application_id='42000000-0000-0000-0000-0000000000b2' and event='status_change'),1,'the in-app inbox notification is preserved');
 select throws_ok($$insert into public.notification_deliveries(outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body) select outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body from public.notification_deliveries limit 1$$,'23505',null,'a recipient cannot receive the same event twice');
@@ -410,12 +410,12 @@ select lives_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-000
 select is(public.tenant_config_publish('1a000000-0000-0000-0000-000000000002','notifications',0),1,'notification configuration version 1 published');
 select lives_ok($$select public.portal_set_application_status('42000000-0000-0000-0000-0000000000b2','under_review')$$,'a transition after publishing');
 reset role;
-select is((select subject||'|'||template_source||'|'||coalesce(sender->>'email','none')||'|'||(template_version_id is not null)::text from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' order by seq desc limit 1),'[Institution B] 42000000: under review|published|none|true','the delivery uses the published template; an unapproved sender is not used');
+select is((select subject||'|'||template_source||'|'||coalesce(sender->>'email','none')||'|'||(template_version_id is not null)::text from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' order by seq desc limit 1),'[Institution B] 42000000: Under review|published|none|true','the delivery uses the published template; an unapproved sender is not used');
 set local role authenticated;
 select lives_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000002','notifications','{"templates":{"application_status_changed":{"subject":"v2 {{reference}}","body":"Changed to {{status}}."}}}',1)$$,'a second version is drafted');
 select is(public.tenant_config_publish('1a000000-0000-0000-0000-000000000002','notifications',1),2,'notification configuration version 2 published');
 reset role;
-select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' and subject='[Institution B] 42000000: under review'),1,'publishing a new version never rewrites a delivery already created');
+select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' and subject='[Institution B] 42000000: Under review'),1,'publishing a new version never rewrites a delivery already created');
 set local role authenticated;
 select lives_ok($$select public.portal_set_application_status('42000000-0000-0000-0000-0000000000b2','action_required','third')$$,'a transition under version 2');
 reset role;

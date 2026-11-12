@@ -467,6 +467,8 @@ export interface StudentMatch {
   id: string; name: string; email: string; phone: string; dateOfBirth: string | null; passportNumber: string;
   businessId: string; businessName: string; agentId: string | null; agentName: string; applications: number;
   emailMatch: boolean; phoneMatch: boolean; passportMatch: boolean;
+  /** A student the caller may not see (20261113250000): nothing else is known about them. */
+  taken?: boolean;
 }
 
 /** Students the caller may see with this email, mobile or passport number, newest first. */
@@ -478,7 +480,21 @@ export async function findStudents(email: string, mobileE164: string, passport =
     passportNumber: str(r.passportNumber), businessId: str(r.businessId), businessName: str(r.businessName),
     agentId: r.agentId ? str(r.agentId) : null, agentName: str(r.agentName), applications: Number(r.applications ?? 0),
     emailMatch: Boolean(r.emailMatch), phoneMatch: Boolean(r.phoneMatch), passportMatch: Boolean(r.passportMatch),
+    taken: r.taken === true,
   }));
+}
+
+/**
+ * The application email step (20261113230000): free = a new student; student = one the caller may start an application for
+ * (reuse it, never a second one); taken = another student the caller cannot see (only the generic message is shown).
+ */
+export type StudentEmailLookup = { status: "free" } | { status: "student"; id: string; fullName: string } | { status: "taken" };
+export async function findStudentByEmail(email: string): Promise<StudentEmailLookup> {
+  const { data, error } = await supabase.rpc("find_student_by_email", { p_email: email });
+  if (error) throw new Error(error.message, { cause: error });
+  const row = (data ?? {}) as Record<string, unknown>;
+  if (row.status === "student" && row.id) return { status: "student", id: str(row.id), fullName: str(row.full_name) };
+  return row.status === "free" ? { status: "free" } : { status: "taken" };
 }
 
 export interface StudentInput {
@@ -503,7 +519,7 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
     p_date_of_birth: input.dateOfBirth || null, p_passport: input.passportNumber ?? "", p_nationality: input.nationality ?? "",
     ...(input.firstName || input.lastName ? { p_first_name: input.firstName ?? "", p_last_name: input.lastName ?? "" } : {}),
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message, { cause: error });
   const r = (data ?? {}) as Record<string, unknown>;
   return { id: str(r.id), name: str(r.name), email: str(r.email), phone: str(r.phone), businessId: str(r.businessId), agentId: r.agentId ? str(r.agentId) : null, reused: Boolean(r.reused) };
 }
@@ -511,7 +527,7 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
 /** A new draft application for a student; its business and assigned agent come from the student. */
 export async function createApplicationForStudent(clientKey: string, studentId: string): Promise<{ id: string; reference: string }> {
   const { data, error } = await supabase.rpc("portal_create_student_application", { p_client_key: clientKey, p_student: studentId });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message, { cause: error });
   const row = (Array.isArray(data) ? data[0] : data) as { application_id?: string; application_reference?: string } | null | undefined;
   if (!row?.application_id) throw new Error("The application could not be created.");
   return { id: String(row.application_id), reference: String(row.application_reference ?? "") };
@@ -682,6 +698,61 @@ export async function setApplicationStatus(applicationId: string, status: string
   });
   if (error) throw new Error(error.message);
 }
+
+/* ------------------------------------------------- Offer letter and workflow commands */
+
+export interface OfferRecipient { kind: "agent" | "student"; name: string; email: string; reason: string; declarationMismatch: boolean }
+export interface OfferLetter {
+  id: string; fileName: string; sizeBytes: number; source: string; message: string; recipientKind: "agent" | "student"; recipientName: string; recipientEmail: string;
+  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | null;
+}
+
+const rpcOrThrow = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw new Error(error.message);
+  return data as T;
+};
+
+/** Who the offer letter will go to and why, and whether the declaration needs a staff note (staff only). */
+export const offerLetterRecipient = (applicationId: string) => rpcOrThrow<OfferRecipient>("portal_offer_letter_recipient", { p_application: applicationId });
+/** Send offer letter: the PDF (template or upload, base64), an optional message and, for a declaration mismatch, the staff note. */
+export const issueOfferLetter = (input: { applicationId: string; source: "template" | "upload"; fileName: string; contentBase64: string; templateId?: string | null; message?: string; overrideNote?: string }) =>
+  rpcOrThrow<{ id: string }>("portal_offer_letter_issue", { p_application: input.applicationId, p_source: input.source, p_file_name: input.fileName, p_content_base64: input.contentBase64,
+    p_template: input.templateId ?? null, p_message: input.message ?? "", p_override_note: input.overrideNote ?? "" });
+export const resendOfferLetter = (applicationId: string, note = "") => rpcOrThrow<void>("portal_offer_letter_resend", { p_application: applicationId, p_note: note });
+export const currentOfferLetter = (applicationId: string) => rpcOrThrow<OfferLetter | null>("portal_offer_letter_current", { p_application: applicationId });
+export const offerLetterList = (applicationId: string) =>
+  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null }>>("portal_offer_letter_list", { p_application: applicationId });
+/** Opens an offer letter PDF in a new tab (the tab is opened first, while the click still counts). */
+export async function openOfferLetter(letterId: string): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const letter = await rpcOrThrow<{ fileName: string; contentBase64: string }>("portal_offer_letter_content", { p_letter: letterId });
+    const bytes = Uint8Array.from(atob(letter.contentBase64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) { tab?.close(); throw error; }
+}
+/** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
+export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
+/** Resubmit: the student or agent sends a corrected application back from Action required. */
+/** Resubmit (Action required → Submitted), with the declaration recorded again when it is given (as on the first submission). */
+export const resubmitApplication = (applicationId: string, note = "", consent: Record<string, unknown> | null = null) =>
+  rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note, p_consent: consent });
+/** Send reminder: emails the student or agent what Action required still asks for. */
+export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });
+/** Payload of change_application_status: a reason from status_reasons ("Other" with its text), a note, notify (default true), the enrolment date. */
+export interface StatusChangePayload { reason_id?: string; reason_text?: string; note?: string; notify?: boolean; enrolment_date?: string }
+/** The one staff command for status moves, reminders and resends (the database checks the transition, the role, access and the reason). */
+export const changeApplicationStatus = (applicationId: string, action: string, payload: StatusChangePayload = {}) =>
+  rpcOrThrow<{ status: string; label: string; from?: string; undoable?: boolean }>("change_application_status", { p_application: applicationId, p_action: action, p_payload: payload });
+/** Undo (the toast, 15 seconds) of the caller's last change with a reason. */
+export const revertApplicationStatus = (applicationId: string) => rpcOrThrow<{ status: string; label: string }>("revert_application_status", { p_application: applicationId });
+/** Issue CoE / VoE in one step: the document (PDF, base64), its number and issue date, a note; the status moves to CoE / VoE issued. */
+export const issueCoeVoe = (input: { applicationId: string; kind: "coe" | "voe"; number: string; issueDate: string; fileName: string; contentBase64: string; note: string; notify: boolean }) =>
+  rpcOrThrow<{ documentId: string; status?: string; label?: string }>("issue_coe_voe", { p_application: input.applicationId, p_kind: input.kind, p_number: input.number, p_issue_date: input.issueDate,
+    p_file_name: input.fileName, p_content: input.contentBase64, p_note: input.note, p_notify: input.notify });
 
 /* --------------------------------------------------------------- Agents */
 

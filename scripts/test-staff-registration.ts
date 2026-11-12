@@ -533,6 +533,17 @@ test("apply: the honeypot and an existing application get the same thank-you and
   assert.ok(!run.names().includes("upload") && !run.names().includes("hr_svc_apply_resume"));
 });
 
+test("apply (email unique within a role, 2026-11-12): an email that already has a staff record is a public 409; a mobile duplicate stays the thank-you", async () => {
+  let run = applyDeps({ apply: { ok: false, reason: "exists", field: "email" } });
+  const taken = await apply.handleApply(applyForm(), { ip: null }, run.deps);
+  assert.equal(taken.status, 409);
+  assert.deepEqual(taken.body, { code: "email_taken", message: "An account with this email already exists. Sign in or reset your password.", details: null,
+    error: "An account with this email already exists. Sign in or reset your password." }, "the public sentence; never the role");
+  assert.ok(!run.names().includes("upload"), "nothing is stored");
+  run = applyDeps({ apply: { ok: false, reason: "exists", field: "phone" } });
+  assert.deepEqual(await apply.handleApply(applyForm(), { ip: null }, run.deps), { status: 200, body: { ok: true } }, "a mobile on another record is not reported");
+});
+
 test("apply: field checks, and a failed record removes the stored file", async () => {
   const cases: Array<[Record<string, string>, string]> = [
     [{ firstName: "" }, "firstName"], [{ lastName: "<script>" }, "lastName"], [{ email: "nope" }, "email"], [{ phone: "12345" }, "phone"], [{ agreed: "false" }, "agreed"],
@@ -1465,6 +1476,10 @@ test("Add staff member: the record first, then the document link to the new reco
   run = adminDeps({ db: { hr_admin_staff_add: { error: { code: "23505", message: "This email or mobile already has a staff record. Open it from Employees." } } } });
   r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
   assert.deepEqual([r.status, run.names()], [400, ["admin:hr_admin_staff_add"]]);
+  // Email unique within a role (20261113240000): the email refusal carries hint email_taken and is a 409 for the email field.
+  run = adminDeps({ db: { hr_admin_staff_add: { error: { code: "23505", hint: "email_taken", message: "This email or mobile already has a staff record. Open it from Employees." } as { code: string; message: string } } } });
+  r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
+  assert.deepEqual([r.status, r.body.code, r.body.message, run.names()], [409, "email_taken", "This email is already in use. Please use a different email address.", ["admin:hr_admin_staff_add"]]);
   const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
   assert.deepEqual(jobs.applyProblems({ hasResume: false, coverLetter: "" }), ["Attach your resume."]);
   assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "" }), [], "the cover letter is optional");
@@ -2482,4 +2497,113 @@ test("onboarding address_search: the student form's Geoscape lookup through the 
   assert.equal(read("supabase/functions/_shared/validation/address.ts"), read("recovered/live-edge-functions-2026-11-02/_shared/validation/address.ts"), "the helper is the one the live address-search function runs");
   for (const file of ["src/pages/agency/components/ApplicationWorkspace.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) assert.ok(read(file).includes("@/components/shared/wizard/AddressSearch"), `${file} uses the shared address search`);
   assert.ok(!/console\.(log|info|warn|error)\([^)]*\b(q|query)\b/.test(read("supabase/functions/staff-onboarding/core.ts") + index), "the search text is never logged");
+});
+
+/* ------------------------------------------------------------------ Offer letter (LOO) templates: pictures, pasted formatting, {{variables}} */
+const letterVars = await load.import<typeof import("../supabase/functions/_shared/letter-variables.ts")>("../supabase/functions/_shared/letter-variables.ts");
+type LetterVariableT = import("../supabase/functions/_shared/letter-variables.ts").LetterVariable;
+const LOO_MIGRATION = read("supabase/migrations/20261113270000_offer_letter_templates.sql");
+/** The registry exactly as the migration seeds public.letter_variables (the one registry; the pages read it from the database). */
+const LETTER_REGISTRY: LetterVariableT[] = (() => {
+  const S = "'((?:[^']|'')*)'";
+  const row = new RegExp(`\\(${S}, ${S}, ${S}, ${S}, ${S}, ${S}, ${S}, ${S}, ${S}, (true|false), (true|false),\\s*${S}, ${S}, (\\d+)\\)`, "g");
+  const un = (s: string) => s.replace(/''/g, "'");
+  return [...LOO_MIGRATION.matchAll(row)].map((m) => ({
+    key: m[1], group: un(m[2]) as LetterVariableT["group"], label: un(m[3]), description: un(m[4]), sourceKind: m[5] as LetterVariableT["sourceKind"], source: un(m[7]),
+    format: m[8] as LetterVariableT["format"], inputType: m[9] as LetterVariableT["inputType"], required: m[10] === "true", editableSource: m[11] === "true",
+    aliases: un(m[12]).replace(/^\{|\}$/g, "").split(",").filter(Boolean), sample: un(m[13]),
+  }));
+})();
+const LOGO = "https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/public/template-assets/default/0b8f1d2e-3c4a-4b5c-8d6e-7f8091a2b3c4.png";
+
+test("offer letter HTML: pictures in template-assets keep their size, other pictures go; Word cell borders, padding, rowspan and line spacing are kept", () => {
+  const clean = richHtml.sanitizeRichHtml(`<p style="text-align:center"><img src="${LOGO}" width="160" height="48" alt="SLIT"></p><img src="https://evil.example/a.png"><img src="file:///C:/Users/x/image001.png">`
+    + `<img src="http://127.0.0.1:54321/storage/v1/object/public/template-assets/default/0b8f1d2e-3c4a-4b5c-8d6e-7f8091a2b3c5.jpg">`
+    + `<table class="MsoTableGrid" border="1" cellspacing="0" style="border-collapse:collapse;border:none"><tr><td rowspan="2" style="width:120pt;border:solid windowtext 1.0pt;padding:0cm 5.4pt 0cm 5.4pt;vertical-align:middle">Fees</td>`
+    + `<td style="border:solid windowtext 1.0pt;border-left:none;mso-border-alt:solid windowtext .5pt;padding:0cm 5.4pt 0cm 5.4pt"><p class="MsoNormal" style="margin-bottom:0cm;line-height:150%"><b>Tuition</b></p></td></tr>`
+    + `<tr><td style="border-top:none;border-left:none;border-bottom:1px solid #333333;border-right:solid windowtext 1.0pt">AUD$14,500.00</td></tr></table>`);
+  assert.ok(clean.includes(`<img src="${LOGO}" alt="SLIT" style="width:120pt;height:36pt">`), `logo kept with its size: ${clean}`);
+  assert.ok(clean.includes('<p style="text-align:center"><img'), "the picture's alignment (its paragraph) is kept");
+  assert.ok(clean.includes("127.0.0.1:54321/storage/v1/object/public/template-assets/"), "the local stack's template-assets is accepted");
+  for (const gone of ["evil.example", "file:///", "mso-border-alt", "MsoTableGrid"]) assert.ok(!clean.includes(gone), `${gone} removed`);
+  for (const kept of ['rowspan="2"', "border-top:1pt solid #000000", "border-left:none", "padding:0pt 5.4pt", "vertical-align:middle", "line-height:1.5", "margin-bottom:0pt", "border-bottom:0.75pt solid #333333", "<strong>Tuition</strong>"])
+    assert.ok(clean.includes(kept), `${kept} kept: ${clean}`);
+  assert.equal(richHtml.sanitizeRichHtml(clean), clean, "sanitising twice changes nothing");
+  assert.equal(richHtml.borderOf("medium none"), "none");
+  assert.equal(richHtml.lineHeightOf("normal"), null);
+  // The database accepts the same pictures and refuses the rest (hr.rich_html_problem in 20261113270000).
+  assert.ok(LOO_MIGRATION.includes("template-assets/") && LOO_MIGRATION.includes("Pictures must be uploaded into the template"));
+});
+
+test("offer letter variables: one registry from the database; unmapped tokens and old placeholders with suggestions; conversion; modifiers; what blocks Send", () => {
+  assert.ok(LETTER_REGISTRY.length >= 55, `registry rows: ${LETTER_REGISTRY.length}`);
+  for (const key of ["student.full_name", "student.dob", "student.passport_number", "student.nationality", "student.address", "student.initial_line", "course.name", "course.intake", "course.start_date",
+    "fees.tuition", "fees.total", "agent.name", "agency.name", "application.reference", "offer.conditions", "institute.name", "institute.abn", "page.number", "page.total"])
+    assert.ok(LETTER_REGISTRY.some((v) => v.key === key), key);
+  assert.deepEqual([...new Set(LETTER_REGISTRY.map((v) => v.group))], ["Student", "Course", "Fees", "Agent / Agency", "Application", "Institute", "Page"]);
+  const html = "<p>Dear {{student.full_name}} $[dogField] {example2:inline} [Page Number] [optional note] {{foo.bar}} {{student.dob|shout}} {{student.dob|upper}} $[Passport <b>No</b>]</p>";
+  const found = letterVars.unmappedTokens(html, LETTER_REGISTRY);
+  assert.deepEqual(found.map((t) => t.token).sort(), ["$[Passport No]", "$[dogField]", "[Page Number]", "{example2:inline}", "{{foo.bar}}", "{{student.dob|shout}}"].sort());
+  assert.equal(found.find((t) => t.token === "[Page Number]")?.suggestion?.key, "page.number", "an old [Page Number] is suggested as {{page.number}}");
+  assert.equal(found.find((t) => t.token === "$[Passport No]")?.suggestion?.key, "student.passport_number");
+  assert.equal(found.find((t) => t.token === "$[dogField]")?.suggestion, undefined, "an unknown old name has no suggestion: staff map it");
+  assert.equal(letterVars.replaceToken("<p>$[Passport <b>No</b>] and [Page Number]</p>", "$[Passport No]", "student.passport_number"), "<p>{{student.passport_number}} and [Page Number]</p>", "converted across Word's tags");
+  assert.deepEqual(letterVars.letterKeys(html), ["student.full_name", "foo.bar", "student.dob"]);
+  const family = { value: "O'Neil-Smith", raw: "o'neil-smith", source: "x", missing: false };
+  assert.equal(letterVars.applyModifier(family, "upper"), "O'NEIL-SMITH");
+  assert.equal(letterVars.applyModifier(family, "raw"), "o'neil-smith");
+  assert.equal(letterVars.conditionsText(""), "Nil");
+  assert.equal(letterVars.conditionsText("- Provide IELTS 6.0\n- Pay the deposit"), "1. Provide IELTS 6.0\n2. Pay the deposit");
+  const spec = (key: string) => LETTER_REGISTRY.find((v) => v.key === key)!;
+  assert.equal(letterVars.formatTyped(spec("student.dob"), "2001-04-12"), "12/04/2001");
+  assert.equal(letterVars.formatTyped(spec("student.dob"), "2001-04-12", "D Month YYYY"), "12 April 2001");
+  assert.equal(letterVars.formatTyped(spec("fees.tuition"), "14500"), "AUD$14,500.00");
+  assert.equal(letterVars.formatTyped(spec("student.given_name"), "ASHA rani"), "Asha Rani");
+  // Send: a required detail must have a value; an optional one a value or the "leave blank" tick.
+  const tpl = "<p>{{course.cricos}} {{fees.material}} {{page.number}} {{offer.conditions}}</p>";
+  const missing = letterVars.missingDetails(tpl, LETTER_REGISTRY, {});
+  assert.deepEqual(missing.map((m) => m.variable.key), ["course.cricos", "fees.material"], "page numbers and conditions are never missing");
+  assert.equal(letterVars.blockingDetails(missing, []).length, 2);
+  assert.equal(letterVars.blockingDetails(missing, [{ key: "fees.material", value: "", mode: "blank" }]).length, 1, "the optional one ticked blank");
+  assert.equal(letterVars.blockingDetails(missing, [{ key: "course.cricos", value: "", mode: "blank" }, { key: "fees.material", value: "", mode: "blank" }]).length, 1, "a required one cannot be blank");
+  assert.equal(letterVars.blockingDetails(missing, [{ key: "course.cricos", value: "0101234", mode: "letter" }, { key: "fees.material", value: "", mode: "blank" }]).length, 0, "nothing blocks");
+});
+
+test("offer letter PDF: logo and office details in the header and the footer on every page, Page x of y, values and conditions printed, missing variables marked on every page", async () => {
+  const header = `<table style="border:none;width:100%"><tr><td style="width:40%"><img src="${LOGO}" style="width:90pt;height:30pt"></td>`
+    + `<td style="text-align:right;width:60%">{{institute.name}}<br>{{institute.address}}<br>RTO {{institute.rto}} | CRICOS {{institute.cricos}}</td></tr></table>`;
+  const footer = `<p>Page {{page.number}} of {{page.total}} &nbsp; {{student.initial_line}} &nbsp; Course CRICOS {{course.cricos}}</p>`;
+  const body = `<h2>Letter of offer</h2><p>Dear {{student.full_name}} ({{student.family_name|upper}}), born {{student.dob}}, passport {{student.passport_number}}.</p>`
+    + `<table><tr><td rowspan="2" style="vertical-align:middle">Fees for {{course.intake}}</td><td>Tuition {{fees.tuition}}</td></tr><tr><td>Total {{fees.total}}</td></tr></table>`
+    + `<p>Conditions:</p><p>{{offer.conditions}}</p>` + Array.from({ length: 60 }, (_, i) => `<p style="line-height:1.5">Clause ${i + 1}: the student agrees to the terms of enrolment, refunds and attendance.</p>`).join("");
+  const v = (value: string) => ({ value, raw: value, source: "test", missing: false });
+  const values = { "institute.name": v("Skyline Institute of Technology"), "institute.address": v("Level 8, 310 King Street, Melbourne VIC 3000"), "institute.rto": v("45989"), "institute.cricos": v("04114B"),
+    "student.full_name": v("Ms Asha Rani O'Neil-Smith"), "student.family_name": v("O'Neil-Smith"), "student.dob": v("12/04/2001"), "student.passport_number": v("N1234567"), "course.intake": v("February 2027"),
+    "fees.tuition": v("AUD$14,500.00"), "fees.total": v("AUD$14,750.00"), "course.cricos": { value: "", raw: "", source: "Course setup › CRICOS code", missing: true } };
+  const made = await documentPdf.buildDocumentPdf({ title: "Letter of offer", header, body, footer, values: {}, brackets: false, images: { [LOGO]: Uint8Array.from(atob(PNG_1PX), (c) => c.charCodeAt(0)) },
+    curly: letterVars.letterResolver(LETTER_REGISTRY, values, [], "Provide IELTS 6.0\nPay the deposit") });
+  assert.ok(made.pages >= 2, `pages: ${made.pages}`);
+  assert.deepEqual(made.missing, ["course.cricos"]);
+  assert.deepEqual([...new Set(made.marks.filter((m) => m.key === "course.cricos").map((m) => m.page))], Array.from({ length: made.pages }, (_, i) => i + 1), "the missing footer variable is marked on every page");
+  for (const m of made.marks) assert.ok(m.x >= 0 && m.y >= 0 && m.x + m.w <= 1.0001 && m.y + m.h <= 1.0001 && m.w > 0, JSON.stringify(m));
+  const items = await pdfText(made.bytes);
+  for (let n = 1; n <= made.pages; n++) {
+    const text = items.filter((t) => t.page === n).map((t) => t.text).join(" ");
+    for (const expected of ["Skyline Institute of Technology", "RTO 45989 | CRICOS 04114B", `Page ${n} of ${made.pages}`, "Student initials:", "[CRICOS course code]"]) assert.ok(text.includes(expected), `page ${n}: ${expected}`);
+  }
+  const all = items.map((t) => t.text).join(" ");
+  for (const expected of ["O'Neil-Smith (O'NEIL-SMITH), born 12/04/2001, passport N1234567.", "Fees for February 2027", "Tuition AUD$14,500.00", "Total AUD$14,750.00", "1. Provide IELTS 6.0", "2. Pay the deposit"])
+    assert.ok(all.includes(expected), expected);
+  assert.ok(!/\{\{/.test(all), "no {{token}} is printed");
+  // The logo is embedded and drawn on every page (the header repeats).
+  const loaded = await PdfLib.PDFDocument.load(made.bytes);
+  for (const page of loaded.getPages()) {
+    const xobjects = page.node.Resources()?.lookup(PdfLib.PDFName.of("XObject"), PdfLib.PDFDict);
+    assert.ok(xobjects && xobjects.keys().length >= 1, "the logo is on the page");
+  }
+  // The sample preview fills every variable from the registry's samples.
+  const sample = await documentPdf.buildDocumentPdf({ title: "x", header, body: "<p>{{student.full_name}} {{course.cricos}}</p>", footer, values: {}, brackets: false,
+    curly: letterVars.letterResolver(LETTER_REGISTRY, {}, [], "", true) });
+  assert.deepEqual([sample.missing, sample.marks.length], [[], 0]);
+  assert.ok((await pdfText(sample.bytes)).map((t) => t.text).join(" ").includes("Ms Asha Rani Patel 0101234"), "sample values print");
 });

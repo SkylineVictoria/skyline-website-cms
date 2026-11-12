@@ -18,6 +18,8 @@ import { claimStudentAccount, enrolAgent, enrolStudent, lookupAbn, type AbnDetai
 import { applyAsStaff } from "@/lib/staffApi";
 import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
 import { toE164 } from "@/lib/staffPhone";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 type Step = 1 | 2 | 3;
 
@@ -173,6 +175,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
   // The email is already on a student record (added by an agent or SLIT) and the mobile matched it: a code went to the email.
   const [claim, setClaim] = useState<{ email: string; sent: boolean } | null>(null);
   const [code, setCode] = useState("");
+  const [emailError, setEmailError] = useState<unknown>(null);
   const navigate = useNavigate();
   const patch = (next: Partial<StudentEnrolForm>) => setForm((prev) => ({ ...prev, ...next }));
 
@@ -184,6 +187,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     setForm(current);
     const checked = validateStudentEnrol(current);
     setErrors(checked);
+    setEmailError(null);
     if (Object.keys(checked).length) return;
     setBusy(true);
     try {
@@ -197,7 +201,11 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
       await supabase.rpc("portal_resolve_access").then(() => undefined, () => undefined);
       setReadyUser(data.user.id);
     }
-    catch (e) { setErrors({ form: e instanceof Error ? e.message : "We could not complete your enrolment. Please try again." }); }
+    catch (e) {
+      // The email already has an account: shown on the email field (sign in / reset password), not as a form error.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
+      setErrors({ form: e instanceof Error ? e.message : "We could not complete your enrolment. Please try again." });
+    }
     finally { setBusy(false); }
   };
 
@@ -257,7 +265,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
       <StepHeader step={2} kind="Student" title="Your details" onBack={onBack} />
       <QuickStart onSignedIn={onSignedIn} intent="student" />
       <div className="mt-6 space-y-4">
-        <Field label="Email" required><TextInput type="email" value={form.email} onChange={(e) => patch({ email: e.target.value })} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
+        <Field label="Email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="student" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
         <div>
           <label htmlFor="enrol-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="enrol-mobile" name="mobile" value={form.mobile} required placeholder="041 234 5678" />
@@ -299,6 +307,7 @@ function AgentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDone:
   const [errors, setErrors] = useState<EnrolErrors<AgentEnrolForm>>({});
   const [busy, setBusy] = useState(false);
   const [website, setWebsite] = useState("");
+  const [emailError, setEmailError] = useState<unknown>(null);
   const patch = (next: Partial<AgentEnrolForm>) => setForm((prev) => ({ ...prev, ...next }));
 
   const choose = (chosen: ChosenBusiness) => {
@@ -315,10 +324,13 @@ function AgentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDone:
     setForm(current);
     const checked = validateAgentEnrol(current);
     setErrors(checked);
+    setEmailError(null);
     if (Object.keys(checked).length) return;
     setBusy(true);
     try { const result = await enrolAgent(current, website); rememberSignUpBusiness(null); onDone(result); }
     catch (e) {
+      // The email already has an agent account: shown on the email field; the popup stays for other contact conflicts.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       const message = e instanceof Error ? e.message : "We could not submit your application. Please try again.";
       if (isContactConflict(message)) {
         setConflict(message);
@@ -362,7 +374,7 @@ function AgentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDone:
       <div className="mt-5 space-y-4">
         <Field label="Contact person" required><TextInput value={form.contactName} onChange={(e) => patch({ contactName: e.target.value })} autoComplete="name" /><Problem text={errors.contactName} /></Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Work email" required><TextInput type="email" value={form.email} onChange={(e) => patch({ email: e.target.value })} autoComplete="email" /><Problem text={errors.email} /></Field>
+          <Field label="Work email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="agent" context="public" serverError={emailError} autoComplete="email" /><Problem text={errors.email} /></Field>
           <div>
             <label htmlFor="agent-enrol-phone" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Phone <span className="text-primary-600">*</span></label>
             <PhoneInput id="agent-enrol-phone" name="phone" value={form.phone} required placeholder="041 234 5678" />
@@ -437,6 +449,7 @@ function StaffStep({ onBack }: { onBack: () => void }) {
   const [sent, setSent] = useState(false);
   const [errors, setErrors] = useState<{ firstName?: string; lastName?: string; email?: string; phone?: string; resume?: string; agreed?: string; captcha?: string; form?: string }>({});
   const [busy, setBusy] = useState(false);
+  const [emailError, setEmailError] = useState<unknown>(null);
 
   const apply = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -454,17 +467,20 @@ function StaffStep({ onBack }: { onBack: () => void }) {
     if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
     if (!captchaToken) next.captcha = "Complete the security check.";
     setErrors(next);
+    setEmailError(null);
     if (Object.keys(next).length) return;
     setBusy(true);
     try {
       await applyAsStaff({ firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim().toLowerCase(), phone: toE164(mobile)!, resume: resume!, agreed, captchaToken, website });
       setSent(true);
     } catch (e) {
+      setCaptchaReset((n) => n + 1); // a CAPTCHA token works once
+      // The email already has a staff account: shown on the email field (sign in / reset password), not as a form error.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       const field = (e as { field?: string }).field;
       const message = e instanceof Error ? e.message : "We could not send your application. Please try again.";
       const known = ["firstName", "lastName", "email", "phone", "resume", "agreed", "captcha"];
       setErrors(field && known.includes(field) ? { [field]: message } : { form: message });
-      setCaptchaReset((n) => n + 1); // a CAPTCHA token works once
     } finally { setBusy(false); }
   };
 
@@ -488,7 +504,7 @@ function StaffStep({ onBack }: { onBack: () => void }) {
           <Field label="First name" required><TextInput value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" maxLength={100} data-testid="staff-apply-first-name" /><Problem text={errors.firstName} /></Field>
           <Field label="Last name" required><TextInput value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="family-name" maxLength={100} data-testid="staff-apply-last-name" /><Problem text={errors.lastName} /></Field>
         </div>
-        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" data-testid="staff-apply-email" /><Problem text={errors.email} /></Field>
+        <Field label="Email" required><EmailField value={email} onChange={setEmail} kind="hr_staff" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" data-testid="staff-apply-email" /><Problem text={errors.email} /></Field>
         <div>
           <label htmlFor="staff-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="staff-mobile" name="staff-mobile" value={phone} required placeholder="041 234 5678" />

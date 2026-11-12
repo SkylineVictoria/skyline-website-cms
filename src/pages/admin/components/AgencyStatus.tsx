@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { STATUS_META } from "@/pages/agency/lib/portalData";
 import { sortedStatusCounts } from "@/pages/admin/lib/agencyStatus";
+import { STATUS_TONE_CLASS as TONE_CLASS, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
+import StatusBadge from "@/components/shared/application-status/StatusBadge";
 
 /** Active is green and Inactive is grey, so an active agency never reads as a warning. */
 export function AgencyStatusBadge({ status, imported = false }: { status: string; imported?: boolean }) {
@@ -30,14 +31,15 @@ export function AgencyStatusBadge({ status, imported = false }: { status: string
  * filtered to that status.
  */
 export function ApplicationStatusPills({ counts, hrefFor, limit }: { counts: Record<string, number> | undefined; hrefFor?: (status: string) => string; limit?: number }) {
-  const entries = sortedStatusCounts(counts);
+  const workflow = useApplicationStatuses();
+  const entries = sortedStatusCounts(counts, workflow.statuses);
   if (entries.length === 0) return null;
   const shown = limit ? entries.slice(0, limit) : entries;
   const hidden = entries.length - shown.length;
   return (
     <ul className="flex flex-wrap gap-1">
       {shown.map(([status, count]) => {
-        const meta = STATUS_META[status];
+        const meta = { label: statusInfo(workflow, status).label, className: TONE_CLASS[statusInfo(workflow, status).tone] };
         const pill = (
           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}>
             <span className="tabular-nums font-semibold">{count}</span> {meta.label}
@@ -58,10 +60,9 @@ export function ApplicationStatusPills({ counts, hrefFor, limit }: { counts: Rec
   );
 }
 
-/** One application status, coloured as everywhere else in the portal. */
+/** One application status, coloured as everywhere else in the portal (labels and colours from the database). */
 export function ApplicationStatusBadge({ status }: { status: string }) {
-  const meta = STATUS_META[status as keyof typeof STATUS_META] ?? STATUS_META.draft;
-  return <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}>{meta.label}</span>;
+  return <StatusBadge status={status} size="sm" />;
 }
 
 /** Completion bar with its percentage. */

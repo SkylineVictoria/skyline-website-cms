@@ -367,6 +367,7 @@ export function Modal({
   children,
   footer,
   width = "max-w-lg",
+  fill = false,
 }: {
   open: boolean;
   title: string;
@@ -374,6 +375,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   width?: string;
+  /** A tall dialog whose content manages its own scrolling (the PDF field editor): the body never scrolls, header and footer stay put. */
+  fill?: boolean;
 }) {
   if (!open) return null;
   // Rendered on <body>: inside a table frame (CSS containment) or a transformed parent, a fixed dialog would be placed
@@ -381,8 +384,8 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-foreground-950/40" onClick={onClose} aria-hidden="true" />
-      <div className={`relative w-full ${width} rounded-card border border-background-200 bg-background-50`}>
-        <div className="flex items-center justify-between border-b border-background-200 px-5 py-3.5">
+      <div className={`relative w-full ${width} rounded-card border border-background-200 bg-background-50${fill ? " flex h-[92vh] flex-col" : ""}`}>
+        <div className="flex shrink-0 items-center justify-between border-b border-background-200 px-5 py-3.5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">{title}</h2>
           <button
             type="button"
@@ -393,9 +396,9 @@ export function Modal({
             <i className="ri-close-line text-lg" aria-hidden="true" />
           </button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+        <div className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4" : "max-h-[70vh] overflow-y-auto px-5 py-4"}>{children}</div>
         {footer ? (
-          <div className="flex justify-end gap-2 border-t border-background-200 px-5 py-3.5">{footer}</div>
+          <div className="flex shrink-0 justify-end gap-2 border-t border-background-200 px-5 py-3.5">{footer}</div>
         ) : null}
       </div>
     </div>,

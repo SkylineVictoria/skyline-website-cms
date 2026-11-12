@@ -77,6 +77,33 @@ export default function ContactPage() {
         </Card>
       </div>
 
+      <Card className="mt-5 p-5" data-testid="offer-letter-settings">
+        <h2 className="mb-1 font-heading text-base font-semibold text-foreground-950">Offer letters</h2>
+        <p className="mb-4 text-sm text-foreground-600">Printed by the offer letter variables of the Institute group, and how dates and the offer's validity are written.</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field label="Legal name" hint="Printed in letter footers, e.g. INDOPACIFIC GLOBAL PTY LTD T/A Skyline Institute of Technology (SLIT)">
+            <TextInput value={draft.legalName ?? ""} maxLength={200} onChange={(e) => set("legalName", e.target.value)} data-testid="settings-legal-name" />
+          </Field>
+          <Field label="ABN" hint="11 digits, spaces allowed">
+            <TextInput value={draft.abn ?? ""} maxLength={14} onChange={(e) => set("abn", e.target.value)} data-testid="settings-abn" />
+          </Field>
+          <Field label="Website">
+            <TextInput value={draft.website ?? ""} placeholder="https://" onChange={(e) => set("website", e.target.value)} data-testid="settings-website" />
+          </Field>
+          <Field label="Offer valid for (days)" hint="Offer valid until = the day the letter is issued + this many days">
+            <TextInput type="number" min={1} max={365} value={draft.offerValidityDays ?? 30} onChange={(e) => set("offerValidityDays", Math.min(365, Math.max(1, Number(e.target.value) || 30)))} />
+          </Field>
+          <Field label="Date format in letters">
+            <select value={draft.letterDateFormat ?? "DD/MM/YYYY"} onChange={(e) => set("letterDateFormat", e.target.value as AdminSettings["letterDateFormat"])}
+              className="h-10 w-full rounded-md border border-background-300 bg-background-50 px-3 text-sm">
+              <option value="DD/MM/YYYY">DD/MM/YYYY (31/01/2027)</option>
+              <option value="D Month YYYY">D Month YYYY (31 January 2027)</option>
+              <option value="DD Mon YYYY">DD Mon YYYY (31 Jan 2027)</option>
+            </select>
+          </Field>
+        </div>
+      </Card>
+
       <div className="mt-5">
         <CalendlyCard url={draft.calendlyUrl ?? ""} onUrlChange={(value) => set("calendlyUrl", value)} />
       </div>

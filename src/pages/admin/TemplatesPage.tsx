@@ -3,6 +3,7 @@ import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components
 import PdfPages from "@/components/signing/PdfPages";
 import TemplateEditor from "@/pages/admin/components/signing/TemplateEditor";
 import TemplatePreviewDialog from "@/pages/admin/components/signing/TemplatePreviewDialog";
+import { LETTER_CATEGORY } from "@/lib/offerLetters";
 import { pdfBytes, signingAction, signingAdmin, type SigningContext, type SigningTemplate } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 import { TEMPLATE_TYPES, isTemplateType, textToHtml, type TemplateType } from "../../../supabase/functions/_shared/hr-template";
@@ -73,7 +74,7 @@ export default function TemplatesPage() {
     </li>
   );
   const visible = (list: SigningTemplate[]) => list.filter((t) => showArchived || t.status !== "archived");
-  const documents = templates ? visible(templates.filter((t) => !isTemplateType(t.category))) : [];
+  const documents = templates ? visible(templates.filter((t) => !isTemplateType(t.category) && t.category !== LETTER_CATEGORY)) : [];
 
   return (
     <div>

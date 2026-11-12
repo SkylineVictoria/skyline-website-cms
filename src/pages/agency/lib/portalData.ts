@@ -1,34 +1,11 @@
 import { normalizeAbn, validateAbn } from "../../../../supabase/functions/_shared/validation/abn";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
-import { STATUS_LABELS } from "@/pages/agency/lib/applicationAccess";
 
 /** Data access for the Agency Portal. Every read is scoped by database RLS. */
 
-export type ApplicationStatus =
-  | "draft"
-  | "submitted"
-  | "under_review"
-  | "action_required"
-  | "offer_issued"
-  | "offer_accepted"
-  | "coe_issued"
-  | "enrolled"
-  | "rejected"
-  | "withdrawn";
-
-export const STATUS_META: Record<ApplicationStatus, { label: string; className: string; icon: string }> = {
-  draft: { label: STATUS_LABELS.draft, className: "bg-background-100 text-foreground-700", icon: "ri-file-edit-line" },
-  submitted: { label: STATUS_LABELS.submitted, className: "bg-secondary-100 text-secondary-900", icon: "ri-send-plane-line" },
-  under_review: { label: STATUS_LABELS.under_review, className: "bg-secondary-100 text-secondary-900", icon: "ri-search-eye-line" },
-  action_required: { label: STATUS_LABELS.action_required, className: "bg-primary-100 text-primary-800", icon: "ri-alert-line" },
-  offer_issued: { label: STATUS_LABELS.offer_issued, className: "bg-accent-100 text-accent-900", icon: "ri-mail-star-line" },
-  offer_accepted: { label: STATUS_LABELS.offer_accepted, className: "bg-accent-100 text-accent-900", icon: "ri-checkbox-circle-line" },
-  coe_issued: { label: STATUS_LABELS.coe_issued, className: "bg-accent-100 text-accent-900", icon: "ri-file-shield-2-line" },
-  enrolled: { label: STATUS_LABELS.enrolled, className: "bg-accent-500 text-background-50", icon: "ri-graduation-cap-line" },
-  rejected: { label: STATUS_LABELS.rejected, className: "bg-primary-100 text-primary-800", icon: "ri-close-circle-line" },
-  withdrawn: { label: STATUS_LABELS.withdrawn, className: "bg-background-200 text-foreground-600", icon: "ri-arrow-go-back-line" },
-};
+/** An application status: one of the values of the database's catalogue (application_statuses). */
+export type ApplicationStatus = string;
 
 export const ROLE_LABELS: Record<string, string> = {
   slit_admin: "SLIT Admin",
@@ -36,10 +13,6 @@ export const ROLE_LABELS: Record<string, string> = {
   agent: "Agent",
   student: "Student",
 };
-
-export function statusMeta(status: string) {
-  return STATUS_META[status as ApplicationStatus] ?? STATUS_META.draft;
-}
 
 export interface DashboardCounts {
   total: number;
@@ -440,15 +413,18 @@ export async function invokePortalUsers(body: Record<string, unknown>): Promise<
   const { data, error } = await supabase.functions.invoke("portal-admin-users", { body });
   if (error) {
     let message = error.message;
+    // The parsed body stays as `cause`: a 409 { code: 'email_taken' | 'login_role_conflict' } is mapped to the email field.
+    let cause: unknown = error;
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
       try {
         const parsed = (await context.clone().json()) as { error?: string };
+        if (parsed && typeof parsed === "object") cause = parsed;
         if (parsed?.error) message = parsed.error;
       } catch { /* keep the generic message */ }
     }
-    throw new Error(message);
+    throw new Error(message, { cause });
   }
-  if (data?.error) throw new Error(String(data.error));
+  if (data?.error) throw new Error(String(data.error), { cause: data });
   return (data ?? {}) as Record<string, unknown>;
 }

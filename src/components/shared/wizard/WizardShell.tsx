@@ -119,8 +119,12 @@ export function WizardNotice({ tone, children }: { tone: keyof typeof NOTICE; ch
   );
 }
 
-/** Covers the wizard while a file uploads or is read, so nothing else can be clicked. */
-export function WizardLock({ children }: { children: ReactNode }) {
+/**
+ * Covers the wizard while a file uploads or is read, so nothing else can be clicked. `quiet`: see-through, with the message for
+ * screen readers only, because the step shows its own reading panel underneath.
+ */
+export function WizardLock({ children, quiet = false }: { children: ReactNode; quiet?: boolean }) {
+  if (quiet) return <div className="absolute inset-0 z-10 cursor-wait rounded-xl" role="status" aria-live="polite"><span className="sr-only">{children}</span></div>;
   return (
     <div className="absolute inset-0 z-10 flex cursor-wait items-center justify-center rounded-xl bg-background-50/70" role="status" aria-live="polite">
       <span className="flex items-center gap-2 rounded-md border border-background-200 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-800 shadow-sm">

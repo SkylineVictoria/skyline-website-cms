@@ -151,7 +151,8 @@ export interface StudentDetail {
 
 async function call<T>(fn: string, params: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.rpc(fn, params);
-  if (error) throw new Error(friendly(error.message) || fallback);
+  // The PostgREST error stays as `cause` so the forms can map an email-taken answer (23505 / email_taken) to the field.
+  if (error) throw new Error(friendly(error.message) || fallback, { cause: error });
   return data as T;
 }
 

@@ -15,7 +15,7 @@ import {
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
-import { portalCourseOptions, resolveCourseOption } from "@/pages/agency/lib/portalSections";
+import { portalCourseOptions, portalSections, resolveCourseOption } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
@@ -52,6 +52,9 @@ interface Props {
 }
 
 const WIZARD_CATEGORIES = new Set(WIZARD_STEPS.map((step) => step.category));
+// The form's label for each value a document can fill, to list what was read under the file.
+const FIELD_LABELS = new Map(portalSections.flatMap((section) => section.fields).filter((field) => field.label).map((field) => [field.name, field.label]));
+const fieldLabel = (key: string) => FIELD_LABELS.get(key);
 // Document screens first, then the answer screens (language, USI, emergency contact, course).
 const DOC_STEPS = WIZARD_STEPS.length;
 const ACADEMIC_WIZARD_STEP = WIZARD_STEPS.find((item) => item.id === "academic");
@@ -668,6 +671,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           onDismissDoc={(doc) => setDismissed((prev) => new Set(prev).add(doc.id))}
           onRemoveDoc={handleRemoveDoc}
           signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
+          fieldLabel={fieldLabel}
           logView={
             role === "slit_admin"
               ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
@@ -824,7 +828,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       }
       overlay={
         locked ? (
-          <WizardLock>
+          <WizardLock quiet={!removingExpired && !removingWrong}>
             {stepPending.some((item) => !item.error) ? `Uploading your ${current.noun}\u2026` : removingExpired ? "Passport expired, removing it\u2026" : removingWrong ? `This is not ${stepCheck?.what ?? `your ${current.noun}`}, removing it\u2026` : `Reading your ${current.noun}\u2026`}
           </WizardLock>
         ) : null

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { listAgencies, ROLE_LABELS, STATUS_META } from "@/pages/agency/lib/portalData";
+import { listAgencies, ROLE_LABELS } from "@/pages/agency/lib/portalData";
+import { currentStatuses, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import {
   getDashboardStats,
   listAssignableAgents,
@@ -19,15 +20,17 @@ interface CardDef {
   label: string;
   icon: string;
   tone: string;
+  /** A status card: its label is the catalogue's label of this status. */
+  status?: string;
 }
 
 const CARDS: CardDef[] = [
   { key: "total", label: "Total applications", icon: "ri-file-list-3-line", tone: "bg-primary-100 text-primary-700" },
   { key: "drafts", label: "Drafts", icon: "ri-file-edit-line", tone: "bg-background-200 text-foreground-700" },
-  { key: "submitted", label: "Submitted", icon: "ri-send-plane-line", tone: "bg-secondary-100 text-secondary-900" },
-  { key: "offerAccepted", label: "Offer accepted", icon: "ri-checkbox-circle-line", tone: "bg-accent-100 text-accent-900" },
-  { key: "actionRequired", label: "Action required", icon: "ri-alert-line", tone: "bg-primary-100 text-primary-800" },
-  { key: "enrolled", label: "Enrolled", icon: "ri-graduation-cap-line", tone: "bg-accent-500 text-background-50" },
+  { key: "submitted", label: "", status: "submitted", icon: "ri-send-plane-line", tone: "bg-secondary-100 text-secondary-900" },
+  { key: "offerAccepted", label: "", status: "offer_accepted", icon: "ri-checkbox-circle-line", tone: "bg-accent-100 text-accent-900" },
+  { key: "actionRequired", label: "", status: "action_required", icon: "ri-alert-line", tone: "bg-primary-100 text-primary-800" },
+  { key: "enrolled", label: "", status: "enrolled", icon: "ri-graduation-cap-line", tone: "bg-accent-500 text-background-50" },
 ];
 
 function initialsOf(name: string): string {
@@ -37,6 +40,7 @@ function initialsOf(name: string): string {
 }
 
 export default function PortalDashboardPage() {
+  const workflow = useApplicationStatuses();
   const { role, profile, agency } = usePortalAuth();
   const [serverStats, setServerStats] = useState<DashboardStats | null>(null);
   const [rows, setRows] = useState<ApplicationListRow[]>([]);
@@ -134,12 +138,12 @@ export default function PortalDashboardPage() {
                   <i className={card.icon} aria-hidden="true" />
                 </span>
                 <p className="mt-4 font-heading text-2xl font-bold text-foreground-950">{stats[card.key]}</p>
-                <p className="mt-0.5 text-sm text-foreground-600">{card.label}</p>
+                <p className="mt-0.5 text-sm text-foreground-600">{card.status ? statusInfo(workflow, card.status).label : card.label}</p>
               </div>
             ))}
           </section>
 
-          <div className="mt-4 flex flex-wrap gap-3" aria-label="All application statuses">{Object.entries(STATUS_META).map(([status, meta]) => <span className="rounded border bg-background-50 px-3 py-2 text-sm" key={status}>{meta.label}: {stats.statuses?.[status] ?? 0}</span>)}</div>
+          <div className="mt-4 flex flex-wrap gap-3" aria-label="All application statuses">{currentStatuses(workflow).map((status) => <span className="rounded border bg-background-50 px-3 py-2 text-sm" key={status.value}>{status.label}: {stats.statuses?.[status.value] ?? 0}</span>)}</div>
           <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
             <section className="rounded-card border border-background-200 bg-background-50 p-5">
               <div className="flex items-center justify-between gap-3">

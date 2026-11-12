@@ -338,7 +338,7 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
     await visitor.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: pdfFor({ passport: "Passport", academic: "Academic", "health-insurance": "Health Insurance" }[slug]!) });
     await expect.poll(() => sql(`select count(*) from hr.staff_documents d where d.profile_id = '${who.profileId}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
   }
-  await expect(visitor.getByTestId("staff-doc-passport")).toContainText("Done ✓");
+  await expect(visitor.getByTestId("staff-doc-passport")).toContainText("Ready for review");
   await expect(visitor.getByTestId("staff-required-summary")).toContainText("3 of 3 uploaded");
   await shot(visitor, "staff-wizard-documents-uploaded");
   await visitor.getByTestId("staff-next").click();

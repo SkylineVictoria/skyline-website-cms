@@ -50,7 +50,7 @@ test("Enroll now > Staff: one full journey from the public form to My HR (docume
   expect(sql(`select (joining_date is not null)::text from hr.employment where profile_id = '${profileId}'`)).toBe("true");
 });
 
-test("the public form: the same thank-you for an address that already applied, and a fake resume is refused", async ({ page }) => {
+test("the public form: an address that already applied is told an account exists (owner decision 2026-11-12), and a fake resume is refused", async ({ page }) => {
   const who = person("dupe");
   const fill = async (resume: { name: string; buffer: Buffer; mimeType: string }) => {
     await page.goto("/login?mode=enroll&as=staff");
@@ -70,7 +70,9 @@ test("the public form: the same thank-you for an address that already applied, a
   await fill({ name: "cv.pdf", mimeType: "application/pdf", buffer: PDF });
   await expect(page.getByTestId("staff-apply-thanks")).toBeVisible();
   await fill({ name: "cv.pdf", mimeType: "application/pdf", buffer: PDF });
-  await expect(page.getByTestId("staff-apply-thanks")).toBeVisible();
+  // Email unique within a role: the public "account already exists" answer on the email field, never the role.
+  await expect(page.getByTestId("email-in-use")).toContainText("An account with this email already exists. Sign in or reset your password.");
+  await expect(page.getByTestId("staff-apply-thanks")).toHaveCount(0);
   expect(sql(`select count(*) from hr.staff_profiles where email = '${who.email}'`)).toBe("1");
   await waitForHrMail(who.email, /already have your staff application/);
   expect((await hrMails(who.email)).filter((m) => /already have/.test(m.subject))).toHaveLength(1);
@@ -180,7 +182,7 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
     await page.getByTestId(`staff-doc-${slug}`).locator('input[type="file"]').first().setInputFiles({ name: `${slug}.pdf`, mimeType: "application/pdf", buffer: pdfFor({ passport: "Passport", visa: "Visa", english: "English", academic: "Academic", "health-insurance": "Health Insurance" }[slug]!) });
     await expect.poll(() => sql(`select count(*) from hr.staff_documents d where d.profile_id = '${applicant.id}' and d.is_current and lower(replace(d.category, ' ', '-')) = '${slug}'`)).toBe("1");
   }
-  await expect(page.getByTestId("staff-doc-visa")).toContainText("Done ✓");
+  await expect(page.getByTestId("staff-doc-visa")).toContainText("Ready for review");
   await page.getByTestId("staff-next").click();
 
   // 2. Check details: read from the passport and the visa; what cannot be read is marked; a mismatch can take the document's value.

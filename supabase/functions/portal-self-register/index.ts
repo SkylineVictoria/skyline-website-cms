@@ -9,6 +9,7 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { lookupAgencyAbn, normalizeAbn, validateAbn, type AgencyAbnDetails } from "../_shared/validation/abn.ts";
 import { deliverInvite, findAuthUserByEmail } from "../_shared/invite-delivery.ts";
+import { emailConflictBody, publicEmailTakenBody } from "../_shared/identity-email.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -25,7 +26,12 @@ const corsHeaders = {
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, ...extra } });
 
-function rpcFailure(error: { code?: string; message?: string }) {
+// portal_self_register's own refusals for an email that already has an account or a pending invitation (20261105140000),
+// next to the identity trigger's hint. The sign-up page shows one public sentence for all of them, never the role.
+const EMAIL_ACCOUNT_REFUSAL = /^This email (already has an account|has already been invited)\b/;
+
+function rpcFailure(error: { code?: string; message?: string; hint?: string; details?: string }) {
+  if (error.code === "23505" && (emailConflictBody(error) || EMAIL_ACCOUNT_REFUSAL.test(error.message ?? ""))) return json(publicEmailTakenBody(), 409);
   const message = error.message || "The request could not be completed.";
   switch (error.code) {
     case "23505":

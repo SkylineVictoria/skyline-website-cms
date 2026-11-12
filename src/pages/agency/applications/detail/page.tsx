@@ -3,8 +3,12 @@ import { useCallback, useEffect, useState } from "react";
 import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { STATUS_META, formatDate } from "@/pages/agency/lib/portalData";
-import { isEditableApplicationStatus, nextStatusOptions } from "@/pages/agency/lib/applicationAccess";
+import { formatDate } from "@/pages/agency/lib/portalData";
+import { isEditableStatus, useApplicationStatuses } from "@/lib/applicationStatuses";
+import StatusBadge from "@/components/shared/application-status/StatusBadge";
+import Toast from "@/components/shared/application-form/Toast";
+import { useToast } from "@/components/shared/application-form/useToast";
+import { AgentMetaEditor, ApplicantStatusBanner, OfferLettersList, StaffReviewBar } from "@/pages/agency/components/ApplicationStatusPanels";
 import {
   assignApplicationAgent,
   deleteApplicationDocument,
@@ -14,7 +18,6 @@ import {
   listAssignableAgents,
   listStatusHistory,
   queueDocumentExtraction,
-  setApplicationStatus,
   type AgentOption,
   type ApplicationDetail,
   type DocumentRow,
@@ -28,7 +31,7 @@ import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { cmsPaths, useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
 import ApplicationMessages from "@/pages/agency/components/ApplicationMessages";
-import { PortalEmpty, PortalError, PortalLoading, StatusBadge } from "@/pages/agency/components/PortalUI";
+import { PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
 
@@ -40,9 +43,6 @@ const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "history", label: "Status history", icon: "ri-history-line" },
   { id: "messages", label: "Messages", icon: "ri-chat-3-line" },
 ];
-
-const CONTROL =
-  "mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2.5 text-sm text-foreground-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 
 function wizardOpenKey(applicationId: string): string {
   return `slit-portal-wizard-open:${portalScopeCacheKey()}:${applicationId}`;
@@ -67,7 +67,8 @@ export default function ApplicationDetailPage() {
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [statusNote, setStatusNote] = useState("");
+  const workflow = useApplicationStatuses();
+  const toast = useToast();
   // ?wizard=1 (a student just added from the Students page) opens the document wizard straight away.
   const [searchParams, setSearchParams] = useSearchParams();
   const [wizardOpen, setWizardOpen] = useState(() => wasWizardOpen(id) || searchParams.get("wizard") === "1");
@@ -138,21 +139,6 @@ export default function ApplicationDetailPage() {
     }
   };
 
-  const handleStatus = async (next: string) => {
-    if (!application || !next) return;
-    setBusy(true);
-    setActionError("");
-    try {
-      await setApplicationStatus(application.id, next, statusNote);
-      setStatusNote("");
-      await load();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "We could not update the status.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleDocumentAction = async (doc: DocumentRow, action: "preview" | "download" | "retry" | "delete") => {
     setDocumentBusy(`${action}:${doc.id}`);
     setActionError("");
@@ -196,7 +182,7 @@ export default function ApplicationDetailPage() {
   // Administrators of the main site manage applications inside the CMS (this also covers links from emails).
   if (paths.area === "portal" && isSlit && !requestWebsiteDomain()) return <Navigate to={cmsPaths.detail(id)} replace />;
 
-  if (loading && !application) {
+  if ((loading && !application) || !workflow.ready) {
     return <PortalLoading label="Loading application\u2026" />;
   }
 
@@ -217,7 +203,7 @@ export default function ApplicationDetailPage() {
 
   // SLIT administrators are not inherently read-only. Status alone controls
   // whether a record is editable; RLS separately determines who may edit it.
-  const readOnly = !isEditableApplicationStatus(application.status);
+  const readOnly = !isEditableStatus(workflow, application.status);
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
   const outstanding =
@@ -245,33 +231,44 @@ export default function ApplicationDetailPage() {
               </span>
             ) : null}
           </div>
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-500">
+          {/* One compact meta row: reference, agency, agent (editable in a popover), dates. */}
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-500" data-testid="application-meta">
             <span className="inline-flex items-center gap-1.5 font-mono font-semibold text-foreground-800">
               <i className="ri-hashtag" aria-hidden="true" />
               {application.reference || "Draft"}
             </span>
-            <span>{agencyName}</span>
+            {agencyName ? <span>Agency: <span className="font-medium text-foreground-800">{agencyName}</span></span> : null}
+            {canManageAssignment ? (
+              <AgentMetaEditor agentId={application.agentId} agentName={application.agentName} agents={agents} busy={busy} onAssign={(profileId) => void handleReassign(profileId)} />
+            ) : application.agentName ? <span>Agent: <span className="font-medium text-foreground-800">{application.agentName}</span></span> : null}
+            {isSlit && application.agentEmail ? <a href={`mailto:${application.agentEmail}`} className="hover:text-primary-700 hover:underline">{application.agentEmail}</a> : null}
+            {isSlit && application.agentPhone ? <span>{formatPhone(application.agentPhone)}</span> : null}
             <span>Created {formatDate(application.createdAt)}</span>
             <span>Updated {formatDate(application.updatedAt)}</span>
             {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
           </p>
-          {isSlit && application.agentName ? (
-            <p className="mt-1 text-xs text-foreground-500">
-              Agent: <span className="font-medium text-foreground-800">{application.agentName}</span>
-              {application.agentEmail ? <> · <a href={`mailto:${application.agentEmail}`} className="text-primary-700 hover:underline">{application.agentEmail}</a></> : null}
-              {application.agentPhone ? <> · {formatPhone(application.agentPhone)}</> : null}
-            </p>
-          ) : null}
-          {isSlit ? (
-            <button
-              type="button"
-              onClick={() => { setActionError(""); void logAdminAccess(application.id, "pdf_exported").then(() => downloadApplicationPdf(application)).catch((e) => setActionError(e instanceof Error ? e.message : "The PDF could not be created.")); }}
-              className="mt-3 inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
-            >
-              <i className="ri-file-pdf-2-line" aria-hidden="true" />
-              Download PDF
-            </button>
-          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {isSlit ? (
+              <button
+                type="button"
+                onClick={() => { setActionError(""); void logAdminAccess(application.id, "pdf_exported").then(() => downloadApplicationPdf(application)).catch((e) => setActionError(e instanceof Error ? e.message : "The PDF could not be created.")); }}
+                className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
+              >
+                <i className="ri-file-pdf-2-line" aria-hidden="true" />
+                Download PDF
+              </button>
+            ) : null}
+            {!readOnly ? (
+              <button
+                type="button"
+                onClick={openWizard}
+                className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
+              >
+                <i className="ri-magic-line" aria-hidden="true" />
+                Document upload wizard
+              </button>
+            ) : null}
+          </div>
         </div>
         <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
@@ -282,78 +279,7 @@ export default function ApplicationDetailPage() {
         </div>
       </header>
 
-      {/* Always has content: the status control for SLIT, the read-only status for agency users. */}
-      <div className="mt-5 flex flex-col gap-3 rounded-card border border-background-200 bg-background-50 p-4 md:flex-row md:flex-wrap md:items-end">
-        {canManageAssignment ? (
-          <label className="block md:w-60">
-            <span className="text-xs font-semibold text-foreground-700">Assigned agent</span>
-            <select
-              value={application.agentId ?? ""}
-              disabled={busy}
-              onChange={(event) => void handleReassign(event.target.value)}
-              className={CONTROL}
-            >
-              <option value="">Unassigned</option>
-              {agents.map((agent) => (
-                <option key={agent.profileId} value={agent.profileId}>
-                  {agent.fullName}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-        {isSlit ? (
-          <>
-            <label className="block md:w-60">
-              <span className="text-xs font-semibold text-foreground-700">Admissions status</span>
-              <select
-                value=""
-                aria-label="Change status"
-                disabled={busy}
-                onChange={(event) => void handleStatus(event.target.value)}
-                className={CONTROL}
-              >
-                <option value="">{nextStatusOptions(application.status).length ? "Change status to…" : "No further status changes"}</option>
-                {nextStatusOptions(application.status).map((value) => (
-                  <option key={value} value={value}>
-                    {STATUS_META[value as keyof typeof STATUS_META]?.label ?? value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block md:min-w-[220px] md:flex-1">
-              <span className="text-xs font-semibold text-foreground-700">Note for the applicant (optional)</span>
-              <input
-                type="text"
-                value={statusNote}
-                onChange={(event) => setStatusNote(event.target.value)}
-                placeholder="Sent with the status change"
-                className={CONTROL}
-              />
-            </label>
-          </>
-        ) : null}
-
-        {!isSlit ? (
-          <div className="md:w-60">
-            <span className="text-xs font-semibold text-foreground-700">Admissions status</span>
-            <p className="mt-1 text-sm text-foreground-800">{STATUS_META[application.status as keyof typeof STATUS_META]?.label ?? application.status}</p>
-            <p className="mt-0.5 text-xs text-foreground-500">Read-only. Status changes are made by SLIT administration.</p>
-          </div>
-        ) : null}
-
-        {!readOnly ? (
-          <button
-            type="button"
-            onClick={openWizard}
-            className="inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-primary-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-primary-700 hover:bg-primary-50 md:ml-auto"
-          >
-            <i className="ri-magic-line" aria-hidden="true" />
-            Document upload wizard
-          </button>
-        ) : null}
-      </div>
+      {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
         {(paths.area === "cms" ? [...TABS, { id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : TABS).map((item) => (
@@ -407,12 +333,17 @@ export default function ApplicationDetailPage() {
             agencyName={agencyName}
             readOnly={readOnly}
             auditAccess={isSlit}
+            reviewBar={isSlit ? (reviewIssues: number) => (
+              <StaffReviewBar application={application} history={history} reviewIssues={reviewIssues} onDone={() => void load()}
+                onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)} />
+            ) : undefined}
             onSaved={refreshAfterSave}
             onSubmitted={(reference, studentName) =>
               navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName } })}
           />
         ) : null}
 
+        {tab === "documents" ? <OfferLettersList applicationId={application.id} refreshKey={application.status} /> : null}
         {tab === "documents" ? (
           documents.length === 0 ? (
             <PortalEmpty
@@ -508,6 +439,7 @@ export default function ApplicationDetailPage() {
           onCancel={closeWizard}
         />
       ) : null}
+      <Toast message={toast.message} onDismiss={toast.dismiss} />
     </div>
   );
 }

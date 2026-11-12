@@ -73,15 +73,18 @@ export async function applyAsStaff(input: StaffApplyInput): Promise<void> {
   if (error) {
     let message = error.message;
     let field: string | undefined;
+    let body: unknown = null;
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
       try {
         const parsed = (await context.clone().json()) as { error?: string; field?: string };
+        body = parsed;
         if (parsed?.error) message = parsed.error;
         field = parsed?.field;
       } catch { /* keep the generic message */ }
     }
-    throw Object.assign(new Error(message || "We could not send your application. Please try again."), { field });
+    // The parsed body stays on `cause` so a 409 email_taken reaches the email field (isEmailTakenError).
+    throw Object.assign(new Error(message || "We could not send your application. Please try again.", { cause: body ?? error }), { field });
   }
   if (data?.error) throw new Error(String(data.error));
 }
@@ -178,7 +181,8 @@ export interface StaffAdminResult {
 export class StaffAdminError extends Error {
   readonly status: number;
   readonly result: StaffAdminResult;
-  constructor(message: string, status: number, result: StaffAdminResult) { super(message); this.status = status; this.result = result; }
+  /** `cause` is the parsed body too, so isEmailTakenError(err) sees a 409 email_taken. */
+  constructor(message: string, status: number, result: StaffAdminResult) { super(message, { cause: result }); this.status = status; this.result = result; }
 }
 
 async function staffAdmin(body: Record<string, unknown> | FormData): Promise<StaffAdminResult> {

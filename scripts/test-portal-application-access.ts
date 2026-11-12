@@ -24,7 +24,21 @@ test('agency directory fills real business fields, starts the added business ina
   assert.equal(directoryAgencyToForm({ ...agency, phone: '', primaryContact: '' }).phone, '');
 });
 import { menuTree, menuActive, menuIcon, type AdminMenuItem } from "../src/pages/admin/lib/adminMenu.ts";
-import { canManagePortalUsers, isEditableApplicationStatus, portalAccessMessage, portalLanding } from "../src/pages/agency/lib/applicationAccess.ts";
+import { canManagePortalUsers, portalAccessMessage, portalLanding } from "../src/pages/agency/lib/applicationAccess.ts";
+// ---- Application statuses from the database (20261113260000): the frontend helpers read the catalogue the migration seeds ----
+import { actionsFor, canSubmitFrom, currentStatuses, isEditableStatus, parseWorkflow, statusInfo } from "../src/lib/applicationStatuses.ts";
+
+const workflowSql = readFileSync(new URL("../supabase/migrations/20261113260000_application_status_workflow.sql", import.meta.url), "utf8");
+const seededWorkflow = (() => {
+  const statusRows = /insert into public\.application_statuses\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";
+  const actionRows = /insert into public\.application_status_actions\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";
+  const tuples = (block: string) => [...block.matchAll(/\(([^()]*)\)/g)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'|(null|true|false|\d+)/g)].map((v) => v[1] !== undefined ? v[1].replace(/''/g, "'") : v[2]));
+  return parseWorkflow({
+    statuses: tuples(statusRows).map(([value, label, sort, tone, hint, editable, legacy]) => ({ value, label, sort: Number(sort), tone, hint, editable: editable === "true", legacy: legacy === "true" })),
+    actions: tuples(actionRows).map(([from, action, to, actor, label, kind, note, tone, sort]) => ({ from, action, to: to === "null" ? null : to, actor, label, kind, note, tone, sort: Number(sort) })),
+  });
+})();
+
 import { availableActions, csvCell, EXPORT_COLUMNS, exportCsv, EXCEPTION_TEXT, normaliseCoeNumber, registrationChecklist, registrationWarning, validateCorrection, verifyBlockers } from "../src/pages/agency/lib/registrationWorkbench.ts";
 
 test('admin menu: order, nesting and active deep links follow backend rows', () => {
@@ -55,17 +69,19 @@ test('admin menu: denied parents, disabled rows, cycles and unsafe routes fail c
 });
 
 test("only database-editable portal statuses enable draft UI", () => {
-  assert.equal(isEditableApplicationStatus("draft"), true);
-  assert.equal(isEditableApplicationStatus("action_required"), true);
-  assert.equal(isEditableApplicationStatus("submitted"), false);
-  assert.equal(isEditableApplicationStatus("under_review"), false);
-  assert.equal(isEditableApplicationStatus("enrolled"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "draft"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "action_required"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "submitted"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "under_review"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "offer_issued"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "enrolled"), false);
+  assert.equal(isEditableStatus(seededWorkflow, "anything-unknown"), false, "an unknown status is never editable");
 });
 
 test("completion and submission-date lookalikes never affect editability", () => {
   // The helper deliberately receives status only: 0%, 3%, an absent date, and
   // document extraction state are presentation data, not authorisation input.
-  assert.equal(isEditableApplicationStatus("draft"), true);
+  assert.equal(isEditableStatus(seededWorkflow, "draft"), true);
 });
 
 // ---- P08-02 manual registration workbench (REG-REGISTER browser validation, export minimization) ----
@@ -395,50 +411,48 @@ test("edge input: cms-admin-users rejects unknown roles instead of defaulting to
   assert.ok(!source.includes('String(parsed.role ?? "Editor")'));
 });
 
-// ---- P08-04: status model, labels and agent read-only after submission ----
-import { LEGACY_STATUSES, SELECTABLE_STATUSES, STATUS_LABELS, canSubmitApplicationStatus, nextStatusOptions } from "../src/pages/agency/lib/applicationAccess.ts";
-
-test("status model: stored values are unchanged and only coe_issued is relabelled", () => {
-  assert.equal(STATUS_LABELS.coe_issued, "CoE / VoE issued");
-  assert.deepEqual(Object.keys(STATUS_LABELS).sort(), ["action_required", "coe_issued", "draft", "enrolled", "offer_accepted", "offer_issued", "rejected", "submitted", "under_review", "withdrawn"]);
-  assert.equal(STATUS_LABELS.enrolled, "Enrolled");
+// ---- Status model (20261113260000): statuses, labels and moves come from the database; the frontend has none of its own ----
+test("status model: the catalogue lists ten statuses in order, Offer letter issued between Action required and Offer accepted", () => {
+  assert.deepEqual(seededWorkflow.statuses.map((s) => s.value), ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted", "coe_issued", "enrolled", "rejected", "withdrawn"]);
+  assert.equal(statusInfo(seededWorkflow, "offer_issued").label, "Offer letter issued");
+  assert.equal(statusInfo(seededWorkflow, "coe_issued").label, "CoE / VoE issued");
+  assert.deepEqual(currentStatuses(seededWorkflow).map((s) => s.value).includes("under_review"), false, "the legacy status is not offered in filters");
+  assert.equal(statusInfo(seededWorkflow, "submitted").hint, "Ready for offer letter");
 });
 
-test("status model: Under review and Offer issued are in no selectable list, but legacy labels stay readable", () => {
-  for (const removed of LEGACY_STATUSES) {
-    assert.ok(!(SELECTABLE_STATUSES as readonly string[]).includes(removed), removed);
-    assert.ok(STATUS_LABELS[removed]);
-    for (const status of Object.keys(STATUS_LABELS)) assert.ok(!nextStatusOptions(status).some((target) => target === removed), `${status} -> ${removed}`);
-  }
-  assert.deepEqual([...SELECTABLE_STATUSES], ["draft", "submitted", "action_required", "offer_accepted", "coe_issued", "enrolled", "rejected", "withdrawn"]);
+test("status model: Take action shows exactly the staff actions of each status, in order", () => {
+  const menu = (status: string) => actionsFor(seededWorkflow, status, "staff").map((x) => x.label);
+  assert.deepEqual(menu("submitted"), ["Issue offer letter", "Action required", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("action_required"), ["Send reminder", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("offer_issued"), ["Resend offer letter", "Mark offer accepted", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("offer_accepted"), ["Issue CoE / VoE", "Withdraw", "Reject"]);
+  assert.deepEqual(menu("coe_issued"), ["Mark enrolled", "Withdraw"]);
+  assert.deepEqual(menu("enrolled"), [], "No action");
+  assert.deepEqual(menu("rejected"), [], "No action");
+  // Reasons are required where the drawer asks for one.
+  const note = (status: string, action: string) => seededWorkflow.actions.find((x) => x.from === status && x.action === action)?.note;
+  assert.equal(note("submitted", "action_required"), "required");
+  assert.equal(note("submitted", "reject"), "required");
+  assert.equal(note("offer_issued", "mark_accepted"), "required");
 });
 
-test("status model: the UI options equal the default graph in migration 91; legacy rows only move forward", () => {
-  const sql = readFileSync(new URL("../supabase/migrations/20261027050000_admissions_status_model_revision.sql", import.meta.url), "utf8");
-  const workflow = /when 'workflow' then jsonb_build_object\([\s\S]*?\]'::jsonb\)/.exec(sql)?.[0] ?? "";
-  const pairs = [...workflow.matchAll(/\{"from":"(\w+)","to":"(\w+)"\}/g)].map((m) => `${m[1]}>${m[2]}`).filter((p) => !p.startsWith("draft>"));
-  // Drafts are compared separately: migration 108 lets an administrator close one (withdrawn / rejected).
-  const fromUi = Object.keys(STATUS_LABELS).flatMap((from) => ["under_review", "offer_issued", "draft"].includes(from) ? [] : nextStatusOptions(from).map((to) => `${from}>${to}`));
-  assert.deepEqual([...pairs].sort(), [...fromUi].sort());
-  assert.ok(workflow.includes('"draft","to":"submitted"'));
-  assert.deepEqual([...nextStatusOptions("under_review")].sort(), ["action_required", "offer_accepted", "rejected", "withdrawn"]);
-  assert.deepEqual([...nextStatusOptions("offer_issued")].sort(), ["offer_accepted", "rejected", "withdrawn"]);
-  assert.deepEqual(nextStatusOptions("enrolled"), []);
-  assert.deepEqual(nextStatusOptions("rejected"), []);
-  // A draft is submitted only from its form; the status command can only close it, as migration 108 allows.
-  assert.deepEqual([...nextStatusOptions("draft")].sort(), ["rejected", "withdrawn"]);
-  const draftSql = readFileSync(new URL("../supabase/migrations/20261104170000_draft_can_be_withdrawn_or_rejected.sql", import.meta.url), "utf8");
-  assert.ok(draftSql.includes("when 'draft' then p_to in ('withdrawn','rejected')"));
-  assert.ok(!nextStatusOptions("draft").includes("submitted"));
-});
-
-test("status model: only a draft can be submitted by an agent or agency admin; the status control is read-only for them", () => {
-  assert.equal(canSubmitApplicationStatus("draft"), true);
-  for (const status of Object.keys(STATUS_LABELS).filter((s) => s !== "draft")) assert.equal(canSubmitApplicationStatus(status), false, status);
-  const detail = readFileSync(new URL("../src/pages/agency/applications/detail/page.tsx", import.meta.url), "utf8");
-  assert.ok(detail.includes("Read-only. Status changes are made by SLIT administration."));
+test("status model: the applicant submits a draft, resubmits after Action required and accepts an issued offer; nothing else", () => {
+  assert.equal(canSubmitFrom(seededWorkflow, "draft"), true);
+  for (const status of seededWorkflow.statuses.map((s) => s.value).filter((s) => s !== "draft")) assert.equal(canSubmitFrom(seededWorkflow, status), false, status);
+  assert.deepEqual(seededWorkflow.actions.filter((x) => x.actor === "applicant").map((x) => `${x.from}>${x.to}`).sort(), ["action_required>submitted", "draft>submitted", "offer_issued>offer_accepted"]);
   const workspace = readFileSync(new URL("../src/pages/agency/components/ApplicationWorkspace.tsx", import.meta.url), "utf8");
-  assert.ok(workspace.includes("canSubmit={canSubmitApplicationStatus(application.status)}"));
+  assert.ok(workspace.includes("canSubmitFrom(workflow, application.status)"));
+});
+
+test("status model: no status list, label or move is written into the frontend", () => {
+  for (const file of ["src/pages/agency/lib/applicationAccess.ts", "src/pages/agency/lib/portalData.ts", "src/pages/agency/applications/detail/page.tsx", "src/pages/agency/components/ApplicationsTable.tsx", "src/pages/admin/lib/agencyStatus.ts"]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.ok(!/["'](offer_accepted|coe_issued|under_review|offer_issued)["']\s*[:,\]]/.test(text), `${file} lists statuses`);
+    assert.ok(!/STATUS_LABELS|STATUS_META|nextStatusOptions|SELECTABLE_STATUSES/.test(text), `${file} keeps a status table`);
+  }
+  const detail = readFileSync(new URL("../src/pages/agency/applications/detail/page.tsx", import.meta.url), "utf8");
+  assert.ok(!detail.includes("Change status"), "the header has no status control: every change goes through Take action");
+  assert.ok(!detail.includes("Note for the applicant"), "the header has no message box");
 });
 
 // ---- P08-05: admin-managed notification recipients (pure UI validation; the database re-validates) ----
@@ -535,11 +549,11 @@ test("shared table exposes sorting controls in the small-screen toolbar without 
 // ---- Agencies list: application status breakdown ----
 import { sortedStatusCounts } from "../src/pages/admin/lib/agencyStatus.ts";
 
-test("agencies list: status breakdown puts work needing attention first and drops empty or unknown statuses", () => {
-  assert.deepEqual(sortedStatusCounts({ offer_accepted: 1, draft: 2, action_required: 1, enrolled: 0, mystery: 4 }),
-    [["action_required", 1], ["draft", 2], ["offer_accepted", 1]]);
-  assert.deepEqual(sortedStatusCounts(undefined), []);
-  assert.deepEqual(sortedStatusCounts({}), []);
+test("agencies list: status breakdown follows the catalogue order and drops empty or unknown statuses", () => {
+  assert.deepEqual(sortedStatusCounts({ offer_accepted: 1, draft: 2, action_required: 1, enrolled: 0, mystery: 4 }, seededWorkflow.statuses),
+    [["draft", 2], ["action_required", 1], ["offer_accepted", 1]]);
+  assert.deepEqual(sortedStatusCounts(undefined, seededWorkflow.statuses), []);
+  assert.deepEqual(sortedStatusCounts({}, seededWorkflow.statuses), []);
 });
 
 // ---- Businesses, agents and students (CMS) ----
@@ -742,4 +756,148 @@ test("contact page: the Calendly link saved in the CMS must be a calendly.com sc
   assert.equal(calendlyEmbedSrc("https://calendly.com/slit/30min/", "slit.edu.au"), "https://calendly.com/slit/30min?embed_type=Inline&hide_gdpr_banner=1&embed_domain=slit.edu.au");
   assert.equal(calendlyEmbedSrc("https://calendly.com/slit", ""), "https://calendly.com/slit?embed_type=Inline&hide_gdpr_banner=1");
   assert.equal(calendlyEmbedSrc("https://example.com/x", "slit.edu.au"), "");
+});
+
+import EmailField from "../src/components/identity/EmailField.tsx";
+import EmailInUseMessage from "../src/components/identity/EmailInUseMessage.tsx";
+import {
+  EMAIL_TAKEN_MESSAGE, emailStatusBlocks, emailTakenFrom, emailTakenFromFunctionError, isEmailTakenError, looksLikeEmail,
+  normalizeEmail, shouldCheckEmail, takenDetailsFor,
+} from "../src/lib/identity/email.ts";
+import * as edgeEmail from "../supabase/functions/_shared/identity-email.ts";
+
+const TRIGGER_ERROR = { code: "23505", hint: "email_taken", message: EMAIL_TAKEN_MESSAGE,
+  details: "stu.x@example.test is already used by another student in SLIT. Each student needs their own email." };
+const ROLE_CONFLICT = { code: "23505", hint: "login_role_conflict",
+  message: "This email already signs in to the portal as an agent. One login can have only one portal role, so use a different email for this invite." };
+
+test("identity email: normalizeEmail trims and lower-cases", () => {
+  assert.equal(normalizeEmail("  Stu.X@Example.TEST \t"), "stu.x@example.test");
+  assert.equal(normalizeEmail(null), "");
+  assert.equal(normalizeEmail(undefined), "");
+  assert.equal(looksLikeEmail(" A@b.co "), true);
+  assert.equal(looksLikeEmail("jo@"), false);
+});
+
+test("identity email: isEmailTakenError matches the trigger (PostgREST), RPC and Edge Function shapes, and nothing else", () => {
+  assert.equal(isEmailTakenError(TRIGGER_ERROR), true, "PostgREST error from the trigger");
+  assert.equal(isEmailTakenError(ROLE_CONFLICT), true, "portal invite to a login with the other role");
+  assert.equal(isEmailTakenError({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE }), true, "Edge Function 409 body");
+  assert.equal(isEmailTakenError({ code: "login_role_conflict", message: ROLE_CONFLICT.message }), true, "Edge Function 409 body, role conflict");
+  assert.equal(isEmailTakenError(JSON.stringify({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE })), true, "body still as text");
+  assert.equal(isEmailTakenError({ error: { code: "23505", hint: "email_taken" } }), true, "nested under error");
+  assert.equal(isEmailTakenError({ code: "23505", hint: "", message: "A student with this mobile already exists" }), false, "another duplicate is not an email error");
+  assert.equal(isEmailTakenError({ code: "42501", hint: "email_taken" }), false, "hint without the unique-violation code");
+  assert.equal(isEmailTakenError(new Error("This email is already in use. Please use a different email address.")), false, "message text alone is not trusted");
+  assert.equal(isEmailTakenError(null), false);
+  assert.equal(isEmailTakenError("not json"), false);
+});
+
+test("identity email: the field message is generic for email_taken and the server's sentence for login_role_conflict", () => {
+  assert.deepEqual(emailTakenFrom(TRIGGER_ERROR), { reason: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: TRIGGER_ERROR.details });
+  assert.equal(emailTakenFrom({ code: "email_taken", message: "Some other text" })?.message, EMAIL_TAKEN_MESSAGE);
+  const ownRefusal = emailTakenFrom({ code: "23505", hint: "email_taken", message: "This email has already been invited. Resend or revoke the pending invitation." });
+  assert.equal(ownRefusal?.message, EMAIL_TAKEN_MESSAGE);
+  assert.equal(takenDetailsFor("admin", ownRefusal?.details), "This email has already been invited. Resend or revoke the pending invitation.", "admins see a function's own sentence");
+  assert.equal(takenDetailsFor("portal", ownRefusal?.details), null, "agents do not");
+  assert.equal(emailTakenFrom({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE })?.details, null);
+  const fromCause = new Error("We could not save this student.", { cause: { code: "23505", hint: "email_taken", message: "Another student already has this email" } });
+  assert.equal(isEmailTakenError(fromCause), true, "a wrapper keeps the database error as its cause");
+  assert.deepEqual(emailTakenFrom(ROLE_CONFLICT), { reason: "login_role_conflict", message: ROLE_CONFLICT.message, details: null });
+});
+
+test("identity email: an Edge Function 409 is read from the unread Response; other statuses are not email errors", async () => {
+  const fnError = (status: number, body: unknown) => ({ name: "FunctionsHttpError", message: "Edge Function returned a non-2xx status code",
+    context: new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }) });
+  assert.deepEqual(await emailTakenFromFunctionError(fnError(409, { code: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." })),
+    { reason: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." });
+  assert.equal(await emailTakenFromFunctionError(fnError(400, { code: "email_taken" })), null);
+  assert.equal(await emailTakenFromFunctionError(fnError(409, { error: "This invitation is no longer pending." })), null);
+  assert.equal((await emailTakenFromFunctionError(TRIGGER_ERROR))?.reason, "email_taken", "a PostgREST error passed straight through");
+});
+
+test("identity email: live checks only for signed-in forms, plausible emails and a changed email; Submit blocks while taken or checking", () => {
+  assert.equal(shouldCheckEmail("new@example.test", "admin"), true);
+  assert.equal(shouldCheckEmail("new@example.test", "portal"), true);
+  assert.equal(shouldCheckEmail("new@example.test", "public"), false, "anonymous sign-up relies on the submit error");
+  assert.equal(shouldCheckEmail("jo@", "admin"), false);
+  assert.equal(shouldCheckEmail(" Own@Example.test ", "admin", "own@example.test"), false, "editing without changing the email: no check");
+  assert.deepEqual(["idle", "checking", "available", "taken", "error"].map((s) => emailStatusBlocks(s as never)), [false, true, false, true, false]);
+  assert.equal(takenDetailsFor("admin", "x is already used by another agent in SLIT."), "x is already used by another agent in SLIT.");
+  assert.equal(takenDetailsFor("portal", "x is already used by another agent in SLIT."), null);
+  assert.equal(takenDetailsFor("public", "x is already used by another agent in SLIT."), null);
+});
+
+test("identity email: Edge Functions answer 409 bodies the frontend maps; other duplicates are not email errors", () => {
+  const db = { code: "23505", hint: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." };
+  assert.deepEqual(edgeEmail.emailConflictBody(db), { code: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: db.details, error: EMAIL_TAKEN_MESSAGE });
+  assert.equal(edgeEmail.emailConflictBody({ ...ROLE_CONFLICT })?.code, "login_role_conflict");
+  assert.equal(edgeEmail.emailConflictBody({ ...ROLE_CONFLICT })?.message, ROLE_CONFLICT.message);
+  assert.equal(edgeEmail.emailConflictBody({ code: "23505", message: "A student with this mobile already exists" }), null);
+  assert.equal(edgeEmail.emailConflictBody({ code: "22023", hint: "email_taken" }), null);
+  assert.equal(isEmailTakenError(edgeEmail.publicEmailTakenBody()), true);
+  assert.equal(edgeEmail.publicEmailTakenBody().details, null, "the public body never names the role");
+  assert.equal(edgeEmail.EMAIL_TAKEN_MESSAGE, EMAIL_TAKEN_MESSAGE, "one sentence on both sides");
+});
+
+test("identity email: EmailInUseMessage shows the role detail to admins only", () => {
+  const admin = renderToStaticMarkup(h(EmailInUseMessage, { context: "admin", details: TRIGGER_ERROR.details }));
+  const portal = renderToStaticMarkup(h(EmailInUseMessage, { context: "portal", details: TRIGGER_ERROR.details }));
+  assert.match(admin, /This email is already in use\. Please use a different email address\./);
+  assert.match(admin, /already used by another student in SLIT/);
+  assert.match(portal, /This email is already in use/);
+  assert.doesNotMatch(portal, /another student/, "agents, students and the public never see the role");
+  assert.match(renderToStaticMarkup(h(EmailInUseMessage, { context: "portal", message: ROLE_CONFLICT.message })), /already signs in to the portal as an agent/);
+});
+
+test("identity email: EmailField maps a submit error to the field, pinned to the submitted value", () => {
+  const field = (props: Record<string, unknown>) => renderToStaticMarkup(h(EmailField, { value: "stu.x@example.test", onChange: () => {}, kind: "student", context: "admin", ...props }));
+  const taken = field({ serverError: TRIGGER_ERROR });
+  assert.match(taken, /data-email-status="taken"/);
+  assert.match(taken, /aria-invalid="true"/);
+  assert.match(taken, /aria-describedby="[^"]+-message"/);
+  assert.match(taken, /This email is already in use/);
+  assert.match(taken, /already used by another student in SLIT/, "admins see the role from the submit error");
+  const portal = field({ context: "portal", serverError: TRIGGER_ERROR });
+  assert.match(portal, /This email is already in use/);
+  assert.doesNotMatch(portal, /another student/);
+  assert.match(field({ context: "portal", serverError: ROLE_CONFLICT }), /already signs in to the portal as an agent/, "login_role_conflict shows the server's sentence");
+  const publicTaken = field({ context: "public", serverError: { code: "email_taken", message: "An account with this email already exists. Sign in or reset your password." } });
+  assert.match(publicTaken, /An account with this email already exists\. Sign in or reset your password\./);
+  assert.match(publicTaken, /href="\/login"[^>]*>Sign in</);
+  assert.match(publicTaken, /href="\/forgot-password"[^>]*>Forgot password</);
+  assert.doesNotMatch(field({ context: "public", serverError: TRIGGER_ERROR }), /another student|This email is already in use/, "the public never sees the role or the signed-in wording");
+  const other = field({ context: "public", serverError: { code: "23505", message: "A student with this mobile already exists" } });
+  assert.doesNotMatch(other, /email-in-use/, "a different error is left to the form");
+  assert.match(field({ context: "public" }), /data-email-status="idle"/, "public forms never run the live check");
+  assert.match(field({ context: "admin", value: "new@example.test" }), /data-email-status="checking"/, "a signed-in form blocks until the check answers");
+  assert.match(field({ context: "admin", savedEmail: "STU.X@example.test" }), /data-email-status="idle"/, "the saved email is not checked");
+});
+
+// ---- Staged application form: the steps grouped into stages by config (applicationStages.ts)
+import { APPLICATION_STAGES, SECTION_SUMMARY, groupSections, sectionKey } from "../src/pages/agency/lib/applicationStages.ts";
+
+// The portal form's 14 steps in form order, as portalSections builds them from the shared enrolment sections (checked below).
+const PORTAL_STEP_TITLES = ["1. PERSONAL DETAILS & PASSPORT", "2. ADDRESS", "AUSTRALIAN VISA", "ENGLISH TEST", "4. STUDENT IDENTIFIER (AVETMISS)", "4a. ACADEMIC DOCUMENTS",
+  "5. UNIQUE STUDENT IDENTIFIER (USI)", "6. EMERGENCY CONTACT", "7. COURSE INFORMATION", "8. STUDY REASON", "9. COURSE CREDIT", "10. OSHC / HEALTH INSURANCE",
+  "11. HOW DID YOU HEAR ABOUT SLIT?", "13. STUDENT DECLARATION"];
+const portalSteps = PORTAL_STEP_TITLES.map((title) => ({ title, fields: [] }));
+
+test("stages: the 14 form steps are grouped into 4 stages by the config, each step exactly once", () => {
+  const forms = readFileSync(new URL("../src/data/applicationForms.ts", import.meta.url), "utf8") + readFileSync(new URL("../src/pages/agency/lib/portalSections.ts", import.meta.url), "utf8");
+  for (const title of PORTAL_STEP_TITLES) assert.ok(forms.includes(`title: "${title}"`), `${title} is a step title`);
+  const stages = groupSections(portalSteps);
+  const keysOf = (ids: number[]) => ids.map((index) => sectionKey(portalSteps[index], index));
+  assert.deepEqual(stages.map((stage) => stage.title), ["About you", "Visa & identity", "Education & course", "Finish"]);
+  assert.deepEqual(stages.map((stage) => keysOf(stage.sections)), APPLICATION_STAGES.map((stage) => [...stage.sections]));
+  assert.deepEqual(stages.flatMap((stage) => stage.sections).sort((a, b) => a - b), portalSteps.map((_, index) => index), "every step is on one stage, none twice");
+  for (const key of Object.keys(SECTION_SUMMARY)) assert.ok(portalSteps.some((section, index) => sectionKey(section, index) === key), `summary key ${key} names a step`);
+});
+
+test("stages: a step the config does not name joins the stage of the step before it", () => {
+  const extra = [...portalSteps.slice(0, 3), { title: "NEW CHECKS", fields: [] }, ...portalSteps.slice(3)];
+  const stages = groupSections(extra);
+  const holder = stages.find((stage) => stage.sections.includes(3));
+  assert.ok(holder?.sections.includes(2), "placed next to the step before it");
+  assert.equal(stages.flatMap((stage) => stage.sections).length, extra.length);
 });

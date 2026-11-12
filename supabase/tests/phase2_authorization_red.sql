@@ -1,7 +1,7 @@
 -- Security assertions (REG-AUTH/SEC), originally red until P02-03/04, now green; includes the P06-01 tenant administration matrix.
 -- Synthetic SQL actor simulation; every write is rolled back.
 begin;
-select plan(470);
+select plan(477);
 -- Backend-driven admin navigation: grants, protection and fail-closed reads.
 select is(has_table_privilege('anon','public.admin_menu_items','select'),false,'menu is not public');
 select is(has_table_privilege('authenticated','public.admin_menu_items','insert'),false,'browser cannot insert menu');
@@ -9,7 +9,7 @@ select is(has_table_privilege('authenticated','public.admin_menu_items','update'
 select is(has_table_privilege('authenticated','public.admin_menu_items','delete'),false,'browser cannot delete menu');
 select is((select relrowsecurity from pg_class where oid='public.admin_menu_items'::regclass),true,'menu has RLS');
 -- 32 seeded rows plus later menu migrations (businesses, agents, students, staff item, Staff group, Jobs, HRMS pages, ...) on a full repo replay.
-select is((select count(*)::int from public.admin_menu_items),58,'desired menu seeded (49 with Document signing 20261110154917 and HRMS Locations 20261113090000, 58 with the External Integrations group and its eight pages 20261113180001)');
+select is((select count(*)::int from public.admin_menu_items),59,'desired menu seeded (49 with Document signing 20261110154917 and HRMS Locations 20261113090000, 58 with the External Integrations group and its eight pages 20261113180001, 59 with Application statuses 20261113280000)');
 -- Seeded hidden: students (unimplemented group), media (unimplemented). 20261102095335: agent_users and agency_directory
 -- (replaced by Agencies > Businesses / Agents / Students). 20261103090000: courses (the group emptied when Course Catalogue
 -- moved under Website).
@@ -165,7 +165,7 @@ select lives_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-000
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','branding','{"primaryColor":"blue"}',0)$$,'22023',null,'invalid colour rejected');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','branding','{"primaryColor":"#112233","logo":"x"}',0)$$,'22023',null,'unknown branding field rejected');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','workflow','{"statuses":["draft","submitted","enrolled"],"transitions":[{"from":"draft","to":"submitted"}]}',0)$$,'22023',null,'workflow with an unreachable status rejected');
-select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','workflow','{"statuses":["draft","submitted","enrolled"],"transitions":[{"from":"draft","to":"submitted"},{"from":"submitted","to":"enrolled"},{"from":"enrolled","to":"submitted"}]}',0)$$,'22023',null,'transition out of a terminal status rejected');
+select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','workflow','{"statuses":["draft","submitted","rejected"],"transitions":[{"from":"draft","to":"submitted"},{"from":"submitted","to":"rejected"},{"from":"rejected","to":"submitted"}]}',0)$$,'22023',null,'transition out of a terminal status rejected');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','roles','{"roles":{"tenant_admin":["cms.read"]}}',0)$$,'22023',null,'administrators cannot be stripped of member and configuration management');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','roles','{"roles":{"platform_admin":["cms.read"],"tenant_admin":["members.manage","config.manage"]}}',0)$$,'22023',null,'a platform role cannot be defined');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000001','integration','{"integrations":[{"provider":"azure","enabled":true,"settings":{"endpoint":"eyJhbGciOiJIUzI1NiJ9.payload.signature"}}]}',0)$$,'22023',null,'a credential-looking setting value is rejected');
@@ -218,9 +218,9 @@ reset role;
 insert into auth.users(id,email) values ('a0000000-0000-0000-0000-000000000006','viewer-a@example.test');
 insert into public.tenant_memberships(tenant_id,auth_user_id,role) values ('1a000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000006','viewer');
 insert into public.cms_pages(id,slug,title,tenant_id) values ('p06-page','p06-page','Original','1a000000-0000-0000-0000-000000000001');
--- P08-04 (deliberate): the default workflow no longer contains under_review / offer_issued, so parity is over the 8 default statuses (64 pairs).
-select is((select count(*)::int from (select f,t from unnest(array['draft','submitted','action_required','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) f cross join unnest(array['draft','submitted','action_required','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) t
-  where public.portal_legacy_transition_allowed(f,t) is distinct from public.portal_pinned_transition_allowed(public.tenant_config_defaults('workflow'),f,t,null,true)) x),0,'the default workflow allows exactly the hard-coded transitions (64 pairs)');
+-- P08-04 (deliberate): the default workflow no longer contains under_review; 20261113260000 adds offer_issued, so parity is over the 9 default statuses (81 pairs); offer_issued -> offer_accepted is in tenant graphs for reachability but is the recipient's acceptance, never a staff move (20261113280000).
+select is((select count(*)::int from (select f,t from unnest(array['draft','submitted','action_required','offer_issued','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) f cross join unnest(array['draft','submitted','action_required','offer_issued','offer_accepted','coe_issued','enrolled','rejected','withdrawn']) t
+  where not (f='offer_issued' and t='offer_accepted') and public.portal_legacy_transition_allowed(f,t) is distinct from public.portal_pinned_transition_allowed(public.tenant_config_defaults('workflow'),f,t,null,true)) x),0,'the default workflow allows exactly the catalogue transitions (81 pairs)');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"draft","to":"submitted"}]}','draft','submitted','tenant_admin',true),false,'a configured workflow cannot move a draft through the reviewer command');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"submitted","to":"rejected","roles":["tenant_admin"]}]}','submitted','rejected','staff',false),false,'a role-limited transition denies other roles');
 select is(public.portal_pinned_transition_allowed('{"transitions":[{"from":"submitted","to":"rejected","roles":["tenant_admin"]}]}','submitted','rejected','tenant_admin',false),true,'a role-limited transition admits the named role');
@@ -395,7 +395,7 @@ select lives_ok($$select public.portal_set_application_status('42000000-0000-000
 reset role;
 select is((select count(*)::int from public.admission_event_outbox where application_id='42000000-0000-0000-0000-0000000000b2' and event='application_status_changed')-(select events from p07_base),1,'a committed transition yields exactly one outbox event, even when requested twice');
 select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),1,'one delivery for the one recipient');
-select is((select recipient_email||'|'||subject||'|'||template_source||'|'||state from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),'notify-admin@example.test|Application 42000000 is now action required|default|pending','the delivery is rendered from the built-in template and addressed in lower case');
+select is((select recipient_email||'|'||subject||'|'||template_source||'|'||state from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),'notify-admin@example.test|Application 42000000 is now Action required|default|pending','the delivery is rendered from the built-in template and addressed in lower case');
 select is((select count(*)::int from public.notification_deliveries where recipient_user in ('a0000000-0000-0000-0000-00000000000a','a0000000-0000-0000-0000-00000000000b','a0000000-0000-0000-0000-00000000000c')),0,'inactive, other-agency and unassigned profiles receive nothing');
 select is((select count(*)::int from public.portal_notifications where recipient='a0000000-0000-0000-0000-000000000009' and application_id='42000000-0000-0000-0000-0000000000b2' and event='status_change'),1,'the in-app inbox notification is preserved');
 select throws_ok($$insert into public.notification_deliveries(outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body) select outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body from public.notification_deliveries limit 1$$,'23505',null,'a recipient cannot receive the same event twice');
@@ -410,12 +410,12 @@ select lives_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-000
 select is(public.tenant_config_publish('1a000000-0000-0000-0000-000000000002','notifications',0),1,'notification configuration version 1 published');
 select lives_ok($$select public.portal_set_application_status('42000000-0000-0000-0000-0000000000b2','under_review')$$,'a transition after publishing');
 reset role;
-select is((select subject||'|'||template_source||'|'||coalesce(sender->>'email','none')||'|'||(template_version_id is not null)::text from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' order by seq desc limit 1),'[Institution B] 42000000: under review|published|none|true','the delivery uses the published template; an unapproved sender is not used');
+select is((select subject||'|'||template_source||'|'||coalesce(sender->>'email','none')||'|'||(template_version_id is not null)::text from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' order by seq desc limit 1),'[Institution B] 42000000: Under review|published|none|true','the delivery uses the published template; an unapproved sender is not used');
 set local role authenticated;
 select lives_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000002','notifications','{"templates":{"application_status_changed":{"subject":"v2 {{reference}}","body":"Changed to {{status}}."}}}',1)$$,'a second version is drafted');
 select is(public.tenant_config_publish('1a000000-0000-0000-0000-000000000002','notifications',1),2,'notification configuration version 2 published');
 reset role;
-select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' and subject='[Institution B] 42000000: under review'),1,'publishing a new version never rewrites a delivery already created');
+select is((select count(*)::int from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2' and subject='[Institution B] 42000000: Under review'),1,'publishing a new version never rewrites a delivery already created');
 set local role authenticated;
 select lives_ok($$select public.portal_set_application_status('42000000-0000-0000-0000-0000000000b2','action_required','third')$$,'a transition under version 2');
 reset role;
@@ -918,6 +918,17 @@ select throws_ok($$select public.admin_agency_directory()$$,'42501',null,'missin
 reset role;
 set local role anon;
 select throws_ok($$select public.admin_agency_directory()$$,'42501',null,'anonymous execution denied');
+-- Offer letter templates (20261113270000): the registry, letter values, fees and template pictures are for staff only.
+select throws_ok($$select public.letter_variable_registry()$$,'42501',null,'anonymous cannot read the letter variable registry');
+select throws_ok($$select public.portal_letter_values(gen_random_uuid())$$,'42501',null,'anonymous cannot read letter values');
+reset role;
+select is(has_table_privilege('authenticated','public.letter_variables','select'),false,'the registry table is read through its function only');
+select is(has_table_privilege('authenticated','public.course_fee_setups','select'),false,'fee setups are read through their functions only');
+set local role authenticated;
+set local request.jwt.claim.sub='00000000-0000-0000-0000-0000000000ee';
+select is(jsonb_array_length(public.letter_variable_registry()),0,'a signed-in user who is not staff gets no registry');
+select throws_ok($$select public.cms_course_fee_save('any-course',null,'{"tuition":"1"}')$$,'42501',null,'a non-admin cannot change fees');
+select throws_ok($$insert into storage.objects(bucket_id,name) values ('template-assets','default/'||gen_random_uuid()||'.png')$$,'42501',null,'a non-admin cannot add a template picture');
 reset role;
 select * from finish();
 rollback;

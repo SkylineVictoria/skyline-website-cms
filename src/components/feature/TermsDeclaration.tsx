@@ -3,9 +3,11 @@ import { useState } from "react";
 type TermsDeclarationProps = {
   heading: string;
   terms: string[];
+  /** Inside a page card (the compact application form): no box of its own and a neutral "agree to all" row. */
+  plain?: boolean;
 };
 
-export default function TermsDeclaration({ heading, terms }: TermsDeclarationProps) {
+export default function TermsDeclaration({ heading, terms, plain = false }: TermsDeclarationProps) {
   const [checked, setChecked] = useState<boolean[]>(() => terms.map(() => false));
   const [open, setOpen] = useState(false);
 
@@ -23,10 +25,10 @@ export default function TermsDeclaration({ heading, terms }: TermsDeclarationPro
   };
 
   return (
-    <div className="rounded-card border border-background-200 bg-background-100/70 p-4 md:p-5">
+    <div className={plain ? "" : "rounded-card border border-background-200 bg-background-100/70 p-4 md:p-5"}>
       <p className="text-sm font-semibold text-foreground-900">{heading}</p>
 
-      <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-md border border-primary-200 bg-primary-50/70 p-3.5">
+      <label className={plain ? "mt-3 flex cursor-pointer items-start gap-3 rounded-lg border border-background-300 p-3" : "mt-4 flex cursor-pointer items-start gap-3 rounded-md border border-primary-200 bg-primary-50/70 p-3.5"}>
         <input
           type="checkbox"
           checked={allChecked}

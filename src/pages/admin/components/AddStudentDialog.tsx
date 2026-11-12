@@ -7,6 +7,7 @@ import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admi
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import { activateAgent, listBusinesses, sendStudentInvitation, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
 import { listAgentsOfBusiness, saveStudent, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 type Business = { id: string; name: string; status: BusinessStatus };
 
@@ -22,6 +23,8 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
   const [initialAgentName, setInitialAgentName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Email unique within the student role: a refused email shows under the email field, not here.
+  const [emailError, setEmailError] = useState<unknown>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -63,6 +66,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
     if (existing) { setError("This student is already on record. Each email and mobile can belong to one student only."); return; }
     setBusy(true);
     setError("");
+    setEmailError(null);
     const notes: string[] = [];
     try {
       if (business.status !== "Active") {
@@ -83,6 +87,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
       onAdded?.();
       onClose();
     } catch (e) {
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       setError(e instanceof Error ? e.message : "We could not add this student.");
     } finally {
       setBusy(false);
@@ -138,7 +143,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
         {/* Student */}
         {ready ? (
           <div className="border-t border-background-200 pt-5">
-            <StudentDetailsStep askName offerInvite busy={busy} error={error} submitLabel="Add student"
+            <StudentDetailsStep askName offerInvite busy={busy} error={error} submitLabel="Add student" context="admin" emailError={emailError}
               description="Name, email and mobile. Email and mobile must be new: a student already on record with either cannot be added again. When an application is started, the name read from the passport replaces the one typed here."
               onContinue={(draft, existing) => void finish(draft, existing)}
               cancel={<Button type="button" variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>} />

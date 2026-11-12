@@ -4,6 +4,8 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { mobileProblem, validEmail } from "@/lib/enrolForm";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 /** Names from Google profile data, when it gave them. */
 function namesFrom(user: User): { first: string; last: string } {
@@ -29,11 +31,13 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
   const [email, setEmail] = useState(emailVerified ? String(user.email) : "");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
   const verifiedPhone = phoneVerified ? `+${String(user.phone).replace(/^\+/, "")}` : "";
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || emailBlocking) return;
     const mobile = phoneVerified ? verifiedPhone : String(new FormData(event.currentTarget).get("mobile") ?? "");
     const next: Record<string, string> = {};
     if (!first.trim()) next.first = "Enter your first name.";
@@ -41,13 +45,19 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
     if (!emailVerified && !validEmail(email)) next.email = "Enter a valid email address.";
     const mobileError = phoneVerified ? "" : mobileProblem(mobile); if (mobileError) next.mobile = mobileError;
     setErrors(next);
+    setEmailError(null);
     if (Object.keys(next).length) return;
     setBusy(true);
     const { error } = await supabase.rpc("portal_self_enrol_complete", {
       p_input: { firstName: first.trim(), lastName: last.trim(), email: email.trim().toLowerCase(), phone: mobile },
     });
     setBusy(false);
-    if (error) { setErrors({ form: error.message || "We could not finish setting up your account. Please try again." }); return; }
+    if (error) {
+      // An email already on another student account is shown on the email field, not in the banner.
+      if (isEmailTakenError(error)) { setEmailError(error); return; }
+      setErrors({ form: error.message || "We could not finish setting up your account. Please try again." });
+      return;
+    }
     onDone();
   };
 
@@ -75,7 +85,11 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
           </dl>
         ) : null}
         {emailVerified ? null : (
-          <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />{problem("email")}</Field>
+          <Field label="Email" required>
+            <EmailField value={email} onChange={setEmail} kind="student" context="portal" serverError={emailError}
+              onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} placeholder="you@example.com" autoComplete="email" />
+            {problem("email")}
+          </Field>
         )}
         {phoneVerified ? null : (
           <div>
@@ -85,7 +99,7 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
           </div>
         )}
         {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">{errors.form}</div> : null}
-        <Button type="submit" className="w-full" disabled={busy}>{busy ? "Creating your account…" : "Create student account"}</Button>
+        <Button type="submit" className="w-full" disabled={busy || emailBlocking}>{busy ? "Creating your account…" : "Create student account"}</Button>
         <p className="text-center text-xs text-foreground-500">
           By creating an account you agree to the <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">terms</a> and <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">privacy policy</a>.
         </p>

@@ -64,6 +64,7 @@ Deno.serve(async (req) => {
     newId: () => crypto.randomUUID(),
   });
   // "Application received", "new application" or "already applied" may have been queued: send after the response.
-  if (result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
+  // A 409 (this email already has a staff record, 2026-11-12) may also have queued "already applied".
+  if (result.status === 200 || result.status === 409) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
   return json(result.body, result.status, result.headers ?? {});
 });

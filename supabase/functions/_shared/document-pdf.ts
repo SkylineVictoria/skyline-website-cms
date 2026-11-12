@@ -12,8 +12,9 @@ import { PDFDocument, PDFFont, PDFPage, PDFString, rgb, type PDFImage } from "pd
 import fontkit from "@pdf-lib/fontkit";
 import { ARIMO_BOLD, ARIMO_BOLD_ITALIC, ARIMO_ITALIC, ARIMO_REGULAR } from "./pdf-fonts-arimo.ts";
 import { NOTO_SANS_BOLD, NOTO_SANS_REGULAR } from "./notification/pdf-fonts.ts";
-import { BRACKET_TOKEN, colourOf, lengthOf, parseHtml, pointsOf, safeHref, safeImageSrc, sanitizeRichHtml, type ElementNode, type Node } from "./rich-html.ts";
+import { BRACKET_TOKEN, colourOf, isTemplateAsset, lengthOf, parseHtml, pointsOf, safeHref, safeImageSrc, sanitizeRichHtml, type ElementNode, type Node } from "./rich-html.ts";
 import { resolveToken, tokenFieldLabel } from "./template-variables.ts";
+import { CURLY_TOKEN, parseCurly, type CurlyResolution } from "./letter-variables.ts";
 
 export const DOC_PAGE_W = 595.28;
 export const DOC_PAGE_H = 841.89;
@@ -30,14 +31,18 @@ const BLACK = "#000000";
 /* ------------------------------------------------------------------ model */
 interface Style { bold: boolean; italic: boolean; underline: boolean; strike: boolean; size: number; color: string; background: string | null; href: string | null; script: "sub" | "sup" | null }
 type Inline =
-  | { t: "text"; text: string; style: Style }
+  | { t: "text"; text: string; style: Style; mark?: string }
   | { t: "image"; src: string; w: number | null; h: number | null; style: Style }
   | { t: "br"; style: Style }
   | { t: "var"; which: "page" | "total"; style: Style }
   | { t: "field"; field: "text" | "initials"; label: string; style: Style };
 type Align = "left" | "center" | "right" | "justify";
-interface Para { kind: "para"; inlines: Inline[]; align: Align; indent: number; marker: string | null; quote: boolean; before: number; after: number; keep: boolean; size: number }
-interface Cell { blocks: Block[]; colspan: number; width: { pct: number } | { pt: number } | null; background: string | null; valign: "top" | "middle" | "bottom" }
+interface Para { kind: "para"; inlines: Inline[]; align: Align; indent: number; marker: string | null; quote: boolean; before: number; after: number; keep: boolean; size: number;
+  /** line-height: a multiple of single spacing, or points. */ leading?: { factor: number } | { pt: number } }
+type Side = "top" | "right" | "bottom" | "left";
+interface Edge { w: number; color: string }
+interface Cell { blocks: Block[]; colspan: number; rowspan: number; width: { pct: number } | { pt: number } | null; background: string | null; valign: "top" | "middle" | "bottom";
+  /** Borders the cell sets itself (null: none on that side); a side it does not set takes the table's. */ borders: Partial<Record<Side, Edge | null>>; pad: { v: number; h: number } }
 interface Table { kind: "table"; border: boolean; width: { pct: number } | { pt: number } | null; rows: Cell[][] }
 type Block = Para | Table | { kind: "hr" };
 
@@ -71,11 +76,31 @@ function styled(base: Style, node: ElementNode): Style {
   return s;
 }
 const alignOf = (node: ElementNode, inherited: Align): Align => { const a = css(node)["text-align"]; return a === "center" || a === "right" || a === "justify" || a === "left" ? a : inherited; };
+/** Line spacing and space before / after a paragraph, as the sanitiser normalised them (line-height:1.5 | 18pt, margin-top / -bottom in pt). */
+function spacing(node: ElementNode): Partial<Para> {
+  const c = css(node);
+  const out: Partial<Para> = {};
+  const lh = String(c["line-height"] ?? "");
+  if (/^\d+(\.\d+)?$/.test(lh)) out.leading = { factor: Number(lh) };
+  else if (/^\d+(\.\d+)?pt$/.test(lh)) out.leading = { pt: parseFloat(lh) };
+  const top = String(c["margin-top"] ?? ""), bottom = String(c["margin-bottom"] ?? "");
+  if (/^\d+(\.\d+)?pt$/.test(top)) out.before = Math.min(48, parseFloat(top));
+  if (/^\d+(\.\d+)?pt$/.test(bottom)) out.after = Math.min(48, parseFloat(bottom));
+  return out;
+}
+const edgeOf = (value: string | undefined): Edge | null | undefined => {
+  const v = String(value ?? "").trim();
+  if (!v) return undefined;
+  if (v === "none") return null;
+  const m = v.match(/^(\d+(?:\.\d+)?)pt solid (#[0-9a-f]{6})$/);
+  return m ? { w: Number(m[1]), color: m[2] } : undefined;
+};
 
 class Builder {
   readonly blocks: Block[] = [];
   private current: Para | null = null;
-  constructor(private readonly inCell: boolean) {}
+  private readonly inCell: boolean;
+  constructor(inCell: boolean) { this.inCell = inCell; }
   private para(ctx: Ctx, extra: Partial<Para> = {}): Para {
     if (!this.current) {
       this.current = { kind: "para", inlines: [], align: ctx.align, indent: ctx.indent, marker: null, quote: ctx.quote, before: 0, after: this.inCell ? 2 : 6, keep: false, size: ctx.style.size, ...extra };
@@ -105,13 +130,13 @@ class Builder {
       case "p": case "div": {
         const blockish = node.children.some((c) => typeof c !== "string" && /^(p|div|table|ul|ol|h[1-6]|blockquote|hr)$/.test(c.tag));
         if (blockish) { this.flush(); this.children(node, here); this.flush(); return; }
-        this.block(node, here, { align: here.align, size: style.size });
+        this.block(node, here, { align: here.align, size: style.size, ...spacing(node) });
         return;
       }
       case "h1": case "h2": case "h3": case "h4": case "h5": case "h6": {
         const h = HEADING[tag];
         const hs: Style = { ...style, bold: true, size: pointsOf(css(node)["font-size"]) ?? h.size };
-        this.block(node, { ...here, style: hs }, { before: this.inCell ? 0 : h.before, after: h.after, keep: true, size: hs.size, align: here.align });
+        this.block(node, { ...here, style: hs }, { before: this.inCell ? 0 : h.before, after: h.after, keep: true, size: hs.size, align: here.align, ...spacing(node) });
         return;
       }
       case "blockquote": this.flush(); this.children(node, { ...here, indent: ctx.indent + 14, quote: true }); this.flush(); return;
@@ -126,7 +151,7 @@ class Builder {
             const liCtx: Ctx = { ...here, style: styled(here.style, child), align: alignOf(child, here.align), indent: ctx.indent + 18 };
             // The item's own text is the marked paragraph; nested lists and blocks follow it, further in.
             this.flush();
-            this.para(liCtx, { marker, after: 2, size: liCtx.style.size });
+            this.para(liCtx, { marker, after: 2, size: liCtx.style.size, ...spacing(child) });
             for (const grandchild of child.children) {
               if (typeof grandchild !== "string" && /^(ul|ol|table|p|div|blockquote|h[1-6])$/.test(grandchild.tag)) { this.flush(); this.walk(grandchild, liCtx); this.flush(); }
               else this.walk(grandchild, liCtx);
@@ -164,9 +189,14 @@ function tableOf(node: ElementNode, ctx: Ctx): Table {
           const cellStyle = styled(ctx.style, cell);
           builder.children(cell, { style: cellStyle, align: alignOf(cell, cell.tag === "th" ? "left" : "left"), indent: 0, quote: false });
           builder.flush();
-          const span = Number(cell.attrs.colspan);
-          row.push({ blocks: builder.blocks, colspan: Number.isInteger(span) && span > 1 ? Math.min(span, 20) : 1, width: lengthOf(cc.width), background: colourOf(cc["background-color"]),
-            valign: cc["vertical-align"] === "middle" ? "middle" : cc["vertical-align"] === "bottom" ? "bottom" : "top" });
+          const span = Number(cell.attrs.colspan), down = Number(cell.attrs.rowspan);
+          const borders: Cell["borders"] = {};
+          for (const side of ["top", "right", "bottom", "left"] as const) { const e = edgeOf(cc[`border-${side}`]); if (e !== undefined) borders[side] = e; }
+          const pad = String(cc.padding ?? "").match(/^(\d+(?:\.\d+)?)pt (\d+(?:\.\d+)?)pt$/);
+          row.push({ blocks: builder.blocks, colspan: Number.isInteger(span) && span > 1 ? Math.min(span, 20) : 1, rowspan: Number.isInteger(down) && down > 1 ? Math.min(down, 50) : 1,
+            width: lengthOf(cc.width), background: colourOf(cc["background-color"]),
+            valign: cc["vertical-align"] === "middle" ? "middle" : cc["vertical-align"] === "bottom" ? "bottom" : "top", borders,
+            pad: pad ? { v: Number(pad[1]), h: Number(pad[2]) } : { v: CELL_PAD, h: CELL_PAD } });
         }
         if (row.length) rows.push(row);
       } else if (child.tag === "thead" || child.tag === "tbody" || child.tag === "tfoot") collect(child);
@@ -181,12 +211,18 @@ function blocksOf(html: string, tokens: TokenContext | null): Block[] {
   const builder = new Builder(false);
   builder.children(parseHtml(sanitizeRichHtml(html)), { style: plain, align: "left", indent: 0, quote: false });
   builder.flush();
-  if (tokens) resolveBlocks(builder.blocks, tokens);
+  if (tokens && (tokens.brackets || tokens.curly)) resolveBlocks(builder.blocks, tokens);
   return builder.blocks;
 }
 
 /* ------------------------------------------------------------------ tokens */
-interface TokenContext { values: Record<string, string>; sample: boolean; missing: Set<string> }
+interface TokenContext { values: Record<string, string>; sample: boolean; missing: Set<string>; brackets: boolean; curly?: CurlyResolver }
+/** Offer letters: how a {{key|modifier}} token prints (see letter-variables.ts letterResolver). */
+export type CurlyResolver = (key: string, modifier: string | null) => CurlyResolution;
+const MARK_BACKGROUND = "#fde68a";
+/** A value with line breaks (offer conditions, a payment plan) prints line by line. */
+const textInlines = (text: string, style: Style, mark?: string): Inline[] =>
+  text.split("\n").flatMap((line, i): Inline[] => [...(i ? [{ t: "br" as const, style }] : []), ...(line ? [{ t: "text" as const, text: line, style, ...(mark ? { mark } : {}) }] : [])]);
 function resolveBlocks(blocks: Block[], ctx: TokenContext): void {
   for (const block of blocks) {
     if (block.kind === "para") block.inlines = resolveInlines(block.inlines, ctx);
@@ -205,9 +241,25 @@ function resolveInlines(inlines: Inline[], ctx: TokenContext): Inline[] {
       let i = from;
       while (i < to) { const style = group[i].style; let j = i; while (j < to && group[j].style === style) j++; out.push({ t: "text", text: group.slice(i, j).map((g) => g.ch).join(""), style }); i = j; }
     };
-    for (const m of text.matchAll(BRACKET_TOKEN)) {
+    const found = [
+      ...(ctx.curly ? [...text.matchAll(CURLY_TOKEN)].map((m) => ({ m, curly: true })) : []),
+      ...(ctx.brackets ? [...text.matchAll(BRACKET_TOKEN)].map((m) => ({ m, curly: false })) : []),
+    ].sort((a, b) => (a.m.index ?? 0) - (b.m.index ?? 0));
+    for (const { m, curly } of found) {
       const start = m.index ?? 0, end = start + m[0].length;
+      if (start < at) continue;
       const style = group[start].style;
+      if (curly && ctx.curly) {
+        const { key, modifier } = parseCurly(m[1]);
+        const r = ctx.curly(key, modifier);
+        emit(at, start);
+        if (r.kind === "value") out.push(...textInlines(r.text, style));
+        else if (r.kind === "missing") { ctx.missing.add(key); out.push({ t: "text", text: `[${r.label}]`, style: { ...style, background: MARK_BACKGROUND }, mark: key }); }
+        else if (r.kind === "image") out.push({ t: "image", src: r.src, w: null, h: r.height, style });
+        else out.push({ t: "var", which: r.kind, style });
+        at = end;
+        continue;
+      }
       const r = resolveToken(m[1], ctx.values, ctx.sample);
       if (r.kind === "literal") continue;
       emit(at, start);
@@ -245,11 +297,13 @@ interface Seg { text: string; font: PDFFont; width: number }
 interface Piece {
   kind: "text" | "image" | "var" | "field";
   segs: Seg[]; width: number; size: number; style: Style; breakAfter: boolean; ascent: number; descent: number;
-  image?: { img: PDFImage; w: number; h: number }; varWhich?: "page" | "total"; field?: { field: "text" | "initials"; label: string };
+  image?: { img: PDFImage; w: number; h: number }; varWhich?: "page" | "total"; field?: { field: "text" | "initials"; label: string }; mark?: string;
 }
 interface Line { pieces: Piece[]; width: number; height: number; ascent: number; spaces: number }
 export interface PlacedField { label: string; type: "text" | "initials"; page: number; x: number; y: number; w: number; h: number }
-interface DrawCtx { page: PDFPage; pageIndex: number; total: number; fields: PlacedField[]; sample: boolean }
+/** Where a missing {{variable}} printed (fractions of the page from its top-left corner), so the preview can point at it. */
+export interface PlacedMark { key: string; page: number; x: number; y: number; w: number; h: number }
+interface DrawCtx { page: PDFPage; pageIndex: number; total: number; fields: PlacedField[]; sample: boolean; marks: PlacedMark[] }
 interface Item {
   height: number; gap?: boolean; keep?: boolean; row?: boolean;
   draw(ctx: DrawCtx, x: number, top: number): void;
@@ -259,7 +313,9 @@ interface Item {
 class Layout {
   readonly unsupported = new Set<string>();
   readonly placed: Array<{ kind: "row"; page: number; top: number; bottom: number }> = [];
-  constructor(private readonly fonts: Fonts, private readonly images: Map<string, PDFImage>) {}
+  private readonly fonts: Fonts;
+  private readonly images: Map<string, PDFImage>;
+  constructor(fonts: Fonts, images: Map<string, PDFImage>) { this.fonts = fonts; this.images = images; }
 
   private face(style: Style): PDFFont { const f = this.fonts.faces; return style.bold ? (style.italic ? f.bi : f.b) : style.italic ? f.i : f.r; }
   /** A text in segments of one font each: Arimo where it has the glyph, Noto Sans where only it has it, "?" (reported) otherwise. */
@@ -294,7 +350,7 @@ class Layout {
         for (const word of inline.text.split(/(?<= )/)) {
           if (!word) continue;
           const segs = this.segments(word, inline.style, size);
-          out.push({ kind: "text", segs, width: segs.reduce((n, s) => n + s.width, 0), size, style: inline.style, breakAfter: word.endsWith(" "), ...metrics });
+          out.push({ kind: "text", segs, width: segs.reduce((n, s) => n + s.width, 0), size, style: inline.style, breakAfter: word.endsWith(" "), ...metrics, ...(inline.mark ? { mark: inline.mark } : {}) });
         }
       } else if (inline.t === "image") {
         const img = this.images.get(inline.src);
@@ -330,7 +386,8 @@ class Layout {
       const size = current.length ? Math.max(...current.map((p) => p.size)) : para.size;
       const ascent = current.length ? Math.max(...current.map((p) => p.ascent), size * 0.905) : para.size * 0.905;
       const descent = current.length ? Math.max(...current.map((p) => p.descent), size * 0.212) : para.size * 0.212;
-      const height = Math.max(size * LEADING, ascent + descent + size * (LEADING - 1.117));
+      const lead = para.leading ? ("pt" in para.leading ? null : Math.max(0.9, Math.min(3.5, para.leading.factor * 1.15))) : LEADING;
+      const height = lead === null ? Math.max(ascent + descent, (para.leading as { pt: number }).pt) : Math.max(size * lead, ascent + descent + size * (lead - 1.117));
       lines.push({ pieces: current, width: visible, height, ascent: ascent + (height - ascent - descent) / 2, spaces: current.slice(0, -1).filter((p) => p.breakAfter && p.kind === "text").length });
       current = [];
     };
@@ -407,6 +464,7 @@ class Layout {
       const shift = p.style.script === "sup" ? p.style.size * 0.33 : p.style.script === "sub" ? -p.style.size * 0.15 : 0;
       const textW = index === line.pieces.length - 1 && p.kind === "text" ? this.trimmedWidth(p) : p.width;
       if (p.style.background && p.kind !== "image") page.drawRectangle({ x, y: baseline - p.size * 0.23, width: textW, height: p.size * 1.15, color: hexRgb(p.style.background) });
+      if (p.mark && p.kind === "text") ctx.marks.push({ key: p.mark, page: ctx.pageIndex + 1, x: x / DOC_PAGE_W, y: (DOC_PAGE_H - (baseline - p.size * 0.23 + p.size * 1.15)) / DOC_PAGE_H, w: textW / DOC_PAGE_W, h: (p.size * 1.15) / DOC_PAGE_H });
       if (p.kind === "image" && p.image) page.drawImage(p.image.img, { x, y: baseline, width: p.image.w, height: p.image.h });
       else if (p.kind === "field" && p.field) {
         const box = { x, y: baseline - p.size * 0.3, w: p.width, h: p.size * 1.35 };
@@ -435,68 +493,80 @@ class Layout {
     });
   }
 
-  /** A table as one item per row; each row draws its own cells, shading and borders, so a page break never leaves a row open. */
+  /**
+   * A table as one item per row (rows joined by a rowspan are one item); each item draws its own cells, shading and borders, so a page
+   * break never leaves a row open. A cell's own borders (Word sets them per cell) win over the table's; padding is per cell.
+   */
   private table(table: Table, available: number, vars: { page: number; total: number } | null): Item[] {
     const width = table.width ? ("pct" in table.width ? available * table.width.pct / 100 : Math.min(available, table.width.pt)) : available;
-    const columns = Math.max(1, ...table.rows.map((row) => row.reduce((n, c) => n + c.colspan, 0)));
-    const set: Array<number | null> = Array(columns).fill(null);
-    for (const row of table.rows) {
+    // The grid: each cell's first row and column; the slots a rowspan covers stay taken in the rows below.
+    const taken: boolean[][] = table.rows.map(() => []);
+    const grid: Array<{ cell: Cell; row: number; col: number }> = [];
+    table.rows.forEach((row, r) => {
       let col = 0;
       for (const cell of row) {
-        if (cell.colspan === 1 && cell.width && set[col] === null) set[col] = "pct" in cell.width ? width * cell.width.pct / 100 : cell.width.pt;
+        while (taken[r][col]) col++;
+        grid.push({ cell, row: r, col });
+        for (let dr = 0; dr < cell.rowspan && r + dr < table.rows.length; dr++) for (let dc = 0; dc < cell.colspan; dc++) taken[r + dr][col + dc] = true;
         col += cell.colspan;
       }
-    }
+    });
+    const columns = Math.max(1, ...taken.map((t) => t.length));
+    const set: Array<number | null> = Array(columns).fill(null);
+    for (const g of grid) if (g.cell.colspan === 1 && g.cell.width && set[g.col] === null) set[g.col] = "pct" in g.cell.width ? width * g.cell.width.pct / 100 : g.cell.width.pt;
     const fixed = set.reduce<number>((n, w) => n + (w ?? 0), 0);
     const open = set.filter((w) => w === null).length;
     let widths = set.map((w) => w ?? (open ? Math.max(20, (width - fixed) / open) : 0));
     const sum = widths.reduce((n, w) => n + w, 0);
     if (sum > width || (open === 0 && sum < width)) widths = widths.map((w) => w * width / sum);
+    const laid: LaidCell[] = grid.map((g) => {
+      const w = widths.slice(g.col, g.col + g.cell.colspan).reduce((n, x) => n + x, 0);
+      const x = widths.slice(0, g.col).reduce((n, v) => n + v, 0);
+      return { cell: g.cell, row: g.row, span: Math.min(g.cell.rowspan, table.rows.length - g.row), x, w, items: this.items(g.cell.blocks, Math.max(10, w - 2 * g.cell.pad.h), vars) };
+    });
     const items: Item[] = [];
-    for (const row of table.rows) {
-      let col = 0;
-      const cells = row.map((cell) => {
-        const w = widths.slice(col, col + cell.colspan).reduce((n, x) => n + x, 0);
-        const x = widths.slice(0, col).reduce((n, v) => n + v, 0);
-        col += cell.colspan;
-        return { cell, x, w, items: this.items(cell.blocks, Math.max(10, w - 2 * CELL_PAD), vars) };
-      });
-      items.push(this.rowItem(cells, width, table.border));
+    for (let r = 0; r < table.rows.length;) {
+      let end = r;
+      for (let k = r; k <= end; k++) for (const c of laid) if (c.row === k) end = Math.max(end, c.row + c.span - 1);
+      const band = laid.filter((c) => c.row >= r && c.row <= end);
+      items.push(end === r ? this.rowItem(band, width, table.border) : this.bandItem(band, r, end, width, table.border));
+      r = end + 1;
     }
     return items;
   }
-  private rowItem(cells: Array<{ cell: Cell; x: number; w: number; items: Item[] }>, width: number, border: boolean): Item {
+  private drawCell(ctx: DrawCtx, x0: number, top: number, c: LaidCell, height: number, tableBorder: boolean): void {
+    const pad = c.cell.pad;
+    if (c.cell.background) ctx.page.drawRectangle({ x: x0 + c.x, y: top - height, width: c.w, height, color: hexRgb(c.cell.background) });
+    const inner = c.items.reduce((n, it) => n + it.height, 0);
+    const offset = c.cell.valign === "middle" ? (height - 2 * pad.v - inner) / 2 : c.cell.valign === "bottom" ? height - 2 * pad.v - inner : 0;
+    let y = top - pad.v - offset;
+    for (const it of c.items) { it.draw(ctx, x0 + c.x + pad.h, y); y -= it.height; }
+    const edge = (side: Side): Edge | null => c.cell.borders[side] !== undefined ? c.cell.borders[side]! : tableBorder ? { w: 0.5, color: BLACK } : null;
+    const left = x0 + c.x, right = x0 + c.x + c.w, bottom = top - height;
+    const line = (e: Edge | null, a: [number, number], b: [number, number]) => { if (e && e.w > 0) ctx.page.drawLine({ start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] }, thickness: e.w, color: hexRgb(e.color) }); };
+    line(edge("top"), [left, top], [right, top]);
+    line(edge("bottom"), [left, bottom], [right, bottom]);
+    line(edge("left"), [left, top], [left, bottom]);
+    line(edge("right"), [right, top], [right, bottom]);
+  }
+  private rowItem(cells: LaidCell[], width: number, border: boolean): Item {
     const contentHeight = (list: Item[]) => list.reduce((n, it) => n + it.height, 0);
-    const height = Math.max(...cells.map((c) => contentHeight(c.items)), 0) + 2 * CELL_PAD;
+    const height = Math.max(...cells.map((c) => contentHeight(c.items) + 2 * c.cell.pad.v), 2 * CELL_PAD);
     const layout = this;
     return {
       height, row: true,
       draw(ctx, x0, top) {
         layout.placed.push({ kind: "row", page: ctx.pageIndex + 1, top, bottom: top - height });
-        for (const c of cells) {
-          if (c.cell.background) ctx.page.drawRectangle({ x: x0 + c.x, y: top - height, width: c.w, height, color: hexRgb(c.cell.background) });
-          const inner = contentHeight(c.items);
-          const offset = c.cell.valign === "middle" ? (height - 2 * CELL_PAD - inner) / 2 : c.cell.valign === "bottom" ? height - 2 * CELL_PAD - inner : 0;
-          let y = top - CELL_PAD - offset;
-          for (const it of c.items) { it.draw(ctx, x0 + c.x + CELL_PAD, y); y -= it.height; }
-        }
-        if (border) {
-          const line = (a: [number, number], b: [number, number]) => ctx.page.drawLine({ start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] }, thickness: 0.5, color: rgb(0, 0, 0) });
-          line([x0, top], [x0 + width, top]);
-          line([x0, top - height], [x0 + width, top - height]);
-          line([x0, top], [x0, top - height]);
-          for (const c of cells) line([x0 + c.x + c.w, top], [x0 + c.x + c.w, top - height]);
-        }
+        for (const c of cells) layout.drawCell(ctx, x0, top, c, height, border);
       },
       split(room) {
         // Only for a row taller than a page: as much of every cell as fits here, the rest on the next page.
-        const budget = room - 2 * CELL_PAD;
-        if (budget <= 0) return null;
-        const firsts: typeof cells = [], rests: typeof cells = [];
+        const firsts: LaidCell[] = [], rests: LaidCell[] = [];
         let any = false;
         for (const c of cells) {
+          const budget = room - 2 * c.cell.pad.v;
           let used = 0, k = 0;
-          while (k < c.items.length && used + c.items[k].height <= budget) { used += c.items[k].height; k++; }
+          while (budget > 0 && k < c.items.length && used + c.items[k].height <= budget) { used += c.items[k].height; k++; }
           if (k > 0) any = true;
           firsts.push({ ...c, items: c.items.slice(0, k) });
           rests.push({ ...c, items: c.items.slice(k) });
@@ -506,7 +576,31 @@ class Layout {
       },
     };
   }
+  /** Rows joined by a rowspan: each row as tall as its own cells need, the last row a spanning cell covers grown when it needs more. */
+  private bandItem(cells: LaidCell[], first: number, last: number, width: number, border: boolean): Item {
+    const contentHeight = (c: LaidCell) => c.items.reduce((n, it) => n + it.height, 0) + 2 * c.cell.pad.v;
+    const heights = Array.from({ length: last - first + 1 }, (_, i) => Math.max(2 * CELL_PAD, ...cells.filter((c) => c.span === 1 && c.row === first + i).map(contentHeight)));
+    for (const c of cells.filter((x) => x.span > 1).sort((a, b) => a.span - b.span)) {
+      const from = c.row - first, to = from + c.span - 1;
+      const have = heights.slice(from, to + 1).reduce((n, h) => n + h, 0);
+      if (contentHeight(c) > have) heights[to] += contentHeight(c) - have;
+    }
+    const height = heights.reduce((n, h) => n + h, 0);
+    const layout = this;
+    return {
+      height, row: true,
+      draw(ctx, x0, top) {
+        layout.placed.push({ kind: "row", page: ctx.pageIndex + 1, top, bottom: top - height });
+        for (const c of cells) {
+          const from = c.row - first;
+          const above = heights.slice(0, from).reduce((n, h) => n + h, 0);
+          layout.drawCell(ctx, x0, top - above, c, heights.slice(from, from + c.span).reduce((n, h) => n + h, 0), border);
+        }
+      },
+    };
+  }
 }
+interface LaidCell { cell: Cell; row: number; span: number; x: number; w: number; items: Item[] }
 
 function hexRgb(hex: string) { const n = parseInt(hex.slice(1), 16); return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255); }
 function linkAnnotation(ctx: DrawCtx, x: number, y: number, w: number, h: number, url: string) {
@@ -527,14 +621,23 @@ export interface DocumentInput {
   brackets: boolean;
   /** Preview: a missing value shows as [Name], a signer field shows its label. */
   sample?: boolean;
+  /** Offer letters: {{key|modifier}} tokens and how each prints (missing ones on a yellow mark, positions in `marks`). */
+  curly?: CurlyResolver;
+  /** The bytes of pictures linked from template-assets, by URL (the caller loads them; one not given is left out). */
+  images?: Record<string, Uint8Array>;
 }
 export interface DocumentResult {
   bytes: Uint8Array; pages: number; fields: PlacedField[]; missing: string[]; unsupported: string | null;
   /** Where each table row landed, for the tests (a row is never split unless taller than a page). */
   placed: Array<{ kind: "row"; page: number; top: number; bottom: number }>;
+  /** Where each missing {{variable}} printed. */
+  marks: PlacedMark[];
 }
 
-const imageSources = (html: string) => [...String(html ?? "").matchAll(/<img\b[^>]*\ssrc="(data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+=*)"/g)].map((m) => m[1]);
+const imageSources = (html: string) => [...String(html ?? "").matchAll(/<img\b[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]).filter((src) => safeImageSrc(src) === src);
+/** The pictures linked from template-assets in a template (the caller loads their bytes for `images`). */
+export const linkedImages = (...html: Array<string | null | undefined>) => [...new Set(html.flatMap((h) => imageSources(sanitizeRichHtml(h ?? ""))).filter(isTemplateAsset))];
+const isPng = (bytes: Uint8Array) => bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
 
 export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentResult> {
   const pdf = await PDFDocument.create();
@@ -546,10 +649,12 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   const header = sanitizeRichHtml(input.header ?? ""), body = sanitizeRichHtml(input.body ?? ""), footer = sanitizeRichHtml(input.footer ?? "");
   for (const src of [...imageSources(header), ...imageSources(body), ...imageSources(footer)]) {
     if (images.has(src)) continue;
-    const bytes = fromBase64(src.slice(src.indexOf(",") + 1));
-    try { images.set(src, src.startsWith("data:image/png") ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes)); } catch { /* an unreadable picture is left out */ }
+    const bytes = src.startsWith("data:") ? fromBase64(src.slice(src.indexOf(",") + 1)) : input.images?.[src];
+    if (!bytes) continue;
+    try { images.set(src, isPng(bytes) ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes)); } catch { /* an unreadable picture is left out */ }
   }
-  const tokens: TokenContext | null = input.brackets ? { values: input.values, sample: !!input.sample, missing: new Set() } : null;
+  const tokens: TokenContext | null = input.brackets || input.curly ? { values: input.values, sample: !!input.sample, missing: new Set(), brackets: input.brackets, curly: input.curly } : null;
+  const marks: PlacedMark[] = [];
   const headerBlocks = header ? blocksOf(header, tokens) : [];
   const bodyBlocks = blocksOf(body, tokens);
   const footerBlocks = footer ? blocksOf(footer, tokens) : [];
@@ -594,7 +699,7 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   const fields: PlacedField[] = [];
   pages.forEach((placed, index) => {
     const page = pdf.addPage([DOC_PAGE_W, DOC_PAGE_H]);
-    const ctx: DrawCtx = { page, pageIndex: index, total, fields, sample: !!input.sample };
+    const ctx: DrawCtx = { page, pageIndex: index, total, fields, sample: !!input.sample, marks };
     if (headerBlocks.length) { let hy = DOC_PAGE_H - DOC_BAND; for (const it of layout.items(headerBlocks, width, { page: index + 1, total })) { it.draw(ctx, DOC_MARGIN_X, hy); hy -= it.height; } }
     for (const { item, top } of placed) item.draw(ctx, DOC_MARGIN_X, top);
     if (footerBlocks.length) {
@@ -604,5 +709,5 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
     }
   });
   const unsupported = layout.unsupported.size ? [...layout.unsupported].join("") : null;
-  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed };
+  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed, marks };
 }

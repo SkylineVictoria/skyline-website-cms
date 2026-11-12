@@ -9,6 +9,8 @@ import { getJob, type Job } from "@/lib/jobsApi";
 import { applyAsStaff } from "@/lib/staffApi";
 import { readResumeContact, type ResumeContact } from "@/lib/resumeContact";
 import { toE164 } from "@/lib/staffPhone";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 /**
  * /careers/:id/apply (HR-02i): the same no-login application as Enroll now > Staff, with the job attached and an optional cover
@@ -45,6 +47,7 @@ export default function CareerApplyPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [emailError, setEmailError] = useState<unknown>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +102,7 @@ export default function CareerApplyPage() {
     if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
     if (!captchaToken) next.captcha = "Complete the security check.";
     setErrors(next);
+    setEmailError(null);
     if (Object.keys(next).length) return;
     setBusy(true);
     try {
@@ -106,9 +110,11 @@ export default function CareerApplyPage() {
         jobId: job.id, coverLetter, coverLetterFile: coverFile });
       setSent(true);
     } catch (e) {
+      setCaptchaToken(""); setCaptchaReset((n) => n + 1);
+      // The email already has a staff account: shown on the email field (sign in / reset password), not in the banner.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       const field = (e as { field?: string }).field ?? "form";
       setErrors({ [field === "jobId" ? "form" : field]: e instanceof Error ? e.message : "We could not send your application. Please try again." });
-      setCaptchaToken(""); setCaptchaReset((n) => n + 1);
     } finally { setBusy(false); }
   };
 
@@ -150,7 +156,7 @@ export default function CareerApplyPage() {
             <div><label className={label} htmlFor="job-first">First name <span className="text-primary-600">*</span></label><input id="job-first" className={input} value={firstName} onChange={(e) => { edited.current.add("firstName"); setFirstName(e.target.value); }} autoComplete="given-name" maxLength={100} data-testid="job-apply-first-name" />{problem(errors.firstName)}</div>
             <div><label className={label} htmlFor="job-last">Last name <span className="text-primary-600">*</span></label><input id="job-last" className={input} value={lastName} onChange={(e) => { edited.current.add("lastName"); setLastName(e.target.value); }} autoComplete="family-name" maxLength={100} data-testid="job-apply-last-name" />{problem(errors.lastName)}</div>
           </div>
-          <div><label className={label} htmlFor="job-email">Email <span className="text-primary-600">*</span></label><input id="job-email" type="email" className={input} value={email} onChange={(e) => { edited.current.add("email"); setEmail(e.target.value); }} autoComplete="email" data-testid="job-apply-email" />{problem(errors.email)}</div>
+          <div><label className={label} htmlFor="job-email">Email <span className="text-primary-600">*</span></label><EmailField id="job-email" inputClassName={input} value={email} onChange={(value) => { edited.current.add("email"); setEmail(value); }} kind="hr_staff" context="public" serverError={emailError} autoComplete="email" data-testid="job-apply-email" />{problem(errors.email)}</div>
           <div onInput={() => { edited.current.add("phone"); }} onChangeCapture={() => { edited.current.add("phone"); }}><label className={label} htmlFor="job-mobile">Mobile <span className="text-primary-600">*</span></label><PhoneInput key={suggestedPhone} id="job-mobile" name="job-mobile" value={suggestedPhone} required placeholder="041 234 5678" />{problem(errors.phone)}</div>
           <div>
             <label className={label} htmlFor="job-letter">Cover letter (optional)</label>

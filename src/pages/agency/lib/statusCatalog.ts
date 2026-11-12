@@ -10,11 +10,8 @@ export interface StatusCatalog { application: StatusChoice[]; business: StatusCh
  * replaced by the backend's catalogue (portal_status_catalog, migration 111) as soon as it loads.
  */
 const FALLBACK: StatusCatalog = {
-  application: [
-    { value: "draft", label: "Draft" }, { value: "submitted", label: "Submitted" }, { value: "action_required", label: "Action required" },
-    { value: "offer_accepted", label: "Offer accepted" }, { value: "coe_issued", label: "CoE / VoE issued" }, { value: "enrolled", label: "Enrolled" },
-    { value: "rejected", label: "Rejected" }, { value: "withdrawn", label: "Withdrawn" },
-  ],
+  // Application statuses come from the database only (application_status_workflow / portal_application_statuses).
+  application: [],
   business: [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }],
   agent: [{ value: "Active", label: "Active" }, { value: "Invited", label: "Invited" }, { value: "Inactive", label: "Inactive" }],
   student: [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Disabled" }],

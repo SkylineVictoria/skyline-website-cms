@@ -35,6 +35,7 @@ import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/do
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
+import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -53,6 +54,11 @@ interface Props {
 const WIZARD_CATEGORIES = new Set(WIZARD_STEPS.map((step) => step.category));
 // Document screens first, then the answer screens (language, USI, emergency contact, course).
 const DOC_STEPS = WIZARD_STEPS.length;
+const ACADEMIC_WIZARD_STEP = WIZARD_STEPS.find((item) => item.id === "academic");
+/** Proof of 2+ years of study in Australia, offered on the English step instead of a test result; stored as an academic record. */
+const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
+  ? { ...ACADEMIC_WIZARD_STEP, title: "Proof of study in Australia", subtitle: "Completion letter, certificate or transcripts showing at least 2 years of study in Australia.", noun: "study record", required: false }
+  : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
 
@@ -146,6 +152,13 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [answerSaveError, setAnswerSaveError] = useState("");
   const [institutionCourses, setInstitutionCourses] = useState<ApplicationCourseRow[] | null>(null);
   const questionFormRef = useRef<HTMLFormElement>(null);
+  // English step without an IELTS / PTE / TOEFL result: 2+ years of Australian study, or a Cambridge English course with Skyline.
+  const [englishAlt, setEnglishAlt] = useState(false);
+  const [ausStudy, setAusStudy] = useState<AusStudyAnswer>("");
+  const [cambridge, setCambridge] = useState<CambridgeAnswer>("");
+  const [englishNotMet, setEnglishNotMet] = useState(false);
+  const [englishSaveError, setEnglishSaveError] = useState("");
+  const [savingEnglish, setSavingEnglish] = useState(false);
 
   useEffect(() => {
     documentsRef.current = documents;
@@ -193,6 +206,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         const pick = (name: string) => (typeof values[name] === "string" ? String(values[name]) : "");
         const courses = Array.isArray(values.courses_of_interest) ? (values.courses_of_interest as unknown[]).map(String) : [];
         if (active) {
+          const pathway = pick("english_pathway");
+          if (pathway === ENGLISH_PATHWAY.ausStudy) { setEnglishAlt(true); setAusStudy("Yes"); }
+          else if (pathway === ENGLISH_PATHWAY.cambridge) { setEnglishAlt(true); setAusStudy("No"); setCambridge("Yes"); }
           setAnswers({
             // "Yes, another language" is selected unless an answer was already given.
             language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
@@ -413,7 +429,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const hasPassport = documents.some((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !isExpiredPassport(doc));
   const passportRequired = PASSPORT_STEP >= 0 && (passportExpired || !hasPassport);
   // Every required document must be uploaded before the agent can move past its step.
-  const stepHasDoc = (item: WizardStep) => documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
+  const ausStudyDocs = AUS_STUDY_STEP ? documents.filter((doc) => doc.category === AUS_STUDY_STEP.category && !isWrongDocument(doc)) : [];
+  /** The English requirement met without a test result: Australian study proof uploaded, or Yes to the Cambridge English course. */
+  const englishAltMet = englishAlt && ((ausStudy === "Yes" && ausStudyDocs.length > 0) || (ausStudy === "No" && cambridge === "Yes"));
+  const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
+    || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
   const goTo = (index: number) => {
     const target = Math.max(0, Math.min(index, LAST_STEP));
@@ -424,9 +444,43 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   useEffect(() => {
     if (loading) return;
     if (passportRequired && step > PASSPORT_STEP) { setStep(PASSPORT_STEP); return; }
-    const missing = WIZARD_STEPS.findIndex((item, index) => index < step && item.required && !documents.some((doc) => doc.category === item.category));
+    const missing = WIZARD_STEPS.findIndex((item, index) => index < step && item.required && !(item.id === "english" && englishAltMet) && !documents.some((doc) => doc.category === item.category));
     if (missing >= 0) setStep(missing);
-  }, [loading, passportRequired, step, documents]);
+  }, [loading, passportRequired, step, documents, englishAltMet]);
+
+  /** Saves how the English requirement is met, then moves on from the English step. */
+  const nextFromEnglish = async () => {
+    setEnglishSaveError("");
+    const pathway = englishAlt ? (ausStudy === "Yes" ? ENGLISH_PATHWAY.ausStudy : ENGLISH_PATHWAY.cambridge) : ENGLISH_PATHWAY.test;
+    const values: Record<string, unknown> = {
+      english_pathway: pathway,
+      aus_study_2yrs: englishAlt ? ausStudy : "",
+      cambridge_course: englishAlt && ausStudy === "No" ? cambridge : "",
+    };
+    if (englishAlt && pathway === ENGLISH_PATHWAY.cambridge) values.english_type = "Cambridge English";
+    setSavingEnglish(true);
+    try {
+      await flushApplicationEdits(applicationId);
+      await getApplication(applicationId, true);
+      await saveApplicationDraft(applicationId, { data: { values }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      goTo(step + 1);
+    } catch (error) {
+      setEnglishSaveError(error instanceof Error ? error.message : "We could not save your English details. Try again.");
+    } finally {
+      setSavingEnglish(false);
+    }
+  };
+  const chooseCambridge = (value: "Yes" | "No") => {
+    setCambridge(value);
+    if (value === "No") setEnglishNotMet(true);
+  };
+  /** From the "requirement not met" dialog back to the start of the English step. */
+  const backToEnglishOptions = () => {
+    setEnglishNotMet(false);
+    setCambridge("");
+    setAusStudy("");
+    setEnglishAlt(false);
+  };
 
   /* ------------------------------------------------------- answer screens */
 
@@ -565,9 +619,43 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         </form>
       );
     }
+    const documentStepProps = {
+      dismissed,
+      onRetryUpload: (item: PendingUpload) => void startUpload(item),
+      onDropUpload: (item: PendingUpload) => setPending((prev) => prev.filter((entry) => entry.key !== item.key)),
+      onRetryDoc: (doc: WizardDoc) => void handleRetryDoc(doc),
+      onDismissDoc: (doc: WizardDoc) => setDismissed((prev) => new Set(prev).add(doc.id)),
+      onRemoveDoc: handleRemoveDoc,
+      signedUrl: (doc: WizardDoc) => getDocumentSignedUrl(doc.storagePath, 300),
+      logView: role === "slit_admin"
+        ? (doc: WizardDoc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
+        : undefined,
+    };
+    if (current.id === "english" && englishAlt && AUS_STUDY_STEP) {
+      return (
+        <EnglishAlternative
+          ausStudy={ausStudy}
+          cambridge={cambridge}
+          onAusStudy={(value) => { setAusStudy(value); if (value === "Yes") setCambridge(""); }}
+          onCambridge={chooseCambridge}
+          onBack={() => { setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError(""); }}
+          error={englishSaveError || uploadRejections[AUS_STUDY_STEP.category] || ""}
+          upload={
+            <WizardDocumentStep
+              {...documentStepProps}
+              step={AUS_STUDY_STEP}
+              docs={documents.filter((doc) => doc.category === AUS_STUDY_STEP.category)}
+              pending={pending.filter((item) => item.category === AUS_STUDY_STEP.category)}
+              onPickFiles={(files) => handlePickFiles(AUS_STUDY_STEP, files)}
+            />
+          }
+        />
+      );
+    }
     return (
       <>
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
+        {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
         <WizardDocumentStep
           step={current}
           docs={stepDocs}
@@ -586,6 +674,15 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               : undefined
           }
         />
+        {current.id === "english" && AUS_STUDY_STEP && !hasFile ? (
+          <div className="mt-5 rounded-lg border border-dashed border-background-300 bg-background-100/60 px-4 py-3 text-sm text-foreground-700">
+            No IELTS, PTE or TOEFL result?{" "}
+            <button type="button" onClick={() => { setEnglishAlt(true); setEnglishSaveError(""); }} data-testid="english-no-test"
+              className="cursor-pointer font-semibold text-primary-700 underline-offset-2 hover:underline">
+              See other ways to meet the English requirement
+            </button>
+          </div>
+        ) : null}
       </>
     );
   };
@@ -654,10 +751,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                 </button>
               </>
             ) : (
-              <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
-                Next
-                <i className="ri-arrow-right-line" aria-hidden="true" />
-              </button>
+              current.id === "english" ? (
+                <button type="button" onClick={() => void nextFromEnglish()}
+                  disabled={(englishAlt ? !englishAltMet : !hasFile) || locked || slowHere.length > 0 || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
+                  {savingEnglish ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
+                </button>
+              ) : (
+                <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
+                  Next
+                  <i className="ri-arrow-right-line" aria-hidden="true" />
+                </button>
+              )
             )}
           </div>
         ) : null
@@ -668,7 +772,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             <WizardNotice tone="info">A current passport is required. Upload it to continue.</WizardNotice>
           ) : null}
 
-          {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked ? (
+          {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked && !(current.id === "english" && englishAlt) ? (
             <WizardNotice tone="info">{current.title} is required. Upload it to continue.</WizardNotice>
           ) : null}
 
@@ -727,6 +831,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       }
     >
       {body()}
+      <EnglishNotMetDialog open={englishNotMet} onBack={backToEnglishOptions} />
     </WizardShell>
   );
 }

@@ -204,6 +204,14 @@ export const enrolSections: AppSection[] = [
       { name: "visa_stay_until", label: "Visa Stay-until / Expiry Date", type: "date", showIf: { field: "holds_visa", equals: ["Yes"] } },
       { name: "visa_grant_number", label: "Visa Grant Number", type: "text", showIf: { field: "holds_visa", equals: ["Yes"] } },
       {
+        name: "english_pathway",
+        label: "How the English requirement is met",
+        type: "select",
+        placeholder: "Select",
+        options: ["English test", "Australian study (2+ years)", "Cambridge English course"],
+        description: "Set by the document wizard. Without an IELTS, PTE or TOEFL result: proof of 2+ years of study in Australia (uploaded with the academic documents) or a Cambridge English course with Skyline.",
+      },
+      {
         name: "english_type",
         label: "English Assessment Type",
         type: "select",

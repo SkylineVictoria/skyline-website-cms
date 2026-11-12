@@ -7,6 +7,8 @@ import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import { reasonsFor, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
 import { letterValues, toBase64 } from "@/lib/offerLetters";
 import { changeApplicationStatus, issueCoeVoe, offerLetterRecipient, type OfferRecipient } from "@/pages/agency/lib/portalApplications";
+import { CcAgent } from "./CcAgent";
+import { sendCc, useCcDefault } from "@/lib/ccAgent";
 
 const INPUT = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 export interface DialogApplication { id: string; reference: string; studentName: string }
@@ -162,6 +164,8 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
   const [recipient, setRecipient] = useState<OfferRecipient | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const cc = useCcDefault(application.id);
+  const [ccOn, setCcOn] = useState(true);
   useEffect(() => { void offerLetterRecipient(application.id).then(setRecipient, () => setRecipient(null)); }, [application.id]);
   const pick = (files: FileList | null) => {
     const picked = files?.[0];
@@ -178,6 +182,7 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
     try {
       const result = await issueCoeVoe({ applicationId: application.id, kind, number: number.trim(), issueDate, fileName: file.name.replace(/[^A-Za-z0-9 ._()-]+/g, " ").trim() || "CoE.pdf",
         contentBase64: toBase64(new Uint8Array(await file.arrayBuffer())), note: note.trim(), notify });
+      if (ccOn && notify) await sendCc(application.id, "coe_voe_issued", cc);
       onDone({ status: result.status ?? action.to ?? "", label: result.label ?? action.label });
     } catch (e) { setError(e instanceof Error ? e.message : "The CoE / VoE could not be issued."); setBusy(false); }
   };
@@ -212,6 +217,7 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
         <div className="rounded-lg border border-background-200 bg-background-100/60 px-3 py-2.5" data-testid="coe-recipient">
           <p className={FORM_LABEL}>Sends to</p>
           <p className="mt-1 text-sm text-foreground-900">{recipient ? <>{recipient.name || "Unnamed"} <span className="text-foreground-500">&lt;{recipient.email || "no email"}&gt;</span> ({recipient.kind})</> : "Working out the recipient…"}</p>
+          <CcAgent cc={cc} on={ccOn} onChange={setCcOn} recipientEmail={recipient?.email} />
         </div>
         {notifyBox(notify, setNotify)}
         {error ? <p className="text-sm text-red-700" role="alert" data-testid="dialog-error">{error}</p> : null}

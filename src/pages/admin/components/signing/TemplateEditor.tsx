@@ -7,6 +7,7 @@ import TemplatePreviewDialog from "./TemplatePreviewDialog";
 import DocumentSections from "./DocumentSections";
 import { LetterTestDialog, UnmappedTokens } from "./LetterTemplateTools";
 import { LETTER_CATEGORY, loadLetterRegistry, rehostImagesIn } from "@/lib/offerLetters";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { unmappedTokens, type LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
 import { isTemplateAsset } from "../../../../../supabase/functions/_shared/rich-html";
 import { sectionsReport } from "@/lib/templateSections";
@@ -79,6 +80,15 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const hrms = isTemplateType(draft.category);
   const loo = draft.category === LETTER_CATEGORY;
   useEffect(() => { if (loo && !registry) void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message)); }, [loo, registry]);
+  // A new student letter starts with the standard SLIT letterhead and footer (from the database; both stay editable).
+  useEffect(() => {
+    if (template || !loo || draft.header_html.trim() || draft.footer_html.trim()) return;
+    let active = true;
+    void Promise.all([supabase.rpc("letter_standard_header"), supabase.rpc("letter_standard_footer", { p_title: (draft.title || "LETTER OF OFFER AND WRITTEN AGREEMENT").toUpperCase(), p_version: "Version 1.0" })])
+      .then(([h, f]) => { if (active && !h.error && !f.error) setDraft((d) => (d.header_html.trim() || d.footer_html.trim() ? d : { ...d, header_html: String(h.data ?? ""), footer_html: String(f.data ?? "") })); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when a new student letter opens
+  }, [template, loo]);
   const spec = hrms ? TEMPLATE_TYPES.find((t) => t.type === draft.category) : undefined;
   const signed = draft.kind !== "email" && !loo;
   // A document template (not an HRMS letter or email, not a PDF) has a header, a body and a footer, and [Variable] tokens.

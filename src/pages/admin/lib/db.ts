@@ -51,6 +51,7 @@ function settingsRow(s: AdminSettings): Row {
     cricos: s.cricos,
     sign_in_url: s.signInUrl,
     ...(s.abn !== undefined ? { abn: s.abn.trim() || null } : {}),
+    ...(s.legalName !== undefined ? { legal_name: s.legalName.trim() || null } : {}),
     ...(s.website !== undefined ? { website: s.website.trim() || null } : {}),
     ...(s.offerValidityDays !== undefined ? { offer_validity_days: s.offerValidityDays } : {}),
     ...(s.letterDateFormat !== undefined ? { letter_date_format: s.letterDateFormat } : {}),
@@ -510,7 +511,7 @@ export async function loadAdminData(): Promise<LoadResult> {
         cricos: str(settingsRow.cricos),
         signInUrl: str(settingsRow.sign_in_url),
         ...(settingsRow.offer_validity_days !== undefined ? {
-          abn: str(settingsRow.abn), website: str(settingsRow.website), offerValidityDays: Number(settingsRow.offer_validity_days) || 30,
+          abn: str(settingsRow.abn), website: str(settingsRow.website), legalName: str(settingsRow.legal_name), offerValidityDays: Number(settingsRow.offer_validity_days) || 30,
           letterDateFormat: (str(settingsRow.letter_date_format) || "DD/MM/YYYY") as AdminSettings["letterDateFormat"],
         } : {}),
         homeHeroImages: Array.isArray(settingsRow.home_hero_images)

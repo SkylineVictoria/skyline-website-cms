@@ -829,21 +829,28 @@ async function pdfPages(bytes: Uint8Array): Promise<string[]> {
   return pages;
 }
 
-test("offer letter: the Standard Letter of Offer on an application like SLIT-2026-0080 (course by slug, no CRICOS, fees or intake): auto-selected, Needs your input, preview, sent", async ({ page }) => {
-  const admin = await createAdmin("loo-standard");
-  // The seed (20261113300000) needs an admin; run it again here (idempotent) and make the standard letter the default.
+/** The real SLIT letter as the active default (the seeds need an admin, so they run again here; both are idempotent). */
+function seedSlitLetter(): string {
   sql(readFileSync("supabase/migrations/20261113300000_standard_letter_of_offer.sql", "utf8"));
-  sql(`update hr.sign_templates set is_default = (name = 'Standard Letter of Offer') where category = 'student_offer_letter' and deleted_at is null`);
-  const standard = sql(`select id from hr.sign_templates where category = 'student_offer_letter' and name = 'Standard Letter of Offer' and deleted_at is null`);
-  expect(sql(`select status || '|' || cardinality(public.letter_template_unmapped(concat_ws(' ', title, header_html, body_html, footer_html))) from hr.sign_templates where id = '${standard}'`)).toBe("active|0");
+  sql(readFileSync("supabase/migrations/20261113320000_slit_letter_of_offer.sql", "utf8"));
+  sql(`update hr.sign_templates set is_default = (name = 'SLIT Letter of Offer and Written Agreement') where category = 'student_offer_letter' and deleted_at is null`);
+  const id = sql(`select id from hr.sign_templates where category = 'student_offer_letter' and name = 'SLIT Letter of Offer and Written Agreement' and deleted_at is null`);
+  expect(sql(`select status || '|' || cardinality(public.letter_template_unmapped(concat_ws(' ', title, header_html, body_html, footer_html))) from hr.sign_templates where id = '${id}'`)).toBe("active|0");
+  return id;
+}
+
+test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (course by slug, no fees or intake, an agency without agent): auto-selected, letterhead from the Website settings, CC to the agency, sent", async ({ page }) => {
+  const admin = await createAdmin("loo-standard");
+  const standard = seedSlitLetter();
   const agency = wfAgency("loo standard");
+  sql(`update public.agencies set business_email = 'office.${agency.slice(0, 8)}@example.test' where id = '${agency}'`);
   const tag = person("loo-std").local.slice(-6);
   const course = `c-${tag}`, slug = `msf${tag}-certificate-iii-in-glass-and-glazing`;
   sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing', 'Published')`);
   const values = { title: "Miss", first_name: "Hima", middle_name: "G", last_name: "Patel", dob: "1995-03-13", nationality: "India", passport_number: "P0000000",
     au_street: "10 Example Gra", au_suburb: "Tarneit", au_state: "VIC", au_zip: "3029", preferred_intake: "December 2026" };
   const id = wfApplication(agency, "submitted", `Hima ${tag}`, { student_email: `hima.${tag}@example.test`, intake: "December 2026", data: JSON.stringify({ values }) });
-  // As on hosted: the application's course row holds the course page's slug, not the course id, and no intake.
+  // As on hosted: the application's course row holds the course page's slug, not the course id, and no intake; the name repeats the code.
   sql(`begin; select set_config('portal.draft_command', '${id}', true); insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title) values ('${id}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing'); commit;`);
   await signInThroughTheForm(page, admin.email);
   await expect(page).toHaveURL(/\/admin/);
@@ -855,11 +862,16 @@ test("offer letter: the Standard Letter of Offer on an application like SLIT-202
   const picked = drawer.getByTestId("offer-template-single").or(drawer.getByLabel("Template"));
   await expect(picked.first()).toBeVisible();
   if (await drawer.getByLabel("Template").count()) await expect(drawer.getByLabel("Template")).toHaveValue(standard);
-  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9]$/, { timeout: 30_000 });
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
   // Needs your input: the start date, CRICOS and fees the course setup does not have (the course is found by its slug).
   const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
   for (const key of ["course.start_date", "course.cricos", "fees.tuition"]) expect(keys, key).toContain(key);
-  expect(keys, "the course name comes from the course setup").not.toContain("course.name");
+  expect(keys, "the course comes from the course setup").not.toContain("course.code_and_name");
+  for (const key of keys) expect(key, "the letterhead is filled from the Website settings").not.toMatch(/^institute\.(address|email|phone|rto|cricos|website|legal_name|abn)$/);
+  // CC: no agent on this application, so the agency's main email gets the copy (ticked), with a warning.
+  await expect(drawer.getByTestId("cc-agent")).toContainText(`office.${agency.slice(0, 8)}@example.test`);
+  await expect(drawer.getByTestId("cc-agent-warning")).toContainText("agency's main email");
+  await expect(drawer.getByTestId("cc-agent-toggle")).toBeChecked();
   await shot(page, "loo-standard-needs-input");
   // Fill every required detail for this letter, tick the optional ones blank.
   const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));
@@ -875,10 +887,78 @@ test("offer letter: the Standard Letter of Offer on an application like SLIT-202
   await drawer.getByTestId("send-offer-letter").click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Send offer letter" }).click();
   await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
-  expect(sql(`select template_name || '|' || (jsonb_array_length(manual_values) > 0)::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("Standard Letter of Offer|true");
+  expect(sql(`select template_name || '|' || (jsonb_array_length(manual_values) > 0)::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("SLIT Letter of Offer and Written Agreement|true");
   const pages = await pdfPages(Uint8Array.from(Buffer.from(sql(`select encode(content, 'base64') from public.enrollment_offer_letters where application_id = '${id}'`).replace(/\s+/g, ""), "base64")));
-  pages.forEach((text, i) => expect(text, `page ${i + 1}`).toContain(`Page ${i + 1} of ${pages.length}`));
-  expect(pages.join(" ")).toContain(`Dear Miss Hima G Patel`);
+  expect(pages.length, "the full SLIT letter").toBeGreaterThanOrEqual(8);
+  pages.forEach((text, i) => {
+    expect(text, `page ${i + 1} footer`).toContain(`Page ${i + 1} of ${pages.length}`);
+    expect(text, `page ${i + 1} letterhead`).toContain("Head Office:");
+  });
+  const all = pages.join(" ");
+  expect(all).toContain("Hima G Patel");
+  expect(all, "the code is printed once").not.toContain(`MSF${tag} MSF${tag}`);
+  expect(all).toContain(`MSF${tag} Certificate III in Glass and Glazing`);
+  expect(all, "no placeholder left").not.toMatch(/\[(Address|Admissions email|Email|Phone|Website|ABN|Legal name)\]/);
+  // The agency's copy is queued with the letter and named in the status history.
+  expect(sql(`select count(*) from public.notification_deliveries where application_id = '${id}' and event = 'offer_letter_issued' and recipient_email = 'office.${agency.slice(0, 8)}@example.test'`)).toBe("1");
+  expect(sql(`select count(*) from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_issued' and note like '%CC: office.%'`)).toBe("1");
+});
+
+test("offer letter: a packaged application (2 courses): a course row and a fee block per course, the combined total, the deposit once", async ({ page }) => {
+  const admin = await createAdmin("loo-packaged");
+  seedSlitLetter();
+  const agency = wfAgency("loo packaged");
+  const tag = person("loo-pkg").local.slice(-6);
+  const courses = [{ id: `pa-${tag}`, code: `PKA${tag}`, name: `PKA${tag} Certificate III in Packaging`, start: "2027-02-01", end: "2027-12-17", tuition: 14000 },
+    { id: `pb-${tag}`, code: `PKB${tag}`, name: "Diploma of Packaging", start: "2028-02-07", end: "2029-02-02", tuition: 16000 }];
+  const intakes = courses.map((c) => {
+    sql(`insert into public.cms_courses(id, slug, code, name, cricos, duration, mode, status) values ('${c.id}', '${c.id}', '${c.code}', '${c.name}', '0${tag}X', '52 Weeks', 'Face-to-Face', 'Published')`);
+    const intake = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${c.id}', '${c.start}', '${c.end}', '${c.start.slice(0, 7)}') returning id`).split("\n")[0];
+    sql(`insert into public.course_fee_setups(course_id, intake_id, tuition_fee, enrolment_fee, material_fee, deposit, orientation, hours_per_week) values ('${c.id}', null, ${c.tuition}, 250, 500, 3000, 'The Monday before the start, 9:30 am', '20')`);
+    return intake;
+  });
+  const values = { title: "Mr", first_name: "Pack", last_name: "Age", dob: "2000-01-31", nationality: "India", passport_number: "P1111111", mobile: "+61400000000", gender: "Male",
+    au_street: "1 Example St", au_suburb: "Melbourne", au_state: "VIC", au_zip: "3000", birth_country: "India", ec_name: "Em Contact", ec_phone: "+61411111111" };
+  const id = wfApplication(agency, "submitted", `Pack ${tag}`, { student_email: `pack.${tag}@example.test`, data: JSON.stringify({ values }) });
+  sql(`begin; select set_config('portal.draft_command', '${id}', true);
+    insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id, created_at) values
+      ('${id}', '${courses[0].id}', '${courses[0].code}', '${courses[0].name}', '${intakes[0]}', now() - interval '1 minute'),
+      ('${id}', '${courses[1].id}', '${courses[1].code}', '${courses[1].name}', '${intakes[1]}', now()); commit;`);
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[0-9]+$/, { timeout: 30_000 });
+  await expect(drawer.getByTestId("offer-letter-preview")).not.toHaveAttribute("data-pages", "0", { timeout: 30_000 });
+  // Both courses have their setup: no course or fee detail is asked for, of either course.
+  const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
+  expect(keys.filter((k) => /^(course|fees)\./.test(k)), "every course and fee detail is known").toEqual([]);
+  // Variable check: the second course's values are listed as course 2.
+  await drawer.getByTestId("toggle-variable-check").click();
+  await expect(drawer.locator('[data-testid=variable-check-row][data-key="course.code_and_name#1"]')).toContainText(`${courses[1].code} Diploma of Packaging`);
+  const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));
+  for (const key of keys) {
+    const spec = registry[key.split("#")[0]];
+    if (spec.required) await drawer.getByTestId(`letter-input-${key}`).fill(spec.input === "date" ? "2027-02-01" : spec.input === "money" ? "1000" : "X1");
+    else await drawer.getByTestId(`leave-blank-${key}`).check();
+  }
+  await drawer.getByLabel(/Note to issue anyway/).fill("Packaged offer checked");
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-missing", "", { timeout: 30_000 });
+  await drawer.getByTestId("send-offer-letter").click();
+  const confirm = page.getByRole("alertdialog");
+  if (await confirm.count()) await confirm.getByRole("button", { name: "Send offer letter" }).click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
+  const all = (await pdfPages(Uint8Array.from(Buffer.from(sql(`select encode(content, 'base64') from public.enrollment_offer_letters where application_id = '${id}'`).replace(/\s+/g, ""), "base64")))).join(" ");
+  for (const c of courses) expect(all, `${c.code} in the course table and its fee block`).toMatch(new RegExp(`${c.code}[^]*${c.code}`));
+  expect(all).toContain("AUD$14,750.00"); // first course total (tuition + application + material)
+  expect(all).toContain("AUD$16,750.00"); // second course total
+  expect(all).toContain("Combined total");
+  expect(all.replace(/\s+/g, ""), "the combined total (bold, so the text comes out in pieces)").toContain("AUD$31,500.00");
+  expect(all.split("Initial Deposit").length - 1, "the deposit is shown once").toBe(1);
+  expect(all, "first start and last end across the courses").toContain("01/02/2027");
+  expect(all).toContain("02/02/2029");
 });
 
 test("offer letter: no active student template: the drawer offers Create template and Upload letter instead", async ({ page }) => {

@@ -81,6 +81,9 @@ export default function ContactPage() {
         <h2 className="mb-1 font-heading text-base font-semibold text-foreground-950">Offer letters</h2>
         <p className="mb-4 text-sm text-foreground-600">Printed by the offer letter variables of the Institute group, and how dates and the offer's validity are written.</p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field label="Legal name" hint="Printed in letter footers, e.g. INDOPACIFIC GLOBAL PTY LTD T/A Skyline Institute of Technology (SLIT)">
+            <TextInput value={draft.legalName ?? ""} maxLength={200} onChange={(e) => set("legalName", e.target.value)} data-testid="settings-legal-name" />
+          </Field>
           <Field label="ABN" hint="11 digits, spaces allowed">
             <TextInput value={draft.abn ?? ""} maxLength={14} onChange={(e) => set("abn", e.target.value)} data-testid="settings-abn" />
           </Field>

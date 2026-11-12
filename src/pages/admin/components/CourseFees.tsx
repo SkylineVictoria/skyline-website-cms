@@ -3,10 +3,10 @@ import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { listCourseIntakes, type CourseIntake } from "@/pages/admin/lib/courseIntakes";
 
-interface FeeRow { id: string; intakeId: string | null; tuition: number | null; enrolment: number | null; material: number | null; oshc: number | null; deposit: number | null; paymentPlan: string | null; campus: string | null }
+interface FeeRow { id: string; intakeId: string | null; tuition: number | null; enrolment: number | null; material: number | null; oshc: number | null; deposit: number | null; paymentPlan: string | null; campus: string | null; orientation: string | null; hoursPerWeek: string | null }
 const MONEY = [["tuition", "Tuition fee"], ["enrolment", "Enrolment fee"], ["material", "Material fee"], ["oshc", "OSHC"], ["deposit", "Initial deposit"]] as const;
-type Form = Record<(typeof MONEY)[number][0] | "paymentPlan" | "campus", string>;
-const blank: Form = { tuition: "", enrolment: "", material: "", oshc: "", deposit: "", paymentPlan: "", campus: "" };
+type Form = Record<(typeof MONEY)[number][0] | "paymentPlan" | "campus" | "orientation" | "hoursPerWeek", string>;
+const blank: Form = { tuition: "", enrolment: "", material: "", oshc: "", deposit: "", paymentPlan: "", campus: "", orientation: "", hoursPerWeek: "" };
 const aud = (n: number | null) => (n === null ? "—" : `AUD$${Number(n).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
 /**
@@ -30,7 +30,7 @@ export default function CourseFees({ courseId }: { courseId: string }) {
   useEffect(() => {
     const row = rows?.find((r) => (r.intakeId ?? "") === target);
     setForm(row ? { tuition: row.tuition?.toString() ?? "", enrolment: row.enrolment?.toString() ?? "", material: row.material?.toString() ?? "", oshc: row.oshc?.toString() ?? "",
-      deposit: row.deposit?.toString() ?? "", paymentPlan: row.paymentPlan ?? "", campus: row.campus ?? "" } : blank);
+      deposit: row.deposit?.toString() ?? "", paymentPlan: row.paymentPlan ?? "", campus: row.campus ?? "", orientation: row.orientation ?? "", hoursPerWeek: row.hoursPerWeek ?? "" } : blank);
   }, [rows, target]);
 
   const save = async () => {
@@ -77,7 +77,9 @@ export default function CourseFees({ courseId }: { courseId: string }) {
           {MONEY.map(([key, label]) => (
             <Field key={key} label={`${label} (AUD)`}><TextInput inputMode="decimal" value={form[key]} placeholder="e.g. 14500.00" onChange={(e) => setForm({ ...form, [key]: e.target.value })} data-testid={`fee-${key}`} /></Field>
           ))}
-          <Field label="Campus"><TextInput value={form.campus} maxLength={300} onChange={(e) => setForm({ ...form, campus: e.target.value })} data-testid="fee-campus" /></Field>
+          <Field label="Campus" hint="Empty: the head office address"><TextInput value={form.campus} maxLength={300} onChange={(e) => setForm({ ...form, campus: e.target.value })} data-testid="fee-campus" /></Field>
+          <Field label="Orientation day"><TextInput value={form.orientation} maxLength={200} placeholder="e.g. 02/02/2027, 9:30 am" onChange={(e) => setForm({ ...form, orientation: e.target.value })} data-testid="fee-orientation" /></Field>
+          <Field label="Hours per week"><TextInput value={form.hoursPerWeek} maxLength={20} placeholder="e.g. 20" onChange={(e) => setForm({ ...form, hoursPerWeek: e.target.value })} data-testid="fee-hours" /></Field>
         </div>
         <Field label="Payment plan" hint="Printed as written, line by line">
           <textarea rows={3} maxLength={2000} value={form.paymentPlan} onChange={(e) => setForm({ ...form, paymentPlan: e.target.value })} className="w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" />

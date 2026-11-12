@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(539);
+select plan(556);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -440,6 +440,45 @@ select is((select count(*)::int from (select 1 from public.application_statuses)
 update public.application_statuses set label='Hacked' where value='draft';
 select is(public.portal_status_label('draft'),'Draft','an agent''s update changes nothing');
 select is((select count(*)::int from public.status_config_audit),0,'an agent cannot read the audit');
+reset role;
+-- Migration 20261113320000: packaged offers (a value set per course), the course name without its code, institute details from the
+-- Website settings, the agent's copy (CC) recorded in the status history.
+reset role;
+insert into public.cms_courses(id, slug, code, name, status) values ('pk-a', 'pk-a', 'PKA1', 'PKA1 Certificate III in Packaging', 'Published'), ('pk-b', 'pk-b', 'PKB2', 'Diploma of Packaging', 'Published');
+insert into public.course_intakes(id, course_id, start_date, end_date, label) values ('53000000-0000-0000-0000-0000000000a1', 'pk-a', '2027-02-01', '2027-12-17', 'February 2027'),
+ ('53000000-0000-0000-0000-0000000000a2', 'pk-b', '2028-02-07', '2029-02-02', 'February 2028');
+insert into public.course_fee_setups(course_id, intake_id, tuition_fee, enrolment_fee) values ('pk-a', null, 14000, 250), ('pk-b', null, 16000, 250);
+insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,student_email,data) values
+ ('43000000-0000-0000-0000-0000000000c0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','pk.student@example.test','{"values":{"first_name":"Pack","last_name":"Age"}}');
+select set_config('portal.draft_command','43000000-0000-0000-0000-0000000000c0',true);
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id, created_at) values
+ ('43000000-0000-0000-0000-0000000000c0','pk-a','PKA1','PKA1 Certificate III in Packaging','53000000-0000-0000-0000-0000000000a1', now() - interval '1 minute'),
+ ('43000000-0000-0000-0000-0000000000c0','pk-b','PKB2','Diploma of Packaging','53000000-0000-0000-0000-0000000000a2', now());
+select set_config('portal.draft_command','',true);
+create temporary view pk_v as select public.application_letter_values('43000000-0000-0000-0000-0000000000c0') v;
+select is((select v->'values'->'course.name'->>'value' || '|' || (v->'values'->'course.code_and_name'->>'value') from pk_v),'Certificate III in Packaging|PKA1 Certificate III in Packaging','the course name drops its code; code and name print the code once');
+select is((select jsonb_array_length(v->'courses') from pk_v),2,'one value set per course of the application');
+select is((select (v->'courses'->1->'course.code_and_name'->>'value') || '|' || (v->'courses'->1->'fees.total'->>'value') from pk_v),'PKB2 Diploma of Packaging|AUD$16,250.00','the second course has its own course and fee values');
+select is((select v->'values'->'fees.combined_total'->>'value' from pk_v),'AUD$30,500.00','the combined total of the courses');
+select is((select (v->'values'->'offer.first_start_date'->>'value') || '|' || (v->'values'->'offer.last_end_date'->>'value') from pk_v),'01/02/2027|02/02/2029','first start and last end across the courses');
+select ok((select (v->'values'->'course.campus'->>'value') <> '' and (v->'values'->'course.campus'->>'source') like 'Website settings%' from pk_v),'without a campus the location is the head office address');
+select ok((select (v->'values'->'institute.legal_name'->>'value') <> '' and (v->'values'->'institute.abn'->>'value') <> '' from pk_v),'the legal name and ABN come from the Website settings');
+select is(cardinality(public.letter_template_unmapped('<p>{{#each courses}}</p><p>{{course.code_and_name}}</p><p>{{/each}}</p><p>{{#if multiple_courses}}</p><p>{{fees.combined_total}}</p><p>{{/if}}</p>')),0,'the block markers are allowed');
+select is(public.letter_template_keys('<p>{{#each courses}}</p><p>{{course.name}}</p><p>{{/each}}</p>'),array['course.name'],'the block markers are not variables');
+select is((select status || '|' || is_default::text from hr.sign_templates where category='student_offer_letter' and name='SLIT Letter of Offer and Written Agreement'),'active|true','the real SLIT letter is the active default');
+select is((select status || '|' || is_default::text || '|' || (header_html = public.letter_standard_header())::text from hr.sign_templates where category='student_offer_letter' and name='Standard Letter of Offer'),'archived|false|true','the starter has the standard letterhead and is an inactive example');
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select is((public.application_cc_default('43000000-0000-0000-0000-0000000000c0'))->>'email','status-agent@example.test','the agent is copied by default');
+select lives_ok($$select public.portal_offer_letter_issue('43000000-0000-0000-0000-0000000000c0','upload','LOO.pdf',pg_temp.loo(),null,'','Packaged fixture')$$,'an offer letter for the packaged application');
+select throws_ok($$select public.portal_notification_cc('43000000-0000-0000-0000-0000000000c0','offer_letter_issued',array['someone@else.test'])$$,'42501',null,'only the agent or agency can be copied');
+reset role;
+-- The recipient of this fixture is the agent itself (it was routed to the agent); the copy goes to the agency's email instead.
+update public.agencies set business_email = 'agency.office@example.test' where id = '13000000-0000-0000-0000-000000000001';
+set local role authenticated;
+select lives_ok($$select public.portal_notification_cc('43000000-0000-0000-0000-0000000000c0','offer_letter_issued',array['agency.office@example.test'])$$,'the agency is copied');
+select is(pg_temp.q($q$select count(*) from public.notification_deliveries where application_id='43000000-0000-0000-0000-0000000000c0' and event='offer_letter_issued' and recipient_email='agency.office@example.test'$q$)::int,1,'the copy is queued with the letter');
+select ok(exists(select 1 from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-0000000000c0' and new_status='offer_issued' and note like '%CC: agency.office@example.test%'),'the copy is in the status history');
 reset role;
 -- Migration 92 (P08-05): per-event recipients, non-user deliveries, event naming, validation, permissions.
 reset role;

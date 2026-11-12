@@ -342,6 +342,7 @@
   display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; line-height: 1.35;
   background: #dbeafe; color: #1e3a8a; border: 1px solid #93c5fd; font-size: 0.92em; white-space: nowrap; cursor: default; user-select: all;
 }
+.rte-content .var-chip[data-block] { background: #ede9fe; color: #4c1d95; border-color: #c4b5fd; font-weight: 600; }
 .rte-content .var-chip[data-unknown] { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
 ::highlight(tpl-known) { background-color: #dbeafe; }
 ::highlight(tpl-field) { background-color: #fde68a; }

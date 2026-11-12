@@ -33,11 +33,83 @@ export const parseCurly = (inner: string): { key: string; modifier: string | nul
   return { key, modifier: modifier ?? null };
 };
 
-/** The keys a template uses, in order of first use (modifiers removed). */
+/* ------------------------------------------------------------------ blocks: packaged offers */
+/** {{#each courses}} ... {{/each}} repeats per course; {{#if multiple_courses}} ... {{/if}} prints only for more than one course. */
+export const EACH_COURSES = "#each courses";
+export const IF_MULTIPLE = "#if multiple_courses";
+const BLOCK_MARKER = /^\s*(#each courses|\/each|#if multiple_courses|\/if)\s*$/i;
+export const isBlockMarker = (inner: string) => BLOCK_MARKER.test(inner);
+/** A course variable of the n-th course after the first is written key#n (course.name#1 is the second course's name). */
+export const baseKey = (key: string) => key.split("#")[0];
+export const courseIndexOf = (key: string) => { const n = Number(key.split("#")[1]); return Number.isInteger(n) && n > 0 ? n : 0; };
+/** Variables that belong to one course (repeated by {{#each courses}}). */
+export const isCourseKey = (key: string) => /^(course|fees)\./.test(key) && key !== "fees.combined_total";
+const courseLabel = (variable: LetterVariable, key: string) => (courseIndexOf(key) ? `${variable.label} (course ${courseIndexOf(key) + 1})` : variable.label);
+
+/** The keys a template uses, in order of first use (modifiers and block markers left out). */
 export function letterKeys(html: string): string[] {
   const seen: string[] = [];
-  for (const m of textOf(html).matchAll(CURLY_TOKEN)) { const { key } = parseCurly(m[1]); if (!seen.includes(key)) seen.push(key); }
+  for (const m of textOf(html).matchAll(CURLY_TOKEN)) {
+    if (isBlockMarker(m[1])) continue;
+    const { key } = parseCurly(m[1]);
+    if (!seen.includes(key)) seen.push(key);
+  }
   return seen;
+}
+
+/** Where a marker sits: its table row or paragraph when it is alone there (removed with it), else the marker itself. */
+function markerSpan(html: string, at: number, length: number): { start: number; end: number } {
+  const own = (open: string, close: string) => {
+    const start = html.lastIndexOf(open, at);
+    if (start < 0 || html.lastIndexOf(close, at) > start) return null;
+    const end = html.indexOf(close, at + length);
+    if (end < 0) return null;
+    const inner = textOf(html.slice(start, end + close.length)).replace(/\s/g, "");
+    return inner === textOf(html.slice(at, at + length)).replace(/\s/g, "") ? { start, end: end + close.length } : null;
+  };
+  return own("<tr", "</tr>") ?? own("<p", "</p>") ?? own("<div", "</div>") ?? { start: at, end: at + length };
+}
+function nextMarker(html: string, from: number, name: RegExp): { at: number; length: number } | null {
+  name.lastIndex = from;
+  const m = name.exec(html);
+  return m ? { at: m.index, length: m[0].length } : null;
+}
+/**
+ * The template as printed for an application with `courseCount` courses: each {{#each courses}} block once per course (its course and
+ * fee variables of the n-th course written key#n), {{#if multiple_courses}} blocks kept only for more than one course. With one course
+ * (or none) the letter reads exactly as without the blocks.
+ */
+export function expandLetterBlocks(html: string, courseCount: number): string {
+  const count = Math.max(1, Math.floor(courseCount) || 1);
+  let out = String(html ?? "");
+  const openEach = /\{\{\s*#each courses\s*\}\}/gi, closeEach = /\{\{\s*\/each\s*\}\}/gi;
+  for (let guard = 0; guard < 50; guard++) {
+    const open = nextMarker(out, 0, openEach);
+    if (!open) break;
+    const close = nextMarker(out, open.at + open.length, closeEach);
+    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
+    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
+    const inner = out.slice(a.end, b.start);
+    const copies = Array.from({ length: count }, (_, n) => (n === 0 ? inner : inner.replace(/\{\{\s*([a-z]+\.[a-z_]+)(\s*\|[^{}]*)?\s*\}\}/g,
+      (whole, key: string, mod: string | undefined) => (isCourseKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole))));
+    out = out.slice(0, a.start) + copies.join("") + out.slice(b.end);
+  }
+  const openIf = /\{\{\s*#if multiple_courses\s*\}\}/gi, closeIf = /\{\{\s*\/if\s*\}\}/gi;
+  for (let guard = 0; guard < 50; guard++) {
+    const open = nextMarker(out, 0, openIf);
+    if (!open) break;
+    const close = nextMarker(out, open.at + open.length, closeIf);
+    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
+    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
+    out = out.slice(0, a.start) + (count > 1 ? out.slice(a.end, b.start) : "") + out.slice(b.end);
+  }
+  return out;
+}
+/** The application's values with the 2nd, 3rd... course's course and fee variables added as key#1, key#2... */
+export function withCourseValues(values: Record<string, LetterValue>, courses: ReadonlyArray<Record<string, LetterValue>> = []): Record<string, LetterValue> {
+  const out: Record<string, LetterValue> = { ...values };
+  courses.forEach((course, n) => { if (n > 0) for (const [key, value] of Object.entries(course)) out[`${key}#${n}`] = value; });
+  return out;
 }
 
 const norm = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -65,6 +137,7 @@ export function unmappedTokens(html: string, registry: readonly LetterVariable[]
   const keys = new Set(registry.map((v) => v.key));
   const out = new Map<string, UnmappedToken>();
   for (const m of text.matchAll(CURLY_TOKEN)) {
+    if (isBlockMarker(m[1])) continue;
     const { key, modifier } = parseCurly(m[1]);
     const token = `{{${m[1].trim()}}}`;
     if (!keys.has(key)) out.set(token, { token, kind: "unknown", suggestion: suggestVariable(key.replace(/^[a-z]+\./, ""), registry) ?? suggestVariable(key, registry) });
@@ -154,7 +227,7 @@ export function letterResolver(registry: readonly LetterVariable[], values: Reco
   const byKey = new Map(registry.map((v) => [v.key, v]));
   const fills = new Map(manual.map((m) => [m.key, m]));
   return (key: string, modifier: string | null): CurlyResolution => {
-    const spec = byKey.get(key);
+    const spec = byKey.get(baseKey(key));
     if (!spec) return { kind: "missing", key, label: key };
     if (key === "page.number") return { kind: "page" };
     if (key === "page.total") return { kind: "total" };
@@ -173,27 +246,28 @@ export function letterResolver(registry: readonly LetterVariable[], values: Reco
     if (value && !value.missing) return { kind: "value", text: applyModifier(value, modifier) };
     if (fill?.mode === "blank" && !spec.required) return { kind: "value", text: "" };
     if (sample) return { kind: "value", text: applyModifier({ value: spec.sample, raw: spec.sample, source: "", missing: false }, modifier) };
-    return { kind: "missing", key, label: spec.label };
+    return { kind: "missing", key, label: courseLabel(spec, key) };
   };
 }
 
-export interface MissingDetail { variable: LetterVariable; value: LetterValue | undefined }
-/** The details a template needs that the application does not have (render / entered variables never are). */
+/** One missing detail: the full key (course variables of the 2nd, 3rd... course end in #1, #2...), its variable, the label shown. */
+export interface MissingDetail { key: string; variable: LetterVariable; value: LetterValue | undefined; label: string }
+/** The details a template (blocks already expanded) needs that the application does not have (render / entered variables never are). */
 export function missingDetails(html: string, registry: readonly LetterVariable[], values: Record<string, LetterValue>): MissingDetail[] {
   const byKey = new Map(registry.map((v) => [v.key, v]));
   return letterKeys(html).flatMap((key) => {
-    const variable = byKey.get(key);
+    const variable = byKey.get(baseKey(key));
     if (!variable || variable.sourceKind === "render" || variable.sourceKind === "entered") return [];
     const value = values[key];
-    return !value || value.missing ? [{ variable, value }] : [];
+    return !value || value.missing ? [{ key, variable, value, label: courseLabel(variable, key) }] : [];
   });
 }
 
 /** What still blocks Send: required details without a value, and optional ones neither filled nor ticked to leave blank. */
 export function blockingDetails(missing: readonly MissingDetail[], manual: readonly ManualFill[]): MissingDetail[] {
   const fills = new Map(manual.map((m) => [m.key, m]));
-  return missing.filter(({ variable }) => {
-    const fill = fills.get(variable.key);
+  return missing.filter(({ key, variable }) => {
+    const fill = fills.get(key);
     if (fill && fill.mode !== "blank" && fill.value.trim()) return false;
     if (fill?.mode === "blank" && !variable.required) return false;
     return true;

@@ -1,18 +1,30 @@
 import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { BRACKET_TOKEN, isTokenName, MAX_IMAGE_CHARS, sanitizeRichHtml } from "../../../../supabase/functions/_shared/rich-html";
 import { lookupVariable, type TemplateVariable } from "../../../../supabase/functions/_shared/template-variables";
-import { CURLY_TOKEN, LETTER_GROUPS, parseCurly, unmappedTokens, type LetterVariable } from "../../../../supabase/functions/_shared/letter-variables";
+import { CURLY_TOKEN, LETTER_GROUPS, isBlockMarker, parseCurly, unmappedTokens, type LetterVariable } from "../../../../supabase/functions/_shared/letter-variables";
+
+/** How the block markers read in the editor. */
+const BLOCK_LABELS: Record<string, string> = {
+  "#each courses": "▸ Course block: repeats per course", "/each": "◂ End of course block",
+  "#if multiple_courses": "▸ Only when there are several courses", "/if": "◂ End of the several-courses part",
+};
 import { rehostImagesIn, uploadTemplateAsset } from "@/lib/offerLetters";
 
 /* Offer letter variables: {{key}} text is shown as a chip (edited as one piece) and saved back as the text token. */
 const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function chipElement(raw: string, registry: readonly LetterVariable[]): HTMLSpanElement {
-  const { key, modifier } = parseCurly(raw);
-  const spec = registry.find((v) => v.key === key);
   const chip = document.createElement("span");
   chip.className = "var-chip";
   chip.contentEditable = "false";
   chip.dataset.var = raw.trim();
+  if (isBlockMarker(raw)) {
+    chip.dataset.block = "";
+    chip.title = `{{${raw.trim()}}}`;
+    chip.textContent = BLOCK_LABELS[raw.trim().toLowerCase()] ?? raw.trim();
+    return chip;
+  }
+  const { key, modifier } = parseCurly(raw);
+  const spec = registry.find((v) => v.key === key);
   if (!spec) chip.dataset.unknown = "";
   chip.title = spec ? `{{${raw.trim()}}} · ${spec.source}` : `{{${raw.trim()}}} is not a variable: map it before the template can be active`;
   chip.textContent = spec ? `${spec.group === "Page" ? "" : `${spec.group} · `}${spec.label}${modifier ? ` (${modifier})` : ""}` : `{{${raw.trim()}}}`;
@@ -904,6 +916,12 @@ export default function RichTextEditor({
           <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Insert variable" data-testid={testId ? `${testId}-variables` : undefined}>
             <p className="text-[13px] font-semibold text-foreground-900">Insert variable</p>
             <p className="mb-1.5 text-[11px] text-foreground-600">Click to insert at the cursor. Saved as {"{{group.key}}"}; add |upper or |raw in the source view.</p>
+            <button type="button" onMouseDown={stop} data-testid="letter-course-block"
+              onClick={() => { const range = savedRange.current; insertAt("<p>{{#each courses}}</p><p>{{course.code_and_name}}: {{fees.total}}</p><p>{{/each}}</p>", range); }}
+              title="Everything between the two markers is printed once per course of the application (packaged offers); course and fee variables are that course's"
+              className="mb-2 flex w-full items-center gap-1.5 rounded border border-dashed border-primary-300 bg-primary-50 px-2 py-1.5 text-left text-xs font-medium text-primary-800 hover:bg-primary-100">
+              <i className="ri-repeat-line" aria-hidden="true" />Course block (repeats per course)
+            </button>
             <input type="search" value={varSearch} onChange={(e) => setVarSearch(e.target.value)} placeholder="Search variables" aria-label="Search variables"
               className="mb-2 h-8 w-full rounded border border-background-300 bg-background-50 px-2 text-xs focus:border-primary-400 focus:outline-none" />
             <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">

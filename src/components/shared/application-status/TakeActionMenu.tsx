@@ -8,6 +8,8 @@ import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
 import { changeApplicationStatus, revertApplicationStatus } from "@/pages/agency/lib/portalApplications";
+import { CcAgent } from "./CcAgent";
+import { sendCc, useCcDefault } from "@/lib/ccAgent";
 
 type Variant = "menu" | "row";
 
@@ -38,6 +40,10 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Resend offer letter: the agent's copy too (on by default).
+  const [ccWanted, setCcWanted] = useState(false);
+  const cc = useCcDefault(application.id, ccWanted);
+  const [ccOn, setCcOn] = useState(true);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const actions = getAllowedActions(workflow, application.status);
@@ -74,7 +80,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     }
     setOpen((value) => !value);
   };
-  const choose = (action: StatusAction) => { setOpen(false); setNote(""); setError(""); setActive(action); };
+  const choose = (action: StatusAction) => { setOpen(false); setNote(""); setError(""); if (action.kind === "resend_offer") setCcWanted(true); setActive(action); };
   const close = () => { if (!busy) { setActive(null); setError(""); } };
 
   /** After a change: the badge at once, a toast, Undo when the database allows it. */
@@ -99,7 +105,10 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     try {
       const result = await changeApplicationStatus(application.id, active.action, { note: note.trim() });
       if (active.kind === "reminder") { onResult?.("Reminder sent.", true); setActive(null); onDone?.(); }
-      else if (active.kind === "resend_offer") { onResult?.("The offer letter was sent again.", true); setActive(null); onDone?.(); }
+      else if (active.kind === "resend_offer") {
+        if (ccOn) await sendCc(application.id, "offer_letter_issued", cc);
+        onResult?.("The offer letter was sent again.", true); setActive(null); onDone?.();
+      }
       else changed(result);
     } catch (e) { setError(e instanceof Error ? e.message : "The action could not be completed."); }
     finally { setBusy(false); }
@@ -167,6 +176,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
                 className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40" />
             </div>
           ) : null}
+          {active.kind === "resend_offer" ? <CcAgent cc={cc} on={ccOn} onChange={setCcOn} /> : null}
           {error ? <p className="mt-2 text-sm text-red-700" role="alert">{error}</p> : null}
         </ConfirmDialog>
       ) : null}

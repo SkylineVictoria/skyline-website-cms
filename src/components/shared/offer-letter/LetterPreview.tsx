@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import PdfPages from "@/components/signing/PdfPages";
 import { buildLetterPdf, type LetterPdfInput } from "@/lib/offerLetters";
-import { letterKeys, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
+import { baseKey, courseIndexOf, letterKeys, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 
 export interface BuiltLetter { bytes: Uint8Array; pages: number; missing: string[]; marks: Array<{ key: string; page: number; x: number; y: number; w: number; h: number }> }
 
@@ -59,7 +59,7 @@ export function VariableCheck({ html, registry, values, manual = [], testId = "v
 }) {
   const byKey = new Map(registry.map((v) => [v.key, v]));
   const fills = new Map(manual.map((m) => [m.key, m]));
-  const keys = letterKeys(html).filter((k) => byKey.get(k)?.sourceKind !== "render");
+  const keys = letterKeys(html).filter((k) => byKey.get(baseKey(k))?.sourceKind !== "render");
   if (!keys.length) return <p className="text-sm text-foreground-500">The template uses no variables.</p>;
   return (
     <div className="overflow-x-auto rounded-lg border border-background-200" data-testid={testId}>
@@ -67,14 +67,14 @@ export function VariableCheck({ html, registry, values, manual = [], testId = "v
         <thead className="bg-background-100 text-foreground-600"><tr><th className="px-2 py-1.5 font-medium">Variable</th><th className="px-2 py-1.5 font-medium">Value</th><th className="px-2 py-1.5 font-medium">Source</th></tr></thead>
         <tbody className="divide-y divide-background-200">
           {keys.map((key) => {
-            const spec = byKey.get(key);
+            const spec = byKey.get(baseKey(key));
             const value = values[key];
             const fill = fills.get(key);
             const shown = fill && fill.mode !== "blank" && fill.value.trim() ? fill.value : value && !value.missing ? value.value : "";
             const state = fill?.mode === "letter" ? "Typed for this letter" : fill?.mode === "source" ? "Saved to source" : fill?.mode === "blank" ? "Left blank" : null;
             return (
               <tr key={key} data-testid="variable-check-row" data-key={key} className={!shown && fill?.mode !== "blank" && spec?.sourceKind !== "entered" ? "bg-amber-50/70" : ""}>
-                <td className="px-2 py-1.5 align-top"><span className="font-medium text-foreground-900">{spec?.label ?? key}</span><br /><code className="text-[10px] text-foreground-500">{`{{${key}}}`}</code></td>
+                <td className="px-2 py-1.5 align-top"><span className="font-medium text-foreground-900">{spec?.label ?? key}{courseIndexOf(key) ? ` (course ${courseIndexOf(key) + 1})` : ""}</span><br /><code className="text-[10px] text-foreground-500">{`{{${key}}}`}</code></td>
                 <td className="whitespace-pre-line px-2 py-1.5 align-top text-foreground-900" data-testid="variable-check-value">{shown || <span className="text-amber-800">{spec?.required ? "Missing (required)" : "Missing"}</span>}</td>
                 <td className="px-2 py-1.5 align-top text-foreground-600">{state ? <span className="font-medium text-foreground-800">{state}</span> : (value?.source ?? spec?.source)}</td>
               </tr>

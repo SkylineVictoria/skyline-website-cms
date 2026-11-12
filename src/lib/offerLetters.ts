@@ -1,7 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite } from "@/lib/tenantSite";
 import { isTemplateAsset } from "../../supabase/functions/_shared/rich-html";
-import { letterKeys, letterResolver, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
+import { expandLetterBlocks, letterKeys, letterResolver, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
 
 /**
  * Offer letters (LOO): the variable registry, an application's values, student offer letter templates, pictures in the template-assets
@@ -25,7 +25,13 @@ export function loadLetterRegistry(): Promise<LetterVariable[]> {
   return registryCache;
 }
 
-export interface LetterValues { values: Record<string, LetterValue>; context: { courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string } }
+/** values: every variable (course and fee ones from the first course); courses: the course and fee variables of each course (packaged offers). */
+export interface LetterValues {
+  values: Record<string, LetterValue>; courses?: Array<Record<string, LetterValue>>;
+  context: { courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string; courseCount?: number };
+}
+/** The template as printed for these values: {{#each courses}} once per course, {{#if multiple_courses}} for several. */
+export const expandFor = (html: string | null | undefined, courses: LetterValues["courses"]) => expandLetterBlocks(html ?? "", courses?.length ?? 1);
 /** The issue drawer: an application's values (staff reviewers). */
 export const letterValues = (applicationId: string) => rpc<LetterValues>("portal_letter_values", { p_application: applicationId });
 /** Template editor, "Test with application" (CMS admins). */
@@ -130,19 +136,22 @@ export interface LetterPdfInput {
   conditions?: string;
   /** Preview with sample values: every variable prints its registry sample. */
   sample?: boolean;
+  /** Packaged offers: the course and fee variables of each course. */
+  courses?: LetterValues["courses"];
 }
 /** The letter as a PDF (A4, header / footer on every page, page numbers), with where each missing variable printed. */
 export async function buildLetterPdf(input: LetterPdfInput) {
   const { buildDocumentPdf, linkedImages } = await import("../../supabase/functions/_shared/document-pdf");
-  const { headerHtml, bodyHtml, footerHtml } = input.template;
+  const headerHtml = expandFor(input.template.headerHtml, input.courses), bodyHtml = expandFor(input.template.bodyHtml, input.courses), footerHtml = expandFor(input.template.footerHtml, input.courses);
+  const values = withCourseValues(input.values, input.courses);
   const images: Record<string, Uint8Array> = {};
   // Pictures in the HTML (template-assets) and picture variables ({{institute.logo}}: the URL from Settings).
   const used = new Set(letterKeys(`${headerHtml ?? ""}\n${bodyHtml ?? ""}\n${footerHtml ?? ""}`));
-  const pictureValues = input.registry.filter((v) => v.format === "image" && used.has(v.key)).map((v) => input.values[v.key]?.value).filter((url): url is string => Boolean(url && /^https?:\/\//.test(url)));
+  const pictureValues = input.registry.filter((v) => v.format === "image" && used.has(v.key)).map((v) => values[v.key]?.value).filter((url): url is string => Boolean(url && /^https?:\/\//.test(url)));
   await Promise.all([...new Set([...linkedImages(headerHtml, bodyHtml, footerHtml), ...pictureValues])].map(async (url) => { const bytes = await loadImage(url); if (bytes) images[url] = bytes; }));
   return buildDocumentPdf({
     title: input.template.title || "Offer letter", header: headerHtml, body: bodyHtml || "<p></p>", footer: footerHtml, values: {}, brackets: false, images,
-    curly: letterResolver(input.registry, input.values, input.manual ?? [], input.conditions ?? "", Boolean(input.sample)),
+    curly: letterResolver(input.registry, values, input.manual ?? [], input.conditions ?? "", Boolean(input.sample)),
   });
 }
 

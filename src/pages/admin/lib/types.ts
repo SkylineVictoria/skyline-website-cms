@@ -244,6 +244,8 @@ export interface AdminSettings {
   cricos: string;
   /** Offer letters ({{institute.abn}}, {{institute.website}}, {{offer.expiry_date}}, date format of every date variable). */
   abn?: string;
+  /** The registered business name printed in letter footers ({{institute.legal_name}}). */
+  legalName?: string;
   website?: string;
   offerValidityDays?: number;
   letterDateFormat?: "DD/MM/YYYY" | "D Month YYYY" | "DD Mon YYYY";

@@ -93,3 +93,10 @@ export async function ticketRequesterPhone(ticket: Pick<TicketRow, "requesterEma
   }
   return "";
 }
+
+/** CMS > Tickets > Notification emails: who gets an email about every ticket reply and status change (admins only). */
+export type TicketNotifyRecipient = { id: string; email: string; label: string; createdAt: string };
+export const listTicketNotify = () => rpc<TicketNotifyRecipient[]>("support_notify_list", {}, "We could not load the notification emails.");
+export const addTicketNotify = (email: string, label: string) =>
+  rpc<TicketNotifyRecipient>("support_notify_add", { p_email: email, p_label: label }, "We could not add this email.");
+export const removeTicketNotify = (id: string) => rpc<void>("support_notify_remove", { p_id: id }, "We could not remove this email.");

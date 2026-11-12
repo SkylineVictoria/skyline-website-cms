@@ -44,12 +44,13 @@ export const WIZARD_STEPS: WizardStep[] = [
     id: "visa",
     title: "Australian visa",
     short: "Visa",
-    subtitle: "Required. Upload the visa grant notice or VEVO record.",
+    subtitle: "Optional. Upload the visa grant notice or VEVO record if the student has one.",
     icon: "ri-passport-line",
     category: "Visa",
     noun: "visa",
     skipLabel: "Continue without visa",
-    required: true,
+    // Optional for now (owner's request 2026-11-12); set back to true to require a visa before the English step.
+    required: false,
   },
   {
     id: "english",

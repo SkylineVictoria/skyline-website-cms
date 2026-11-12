@@ -32,7 +32,8 @@ export function StaffReviewBar({ application, history, onDone, onResult, reviewI
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5" data-testid="staff-review-bar">
       <StatusBadge status={status} size="sm" />
       <span className="min-w-0 truncate text-xs text-foreground-600" data-testid="status-hint">
-        <span className="font-medium text-foreground-800">{info.label}</span>{info.hint ? <> &middot; {info.hint}</> : null}
+        {/* The badge already names the status: here only what comes next. */}
+        <span className="font-medium text-foreground-800">{info.hint || info.label}</span>
         {note ? <> &middot; Asked: {note}</> : null}
       </span>
       <span className="ml-auto">

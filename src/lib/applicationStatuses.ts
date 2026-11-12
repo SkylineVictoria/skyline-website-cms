@@ -16,10 +16,12 @@ export type ActionKind = "status" | "enrol" | "offer_letter" | "coe" | "reminder
 export interface StatusAction {
   from: string; action: string; to: string | null; actor: "staff" | "applicant"; label: string; kind: ActionKind;
   note: "none" | "optional" | "required"; tone: "neutral" | "primary" | "danger"; sort: number;
-  primary: boolean; automatic: boolean; requiresReason: boolean; roles: string[]; icon: string;
+  /** null when the backend does not say (an older one): not filtered here, the backend still checks. */
+  primary: boolean; automatic: boolean; requiresReason: boolean; roles: string[] | null; icon: string;
 }
 export interface StatusReason { id: string; status: string; label: string; other: boolean }
-export interface Workflow { statuses: StatusDefinition[]; actions: StatusAction[]; reasons: StatusReason[]; roles: string[] }
+/** roles: the signed-in user's role names; null when the backend does not report them (then only the backend filters by role). */
+export interface Workflow { statuses: StatusDefinition[]; actions: StatusAction[]; reasons: StatusReason[]; roles: string[] | null }
 
 export const EMPTY_WORKFLOW: Workflow = { statuses: [], actions: [], reasons: [], roles: [] };
 
@@ -57,13 +59,13 @@ export function parseWorkflow(raw: unknown): Workflow {
       label: str(x.label ?? x.action), kind: str(x.kind, "status") as ActionKind, note: (["optional", "required"].includes(str(x.note)) ? x.note : "none") as StatusAction["note"],
       tone: (["primary", "danger"].includes(str(x.tone)) ? x.tone : "neutral") as StatusAction["tone"], sort: Number(x.sort ?? 0),
       primary: Boolean(x.primary), automatic: Boolean(x.automatic) || x.actor === "applicant", requiresReason: Boolean(x.requiresReason),
-      roles: Array.isArray(x.roles) ? x.roles.map((v) => str(v)) : [], icon: str(x.icon) } satisfies StatusAction;
+      roles: Array.isArray(x.roles) ? x.roles.map((v) => str(v)) : null, icon: str(x.icon) } satisfies StatusAction;
   }).filter((x) => x.from && x.action);
   const reasons = (Array.isArray(r.reasons) ? r.reasons : []).map((item) => {
     const x = (item ?? {}) as Record<string, unknown>;
     return { id: str(x.id), status: str(x.status), label: str(x.label), other: Boolean(x.other) };
   }).filter((x) => x.id && x.status);
-  const roles = Array.isArray(r.roles) ? r.roles.map((v) => str(v)) : [];
+  const roles = Array.isArray(r.roles) ? r.roles.map((v) => str(v)) : null;
   return { statuses, actions, reasons, roles };
 }
 
@@ -80,9 +82,9 @@ export function actionsFor(workflow: Workflow, status: string, actor: StatusActi
  * What a user with `roles` may choose from `status`: the active, non-automatic transitions whose allowed roles include one of theirs
  * (the database checks the same). The primary one first, Reject / Withdraw (danger) last.
  */
-export function getAllowedActions(workflow: Workflow, status: string, roles: readonly string[] = workflow.roles): StatusAction[] {
+export function getAllowedActions(workflow: Workflow, status: string, roles: readonly string[] | null = workflow.roles): StatusAction[] {
   return workflow.actions
-    .filter((x) => x.from === status && !x.automatic && x.roles.some((role) => roles.includes(role)))
+    .filter((x) => x.from === status && !x.automatic && (roles === null || x.roles === null || x.roles.some((role) => roles.includes(role))))
     .sort((a, b) => Number(b.primary) - Number(a.primary) || Number(a.tone === "danger") - Number(b.tone === "danger") || a.sort - b.sort || a.action.localeCompare(b.action));
 }
 /** The reasons for moving to `status` ("Other" last). */

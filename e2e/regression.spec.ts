@@ -491,6 +491,7 @@ const wfMenu = (status: string) => {
   return { primary: rows.find((r) => r[1] === "true")?.[0] ?? null, menu: rows.filter((r) => r[1] !== "true").map((r) => r[0]) };
 };
 const wfLabel = (status: string, action: string) => sql(`select label from public.application_status_transitions where from_status = '${status}' and action_key = '${action}'`);
+const wfStatusHint = (status: string) => sql(`select hint from public.application_statuses where value = '${status}'`);
 const wfStatusLabel = (status: string) => sql(`select label from public.application_statuses where value = '${status}'`);
 const wfPortalUser = async (label: string, agency: string, role: "agent" | "student", studentId?: string) => {
   const who = person(label);
@@ -686,7 +687,7 @@ test("status workflow: an offer letter is uploaded and sent to the agent who sta
   // Review: the staff action bar with the status, what comes next and Take action.
   await page.goto(`/admin/applications/${id}?stage=review`);
   const bar = page.getByTestId("staff-review-bar");
-  await expect(bar.getByTestId("status-hint")).toContainText("Submitted · Ready for offer letter");
+  await expect(bar.getByTestId("status-hint")).toHaveText(wfStatusHint("submitted"));
   await bar.getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");

@@ -49,7 +49,7 @@ function wizardOpenKey(applicationId: string): string {
 }
 
 function wasWizardOpen(applicationId: string): boolean {
-  try { return window.sessionStorage.getItem(wizardOpenKey(applicationId)) === "1"; } catch { return false; }
+  try { return window.localStorage.getItem(wizardOpenKey(applicationId)) === "1"; } catch { return false; }
 }
 
 export default function ApplicationDetailPage() {
@@ -74,7 +74,7 @@ export default function ApplicationDetailPage() {
   const [wizardOpen, setWizardOpen] = useState(() => wasWizardOpen(id) || searchParams.get("wizard") === "1");
   useEffect(() => {
     if (searchParams.get("wizard") !== "1") return;
-    try { window.sessionStorage.setItem(wizardOpenKey(id), "1"); } catch { /* session storage unavailable */ }
+    try { window.localStorage.setItem(wizardOpenKey(id), "1"); } catch { /* session storage unavailable */ }
     setWizardOpen(true);
     const next = new URLSearchParams(searchParams);
     next.delete("wizard");
@@ -116,12 +116,12 @@ export default function ApplicationDetailPage() {
   const refreshAfterSave = useCallback(() => { void getApplication(id, false).then(detail => { if (detail) setApplication(detail); }).catch(e => setActionError(e.message)); }, [id]);
 
   const openWizard = useCallback(() => {
-    try { window.sessionStorage.setItem(wizardOpenKey(id), "1"); } catch { /* session storage unavailable */ }
+    try { window.localStorage.setItem(wizardOpenKey(id), "1"); } catch { /* session storage unavailable */ }
     setWizardOpen(true);
   }, [id]);
 
   const closeWizard = useCallback(() => {
-    try { window.sessionStorage.removeItem(wizardOpenKey(id)); } catch { /* session storage unavailable */ }
+    try { window.localStorage.removeItem(wizardOpenKey(id)); } catch { /* session storage unavailable */ }
     setWizardOpen(false);
   }, [id]);
 

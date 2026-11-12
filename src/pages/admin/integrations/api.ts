@@ -17,3 +17,15 @@ export async function integrationRequest<T>(action: string, values: Record<strin
   if (data?.error) throw new Error(data.error);
   return data as T;
 }
+
+/** Access details for USI / VEVO / PRISMS / DataZoo, stored ahead of their connectors (integrations-credentials). Values never come back. */
+export type PendingCredentialFields = { apiKey: string; accountId: string; organisationCode: string; environment: 'test' | 'production' };
+export async function pendingCredentialRequest(action: 'save' | 'clear', connectionId: string, fields?: PendingCredentialFields): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('integrations-credentials', { body: { action, connectionId, fields, tenantId: currentTenantSite()?.tenantId ?? null } });
+  if (error) {
+    let message = error.message;
+    if (error.context instanceof Response) { try { message = (await error.context.clone().json()).error || message; } catch { /* preserve transport error */ } }
+    throw new Error(message);
+  }
+  if (data?.error) throw new Error(data.error);
+}

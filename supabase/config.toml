@@ -68,3 +68,8 @@ verify_jwt = false # Stripe HMAC signature verification in the handler; no user 
 # CMS > Students > Office 365 email. The gateway verifies the caller's JWT; student_o365_* RPCs (admin_business_require) decide
 # access. App-only Microsoft Graph with EF_MICROSOFT365_* secrets; the temporary password is never stored or returned.
 verify_jwt = true
+
+[functions.integrations-credentials]
+# Stores access details for USI / VEVO / PRISMS / DataZoo ahead of their connectors (Vault, never returned). The gateway
+# verifies the JWT; integration_can_manage and integration_module_access decide access, as in integrations-admin.
+verify_jwt = true

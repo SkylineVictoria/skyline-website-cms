@@ -4,6 +4,7 @@ import { integrationRequest, type Snapshot } from './api';
 import { Button, Card } from '@/pages/admin/components/ui';
 import { Frame } from './shared';
 import { useIntegrations, inputClass } from './state';
+import PendingCredentialsForm from './PendingCredentialsForm';
 
 type OAuthSetup = {
   callbackUrl: string;
@@ -167,6 +168,8 @@ export default function ConnectionsPage() {
   }
 
   const disabled = connection?.status === 'disabled';
+  // Apps whose connector is not built yet: their details can be stored, but there is nothing to test or disconnect.
+  const pendingApp = definition?.availability === 'requires_approval' && Object.hasOwn(australianEducationApps, definition.id);
   const wrongDomain = setup && new URL(setup.callbackUrl).origin !== window.location.origin;
   const available = state.data?.definitions.filter(provider =>
     provider.availability !== 'requires_approval' &&
@@ -195,7 +198,7 @@ export default function ConnectionsPage() {
         </div> : <p>All available applications are already listed in Connections.</p>}
         {pendingEducationApps.length > 0 && <section className="space-y-3 border-t border-background-300 pt-4" aria-labelledby="education-apps-title">
           <h3 id="education-apps-title" className="font-semibold">Australian education integrations</h3>
-          <p className="text-sm">Not available yet. These cannot be connected from here: each one needs access approved by the provider first, then a connector is added to Skyline. Until then, keep using the provider’s own website.</p>
+          <p className="text-sm">Not available yet: each one needs access approved by the provider first, then a connector is added to Skyline. You can store the access details now so they are ready. Until then, keep using the provider’s own website.</p>
           <ul className="space-y-3">
             {pendingEducationApps.map(provider => {
               const details = australianEducationApps[provider.id];
@@ -205,6 +208,9 @@ export default function ConnectionsPage() {
                 </p>
                 <p className="text-sm">{details.purpose}</p>
                 <p className="text-sm"><span className="font-medium">Next step:</span> {details.nextStep}</p>
+                {state.data?.connections.some(item => item.connector_id === provider.id)
+                  ? <p className="mt-2 text-sm">Listed in Connections. Use Manage there to store its details.</p>
+                  : <Button className="mt-2" variant="outline" disabled={busy} onClick={() => void addConnection(provider.id)}>Store access details</Button>}
               </li>;
             })}
           </ul>
@@ -276,6 +282,9 @@ export default function ConnectionsPage() {
               <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Update app credentials</Button>
             </div>
           ))
+        ) : pendingApp && definition ? (
+          <PendingCredentialsForm key={connection.id} connectionId={connection.id} name={definition.name} saved={connection.credential_configured}
+            busy={busy} perform={perform} onNotice={setNotice} />
         ) : definition?.availability === 'requires_approval' || isOAuth ? (
           <p>This application needs provider approval and a supported connector before you can connect it.</p>
         ) : definition && (
@@ -305,13 +314,13 @@ export default function ConnectionsPage() {
             <Button type="submit" disabled={busy || !secret.trim()}>{kind === 'api_key' ? 'Save & Connect' : 'Save'}</Button>
           </form>
         ))}
-        {connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
+        {!pendingApp && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: selected });
             setNotice('Connection verified.');
           })}>Retry connection check</Button>
         )}
-        {connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
+        {!pendingApp && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('revoke', { connectionId: selected });
             if (isOAuth) {

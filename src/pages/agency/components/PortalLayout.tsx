@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import StudentMobilePrompt from "@/pages/agency/components/StudentMobilePrompt";
 import { ROLE_LABELS } from "@/pages/agency/lib/portalData";
 import WorkspaceShell, { type NavEntry } from "@/pages/agency/components/WorkspaceShell";
 
@@ -102,6 +103,7 @@ export default function PortalLayout() {
       onSignOut={() => void handleSignOut()}
     >
       <Outlet key={scopeEpoch} />
+      {isStudent ? <StudentMobilePrompt key={authUser?.id ?? ""} onSignOut={() => void handleSignOut()} /> : null}
     </WorkspaceShell>
   );
 }

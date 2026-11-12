@@ -71,7 +71,7 @@ function wizardStepKey(applicationId: string): string {
 
 function savedWizardStep(applicationId: string): number {
   try {
-    const value = Number(window.sessionStorage.getItem(wizardStepKey(applicationId)));
+    const value = Number(window.localStorage.getItem(wizardStepKey(applicationId)));
     return Number.isInteger(value) && value >= 0 && value <= LAST_STEP ? value : 0;
   } catch {
     return 0;
@@ -177,7 +177,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const question: WizardQuestion | null = step >= DOC_STEPS ? WIZARD_QUESTIONS[step - DOC_STEPS] ?? null : null;
   const current = WIZARD_STEPS[Math.min(step, DOC_STEPS - 1)];
   useEffect(() => {
-    try { window.sessionStorage.setItem(wizardStepKey(applicationId), String(step)); } catch { /* session storage unavailable */ }
+    // localStorage, not sessionStorage: on a phone the browser can be closed to free memory while the camera or file picker is open,
+    // and the wizard must reopen on the same step when the page comes back.
+    try { window.localStorage.setItem(wizardStepKey(applicationId), String(step)); } catch { /* storage unavailable */ }
   }, [applicationId, step]);
 
   // Lock background scrolling while the wizard is open.

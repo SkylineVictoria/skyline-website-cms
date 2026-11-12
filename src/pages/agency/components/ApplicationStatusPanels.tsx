@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
@@ -50,6 +51,7 @@ export function StaffReviewBar({ application, history, onDone, onResult, reviewI
  * and resubmit, with what was asked. Nothing for other statuses.
  */
 export function ApplicantStatusBanner({ application, history, onChanged }: { application: ApplicationDetail; history: StatusHistoryRow[]; onChanged: () => void }) {
+  const navigate = useNavigate();
   const workflow = useApplicationStatuses();
   const actions = actionsFor(workflow, application.status, "applicant");
   const accept = actions.find((x) => x.kind === "accept_offer");
@@ -102,9 +104,10 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
             <p className="text-sm font-semibold text-foreground-950">This application needs action</p>
             <p className="text-xs text-foreground-700" data-testid="action-required-note">{actionRequiredNote(history) || "Correct the application, then resubmit it."}</p>
           </div>
-          <button type="button" onClick={() => setConfirming("resubmit")} data-testid="resubmit-application"
+          {/* Resubmitting checks the form first: the button opens Review, where Resubmit application is. */}
+          <button type="button" onClick={() => navigate({ search: "?stage=review" })} data-testid="resubmit-application"
             className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
-            <i className="ri-send-plane-line" aria-hidden="true" />{resubmit!.label}
+            <i className="ri-send-plane-line" aria-hidden="true" />Review &amp; resubmit
           </button>
         </div>
       )}

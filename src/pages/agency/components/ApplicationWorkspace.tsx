@@ -23,6 +23,7 @@ import {
   type ApplicationCourseRow,
   saveApplicationDraft,
   submitApplication,
+  resubmitApplication,
   deleteApplicationDocument,
   getDocumentSignedUrl,
   listApplicationDocuments,
@@ -36,7 +37,7 @@ import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/d
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
 import { qualificationDetail, qualificationTitle, readQualifications } from "@/pages/agency/lib/qualifications";
-import { canSubmitFrom, useApplicationStatuses } from "@/lib/applicationStatuses";
+import { actionsFor, canSubmitFrom, useApplicationStatuses } from "@/lib/applicationStatuses";
 import ApplicationReview, { type ConsentState } from "@/pages/agency/components/ApplicationReview";
 import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAttachmentField";
 import SchoolLevelField from "@/pages/agency/components/SchoolLevelField";
@@ -1331,7 +1332,8 @@ export default function ApplicationWorkspace({
       openSection(wrongDocumentPage);
       return;
     }
-    if (!consent.method || !consent.confirmed || !consent.authorised) {
+    // A resubmission keeps the consent recorded when the application was first submitted.
+    if (!resubmitHere && (!consent.method || !consent.confirmed || !consent.authorised)) {
       setSubmitError("Please record the student consent method and both confirmations before submitting.");
       return;
     }
@@ -1340,6 +1342,17 @@ export default function ApplicationWorkspace({
       // Always save once more: the server checks the saved draft, which must carry the derived answers (e.g. ec_in_au).
       dirtyRef.current = true;
       await flushSave();
+      if (resubmitHere) {
+        // Action required, corrected: back to Submitted through the applicant's resubmit command (history, audit, email).
+        await resubmitApplication(application.id, "Resubmitted after corrections");
+        const snapshot = collectSnapshot();
+        setSubmittedRef(application.reference);
+        const done = () => onSubmitted?.(application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
+        submittedDoneRef.current = done;
+        window.setTimeout(() => { if (submittedDoneRef.current === done) { submittedDoneRef.current = null; done(); } }, 1800);
+        onSaved?.();
+        return;
+      }
       const signedDocumentRef = consent.file ? await uploadConsentDocument(application.id, consent.file) : "";
       const snapshot = collectSnapshot();
       const reference = await submitApplication(application.id, {
@@ -1811,7 +1824,10 @@ export default function ApplicationWorkspace({
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
   const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
   const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
-  const canSubmitHere = canSubmitFrom(workflow, application.status);
+  const firstSubmit = canSubmitFrom(workflow, application.status);
+  // Action required: the student or agent corrects the form and resubmits it from here (staff never resubmit).
+  const resubmitHere = !auditAccess && actionsFor(workflow, application.status, "applicant").some((x) => x.kind === "resubmit");
+  const canSubmitHere = firstSubmit || resubmitHere;
   const lastStage = stage >= reviewStage - 1;
 
   return (
@@ -1846,13 +1862,14 @@ export default function ApplicationWorkspace({
           isReview
             ? !readOnly && canSubmitHere
               ? {
-                label: "Submit application",
+                label: resubmitHere ? "Resubmit application" : "Submit application",
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
-                // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document.
-                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; a resubmission
+                // keeps the consent of the first submission.
+                disabled: missingNow.length > 0 || (!resubmitHere && (consent.method === "" || !consent.confirmed || !consent.authorised)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
-                busyLabel: "Submitting…",
+                busyLabel: resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",
               }
               : null
@@ -1899,7 +1916,8 @@ export default function ApplicationWorkspace({
               fieldProblems={crossFieldProblems}
               submitError={submitError}
               readOnly={readOnly}
-              canSubmit={canSubmitHere}
+              canSubmit={firstSubmit}
+              resubmit={resubmitHere}
             />
           </div>
         ) : null}

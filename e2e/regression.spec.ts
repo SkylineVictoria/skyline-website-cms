@@ -654,6 +654,34 @@ test("status flow: Submitted → Issue offer letter → accepted → Issue CoE /
   expect(sql(`select h.reason || '|' || (select count(*) from public.admission_event_outbox o where o.application_id = h.application_id) from public.enrollment_application_status_history h where h.application_id = '${other}' and h.new_status = 'withdrawn'`)).toBe("Student request|0");
 });
 
+test("Action required: the agent sees Review & resubmit and a Resubmit application button on Review (checked like Submit); staff do not", async ({ page }) => {
+  const agency = wfAgency("resubmit");
+  const agent = await wfPortalUser("resubmit-agent", agency, "agent");
+  const id = wfApplication(agency, "action_required", `Resub${agent.local.slice(-6)} Student`, { created_by: agent.profile, assigned_agent_id: agent.profile });
+  await signInThroughTheForm(page, agent.email);
+  await expect(page).toHaveURL(/\/agency/, { timeout: 30_000 });
+  await page.goto(`/agency/applications/${id}`);
+  await expect(page.getByTestId("action-required-banner")).toBeVisible();
+  await page.getByTestId("resubmit-application").click();
+  await expect(page).toHaveURL(/stage=review/);
+  const button = page.getByTestId("submit-application");
+  await expect(button).toHaveText(/Resubmit application/);
+  await expect(page.getByTestId("resubmit-hint")).toBeVisible();
+  // This fixture has no answers: Resubmit is held back exactly like Submit until the form is complete.
+  await expect(page.getByTestId("review-issues")).toBeVisible();
+  await expect(button).toBeDisabled();
+  await shot(page, "action-required-resubmit");
+  // Staff see the review bar, not Resubmit.
+  const admin = await createAdmin("resubmit-staff");
+  await page.context().clearCookies();
+  await page.evaluate(() => window.localStorage.clear());
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  await expect(page.getByTestId("staff-review-bar")).toBeVisible();
+  await expect(page.getByTestId("submit-application")).toHaveCount(0);
+});
+
 test("Settings › Application statuses: an admin renames a status (live everywhere, audited), the automatic moves are locked, reasons per status", async ({ page }) => {
   const admin = await createAdmin("status-settings");
   await signInThroughTheForm(page, admin.email);

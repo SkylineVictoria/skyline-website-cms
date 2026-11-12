@@ -45,6 +45,7 @@ export default function ApplicationReview({
   submitError,
   readOnly = false,
   canSubmit = true,
+  resubmit = false,
 }: {
   values: DraftValues;
   courses: string[];
@@ -69,6 +70,8 @@ export default function ApplicationReview({
   readOnly?: boolean;
   /** Only a draft is submitted by agents; after that SLIT administration moves the application on. */
   canSubmit?: boolean;
+  /** Action required: corrected, the application is resubmitted with the button below (the consent of the first submission stands). */
+  resubmit?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));
   const val = (key: string): string => {
@@ -145,9 +148,13 @@ export default function ApplicationReview({
           </label>
           <p className="text-xs text-foreground-500">Prepared by {agentName || "the agency"} &middot; Declaration version 1.0 &middot; Consent recorded against your account.</p>
         </fieldset>
+      ) : resubmit ? (
+        <p className="mt-4 text-xs text-foreground-600" data-testid="resubmit-hint">
+          Fix what was asked, then press Resubmit application: it goes back to Submitted and SLIT admissions reviews it again.
+        </p>
       ) : (
         <p className="mt-4 text-xs text-foreground-600">
-          Your corrections are saved on this application. SLIT administration reviews them and moves the application on; it cannot be resubmitted from here.
+          Your corrections are saved on this application. SLIT administration reviews them and moves the application on.
         </p>
       )}
 

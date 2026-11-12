@@ -41,18 +41,6 @@ export const WIZARD_STEPS: WizardStep[] = [
     required: true,
   },
   {
-    id: "visa",
-    title: "Australian visa",
-    short: "Visa",
-    subtitle: "Optional. Upload the visa grant notice or VEVO record if the student has one.",
-    icon: "ri-passport-line",
-    category: "Visa",
-    noun: "visa",
-    skipLabel: "Continue without visa",
-    // Optional for now (owner's request 2026-11-12); set back to true to require a visa before the English step.
-    required: false,
-  },
-  {
     id: "english",
     title: "English-language evidence",
     short: "English",
@@ -73,6 +61,17 @@ export const WIZARD_STEPS: WizardStep[] = [
     noun: "academic transcript",
     skipLabel: "Continue without academic results",
     multiple: true,
+    required: true,
+  },
+  {
+    id: "visa",
+    title: "Australian visa",
+    short: "Visa",
+    subtitle: "Required. Upload the visa grant notice or VEVO record.",
+    icon: "ri-passport-line",
+    category: "Visa",
+    noun: "visa",
+    skipLabel: "Continue without visa",
     required: true,
   },
   {

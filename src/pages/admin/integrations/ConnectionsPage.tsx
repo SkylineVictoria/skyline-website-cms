@@ -195,14 +195,16 @@ export default function ConnectionsPage() {
         </div> : <p>All available applications are already listed in Connections.</p>}
         {pendingEducationApps.length > 0 && <section className="space-y-3 border-t border-background-300 pt-4" aria-labelledby="education-apps-title">
           <h3 id="education-apps-title" className="font-semibold">Australian education integrations</h3>
-          <p className="text-sm">These apps need confirmed provider access and a connector before you can enter credentials.</p>
+          <p className="text-sm">Not available yet. These cannot be connected from here: each one needs access approved by the provider first, then a connector is added to Skyline. Until then, keep using the provider’s own website.</p>
           <ul className="space-y-3">
             {pendingEducationApps.map(provider => {
               const details = australianEducationApps[provider.id];
-              return <li key={provider.id} className="rounded border border-background-300 p-3">
-                <p className="font-semibold">{details.name}</p>
+              return <li key={provider.id} className="rounded border border-dashed border-background-300 bg-background-50 p-3 text-foreground-700">
+                <p className="flex flex-wrap items-center gap-2 font-semibold">{details.name}
+                  <span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold text-foreground-700">Not available yet: needs provider approval</span>
+                </p>
                 <p className="text-sm">{details.purpose}</p>
-                <p className="text-sm">{details.nextStep}</p>
+                <p className="text-sm"><span className="font-medium">Next step:</span> {details.nextStep}</p>
               </li>;
             })}
           </ul>

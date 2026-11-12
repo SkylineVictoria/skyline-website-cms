@@ -3,11 +3,14 @@ import { useEffect, useState } from "react";
 export type ReadingPhase = "uploading" | "queued" | "processing";
 
 const STAGES = ["Uploading…", "Reading your document…", "Finding your details…", "Almost there…"] as const;
-const MESSAGES = ["Good things take a few seconds ✨", "You won’t regret the wait", "Saving you from typing all this", "Double-checking every letter"] as const;
+// Twice the thumbnail's 56px width, for sharp screens.
+const THUMB_WIDTH = 112;
+type PdfDocument = { getPage(n: number): Promise<{ getViewport(o: { scale: number }): { width: number; height: number }; render(o: Record<string, unknown>): { promise: Promise<void> } }> };
+const MESSAGES =["Good things take a few seconds ✨", "You won’t regret the wait", "Saving you from typing all this", "Double-checking every letter"] as const;
 
 /**
  * What a document looks like while it is uploaded and read, used by the application form and by the document wizards: the
- * document (a picture of it when the file is an image) with an orange line sweeping over it, the stages ticking off, a rotating
+ * document (the picture, or page 1 of a PDF, when this browser has the file) with an orange line sweeping over it, the stages ticking off, a rotating
  * friendly line and a thin progress bar. The stages follow the real states (uploading, queued, being read); within a state they
  * move on with time, since the reader reports no finer progress. With reduced motion there is no sweep, only the text changes.
  */
@@ -27,10 +30,32 @@ export default function DocumentReadingState({ filename, file, phase, uploadProg
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (!file || !file.type.startsWith("image/")) return undefined;
-    const url = URL.createObjectURL(file);
-    setThumb(url);
-    return () => URL.revokeObjectURL(url);
+    if (!file) return undefined;
+    if (file.type.startsWith("image/")) {
+      const url = URL.createObjectURL(file);
+      setThumb(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    if (file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) return undefined;
+    // A PDF: page 1, drawn small by pdf.js (already used by the signing viewer, loaded only here); the drawn page stays otherwise.
+    let cancelled = false;
+    let task: { promise: Promise<unknown>; destroy(): Promise<void> } | null = null;
+    void (async () => {
+      try {
+        const [pdf, worker] = await Promise.all([import("pdfjs-dist/legacy/build/pdf.mjs"), import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")]);
+        pdf.GlobalWorkerOptions.workerSrc = worker.default;
+        task = pdf.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }) as unknown as typeof task;
+        const doc = await task!.promise as PdfDocument;
+        const page = await doc.getPage(1);
+        const base = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: THUMB_WIDTH / base.width });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width); canvas.height = Math.floor(viewport.height);
+        await page.render({ canvas, canvasContext: canvas.getContext("2d"), viewport }).promise;
+        if (!cancelled) setThumb(canvas.toDataURL("image/png"));
+      } catch { /* not drawable here: the drawn page stays */ }
+    })();
+    return () => { cancelled = true; void task?.destroy().catch(() => undefined); };
   }, [file]);
 
   const elapsed = now - since;
@@ -46,7 +71,7 @@ export default function DocumentReadingState({ filename, file, phase, uploadProg
       <div className="flex items-start gap-3">
         <div className="relative h-[72px] w-14 shrink-0 overflow-hidden rounded-md border border-background-200 bg-background-100">
           {thumb ? (
-            <img src={thumb} alt="" className="h-full w-full object-cover" />
+            <img src={thumb} alt="" className="h-full w-full object-cover object-top" />
           ) : (
             <div className="space-y-1.5 p-2" aria-hidden="true">
               <div className="h-1.5 w-7 rounded bg-background-300" />

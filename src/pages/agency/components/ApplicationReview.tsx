@@ -70,7 +70,7 @@ export default function ApplicationReview({
   readOnly?: boolean;
   /** Only a draft is submitted by agents; after that SLIT administration moves the application on. */
   canSubmit?: boolean;
-  /** Action required: corrected, the application is resubmitted with the button below (the consent of the first submission stands). */
+  /** Action required: corrected, the application is resubmitted with the button below (the declaration is confirmed again). */
   resubmit?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));

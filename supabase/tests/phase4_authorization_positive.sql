@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(537);
+select plan(539);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -211,7 +211,8 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
  ('43000000-0000-0000-0000-000000000034','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_issued','{}'),
  ('43000000-0000-0000-0000-000000000035','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','action_required','{}'),
  ('43000000-0000-0000-0000-000000000036','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-000000000037','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}');
+ ('43000000-0000-0000-0000-000000000037','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
+ ('43000000-0000-0000-0000-0000000000e6','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','action_required','{}');
 -- Migration 20261113260000: statuses and actions from the catalogue tables; Offer letter issued only through the offer letter
 -- command; the applicant resubmits and accepts; staff marking an offer accepted, rejecting or asking for action add a note.
 update public.enrollment_applications set created_by='23000000-0000-0000-0000-000000000030' where id='43000000-0000-0000-0000-000000000030';
@@ -235,7 +236,9 @@ select lives_ok($$select public.portal_set_application_status('43000000-0000-000
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000038','withdrawn','Student request')$$,'an admin can withdraw a submitted application with a reason');
 select lives_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','action_required','Please correct the passport')$$,'submitted -> action_required');
 select throws_ok($$select public.portal_set_application_status('43000000-0000-0000-0000-000000000030','submitted')$$,'22023',null,'staff do not resubmit: the student or agent does');
-select throws_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-000000000030')$$,'42501',null,'staff cannot use the applicant resubmit');
+select throws_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-0000000000e6','Fixed','{"method":"electronic","confirmed":true,"authorised":false}')$$,'22023',null,'resubmitting needs both declaration confirmations (20261113310000)');
+select lives_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-0000000000e6','Fixed the passport','{"method":"electronic","confirmed":true,"authorised":true,"declarationVersion":"1.0"}')$$,'staff resubmit a corrected application (20261113310000)');
+select is(pg_temp.q($q$select (select status from public.enrollment_applications where id='43000000-0000-0000-0000-0000000000e6')||'|'||(select count(*) from public.enrollment_application_consents where application_id='43000000-0000-0000-0000-0000000000e6')$q$),'submitted|1','back to Submitted, the declaration recorded again');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
 select lives_ok($$select public.portal_application_resubmit('43000000-0000-0000-0000-000000000030','Passport replaced')$$,'the agent resubmits after the correction');
 select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000030'),'submitted','resubmitted: back to Submitted');

@@ -1332,8 +1332,8 @@ export default function ApplicationWorkspace({
       openSection(wrongDocumentPage);
       return;
     }
-    // A resubmission keeps the consent recorded when the application was first submitted.
-    if (!resubmitHere && (!consent.method || !consent.confirmed || !consent.authorised)) {
+    // The declaration is confirmed again on a resubmission, as on the first submission.
+    if (!consent.method || !consent.confirmed || !consent.authorised) {
       setSubmitError("Please record the student consent method and both confirmations before submitting.");
       return;
     }
@@ -1343,8 +1343,11 @@ export default function ApplicationWorkspace({
       dirtyRef.current = true;
       await flushSave();
       if (resubmitHere) {
-        // Action required, corrected: back to Submitted through the applicant's resubmit command (history, audit, email).
-        await resubmitApplication(application.id, "Resubmitted after corrections");
+        // Action required, corrected: the form is saved (above), the declaration recorded again, then back to Submitted through the resubmit
+        // command (history, audit, email).
+        const signedRef = consent.file ? await uploadConsentDocument(application.id, consent.file) : "";
+        await resubmitApplication(application.id, "Resubmitted after corrections",
+          { method: consent.method, confirmed: consent.confirmed, authorised: consent.authorised, declarationVersion: DECLARATION_VERSION, signedDocumentRef: signedRef });
         const snapshot = collectSnapshot();
         setSubmittedRef(application.reference);
         const done = () => onSubmitted?.(application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
@@ -1825,8 +1828,9 @@ export default function ApplicationWorkspace({
   const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
   const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
   const firstSubmit = canSubmitFrom(workflow, application.status);
-  // Action required: the student or agent corrects the form and resubmits it from here (staff never resubmit).
-  const resubmitHere = !auditAccess && actionsFor(workflow, application.status, "applicant").some((x) => x.kind === "resubmit");
+  // Action required: whoever the backend allows (the student, the agent, staff) corrects the form and resubmits it from here.
+  const resubmitHere = actionsFor(workflow, application.status, "applicant")
+    .some((x) => x.kind === "resubmit" && (workflow.roles === null || x.roles === null || x.roles.some((role) => workflow.roles!.includes(role))));
   const canSubmitHere = firstSubmit || resubmitHere;
   const lastStage = stage >= reviewStage - 1;
 
@@ -1865,9 +1869,8 @@ export default function ApplicationWorkspace({
                 label: resubmitHere ? "Resubmit application" : "Submit application",
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
-                // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; a resubmission
-                // keeps the consent of the first submission.
-                disabled: missingNow.length > 0 || (!resubmitHere && (consent.method === "" || !consent.confirmed || !consent.authorised)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; the same for a resubmission.
+                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
                 busyLabel: resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",
@@ -1916,7 +1919,7 @@ export default function ApplicationWorkspace({
               fieldProblems={crossFieldProblems}
               submitError={submitError}
               readOnly={readOnly}
-              canSubmit={firstSubmit}
+              canSubmit={canSubmitHere}
               resubmit={resubmitHere}
             />
           </div>

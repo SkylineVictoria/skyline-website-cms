@@ -737,7 +737,9 @@ export async function openOfferLetter(letterId: string): Promise<void> {
 /** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
 export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
 /** Resubmit: the student or agent sends a corrected application back from Action required. */
-export const resubmitApplication = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note });
+/** Resubmit (Action required → Submitted), with the declaration recorded again when it is given (as on the first submission). */
+export const resubmitApplication = (applicationId: string, note = "", consent: Record<string, unknown> | null = null) =>
+  rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note, p_consent: consent });
 /** Send reminder: emails the student or agent what Action required still asks for. */
 export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });
 /** Payload of change_application_status: a reason from status_reasons ("Other" with its text), a note, notify (default true), the enrolment date. */

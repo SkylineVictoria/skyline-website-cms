@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "./ActionDrawer";
 import OfferLetterDrawer, { type OfferApplication } from "./OfferLetterDrawer";
-import { FinalBadge } from "./StatusBadge";
+import { FinalBadge, StatusConfigError } from "./StatusBadge";
 import { CoeVoeDrawer, EnrolDialog, ReasonDialog, type StatusResult } from "./StatusDialogs";
 import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
@@ -57,6 +57,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); window.removeEventListener("scroll", reflow, true); };
   }, [open]);
 
+  if (workflow.error) return <StatusConfigError compact />;
   if (!workflow.ready) return <span className="inline-block h-8 w-20 animate-pulse rounded-lg bg-background-100" aria-label="Loading actions" />;
   if (!actions.length) {
     return statusInfo(workflow, application.status).final ? <FinalBadge />

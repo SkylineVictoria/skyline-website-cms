@@ -98,34 +98,50 @@ export const canSubmitFrom = (workflow: Workflow, status: string) => actionsFor(
 export const currentStatuses = (workflow: Workflow) => workflow.statuses.filter((s) => !s.legacy && s.active);
 
 let cached: Workflow | null = null;
-let pending: Promise<Workflow> | null = null;
-const listeners = new Set<(workflow: Workflow) => void>();
+let lastError: string | null = null;
+let pending: Promise<Workflow | null> | null = null;
+const listeners = new Set<() => void>();
 let channel: { unsubscribe: () => unknown } | null = null;
+const notify = () => listeners.forEach((listener) => listener());
 
+/** Reads the configuration; throws with the database's message when it cannot (never a silent empty one). */
 async function fetchWorkflow(): Promise<Workflow> {
   const { supabase } = await import("@/pages/admin/lib/supabase");
   const { data, error } = await supabase.rpc("application_status_workflow");
-  if (error || !data) return cached ?? EMPTY_WORKFLOW;
-  return parseWorkflow(data);
+  if (error) throw new Error(error.message || "application_status_workflow failed");
+  const workflow = parseWorkflow(data);
+  if (!workflow.statuses.length) throw new Error("application_status_workflow returned no statuses");
+  return workflow;
 }
 
-/** Loads the workflow once per page load and shares it; an empty one (no labels, no actions) when it cannot be read. */
-export function loadApplicationStatuses(): Promise<Workflow> {
+/** Loads the configuration once per page load and shares it; on failure records the error (shown inline, logged) and returns null. */
+export function loadApplicationStatuses(): Promise<Workflow | null> {
   if (cached) return Promise.resolve(cached);
-  pending ??= fetchWorkflow().then((next) => { if (next !== EMPTY_WORKFLOW) cached = next; return next; })
-    .catch(() => EMPTY_WORKFLOW).finally(() => { pending = null; });
+  pending ??= fetchWorkflow()
+    .then((next) => { cached = next; lastError = null; return next; })
+    .catch((e: unknown) => {
+      lastError = e instanceof Error ? e.message : String(e);
+      console.error("[application statuses] could not load the status configuration:", lastError);
+      return null;
+    })
+    .finally(() => { pending = null; notify(); });
   return pending;
 }
 
-/** Reads the workflow again and gives it to every mounted component (after a settings save, or a realtime change). */
-export async function refreshApplicationStatuses(): Promise<Workflow> {
-  const next = await fetchWorkflow().catch(() => cached ?? EMPTY_WORKFLOW);
-  cached = next;
-  listeners.forEach((listener) => listener(next));
-  return next;
+/** Reads the configuration again for every mounted component (after a settings save, a realtime change, or Retry). */
+export async function refreshApplicationStatuses(): Promise<Workflow | null> {
+  try {
+    cached = await fetchWorkflow();
+    lastError = null;
+  } catch (e) {
+    lastError = e instanceof Error ? e.message : String(e);
+    console.error("[application statuses] could not load the status configuration:", lastError);
+  }
+  notify();
+  return cached;
 }
 
-/** One realtime subscription per page to the three configuration tables (each change re-reads the workflow). */
+/** One realtime subscription per page to the three configuration tables (each change re-reads the configuration). */
 async function subscribe() {
   if (channel) return;
   try {
@@ -136,19 +152,23 @@ async function subscribe() {
     for (const table of ["application_statuses", "application_status_transitions", "status_reasons"]) ch.on("postgres_changes", { event: "*", schema: "public", table }, onChange);
     ch.subscribe();
     channel = ch;
-  } catch { /* live refresh is a convenience; the next page load reads the new configuration */ }
+  } catch (e) { console.warn("[application statuses] live refresh is off:", e); }
 }
 
-/** The workflow from the database for components: `ready` once it has loaded; it follows configuration changes live. */
-export function useApplicationStatuses(): Workflow & { ready: boolean } {
-  const [workflow, setWorkflow] = useState<Workflow | null>(cached);
+/**
+ * The configuration for components: `ready` once loaded; `error` (and `retry`) when it could not be read, so pages show
+ * "Couldn't load statuses · Retry" instead of empty filters and no actions. It follows configuration changes live.
+ */
+export function useApplicationStatuses(): Workflow & { ready: boolean; error: string | null; retry: () => void } {
+  const [, setTick] = useState(0);
   useEffect(() => {
     let active = true;
-    const listener = (next: Workflow) => { if (active) setWorkflow(next); };
+    const listener = () => { if (active) setTick((n) => n + 1); };
     listeners.add(listener);
-    if (!cached) void loadApplicationStatuses().then((next) => { if (active) setWorkflow(next); });
+    if (!cached && !lastError) void loadApplicationStatuses();
     void subscribe();
     return () => { active = false; listeners.delete(listener); };
   }, []);
-  return { ...(workflow ?? EMPTY_WORKFLOW), ready: workflow !== null };
+  const retry = () => { lastError = null; notify(); void refreshApplicationStatuses(); };
+  return { ...(cached ?? EMPTY_WORKFLOW), ready: cached !== null, error: cached ? null : lastError, retry };
 }

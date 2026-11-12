@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(536);
+select plan(537);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -319,6 +319,8 @@ insert into hr.sign_templates(id, name, title, body_html, kind, audience, catego
   'text','student','student_offer_letter','33000000-0000-0000-0000-000000000002'),
  ('73000000-0000-0000-0000-0000000000a2','LOO old','Letter of offer','<p>Dear $[dogField], {example2:inline} [Page Number] [optional note] {{student.dob|shout}}</p>','text','student','student_offer_letter','33000000-0000-0000-0000-000000000002');
 select is(public.letter_format_name('ASHA o''neil-smith'),'Asha O''Neil-Smith','names print in Title Case, also after an apostrophe or hyphen');
+insert into public.cms_courses(id, slug, code, name, status) values ('loo-c2', 'loo-c2-public-slug', 'LOOC2', 'Slug course', 'Published');
+select is(public.letter_course_id('loo-c2-public-slug', 'LOOC2'),'loo-c2','a course row holding the public slug resolves to the course setup (20261113290000)');
 select is(cardinality(public.letter_template_unmapped('<p>$[dogField] {example2:inline} [Page Number] [optional note] {{student.dob|shout}} {{foo.bar}} {{student.dob|upper}}</p>')),5,'old placeholders, an unknown variable and an unknown modifier are unmapped');
 select ok(not ('[optional note]' = any(public.letter_template_unmapped('<p>[Page Number] [optional note]</p>'))),'other text in square brackets stays text');
 select ok(hr.rich_html_problem('<p><img src="https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/public/template-assets/default/'||gen_random_uuid()||'.png"></p>') is null,'a picture in template-assets is allowed in a template');

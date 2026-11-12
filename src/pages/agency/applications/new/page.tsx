@@ -238,7 +238,8 @@ export default function NewApplicationPage() {
         const existing = readSession(authUser.id);
         if (existing) {
           const app = await getApplication(existing).catch(() => null);
-          if (app && isEditableStatus(await loadApplicationStatuses(), app.status)) {
+          const statuses = app ? await loadApplicationStatuses() : null;
+          if (app && statuses && isEditableStatus(statuses, app.status)) {
             setApplicationId(app.id);
             // Drafts started before the student step existed must still collect the contact details before the wizard.
             const values = (app.data?.values ?? {}) as Record<string, unknown>;

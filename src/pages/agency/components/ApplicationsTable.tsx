@@ -240,7 +240,7 @@ export default function ApplicationsTable({
               className={SELECT_CLASS}
               aria-label="Filter by status"
             >
-              <option value="">All statuses</option>
+              <option value="">{workflow.error ? "Statuses unavailable" : "All statuses"}</option>
               {statusChoices.map((choice) => (
                 <option key={choice.value} value={choice.value}>
                   {choice.label}

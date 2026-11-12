@@ -1,8 +1,10 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { validateEmail } from "@/pages/agency/lib/userValidation";
-import { findStudents, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import { findStudentByEmail, findStudents, type StudentEmailLookup, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import EmailField from "@/components/identity/EmailField";
+import { EMAIL_TAKEN_MESSAGE, normalizeEmail, type EmailAvailability, type EmailFieldContext } from "@/lib/identity/email";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 
 /** What the first step collects. Name, date of birth and passport come from the passport upload in the wizard. */
@@ -26,8 +28,14 @@ const INPUT = "w-full rounded-md border border-background-300 bg-background-50 p
  * The student a new application is for: only their email and mobile, both unique. A student already on record with either
  * stops the step with a message; nothing is created. With `allowStudentWithoutApplication` (New application), one student
  * found by email or mobile is shown in a popup; once confirmed, the application continues for that student.
+ *
+ * The email (find_student_by_email, 20261113230000; email unique within the student role):
+ *   free    -> a new student and the application, as before (an agent's or staff member's email is fine);
+ *   student -> one the caller may start an application for: "A student with this email already exists: <name>" and
+ *              "Add application to this student" (reuse it; never a second student). Add student refuses it instead;
+ *   taken   -> another student the caller cannot see: the generic "already in use" message, Next disabled.
  */
-export default function StudentDetailsStep({ initial, busy, error, submitLabel = "Next", onContinue, cancel, description, allowStudentWithoutApplication = false, askName = false, offerInvite = false }: {
+export default function StudentDetailsStep({ initial, busy, error, submitLabel = "Next", onContinue, cancel, description, allowStudentWithoutApplication = false, askName = false, offerInvite = false, context = "portal", emailError }: {
   initial?: Partial<StudentDraft>;
   busy: boolean;
   error?: string;
@@ -41,6 +49,10 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
   askName?: boolean;
   /** Offers to email the student a sign-in invitation (ticked by default). */
   offerInvite?: boolean;
+  /** admin = Admin CMS (sees which account holds an email); portal = agency portal. */
+  context?: EmailFieldContext;
+  /** The error from the last save; an email refusal shows under the email field. */
+  emailError?: unknown;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [errors, setErrors] = useState<{ email?: string; mobile?: string; firstName?: string; lastName?: string }>({});
@@ -49,10 +61,30 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
   // The one student found by email or mobile, waiting for "Yes, this is the student".
   const [found, setFound] = useState<{ draft: StudentDraft; row: StudentMatch } | null>(null);
   const start = { ...EMPTY, ...initial };
+  const [email, setEmail] = useState(start.email);
+  const [emailBlocking, setEmailBlocking] = useState(false);
+  const [lookup, setLookup] = useState<{ email: string; result: StudentEmailLookup } | null>(null);
+  const typed = normalizeEmail(email);
+  const known = lookup && lookup.email === typed ? lookup.result : null;
+  // The student this application can reuse (New application only).
+  const reuse = allowStudentWithoutApplication && known?.status === "student" ? known : null;
+  const checkEmail = useCallback(async (value: string): Promise<EmailAvailability> => {
+    const result = await findStudentByEmail(value);
+    setLookup({ email: value, result });
+    if (result.status === "taken" || (result.status === "student" && !allowStudentWithoutApplication)) return { available: false, message: EMAIL_TAKEN_MESSAGE };
+    return { available: true, message: null };
+  }, [allowStudentWithoutApplication]);
+  const reuseMatch = (found: { id: string; fullName: string }): StudentMatch => ({
+    id: found.id, name: found.fullName, email: typed, phone: "", dateOfBirth: null, passportNumber: "", businessId: "", businessName: "",
+    agentId: null, agentName: "", applications: 0, emailMatch: true, phoneMatch: false, passportMatch: false,
+  });
 
   const submit = async () => {
+    if (emailBlocking) return;
     const data = new FormData(formRef.current ?? undefined);
-    const draft: StudentDraft = { ...EMPTY, email: String(data.get("email") ?? "").trim().toLowerCase(), mobile: String(data.get("mobile") ?? "").trim() };
+    const draft: StudentDraft = { ...EMPTY, email: typed, mobile: String(data.get("mobile") ?? "").trim() };
+    // Reuse: the application is for that student; their record (and mobile) stays as it is.
+    if (reuse) { onContinue(draft, reuseMatch(reuse)); return; }
     if (offerInvite) draft.invite = data.get("invite") === "on";
     if (askName) {
       draft.firstName = String(data.get("firstName") ?? "").replace(/\s+/g, " ").trim();
@@ -73,14 +105,16 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
       // Email and mobile are unique: one student, one application. A match stops here; nothing is created.
       const rows = await findStudents(draft.email, draft.mobile);
       if (rows.length === 0) { onContinue(draft, null); return; }
-      const only = rows.length === 1 ? rows[0] : null;
+      const only = rows.length === 1 && !rows[0].taken ? rows[0] : null;
       if (allowStudentWithoutApplication && only) { setFound({ draft, row: only }); return; }
-      const byEmail = rows.find((row) => row.emailMatch);
-      const byMobile = rows.find((row) => row.phoneMatch);
+      const byEmail = rows.find((row) => !row.taken && row.emailMatch);
+      const byMobile = rows.find((row) => !row.taken && row.phoneMatch);
+      // Someone the caller may not see: nothing about them is shown. The email was checked above, so it is the mobile.
+      const hidden = rows.some((row) => row.taken);
       const who = (row: StudentMatch) => (row.name ? ` (${row.name}, ${row.businessName})` : ` (${row.businessName})`);
       setErrors({
         email: byEmail ? `A student with this email already exists${who(byEmail)}.` : undefined,
-        mobile: byMobile ? `A student with this mobile already exists${who(byMobile)}.` : undefined,
+        mobile: byMobile ? `A student with this mobile already exists${who(byMobile)}.` : hidden ? "A student with this mobile already exists." : undefined,
       });
     } catch (e) {
       setCheckError(e instanceof Error ? e.message : "We could not check for an existing student.");
@@ -89,7 +123,7 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
     }
   };
 
-  const waiting = busy || checking;
+  const waiting = busy || checking || emailBlocking;
 
   const notThisStudent = () => {
     if (!found) return;
@@ -132,12 +166,21 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
         ) : null}
         <div>
           <label htmlFor="student-email" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Email <span className="text-primary-600">*</span></label>
-          <input id="student-email" name="email" type="email" required autoFocus={!askName} autoComplete="off" maxLength={254} defaultValue={start.email} placeholder="student@example.com" aria-invalid={Boolean(errors.email)} className={INPUT} />
+          <EmailField id="student-email" name="email" required autoFocus={!askName} autoComplete="off" maxLength={254} placeholder="student@example.com"
+            value={email} onChange={setEmail} kind="student" context={context} savedEmail={initial?.email || null} serverError={emailError}
+            checker={checkEmail} onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} inputClassName={INPUT}
+            availableNote={reuse ? (
+              <div className="text-foreground-700" data-testid="student-email-reuse">
+                <p>A student with this email already exists: <b className="text-foreground-950">{reuse.fullName || "name not read from a passport yet"}</b></p>
+                <Button type="button" className="mt-1.5" disabled={busy} onClick={() => onContinue({ ...EMPTY, email: typed }, reuseMatch(reuse))}>Add application to this student</Button>
+              </div>
+            ) : undefined} />
           {errors.email ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.email}</p> : null}
         </div>
         <div>
           <label htmlFor="student-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
-          <PhoneInput id="student-mobile" name="mobile" value={start.mobile} required placeholder="041 234 5678" />
+          <PhoneInput id="student-mobile" name="mobile" value={start.mobile} required={!reuse} locked={Boolean(reuse)} placeholder="041 234 5678" />
+          {reuse ? <p className="mt-1 text-xs text-foreground-500">Not needed: the application uses this student&apos;s record.</p> : null}
           {errors.mobile ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.mobile}</p> : null}
         </div>
       </div>

@@ -15,6 +15,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { lookupAgencyAbn, validateAbn, normalizeAbn, type AgencyAbnDetails } from "../_shared/validation/abn.ts";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
+import { emailConflictBody } from "../_shared/identity-email.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,7 +39,10 @@ function json(body: unknown, status = 200) {
 }
 
 // Database errors raised by the portal_* functions carry user-facing messages and a class code.
-function rpcFailure(error: { code?: string; message?: string }) {
+// An email refused by the identity rule (hint email_taken / login_role_conflict) is a 409 the email field shows.
+function rpcFailure(error: { code?: string; message?: string; hint?: string; details?: string }) {
+  const conflict = emailConflictBody(error);
+  if (conflict) return json(conflict, 409);
   const message = error.message || "The request could not be completed.";
   switch (error.code) {
     case "42501": return json({ error: message }, 403);

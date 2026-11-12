@@ -467,6 +467,8 @@ export interface StudentMatch {
   id: string; name: string; email: string; phone: string; dateOfBirth: string | null; passportNumber: string;
   businessId: string; businessName: string; agentId: string | null; agentName: string; applications: number;
   emailMatch: boolean; phoneMatch: boolean; passportMatch: boolean;
+  /** A student the caller may not see (20261113250000): nothing else is known about them. */
+  taken?: boolean;
 }
 
 /** Students the caller may see with this email, mobile or passport number, newest first. */
@@ -478,7 +480,21 @@ export async function findStudents(email: string, mobileE164: string, passport =
     passportNumber: str(r.passportNumber), businessId: str(r.businessId), businessName: str(r.businessName),
     agentId: r.agentId ? str(r.agentId) : null, agentName: str(r.agentName), applications: Number(r.applications ?? 0),
     emailMatch: Boolean(r.emailMatch), phoneMatch: Boolean(r.phoneMatch), passportMatch: Boolean(r.passportMatch),
+    taken: r.taken === true,
   }));
+}
+
+/**
+ * The application email step (20261113230000): free = a new student; student = one the caller may start an application for
+ * (reuse it, never a second one); taken = another student the caller cannot see (only the generic message is shown).
+ */
+export type StudentEmailLookup = { status: "free" } | { status: "student"; id: string; fullName: string } | { status: "taken" };
+export async function findStudentByEmail(email: string): Promise<StudentEmailLookup> {
+  const { data, error } = await supabase.rpc("find_student_by_email", { p_email: email });
+  if (error) throw new Error(error.message, { cause: error });
+  const row = (data ?? {}) as Record<string, unknown>;
+  if (row.status === "student" && row.id) return { status: "student", id: str(row.id), fullName: str(row.full_name) };
+  return row.status === "free" ? { status: "free" } : { status: "taken" };
 }
 
 export interface StudentInput {
@@ -503,7 +519,7 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
     p_date_of_birth: input.dateOfBirth || null, p_passport: input.passportNumber ?? "", p_nationality: input.nationality ?? "",
     ...(input.firstName || input.lastName ? { p_first_name: input.firstName ?? "", p_last_name: input.lastName ?? "" } : {}),
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message, { cause: error });
   const r = (data ?? {}) as Record<string, unknown>;
   return { id: str(r.id), name: str(r.name), email: str(r.email), phone: str(r.phone), businessId: str(r.businessId), agentId: r.agentId ? str(r.agentId) : null, reused: Boolean(r.reused) };
 }
@@ -511,7 +527,7 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
 /** A new draft application for a student; its business and assigned agent come from the student. */
 export async function createApplicationForStudent(clientKey: string, studentId: string): Promise<{ id: string; reference: string }> {
   const { data, error } = await supabase.rpc("portal_create_student_application", { p_client_key: clientKey, p_student: studentId });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message, { cause: error });
   const row = (Array.isArray(data) ? data[0] : data) as { application_id?: string; application_reference?: string } | null | undefined;
   if (!row?.application_id) throw new Error("The application could not be created.");
   return { id: String(row.application_id), reference: String(row.application_reference ?? "") };

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { HR_PAGE_SIZE, hrDate, type HistoryEvent, type PersonForm } from "@/lib/recruitmentApi";
+import EmailField from "@/components/identity/EmailField";
 
 export function HrNotice({ error, children }: { error?: boolean; children: ReactNode }) {
   if (!children) return null;
@@ -19,11 +20,19 @@ export function HrPager({ offset, total, onChange }: { offset: number; total: nu
   </nav>;
 }
 
-export function HrFields({ value, onChange, linked }: { value: PersonForm; onChange: (value: PersonForm) => void; linked?: boolean }) {
+/** `profileId` / `savedEmail`: the person being edited (their own email is never flagged); `emailError`: the last save's error. */
+export function HrFields({ value, onChange, linked, profileId, savedEmail, emailError, onEmailBlocking }: {
+  value: PersonForm; onChange: (value: PersonForm) => void; linked?: boolean;
+  profileId?: string | null; savedEmail?: string | null; emailError?: unknown; onEmailBlocking?: (blocking: boolean) => void;
+}) {
   return <div className="grid gap-3 sm:grid-cols-2">
     <Field label="First name" required><TextInput required maxLength={100} value={value.firstName} onChange={(e) => onChange({ ...value, firstName: e.target.value })} data-testid="hr-person-first" /></Field>
     <Field label="Last name" required><TextInput required maxLength={100} value={value.lastName} onChange={(e) => onChange({ ...value, lastName: e.target.value })} data-testid="hr-person-last" /></Field>
-    <Field label="Email" required hint={linked ? "Managed through the linked sign-in account." : undefined}><TextInput required readOnly={linked} type="email" maxLength={254} value={value.email} onChange={(e) => onChange({ ...value, email: e.target.value })} data-testid="hr-person-email" /></Field>
+    <Field label="Email" required hint={linked ? "Managed through the linked sign-in account." : undefined}>
+      <EmailField required readOnly={linked} maxLength={254} value={value.email} onChange={(email) => onChange({ ...value, email })} data-testid="hr-person-email"
+        kind="hr_staff" context="admin" recordId={profileId ?? null} savedEmail={savedEmail ?? null} serverError={emailError}
+        onStatusChange={(_status, blocking) => onEmailBlocking?.(blocking)} />
+    </Field>
     <Field label="Mobile" required hint="Australian mobile, or with the country code."><TextInput required type="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} data-testid="hr-person-phone" /></Field>
   </div>;
 }

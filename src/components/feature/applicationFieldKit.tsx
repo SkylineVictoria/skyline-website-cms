@@ -1,18 +1,23 @@
 import { baseFieldClass, isConditionMet, isFieldFilled, sectionHeading, sectionIcon, todayIso } from "./applicationFieldHelpers";
 import type { AppField, FieldCondition } from "@/data/applicationForms";
 import { PhoneInput, UsiInput, YearSelect } from "./applicationInputs";
+import { fitsSegments } from "@/components/shared/application-form/segments";
+import { SegmentedRadios } from "@/components/shared/application-form/SegmentedControl";
 
 export function ApplicationFieldControl({
   field,
   formId,
   value,
   locked,
+  compact,
 }: {
   field: AppField;
   formId: string;
   value?: string;
   /** Renders the field read-only (used for auto-filled agency/agent details). */
   locked?: boolean;
+  /** The compact form: a radio group of up to three short options shows as a segmented control (same radio inputs). */
+  compact?: boolean;
 }) {
   const id = `${formId}-${field.name}`;
 
@@ -22,6 +27,10 @@ export function ApplicationFieldControl({
         {field.description}
       </p>
     );
+  }
+
+  if (field.type === "radio" && compact && fitsSegments(field.options)) {
+    return <SegmentedRadios name={field.name} label={field.label} options={field.options ?? []} required={field.required && !locked} disabled={locked} />;
   }
 
   if (field.type === "radio") {

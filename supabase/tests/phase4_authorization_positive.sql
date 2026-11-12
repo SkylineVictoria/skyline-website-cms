@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(338);
+select plan(404);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -706,6 +706,145 @@ select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a
 insert into public.course_intakes(course_id, start_date) values ('int-course-c', current_date + 50);
 select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a2'), 'Choose an intake for the course', 'INT-01 fallback: once the course has a real intake, a month alone is refused');
 select is((select bool_or((x->>'fallback')::boolean) from jsonb_array_elements(public.course_intakes_open('int-course-c')) x), false, '...and only the real intake is listed');
+
+-- An email is unique WITHIN a role (hosted 20261112042544 email_unique_per_role, 20261112042642 portal_invite_single_login_role;
+-- local 20261113230000 find_student_by_email). Same-role duplicates (also by case / spaces) are refused with 23505 + hint
+-- email_taken; one person may hold the email as a student, a staff member and an agent. pg_temp.email_err returns
+-- 'ok' or '<sqlstate>:<hint>' so the hint the forms map is asserted, not only the code.
+reset role;
+create function pg_temp.email_err(p_sql text) returns text language plpgsql as $$
+declare c text; h text;
+begin
+  execute p_sql;
+  return 'ok';
+exception when others then
+  get stacked diagnostics c = returned_sqlstate, h = pg_exception_hint;
+  return c || ':' || coalesce(h, '');
+end $$;
+grant execute on function pg_temp.email_err(text) to authenticated, anon;
+insert into public.agencies(id, name, code) values
+ ('ee000000-0000-0000-0000-0000000000a1', 'Identity X', 'IDX-X'), ('ee000000-0000-0000-0000-0000000000a2', 'Identity Y', 'IDX-Y');
+insert into auth.users(id, email, email_confirmed_at) values
+ ('ee000000-0000-0000-0000-0000000000b1', 'idx.admin.x@example.test', now()),
+ ('ee000000-0000-0000-0000-0000000000b2', 'agent.one@example.test', now()),
+ ('ee000000-0000-0000-0000-0000000000b3', 'cms.admin@example.test', now());
+insert into public.portal_profiles(id, auth_user_id, full_name, email) values
+ ('ee000000-0000-0000-0000-0000000000c1', 'ee000000-0000-0000-0000-0000000000b1', 'Identity admin X', 'idx.admin.x@example.test'),
+ ('ee000000-0000-0000-0000-0000000000c2', 'ee000000-0000-0000-0000-0000000000b2', 'Agent One', 'agent.one@example.test');
+-- The agent record first: agent_membership_sync links a membership to it (and makes one for the agency admin).
+insert into public.agents(id, business_id, profile_id, full_name, email) values
+ ('ee000000-0000-0000-0000-0000000000d1', 'ee000000-0000-0000-0000-0000000000a1', 'ee000000-0000-0000-0000-0000000000c2', 'Agent One', 'agent.one@example.test');
+insert into public.agency_memberships(user_id, agency_id, role) values
+ ('ee000000-0000-0000-0000-0000000000c1', 'ee000000-0000-0000-0000-0000000000a1', 'agency_admin'),
+ ('ee000000-0000-0000-0000-0000000000c2', 'ee000000-0000-0000-0000-0000000000a1', 'agent');
+insert into public.enrollment_students(id, agency_id, agent_id, full_name, email, phone) values
+ ('ee000000-0000-0000-0000-0000000000e1', 'ee000000-0000-0000-0000-0000000000a1', 'ee000000-0000-0000-0000-0000000000d1', 'Stu X', 'stu.x@example.test', '+61400000101'),
+ ('ee000000-0000-0000-0000-0000000000e2', 'ee000000-0000-0000-0000-0000000000a2', null, 'Stu Y', 'stu.y@example.test', '+61400000102');
+insert into public.cms_users(id, name, email, role, status, auth_user_id) values
+ ('idx-cms-admin', 'Identity CMS admin', 'cms.admin@example.test', 'Admin', 'Active', 'ee000000-0000-0000-0000-0000000000b3');
+insert into hr.staff_profiles(id, first_name, last_name, email) values ('ee000000-0000-0000-0000-0000000000f1', 'Hr', 'One', 'hr.one@example.test');
+-- CMS staff users
+select is(pg_temp.email_err($$insert into public.cms_users(id, name, email, role, status) values ('idx-cms-dup', 'Dup', ' CMS.Admin@Example.test ', 'Editor', 'Active')$$), '23505:email_taken', 'identity: a second CMS user with the same email (case and spaces differ) is refused as email_taken');
+select is(pg_temp.email_err($$insert into public.cms_users(id, name, email, role, status) values ('idx-cms-agent', 'Agent as staff', 'agent.one@example.test', 'Editor', 'Active')$$), 'ok', 'identity: an agent''s email may also be a CMS user');
+select is(pg_temp.email_err($$update public.cms_users set name = 'Renamed' where id = 'idx-cms-admin'$$), 'ok', 'identity: editing a CMS user without changing the email works');
+select is(pg_temp.email_err($$insert into public.cms_users(id, name, email, role, status) values ('idx-cms-new', 'New', 'cms.new@example.test', 'Editor', 'Active')$$), 'ok', 'identity: a brand-new CMS user email works');
+-- HR staff profiles
+select is(pg_temp.email_err($$insert into hr.staff_profiles(first_name, last_name, email) values ('Dup', 'Hr', 'HR.One@example.test ')$$), '23505:email_taken', 'identity: a second HR staff profile with the same email (case and spaces differ) is refused');
+select is(pg_temp.email_err($$insert into hr.staff_profiles(first_name, last_name, email) values ('Cms', 'Admin', 'cms.admin@example.test')$$), 'ok', 'identity: a CMS user may also have an HR staff profile');
+select is(pg_temp.email_err($$update hr.staff_profiles set first_name = 'Harriet' where id = 'ee000000-0000-0000-0000-0000000000f1'$$), 'ok', 'identity: editing an HR staff profile without changing the email works');
+select is(pg_temp.email_err($$insert into hr.staff_profiles(first_name, last_name, email) values ('New', 'Hr', 'hr.new@example.test')$$), 'ok', 'identity: a brand-new HR staff email works');
+-- Agents (agent + agency admin = one role)
+select is(pg_temp.email_err($$insert into public.agents(business_id, full_name, email) values ('ee000000-0000-0000-0000-0000000000a2', 'Dup', ' Agent.One@Example.test')$$), '23505:email_taken', 'identity: an agent email already used in another agency is refused (case and spaces differ)');
+select is(pg_temp.email_err($$insert into public.agents(business_id, full_name, email, role) values ('ee000000-0000-0000-0000-0000000000a1', 'Dup admin', 'agent.one@example.test', 'agency_admin')$$), '23505:email_taken', 'identity: agent and agency admin are one role: a second agent record in the same agency is refused');
+select is(pg_temp.email_err($$insert into public.agents(business_id, full_name, email) values ('ee000000-0000-0000-0000-0000000000a2', 'Student as agent', 'stu.y@example.test')$$), 'ok', 'identity: a student''s email may also be an agent');
+select is(pg_temp.email_err($$update public.agents set phone = '+61400000999' where id = 'ee000000-0000-0000-0000-0000000000d1'$$), 'ok', 'identity: editing an agent without changing the email works');
+select is(pg_temp.email_err($$insert into public.agents(business_id, full_name, email) values ('ee000000-0000-0000-0000-0000000000a1', 'New agent', 'agent.new@example.test')$$), 'ok', 'identity: a brand-new agent email works');
+-- Students
+select is(pg_temp.email_err($$insert into public.enrollment_students(agency_id, full_name, email, phone) values ('ee000000-0000-0000-0000-0000000000a1', 'Dup', ' STU.Y@example.test', '+61400000103')$$), '23505:email_taken', 'identity: another business''s student email is refused for a new student (case and spaces differ)');
+select is(pg_temp.email_err($$insert into public.enrollment_students(id, agency_id, full_name, email, phone) values ('ee000000-0000-0000-0000-0000000000e3', 'ee000000-0000-0000-0000-0000000000a1', 'Agent as student', 'agent.one@example.test', '+61400000104')$$), 'ok', 'identity: an agent''s email may also be a student');
+select is(pg_temp.email_err($$update public.enrollment_students set full_name = 'Stu X Renamed' where id = 'ee000000-0000-0000-0000-0000000000e1'$$), 'ok', 'identity: editing a student without changing the email works');
+select is(pg_temp.email_err($$update public.enrollment_students set email = 'stu.x@example.test', phone = '+61400000111' where id = 'ee000000-0000-0000-0000-0000000000e1'$$), 'ok', 'identity: saving a student with their own email again works');
+select is(pg_temp.email_err($$insert into public.enrollment_students(agency_id, full_name, email, phone) values ('ee000000-0000-0000-0000-0000000000a1', 'New student', 'stu.new@example.test', '+61400000105')$$), 'ok', 'identity: a brand-new student email works');
+-- Self-service student profiles
+select is(pg_temp.email_err($$insert into public.student_profiles(id, email) values ('ee000000-0000-0000-0000-000000000071', 'sp.one@example.test')$$), 'ok', 'identity: a brand-new student profile email works');
+select is(pg_temp.email_err($$insert into public.student_profiles(id, email) values ('ee000000-0000-0000-0000-000000000072', ' SP.One@example.test')$$), '23505:email_taken', 'identity: a second student profile with the same email (case and spaces differ) is refused');
+select is(pg_temp.email_err($$insert into public.student_profiles(id, email) values ('ee000000-0000-0000-0000-000000000073', 'agent.new@example.test')$$), 'ok', 'identity: an agent''s email may also be a student profile');
+select is(pg_temp.email_err($$update public.student_profiles set email = 'sp.one@example.test' where id = 'ee000000-0000-0000-0000-000000000071'$$), 'ok', 'identity: saving a student profile with its own email works');
+-- Live check (CMS admin signed in)
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b3';
+select is(public.email_available(' Agent.One@Example.test ', 'agent')->>'available', 'false', 'email_available: an agent email is taken for another agent (case and spaces differ)');
+select is(public.email_available('agent.one@example.test', 'agent', 'ee000000-0000-0000-0000-0000000000d1')->>'available', 'true', 'email_available: an agent editing their own record is not flagged');
+select is(public.email_available('hr.one@example.test', 'agent')->>'available', 'true', 'email_available: an HR staff email is free for an agent');
+select is(public.email_available('hr.one@example.test', 'hr_staff')->>'message', 'This email is already in use. Please use a different email address.', 'email_available: a second HR staff profile is flagged with the field message');
+select is(public.email_available('hr.one@example.test', 'staff')->>'available', 'true', 'email_available: a CMS user and an HR profile are separate records');
+select is(pg_temp.email_err($$select public.email_available('x@example.test', null)$$), '22023:', 'email_available: the role is required');
+set local role anon;
+select is(pg_temp.email_err($$select public.email_available('x@example.test', 'agent')$$), '42501:', 'email_available: signed-out callers are refused');
+-- Portal invitations
+reset role;
+select is(pg_temp.email_err($$insert into public.agency_invitations(agency_id, email, role, full_name) values ('ee000000-0000-0000-0000-0000000000a2', 'Agent.One@example.test', 'agent', 'Agent One')$$), '23505:email_taken', 'identity: an agent cannot be invited into a second agency');
+select is(pg_temp.email_err($$insert into public.agency_invitations(id, agency_id, email, role, full_name) values ('ee000000-0000-0000-0000-000000000091', 'ee000000-0000-0000-0000-0000000000a1', 'agent.one@example.test', 'agent', 'Agent One')$$), 'ok', 'identity: inviting an agent into their own agency works');
+select is(pg_temp.email_err($$update public.agency_invitations set status = 'pending', email = email, sent_count = sent_count + 1, expires_at = now() + interval '7 days' where id = 'ee000000-0000-0000-0000-000000000091'$$), 'ok', 'identity: resending an agent invite to the same person works');
+select is(pg_temp.email_err($$insert into public.agency_invitations(agency_id, email, role, full_name, student_id) values ('ee000000-0000-0000-0000-0000000000a1', 'agent.one@example.test', 'student', 'Agent as student', 'ee000000-0000-0000-0000-0000000000e3')$$), '23505:login_role_conflict', 'identity: a student invite to an email that signs in as an agent is refused as login_role_conflict');
+select is(pg_temp.email_err($$insert into public.agency_invitations(agency_id, email, role, full_name, student_id) values ('ee000000-0000-0000-0000-0000000000a1', 'stu.y@example.test', 'student', 'Wrong student', 'ee000000-0000-0000-0000-0000000000e1')$$), '23505:email_taken', 'identity: a student invite to another student''s email is refused');
+select is(pg_temp.email_err($$insert into public.agency_invitations(id, agency_id, email, role, full_name, student_id) values ('ee000000-0000-0000-0000-000000000092', 'ee000000-0000-0000-0000-0000000000a1', 'stu.x@example.test', 'student', 'Stu X', 'ee000000-0000-0000-0000-0000000000e1')$$), 'ok', 'identity: inviting a student with their own email works');
+select is(pg_temp.email_err($$update public.agency_invitations set status = 'pending', email = email, sent_count = sent_count + 1 where id = 'ee000000-0000-0000-0000-000000000092'$$), 'ok', 'identity: resending a student invite to the same student works');
+-- Applications: the email step (find_student_by_email, 20261113230000)
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b1';
+select is(public.find_student_by_email('stu.x@example.test')->>'status', 'student', 'applications: an agency admin is offered their business''s student for reuse');
+select is(public.find_student_by_email(' STU.X@Example.test ')->>'id', 'ee000000-0000-0000-0000-0000000000e1', '...found by a case / spaces variant');
+select is(public.find_student_by_email('stu.y@example.test'), '{"status": "taken"}'::jsonb, 'applications: another business''s student is only "taken" (no id, name or business)');
+select is(public.find_student_by_email('hr.one@example.test')->>'status', 'free', 'applications: a staff member''s email is free for a new student');
+select is(public.find_student_by_email('idx.admin.x@example.test')->>'status', 'free', 'applications: an agent''s login email is free for a new student');
+select is(public.find_student_by_email('brand.new@example.test')->>'status', 'free', 'applications: a brand-new email is free');
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b2';
+select is(public.find_student_by_email('stu.x@example.test')->>'status', 'student', 'applications: an agent is offered their own student for reuse');
+select is(public.find_student_by_email('agent.one@example.test'), '{"status": "taken"}'::jsonb, 'applications: an agent is not offered another agent''s (or an unassigned) student in the business');
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b3';
+select is(public.find_student_by_email('stu.y@example.test')->>'status', 'student', 'applications: a SLIT admin is offered any student for reuse');
+set local role anon;
+select is(pg_temp.email_err($$select public.find_student_by_email('stu.x@example.test')$$), '42501:', 'applications: signed-out callers cannot look up students');
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b1';
+select is(pg_temp.email_err($$select public.portal_student_save(null, 'ee000000-0000-0000-0000-0000000000d1', 'Dup', 'stu.y@example.test', '+61400000106')$$), '23505:email_taken', 'applications: a new student with another business''s student email is refused as email_taken');
+select is(pg_temp.email_err($$select public.portal_student_save(null, 'ee000000-0000-0000-0000-0000000000d1', 'Again', 'Stu.X@example.test', '+61400000107')$$), '23505:email_taken', 'applications: a second student with an existing student''s email is refused as email_taken');
+select is(pg_temp.email_err($$select public.portal_student_save(null, 'ee000000-0000-0000-0000-0000000000d1', 'Staff email student', 'hr.one@example.test', '+61400000108')$$), 'ok', 'applications: a staff member''s email creates a new student');
+select is(pg_temp.email_err($$select public.portal_create_student_application('idx-reuse-1', 'ee000000-0000-0000-0000-0000000000e1')$$), 'ok', 'applications: the existing student gets the new application');
+reset role;
+select is((select count(*)::int from public.enrollment_students where lower(btrim(email)) = 'stu.x@example.test'), 1, 'applications: reuse made no second student');
+select is((select count(*)::int from public.enrollment_applications where student_id = 'ee000000-0000-0000-0000-0000000000e1'), 1, '...and the application belongs to that student');
+select is(pg_temp.email_err($$update public.enrollment_applications set student_name = 'Stu X', data = jsonb_set(data, '{values,first_name}', '"Stu"') where student_id = 'ee000000-0000-0000-0000-0000000000e1'$$), 'ok', 'applications: editing the draft without changing the email works');
+-- 20261113240000: the functions' own duplicate-email refusals carry hint email_taken (a mobile duplicate does not).
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b3';
+select is(pg_temp.email_err($$select public.admin_student_update('ee000000-0000-0000-0000-0000000000e1', 'Stu X', 'STU.Y@example.test', '+61400000111', null, '', '', null)$$), '23505:email_taken', 'hints: Edit student to another student''s email is email_taken');
+select is(pg_temp.email_err($$select public.admin_student_update('ee000000-0000-0000-0000-0000000000e1', 'Stu X', 'stu.x@example.test', '+61400000102', null, '', '', null)$$), '23505:', 'hints: Edit student to another student''s mobile has no email hint');
+select is(pg_temp.email_err($$select public.admin_student_update('ee000000-0000-0000-0000-0000000000e1', 'Stu X Again', 'stu.x@example.test', '+61400000111', null, '', '', null)$$), 'ok', 'hints: Edit student keeping the email works');
+select is(pg_temp.email_err($$select public.admin_agent_activate(null, 'ee000000-0000-0000-0000-0000000000a1', 'Second Agent One', 'agent.one@example.test')$$), '23505:email_taken', 'hints: Activate agent with an email already in the business is email_taken');
+reset role;
+select is(pg_temp.email_err($$select public.portal_invitation_create('ee000000-0000-0000-0000-0000000000b1', null, 'agent.one@example.test', 'Agent One', 'agent')$$), '23505:email_taken', 'hints: a second invitation to a pending invitee is email_taken');
+select is(pg_temp.email_err($$select public.portal_invitation_create('ee000000-0000-0000-0000-0000000000b1', null, 'idx.admin.x@example.test', 'Identity admin X', 'agent')$$), '23505:email_taken', 'hints: inviting an email that already signs in to the portal is email_taken');
+insert into auth.users(id, phone, phone_confirmed_at) values ('ee000000-0000-0000-0000-0000000000b4', '61400000199', now());
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b4';
+select is(pg_temp.email_err($$select public.portal_self_enrol_complete('{"email":"Stu.Y@example.test","firstName":"Phone","lastName":"Person"}')$$), '23505:email_taken', 'hints: Complete profile with another student''s email is email_taken');
+-- 20261113250000: the live check knows the agent's own business; the student search hides other people's students.
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b3';
+select is(public.email_available('agent.one@example.test', 'agent', 'ee000000-0000-0000-0000-0000000000d1')->>'available', 'true', 'rule fix: an agent''s own pending invite in their own business is not "taken"');
+reset role;
+insert into public.agency_invitations(agency_id, email, role, full_name) values ('ee000000-0000-0000-0000-0000000000a2', 'pending.y@example.test', 'agent', 'Pending Y');
+set local role authenticated;
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b3';
+select is(public.email_available('pending.y@example.test', 'agent', 'ee000000-0000-0000-0000-0000000000d1')->>'available', 'false', 'rule fix: a pending agent invite into another business still counts');
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b1';
+select is(public.portal_student_find('stu.y@example.test'), '[{"taken": true}]'::jsonb, 'rule fix: another business''s student is only {"taken": true} (no business name)');
+select is(public.portal_student_find('stu.x@example.test')->0->>'id', 'ee000000-0000-0000-0000-0000000000e1', 'rule fix: the agency admin still finds their business''s student');
+set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b2';
+select is(public.portal_student_find('agent.one@example.test'), '[{"taken": true}]'::jsonb, 'rule fix: an agent does not see an unassigned student of the business');
+select is(public.portal_student_find('', '+61400000111')->0->>'name', 'Stu X Again', 'rule fix: an agent finds their own student by mobile');
+reset role;
 
 select * from finish();
 rollback;

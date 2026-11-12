@@ -5,6 +5,8 @@ import { updateStudent, type StudentRow } from "@/pages/admin/lib/businessData";
 import { listAgentsOfBusiness, type BusinessAgentOption } from "@/pages/agency/lib/portalApplications";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { validateEmail } from "@/pages/agency/lib/userValidation";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 
 /** Edit a student's details: name, email, mobile, date of birth, passport, nationality and agent. */
@@ -20,8 +22,11 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
   const [agents, setAgents] = useState<BusinessAgentOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
 
   useEffect(() => {
+    setEmailError(null);
     if (!student) return;
     setFullName(student.name ?? "");
     setEmail(student.email ?? "");
@@ -37,8 +42,9 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
   }, [student]);
 
   const save = async () => {
-    if (!student) return;
+    if (!student || emailBlocking) return;
     setError("");
+    setEmailError(null);
     const cleanEmail = email.trim().toLowerCase();
     const emailProblem = validateEmail(cleanEmail);
     if (emailProblem) { setError(emailProblem); return; }
@@ -55,6 +61,8 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
       onSaved();
       onClose();
     } catch (e) {
+      // Another student already has this email: shown under the field, not in the red box.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       setError(e instanceof Error ? e.message : "We could not save this student.");
     } finally {
       setBusy(false);
@@ -65,7 +73,7 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
     <Modal open={Boolean(student)} onClose={() => { if (!busy) onClose(); }} width="max-w-xl" title="Edit student"
       footer={<>
         <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-        <Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save student"}</Button>
+        <Button disabled={busy || emailBlocking} onClick={() => void save()}>{busy ? "Saving…" : "Save student"}</Button>
       </>}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
@@ -73,7 +81,11 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
             <TextInput value={fullName} onChange={(e) => setFullName(e.target.value)} maxLength={200} />
           </Field>
         </div>
-        <Field label="Email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} /></Field>
+        <Field label="Email" required>
+          <EmailField value={email} onChange={setEmail} maxLength={254} kind="student" context="admin"
+            recordId={student?.id ?? null} savedEmail={student?.email ?? null} serverError={emailError}
+            onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
+        </Field>
         <div>
           <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
           <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "student_mobile") setMobile(target.value); }}>

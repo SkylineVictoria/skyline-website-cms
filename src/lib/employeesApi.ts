@@ -15,7 +15,7 @@ export * from "@/lib/employeeRules";
 
 async function rpc<T>(name: string, args: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.rpc(name, args);
-  if (error) throw new Error(error.message || fallback);
+  if (error) throw new Error(error.message || fallback, { cause: error });
   return data as T;
 }
 

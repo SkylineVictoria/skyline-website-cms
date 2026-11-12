@@ -1,9 +1,11 @@
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Dialog } from "@/pages/agency/components/Dialog";
 import {
   mapServerError, normaliseEmail, validateField, validateUserForm,
   type UserFormContext, type UserFormErrors, type UserFormValues,
 } from "@/pages/agency/lib/userValidation";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 const inputClass =
   "w-full rounded-md border bg-background-50 px-3.5 py-2.5 text-sm text-foreground-950 placeholder:text-foreground-400 transition-colors focus:outline-none focus:ring-2 read-only:bg-background-100 read-only:text-foreground-600 disabled:bg-background-100";
@@ -42,9 +44,26 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
   const [errors, setErrors] = useState<UserFormErrors>({});
   const [topError, setTopError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Add only: an email another agent / portal login already has is shown under the field and keeps Submit disabled.
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
+  const emailBlocks = mode === "add" && emailBlocking;
 
-  // Reset whenever the dialog is (re)opened for a user.
-  useEffect(() => { if (open) { setValues(initial); setErrors({}); setTopError(""); setBusy(false); } }, [open, initial]);
+  // Reset whenever the dialog is (re)opened for a user. When the starting values change while it is open (a list such as the
+  // agencies finished loading), only the fields not yet typed in follow them, so nothing already entered is wiped.
+  const openedRef = useRef(false);
+  const initialRef = useRef(initial);
+  useEffect(() => {
+    const previous = initialRef.current;
+    initialRef.current = initial;
+    if (!open) { openedRef.current = false; setEmailError(null); return; }
+    if (!openedRef.current) {
+      openedRef.current = true;
+      setEmailError(null); setValues(initial); setErrors({}); setTopError(""); setBusy(false);
+      return;
+    }
+    setValues((prev) => Object.fromEntries(Object.entries(initial).map(([key, value]) => [key, prev[key as keyof UserFormValues] === previous[key as keyof UserFormValues] ? value : prev[key as keyof UserFormValues]])) as UserFormValues);
+  }, [open, initial]);
 
   const ctx: UserFormContext = { mode, existingEmails, allowedRoles: roles.map((r) => r.value), needsAgency: Boolean(agencies), nameEditable };
   const set = (field: keyof UserFormValues, value: string) => setValues((prev) => ({ ...prev, [field]: value }));
@@ -55,7 +74,8 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || emailBlocks) return;
+    setEmailError(null);
     const next = validateUserForm(values, ctx);
     const blocked = roleBlock?.(values.role);
     if (blocked && !next.role) next.role = blocked;
@@ -66,6 +86,7 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
     try {
       await onSubmit({ ...values, name: values.name.trim(), email: normaliseEmail(values.email) });
     } catch (e) {
+      if (mode === "add" && isEmailTakenError(e)) { setEmailError(e); setBusy(false); return; }
       const mapped = mapServerError(e);
       if (mapped.field) setErrors((prev) => ({ ...prev, [mapped.field as keyof UserFormValues]: mapped.message }));
       else setTopError(mapped.message);
@@ -83,7 +104,7 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
       footer={
         <>
           <button type="button" onClick={onClose} disabled={busy} className="cursor-pointer whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-5 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-60">Cancel</button>
-          <button type="submit" form={`${uid}-form`} disabled={busy} className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-6 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-70">
+          <button type="submit" form={`${uid}-form`} disabled={busy || emailBlocks} className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-6 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-70">
             {busy ? <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> : <i className={mode === "add" ? "ri-mail-send-line" : "ri-save-3-line"} aria-hidden="true" />}
             {busy ? "Saving…" : mode === "add" ? "Send invitation" : "Save changes"}
           </button>
@@ -98,7 +119,11 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
           {(p) => <input {...p} value={values.name} onChange={(e) => set("name", e.target.value)} onBlur={() => blur("name")} readOnly={!nameEditable} maxLength={120} autoComplete="off" placeholder="e.g. Priya Nair" />}
         </FieldRow>
         <FieldRow id={`${uid}-email`} label="Email address" error={errors.email}>
-          {(p) => <input {...p} type="email" value={values.email} onChange={(e) => set("email", e.target.value)} onBlur={() => { set("email", values.email.trim()); blur("email"); }} readOnly={mode === "edit"} maxLength={254} autoComplete="off" placeholder="user@agency.com" />}
+          {(p) => mode === "edit"
+            ? <input {...p} type="email" value={values.email} onChange={(e) => set("email", e.target.value)} onBlur={() => { set("email", values.email.trim()); blur("email"); }} readOnly maxLength={254} autoComplete="off" placeholder="user@agency.com" />
+            : <EmailField id={p.id} aria-invalid={p["aria-invalid"]} aria-describedby={p["aria-describedby"]} inputClassName={p.className}
+                value={values.email} onChange={(email) => set("email", email)} onBlur={() => blur("email")} maxLength={254} autoComplete="off" placeholder="user@agency.com"
+                kind="agent" context="portal" serverError={emailError} onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />}
         </FieldRow>
         <FieldRow id={`${uid}-role`} label="Role" error={errors.role}>
           {(p) => (

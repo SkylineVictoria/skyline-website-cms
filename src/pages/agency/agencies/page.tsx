@@ -12,6 +12,8 @@ import {
   updateAgency,
 } from "@/pages/agency/lib/portalData";
 import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 import {
   PageHeading,
   PermanentBadge,
@@ -107,6 +109,8 @@ function PortalAgenciesPage() {
   const [createNotice, setCreateNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
 
   const [editing, setEditing] = useState<PortalAgency | null>(null);
   const [editForm, setEditForm] = useState<FormState>({ ...EMPTY_FORM });
@@ -140,7 +144,9 @@ function PortalAgenciesPage() {
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
+    if (emailBlocking) return;
     setFormError("");
+    setEmailError(null);
     setCreateNotice("");
     if (!form.name.trim() || !form.code.trim() || !admin.email.trim() || !admin.name.trim()) {
       setFormError("Agency name, a unique agency code and the first administrator's name and email are required.");
@@ -171,6 +177,8 @@ function PortalAgenciesPage() {
       setShowForm(false);
       await load();
     } catch (e) {
+      // The administrator's email already has an agent login / invitation: shown under the email field.
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       setFormError(e instanceof Error ? e.message : "We could not create this agency.");
     } finally {
       setSaving(false);
@@ -249,7 +257,7 @@ function PortalAgenciesPage() {
         action={
           <button
             type="button"
-            onClick={() => setShowForm((v) => !v)}
+            onClick={() => { setShowForm((v) => !v); setEmailError(null); }}
             className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"
           >
             <i className={showForm ? "ri-close-line" : "ri-add-line"} aria-hidden="true" />
@@ -276,7 +284,8 @@ function PortalAgenciesPage() {
             </div>
             <div>
               <label className={labelClass}>Administrator email *</label>
-              <input className={fieldClass} type="email" value={admin.email} onChange={(e) => setAdmin((prev) => ({ ...prev, email: e.target.value }))} />
+              <EmailField inputClassName={fieldClass} value={admin.email} onChange={(email) => setAdmin((prev) => ({ ...prev, email }))}
+                kind="agent" context="portal" serverError={emailError} onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
             </div>
           </div>
 
@@ -290,7 +299,7 @@ function PortalAgenciesPage() {
           <div className="mt-5">
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || emailBlocking}
               className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-6 py-3 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:opacity-70"
             >
               {saving ? <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> : <i className="ri-save-3-line" aria-hidden="true" />}

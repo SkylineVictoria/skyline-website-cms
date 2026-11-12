@@ -12,6 +12,8 @@ import {
 } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import { deactivationBlock, normaliseEmail, validateEmail, validateName } from "@/pages/agency/lib/userValidation";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 type Tab = "details" | "agents" | "applications";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -175,6 +177,8 @@ export function AgentsTab({ agencyId, agencyName, onChanged }: { agencyId: strin
   const [busyId, setBusyId] = useState("");
   const [person, setPerson] = useState({ name: "", email: "" });
   const [errors, setErrors] = useState<{ name?: string; email?: string }>({});
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
   const [confirm, setConfirm] = useState<AgencyMemberRow | null>(null);
 
   const load = useCallback(async () => {
@@ -212,10 +216,12 @@ export function AgentsTab({ agencyId, agencyName, onChanged }: { agencyId: strin
 
   const invite = async (event: FormEvent) => {
     event.preventDefault();
+    if (emailBlocking) return;
+    setEmailError(null);
     const nameError = validateName(person.name);
-    const emailError = validateEmail(person.email, existing);
-    setErrors({ name: nameError ?? undefined, email: emailError ?? undefined });
-    if (nameError || emailError) return;
+    const emailProblem = validateEmail(person.email, existing);
+    setErrors({ name: nameError ?? undefined, email: emailProblem ?? undefined });
+    if (nameError || emailProblem) return;
     setBusyId("invite");
     try {
       const data = await invokePortalUsers({ action: "invite", email: normaliseEmail(person.email), name: person.name.trim(), role: "agent", agencyId, redirectTo: portalPasswordResetUrl() });
@@ -223,6 +229,7 @@ export function AgentsTab({ agencyId, agencyName, onChanged }: { agencyId: strin
       setPerson({ name: "", email: "" });
       await Promise.all([load(), onChanged()]);
     } catch (e) {
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       setErrors({ email: e instanceof Error ? e.message : "We could not send that invitation." });
     } finally {
       setBusyId("");
@@ -268,11 +275,12 @@ export function AgentsTab({ agencyId, agencyName, onChanged }: { agencyId: strin
           </div>
           <div>
             <Field label="Email" hint={errors.email ? undefined : `This email receives the invite to join ${agencyName}.`}>
-              <TextInput type="email" value={person.email} aria-invalid={Boolean(errors.email)} onChange={(e) => setPerson((p) => ({ ...p, email: e.target.value }))} />
+              <EmailField value={person.email} aria-invalid={Boolean(errors.email)} onChange={(email) => setPerson((p) => ({ ...p, email }))}
+                kind="agent" context="admin" serverError={emailError} onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
             </Field>
             {errors.email ? <p role="alert" className="mt-1 text-xs font-medium text-red-700">{errors.email}</p> : null}
           </div>
-          <div className="md:pt-6"><Button type="submit" icon="ri-mail-send-line" disabled={busyId === "invite"}>{busyId === "invite" ? "Sending…" : "Send invite"}</Button></div>
+          <div className="md:pt-6"><Button type="submit" icon="ri-mail-send-line" disabled={busyId === "invite" || emailBlocking}>{busyId === "invite" ? "Sending…" : "Send invite"}</Button></div>
         </form>
         {notice ? <p role="status" className="mt-3 break-words text-sm text-foreground-700">{notice}</p> : null}
       </Card>

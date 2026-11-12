@@ -182,7 +182,18 @@ test("Add employee: Start onboarding emails the document link, the same email ca
 
   // The same email (or mobile) cannot be added twice, in either mode.
   await page.goto("/admin/staff/employees");
-  await fill("onboard", who.email, who.local);
+  // Email unique within a role (2026-11-12): the live check flags the email under the field and Save stays disabled.
+  await page.getByTestId("employee-add").click();
+  await page.getByTestId("employee-mode-onboard").check();
+  await page.getByTestId("employee-firstName").fill("Ada");
+  await page.getByTestId("employee-lastName").fill("Again");
+  await page.getByTestId("employee-email").fill(` ${who.email.toUpperCase()}`);
+  await page.locator("#employee-phone-input").fill(person("added-other").local);
+  await expect(page.getByTestId("email-in-use")).toContainText("This email is already in use. Please use a different email address.");
+  await expect(page.getByTestId("employee-save")).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  // The same mobile with a new email is still refused by the server, as a form error (not the email field).
+  await fill("onboard", person("added-new").email, who.local);
   await expect(page.locator("#employee-form [role='alert']").last()).toContainText("already has a staff record");
   await page.getByRole("button", { name: "Cancel" }).click();
   expect(sql(`select count(*) from hr.staff_profiles where email = '${who.email}'`)).toBe("1");

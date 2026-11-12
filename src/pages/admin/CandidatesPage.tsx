@@ -11,6 +11,7 @@ import {
 } from "@/lib/recruitmentApi";
 import { StaffAdminError, staffDocumentUrl, type StaffAdminResult } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL } from "@/lib/staffStatus";
+import { isEmailTakenError } from "@/lib/identity/email";
 import { STAFF_CANDIDATES_PATH, staffCandidatePath, staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
 
 /**
@@ -126,22 +127,29 @@ function CandidateForm({ row, jobs, job, onClose, onSaved }: { row?: Candidate; 
   const [notes, setNotes] = useState(row?.recruiterNotes ?? "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (busy) return;
-    setBusy(true); setError("");
+    if (busy || emailBlocking) return;
+    setBusy(true); setError(""); setEmailError(null);
     try { onSaved(await saveCandidate(row?.id ?? null, jobId, person, letter, notes)); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) {
+      // An email already used by another staff profile is shown on the email field, not in the notice.
+      if (isEmailTakenError(e)) setEmailError(e);
+      else setError((e as Error).message);
+    }
     finally { setBusy(false); }
   }
 
   return <Modal open title={row ? "Edit candidate" : "Add candidate"} width="max-w-2xl" onClose={() => { if (!busy) onClose(); }}
-    footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" form="candidate-form" disabled={busy} data-testid="candidate-save">{busy ? "Saving…" : "Save candidate"}</Button></>}>
+    footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" form="candidate-form" disabled={busy || emailBlocking} data-testid="candidate-save">{busy ? "Saving…" : "Save candidate"}</Button></>}>
     <form id="candidate-form" className="space-y-4" onSubmit={(e) => void submit(e)} data-testid="candidate-form">
       <HrNotice error>{error}</HrNotice>
       {!row ? <p className="text-sm text-foreground-700">A record is created for the person (no login until they are activated). Hiring later sends them the document link.</p> : null}
-      <HrFields value={person} onChange={setPerson} linked={row?.linkedAccount} />
+      <HrFields value={person} onChange={setPerson} linked={row?.linkedAccount} profileId={row?.profileId ?? null} savedEmail={row?.email ?? null}
+        emailError={emailError} onEmailBlocking={setEmailBlocking} />
       <Field label="Applied job" required><Select required value={jobId} disabled={Boolean(row && (row.source !== "manual" || row.status !== "applied" || row.stage !== "screening" || !jobs.length))} onChange={(e) => setJobId(e.target.value)} data-testid="candidate-job">
         <option value="">Choose a job</option>
         {row && !jobs.some((j) => j.id === row.jobId) ? <option value={row.jobId}>{row.jobTitle}</option> : null}

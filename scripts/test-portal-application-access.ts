@@ -743,3 +743,119 @@ test("contact page: the Calendly link saved in the CMS must be a calendly.com sc
   assert.equal(calendlyEmbedSrc("https://calendly.com/slit", ""), "https://calendly.com/slit?embed_type=Inline&hide_gdpr_banner=1");
   assert.equal(calendlyEmbedSrc("https://example.com/x", "slit.edu.au"), "");
 });
+
+import EmailField from "../src/components/identity/EmailField.tsx";
+import EmailInUseMessage from "../src/components/identity/EmailInUseMessage.tsx";
+import {
+  EMAIL_TAKEN_MESSAGE, emailStatusBlocks, emailTakenFrom, emailTakenFromFunctionError, isEmailTakenError, looksLikeEmail,
+  normalizeEmail, shouldCheckEmail, takenDetailsFor,
+} from "../src/lib/identity/email.ts";
+import * as edgeEmail from "../supabase/functions/_shared/identity-email.ts";
+
+const TRIGGER_ERROR = { code: "23505", hint: "email_taken", message: EMAIL_TAKEN_MESSAGE,
+  details: "stu.x@example.test is already used by another student in SLIT. Each student needs their own email." };
+const ROLE_CONFLICT = { code: "23505", hint: "login_role_conflict",
+  message: "This email already signs in to the portal as an agent. One login can have only one portal role, so use a different email for this invite." };
+
+test("identity email: normalizeEmail trims and lower-cases", () => {
+  assert.equal(normalizeEmail("  Stu.X@Example.TEST \t"), "stu.x@example.test");
+  assert.equal(normalizeEmail(null), "");
+  assert.equal(normalizeEmail(undefined), "");
+  assert.equal(looksLikeEmail(" A@b.co "), true);
+  assert.equal(looksLikeEmail("jo@"), false);
+});
+
+test("identity email: isEmailTakenError matches the trigger (PostgREST), RPC and Edge Function shapes, and nothing else", () => {
+  assert.equal(isEmailTakenError(TRIGGER_ERROR), true, "PostgREST error from the trigger");
+  assert.equal(isEmailTakenError(ROLE_CONFLICT), true, "portal invite to a login with the other role");
+  assert.equal(isEmailTakenError({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE }), true, "Edge Function 409 body");
+  assert.equal(isEmailTakenError({ code: "login_role_conflict", message: ROLE_CONFLICT.message }), true, "Edge Function 409 body, role conflict");
+  assert.equal(isEmailTakenError(JSON.stringify({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE })), true, "body still as text");
+  assert.equal(isEmailTakenError({ error: { code: "23505", hint: "email_taken" } }), true, "nested under error");
+  assert.equal(isEmailTakenError({ code: "23505", hint: "", message: "A student with this mobile already exists" }), false, "another duplicate is not an email error");
+  assert.equal(isEmailTakenError({ code: "42501", hint: "email_taken" }), false, "hint without the unique-violation code");
+  assert.equal(isEmailTakenError(new Error("This email is already in use. Please use a different email address.")), false, "message text alone is not trusted");
+  assert.equal(isEmailTakenError(null), false);
+  assert.equal(isEmailTakenError("not json"), false);
+});
+
+test("identity email: the field message is generic for email_taken and the server's sentence for login_role_conflict", () => {
+  assert.deepEqual(emailTakenFrom(TRIGGER_ERROR), { reason: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: TRIGGER_ERROR.details });
+  assert.equal(emailTakenFrom({ code: "email_taken", message: "Some other text" })?.message, EMAIL_TAKEN_MESSAGE);
+  const ownRefusal = emailTakenFrom({ code: "23505", hint: "email_taken", message: "This email has already been invited. Resend or revoke the pending invitation." });
+  assert.equal(ownRefusal?.message, EMAIL_TAKEN_MESSAGE);
+  assert.equal(takenDetailsFor("admin", ownRefusal?.details), "This email has already been invited. Resend or revoke the pending invitation.", "admins see a function's own sentence");
+  assert.equal(takenDetailsFor("portal", ownRefusal?.details), null, "agents do not");
+  assert.equal(emailTakenFrom({ code: "email_taken", message: EMAIL_TAKEN_MESSAGE })?.details, null);
+  const fromCause = new Error("We could not save this student.", { cause: { code: "23505", hint: "email_taken", message: "Another student already has this email" } });
+  assert.equal(isEmailTakenError(fromCause), true, "a wrapper keeps the database error as its cause");
+  assert.deepEqual(emailTakenFrom(ROLE_CONFLICT), { reason: "login_role_conflict", message: ROLE_CONFLICT.message, details: null });
+});
+
+test("identity email: an Edge Function 409 is read from the unread Response; other statuses are not email errors", async () => {
+  const fnError = (status: number, body: unknown) => ({ name: "FunctionsHttpError", message: "Edge Function returned a non-2xx status code",
+    context: new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }) });
+  assert.deepEqual(await emailTakenFromFunctionError(fnError(409, { code: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." })),
+    { reason: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." });
+  assert.equal(await emailTakenFromFunctionError(fnError(400, { code: "email_taken" })), null);
+  assert.equal(await emailTakenFromFunctionError(fnError(409, { error: "This invitation is no longer pending." })), null);
+  assert.equal((await emailTakenFromFunctionError(TRIGGER_ERROR))?.reason, "email_taken", "a PostgREST error passed straight through");
+});
+
+test("identity email: live checks only for signed-in forms, plausible emails and a changed email; Submit blocks while taken or checking", () => {
+  assert.equal(shouldCheckEmail("new@example.test", "admin"), true);
+  assert.equal(shouldCheckEmail("new@example.test", "portal"), true);
+  assert.equal(shouldCheckEmail("new@example.test", "public"), false, "anonymous sign-up relies on the submit error");
+  assert.equal(shouldCheckEmail("jo@", "admin"), false);
+  assert.equal(shouldCheckEmail(" Own@Example.test ", "admin", "own@example.test"), false, "editing without changing the email: no check");
+  assert.deepEqual(["idle", "checking", "available", "taken", "error"].map((s) => emailStatusBlocks(s as never)), [false, true, false, true, false]);
+  assert.equal(takenDetailsFor("admin", "x is already used by another agent in SLIT."), "x is already used by another agent in SLIT.");
+  assert.equal(takenDetailsFor("portal", "x is already used by another agent in SLIT."), null);
+  assert.equal(takenDetailsFor("public", "x is already used by another agent in SLIT."), null);
+});
+
+test("identity email: Edge Functions answer 409 bodies the frontend maps; other duplicates are not email errors", () => {
+  const db = { code: "23505", hint: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: "x is already used by another agent in SLIT." };
+  assert.deepEqual(edgeEmail.emailConflictBody(db), { code: "email_taken", message: EMAIL_TAKEN_MESSAGE, details: db.details, error: EMAIL_TAKEN_MESSAGE });
+  assert.equal(edgeEmail.emailConflictBody({ ...ROLE_CONFLICT })?.code, "login_role_conflict");
+  assert.equal(edgeEmail.emailConflictBody({ ...ROLE_CONFLICT })?.message, ROLE_CONFLICT.message);
+  assert.equal(edgeEmail.emailConflictBody({ code: "23505", message: "A student with this mobile already exists" }), null);
+  assert.equal(edgeEmail.emailConflictBody({ code: "22023", hint: "email_taken" }), null);
+  assert.equal(isEmailTakenError(edgeEmail.publicEmailTakenBody()), true);
+  assert.equal(edgeEmail.publicEmailTakenBody().details, null, "the public body never names the role");
+  assert.equal(edgeEmail.EMAIL_TAKEN_MESSAGE, EMAIL_TAKEN_MESSAGE, "one sentence on both sides");
+});
+
+test("identity email: EmailInUseMessage shows the role detail to admins only", () => {
+  const admin = renderToStaticMarkup(h(EmailInUseMessage, { context: "admin", details: TRIGGER_ERROR.details }));
+  const portal = renderToStaticMarkup(h(EmailInUseMessage, { context: "portal", details: TRIGGER_ERROR.details }));
+  assert.match(admin, /This email is already in use\. Please use a different email address\./);
+  assert.match(admin, /already used by another student in SLIT/);
+  assert.match(portal, /This email is already in use/);
+  assert.doesNotMatch(portal, /another student/, "agents, students and the public never see the role");
+  assert.match(renderToStaticMarkup(h(EmailInUseMessage, { context: "portal", message: ROLE_CONFLICT.message })), /already signs in to the portal as an agent/);
+});
+
+test("identity email: EmailField maps a submit error to the field, pinned to the submitted value", () => {
+  const field = (props: Record<string, unknown>) => renderToStaticMarkup(h(EmailField, { value: "stu.x@example.test", onChange: () => {}, kind: "student", context: "admin", ...props }));
+  const taken = field({ serverError: TRIGGER_ERROR });
+  assert.match(taken, /data-email-status="taken"/);
+  assert.match(taken, /aria-invalid="true"/);
+  assert.match(taken, /aria-describedby="[^"]+-message"/);
+  assert.match(taken, /This email is already in use/);
+  assert.match(taken, /already used by another student in SLIT/, "admins see the role from the submit error");
+  const portal = field({ context: "portal", serverError: TRIGGER_ERROR });
+  assert.match(portal, /This email is already in use/);
+  assert.doesNotMatch(portal, /another student/);
+  assert.match(field({ context: "portal", serverError: ROLE_CONFLICT }), /already signs in to the portal as an agent/, "login_role_conflict shows the server's sentence");
+  const publicTaken = field({ context: "public", serverError: { code: "email_taken", message: "An account with this email already exists. Sign in or reset your password." } });
+  assert.match(publicTaken, /An account with this email already exists\. Sign in or reset your password\./);
+  assert.match(publicTaken, /href="\/login"[^>]*>Sign in</);
+  assert.match(publicTaken, /href="\/forgot-password"[^>]*>Forgot password</);
+  assert.doesNotMatch(field({ context: "public", serverError: TRIGGER_ERROR }), /another student|This email is already in use/, "the public never sees the role or the signed-in wording");
+  const other = field({ context: "public", serverError: { code: "23505", message: "A student with this mobile already exists" } });
+  assert.doesNotMatch(other, /email-in-use/, "a different error is left to the form");
+  assert.match(field({ context: "public" }), /data-email-status="idle"/, "public forms never run the live check");
+  assert.match(field({ context: "admin", value: "new@example.test" }), /data-email-status="checking"/, "a signed-in form blocks until the check answers");
+  assert.match(field({ context: "admin", savedEmail: "STU.X@example.test" }), /data-email-status="idle"/, "the saved email is not checked");
+});

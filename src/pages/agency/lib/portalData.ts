@@ -440,15 +440,18 @@ export async function invokePortalUsers(body: Record<string, unknown>): Promise<
   const { data, error } = await supabase.functions.invoke("portal-admin-users", { body });
   if (error) {
     let message = error.message;
+    // The parsed body stays as `cause`: a 409 { code: 'email_taken' | 'login_role_conflict' } is mapped to the email field.
+    let cause: unknown = error;
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
       try {
         const parsed = (await context.clone().json()) as { error?: string };
+        if (parsed && typeof parsed === "object") cause = parsed;
         if (parsed?.error) message = parsed.error;
       } catch { /* keep the generic message */ }
     }
-    throw new Error(message);
+    throw new Error(message, { cause });
   }
-  if (data?.error) throw new Error(String(data.error));
+  if (data?.error) throw new Error(String(data.error), { cause: data });
   return (data ?? {}) as Record<string, unknown>;
 }

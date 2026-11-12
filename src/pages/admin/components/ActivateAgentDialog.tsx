@@ -6,6 +6,8 @@ import type { AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import { PhoneInput } from "@/components/feature/applicationInputs";
+import EmailField from "@/components/identity/EmailField";
+import { emailTakenFrom, isEmailTakenError } from "@/lib/identity/email";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 
 type Picked = { id: string; name: string; status: BusinessStatus | null } | null;
@@ -31,8 +33,21 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
   const [invite, setInvite] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
+  // Set when the agent was saved but the invitation's email was refused: a retry updates that agent instead of adding another,
+  // and the list is refreshed when the dialog closes.
+  const [saved, setSaved] = useState<ActivationResult | null>(null);
+  const agentId = saved?.agentId ?? agent?.agentId ?? null;
+  const close = () => {
+    if (busy) return;
+    if (saved) onDone(saved);
+    onClose();
+  };
 
   useEffect(() => {
+    setEmailError(null);
+    setSaved(null);
     if (!open) return;
     setName(agent?.name ?? "");
     setEmail(agent?.email ?? "");
@@ -60,7 +75,9 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
   const willInvite = invite && !agent?.hasLogin && Boolean(cleanEmail) && emailValid;
 
   const submit = async () => {
+    if (emailBlocking) return;
     setError("");
+    setEmailError(null);
     if (!name.trim()) { setError("Enter the agent's name."); return; }
     if (!emailValid) { setError("Enter a valid email address, or leave it empty."); return; }
     if (!picked) { setError("Choose the business this agent works for."); return; }
@@ -75,7 +92,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
     setBusy(true);
     try {
       // The MARN is no longer asked for; an agent's existing one is kept.
-      const result = await activateAgent({ agentId: agent?.agentId ?? null, businessId: picked.id, name: name.trim(), email: cleanEmail, phone: storedPhone, marn: agent?.marn ?? "", role });
+      const result = await activateAgent({ agentId, businessId: picked.id, name: name.trim(), email: cleanEmail, phone: storedPhone, marn: agent?.marn ?? "", role });
       let message = `${result.name} ${adding ? "added to" : "activated with"} ${result.businessName}.`;
       if (result.businessActivated) message += " The business was activated too.";
       if (willInvite && !result.hasLogin) {
@@ -83,7 +100,15 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
           const sent = await invokePortalUsers({ action: "invite", email: result.email, name: result.name, role: result.role, agencyId: result.agencyId, redirectTo: portalPasswordResetUrl() });
           message += sent.warning ? ` ${String(sent.warning)}` : sent.emailSent ? ` A sign-in invitation was emailed to ${result.email}.` : " They can sign in with their existing account.";
         } catch (e) {
-          const reason = e instanceof Error ? e.message : "";
+          // A pending invitation for this email (portal_invitation_create's own sentence, kept in the 409 details) is harmless.
+          const reason = `${e instanceof Error ? e.message : ""} ${emailTakenFrom(e)?.details ?? ""}`.trim();
+          // The agent is saved, but the invitation's email is refused (another agent / portal login has it): shown under the
+          // field and the dialog stays open, so a different email can be tried for the same agent.
+          if (!/already been invited/i.test(reason) && isEmailTakenError(e)) {
+            setSaved(result);
+            setEmailError(e);
+            return;
+          }
           message += /already been invited/i.test(reason) ? " An invitation is already waiting for this email; resend it from the business's Agents tab."
             : ` The invitation was not sent${reason ? `: ${reason}` : "."} You can invite them from the business's Agents tab.`;
         }
@@ -94,6 +119,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
       onDone(result);
       onClose();
     } catch (e) {
+      if (isEmailTakenError(e)) { setEmailError(e); return; }
       setError(e instanceof Error ? e.message : "We could not activate this agent.");
     } finally {
       setBusy(false);
@@ -101,11 +127,11 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
   };
 
   return (
-    <Modal open={open} onClose={() => { if (!busy) onClose(); }} width="max-w-xl"
+    <Modal open={open} onClose={close} width="max-w-xl"
       title={adding ? "Add agent" : `Activate ${agent?.name || "agent"}`}
       footer={<>
-        <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-        <Button disabled={busy} onClick={() => void submit()}>{busy ? (adding ? "Adding…" : "Activating…") : adding ? "Add agent" : "Activate agent"}</Button>
+        <Button variant="outline" disabled={busy} onClick={close}>Cancel</Button>
+        <Button disabled={busy || emailBlocking} onClick={() => void submit()}>{busy ? (adding ? "Adding…" : "Activating…") : adding ? "Add agent" : "Activate agent"}</Button>
       </>}>
       <div className="space-y-4">
         <div>
@@ -142,7 +168,9 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Field label="Email" hint={agent?.hasLogin ? "They already have a login." : "Where the sign-in invitation goes."}>
-            <TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={!emailValid} />
+            <EmailField value={email} onChange={setEmail} aria-invalid={!emailValid} kind="agent" context="admin"
+              recordId={agentId} savedEmail={saved ? null : agent?.email ?? null} serverError={emailError}
+              onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
           </Field>
           <div className="sm:col-span-2">
             {/* The shared phone control: country code plus number, checked the same way as every other phone field. */}

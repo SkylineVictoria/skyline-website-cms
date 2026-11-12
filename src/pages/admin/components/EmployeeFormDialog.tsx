@@ -8,6 +8,8 @@ import {
 } from "@/lib/employeesApi";
 import { staffAdminActions } from "@/lib/staffApi";
 import { toE164 } from "@/lib/staffPhone";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 type Problems = Partial<Record<keyof EmployeeForm, string>>;
 type BankProblems = Partial<Record<keyof EmployeeBank, string>>;
@@ -32,6 +34,8 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
   // Once the person is saved, a retry (e.g. after a bank details error) edits them instead of adding them twice.
   const [savedId, setSavedId] = useState<string | null>(id ?? null);
 
@@ -46,10 +50,10 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy) return;
+    if (busy || emailBlocking) return;
     const found = employeeProblems(form);
     const foundBank = id ? {} : bankProblems(bank);
-    setTouched(true); setProblems(found); setBankIssues(foundBank); setError("");
+    setTouched(true); setProblems(found); setBankIssues(foundBank); setError(""); setEmailError(null);
     if (Object.keys(found).length || Object.keys(foundBank).length) return;
     setBusy(true);
     let personId = savedId;
@@ -78,7 +82,11 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
         catch (err) { setError(`${id ? "Details" : "The employee"} saved, but the bank details were not: ${err instanceof Error ? err.message : "please try again"}.`); return; }
       }
       onSaved(personId, { id: personId, mode: id ? "active" : mode, message });
-    } catch (err) { setError(err instanceof Error ? err.message : "The employee could not be saved."); }
+    } catch (err) {
+      // An email already used by another staff profile is shown on the email field, not in the banner.
+      if (isEmailTakenError(err)) { setEmailError(err); return; }
+      setError(err instanceof Error ? err.message : "The employee could not be saved.");
+    }
     finally { setBusy(false); }
   };
 
@@ -101,7 +109,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   return (
     <Modal open width="max-w-2xl" title={id ? "Edit employee" : "Add employee"} onClose={() => { if (!busy) onClose(); }}
       footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-        <Button type="submit" form="employee-form" disabled={busy || !bankLoaded} data-testid="employee-save">
+        <Button type="submit" form="employee-form" disabled={busy || !bankLoaded || emailBlocking} data-testid="employee-save">
           {busy ? "Saving…" : id ? "Save" : mode === "onboard" ? "Add and send document link" : "Add employee"}</Button></>}>
       <form id="employee-form" noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
         {!id ? (
@@ -115,7 +123,27 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
           {field("firstName", "First name", { maxLength: 100, autoComplete: "off", autoFocus: true })}
           {field("lastName", "Last name", { maxLength: 100, autoComplete: "off" })}
         </div>
-        {field("email", "Email", { type: "email", maxLength: 254, autoComplete: "off", inputMode: "email" })}
+        <div>
+          <Field label="Email" required>
+            <EmailField
+              value={form.email}
+              onChange={(email) => patch({ email })}
+              kind="hr_staff"
+              context="admin"
+              recordId={id ?? null}
+              savedEmail={id ? initial?.email ?? null : null}
+              serverError={emailError}
+              onStatusChange={(_status, blocking) => setEmailBlocking(blocking)}
+              aria-invalid={Boolean(problems.email)}
+              data-testid="employee-email"
+              disabled={Boolean(savedId && !id)}
+              maxLength={254}
+              autoComplete="off"
+              inputMode="email"
+            />
+          </Field>
+          {problems.email ? <p role="alert" className="mt-1 text-xs text-primary-700">{problems.email}</p> : null}
+        </div>
         {/* The same phone field as the student and agent forms: country code + number, formatted and checked as you type. */}
         <div data-testid="employee-phone" onInput={(e) => { const t = e.target as HTMLInputElement; if (t.name === "employee_phone") patch({ phone: t.value }); }}>
           <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>

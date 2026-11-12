@@ -1,11 +1,16 @@
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { expiryMessage, expiryTone, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
-import { formatBytes, type PendingUpload, type WizardDoc, type WizardStep } from "@/pages/agency/lib/wizardConfig";
+import type { PendingUpload, WizardDoc, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
+import DocumentReadingState from "@/components/shared/application-form/DocumentReadingState";
+import { DocumentRow, Dropzone, ReadFailure } from "@/components/shared/application-form/DocumentUpload";
+import Toast from "@/components/shared/application-form/Toast";
+import { useToast } from "@/components/shared/application-form/useToast";
 
 /**
- * One document screen of a wizard: the upload area, then one row per file with what is happening to it (uploading, being read,
- * done, failed with Retry), View and Delete. Used by the student "Add New Form" wizard and by staff onboarding.
+ * One document screen of a wizard: the upload area, then, per file, the shared reading panel (DocumentReadingState, as on the
+ * application form) while it uploads and is read, and a compact row once it is (status pill, View, Replace, Delete; a failure
+ * offers Try again and Fill manually). Used by the student "Add New Form" wizard and by staff onboarding.
  * Opt-in extras (staff onboarding switches them on; without them the screen is exactly the student one):
  *   dropzone: files can be dragged onto the screen;  camera: a "Take a photo" button on phones and tablets;
  *   a PendingUpload with `progress` (0 to 1) shows a progress bar while it uploads.
@@ -32,10 +37,10 @@ interface Props {
   dropzone?: boolean;
   /** Offers "Take a photo" on phones and tablets (the device camera, saved as a JPG). */
   camera?: boolean;
+  /** The form's label for a value read from the document; given, the values read are listed under the file. */
+  fieldLabel?: (key: string) => string | undefined;
 }
 
-const CHIP = "rounded-md border border-background-200 bg-background-50 px-3 py-2 text-xs text-foreground-700";
-const LINK_BUTTON = "cursor-pointer font-semibold text-primary-700 underline disabled:opacity-50";
 
 /** Informational only: shown once a passport, visa or English result has been read. */
 function expiryNote(step: WizardStep, doc: WizardDoc): { text: string; tone: string } | null {
@@ -45,30 +50,34 @@ function expiryNote(step: WizardStep, doc: WizardDoc): { text: string; tone: str
   return text ? { text, tone: expiryTone(expiry.status) } : null;
 }
 
-function ErrorActions({ message, onRetry, onManual }: { message: string; onRetry: () => void; onManual: () => void }) {
-  return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-primary-900" role="alert">
-      <span className="flex items-center gap-1.5">
-        <i className="ri-alert-line" aria-hidden="true" />
-        {message}
-      </span>
-      <button type="button" onClick={onRetry} className={LINK_BUTTON}>Retry</button>
-      <button type="button" onClick={onManual} className={LINK_BUTTON}>Enter manually later</button>
-    </div>
-  );
-}
-
-export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl, dropzone, camera }: Props) {
+export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl, dropzone, camera, fieldLabel }: Props) {
   const [dragging, setDragging] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<WizardDoc | null>(null);
   const [removing, setRemoving] = useState("");
   const [removeError, setRemoveError] = useState("");
+  const toast = useToast();
+  const showToast = toast.show;
 
   const uploading = pending.some((item) => !item.error);
   const hasFile = docs.length > 0 || pending.length > 0;
 
   const [viewing, setViewing] = useState("");
   const [preview, setPreview] = useState<{ doc: WizardDoc; url: string; isPdf: boolean } | null>(null);
+
+  // The files picked here, by name, so the reading panel can show an image while the stored copy is read.
+  const pickedRef = useRef(new Map<string, File>());
+  for (const item of pending) pickedRef.current.set(item.file.name, item.file);
+  // A document whose reading just finished: say how much was read (a document already read when the step opened says nothing).
+  const statesRef = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    const before = statesRef.current;
+    statesRef.current = new Map(docs.map((doc) => [doc.id, doc.extraction]));
+    if (!before) return;
+    const finished = docs.find((doc) => doc.extraction === "done" && (before.get(doc.id) === "queued" || before.get(doc.id) === "processing"));
+    if (!finished) return;
+    const count = Object.values(finished.extracted ?? {}).filter((value) => String(value ?? "").trim()).length;
+    if (count) showToast(`We filled ${count} field${count === 1 ? "" : "s"} from your ${step.noun}. Please review.`);
+  }, [docs, step.noun, showToast]);
 
   useEffect(() => {
     if (!preview) return;
@@ -113,18 +122,31 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
     onDrop: (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); if (!uploading && event.dataTransfer.files.length) onPickFiles(event.dataTransfer.files); },
   } : {};
   const cameraButton = camera ? (
-    <label className="mt-2 hidden w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700 [@media(pointer:coarse)]:flex">
-      <i className="ri-camera-line text-lg" aria-hidden="true" />
+    <label className="mt-2 hidden h-10 w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-background-300 bg-background-50 px-4 text-sm font-medium text-foreground-700 transition-colors hover:border-foreground-400 hover:text-foreground-900 [@media(pointer:coarse)]:flex">
+      <i className="ri-camera-line text-base" aria-hidden="true" />
       Take a photo
       <input type="file" accept="image/jpeg,image/png" capture="environment" disabled={uploading} data-testid="wizard-camera"
         onChange={(event) => { onPickFiles(event.target.files); event.target.value = ""; }} className="sr-only" />
     </label>
   ) : null;
 
+  // One file at a time on a single-document step: Replace picks the new one (the wizard supersedes the earlier file itself).
+  const replaceButton = (doc: WizardDoc) => (
+    <label title="Replace" className={`flex h-8 w-8 items-center justify-center rounded-md text-foreground-600 transition-colors duration-150 hover:bg-background-100 hover:text-foreground-900 ${uploading ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
+      <i className="ri-upload-2-line text-base leading-none" aria-hidden="true" />
+      <span className="sr-only">Replace {doc.filename}</span>
+      <input type="file" accept={DOCUMENT_ACCEPT} disabled={uploading} onChange={(event) => { onPickFiles(event.target.files); event.target.value = ""; }} className="sr-only" />
+    </label>
+  );
+
+  const readValues = (doc: WizardDoc) => fieldLabel && doc.extraction === "done"
+    ? Object.entries(doc.extracted ?? {}).filter(([key, value]) => String(value ?? "").trim() && fieldLabel(key)).map(([key, value]) => [fieldLabel(key) as string, String(value)] as const)
+    : [];
+
   return (
-    <div className={dragging ? "space-y-4 rounded-md ring-2 ring-primary-400 ring-offset-4" : "space-y-4"} {...drop}>
+    <div className={dragging ? "space-y-3 rounded-lg ring-2 ring-primary-400 ring-offset-4" : "space-y-3"} {...drop}>
       <div className="flex items-start gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background-100 text-primary-600">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-background-100 text-foreground-600">
           <i className={`${step.icon} text-xl`} aria-hidden="true" />
         </span>
         <div className="min-w-0">
@@ -133,132 +155,90 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
         </div>
       </div>
 
-      {hasFile ? (
-        // Once a document is in, the upload area shrinks to a small, light button so it is clear the step is done.
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
-          <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-900">
-            <i className="ri-checkbox-circle-fill text-base text-emerald-600" aria-hidden="true" />
-            {step.multiple ? "Uploaded" : "Document uploaded"}
-          </p>
-          <label className="inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-2.5 py-1 text-[11px] font-medium text-foreground-600 transition-colors hover:border-primary-300 hover:text-primary-700">
-            <i className={step.multiple ? "ri-add-line" : "ri-refresh-line"} aria-hidden="true" />
-            {step.multiple ? "Add more files" : "Replace file"}
-          <input
-            type="file"
-            accept={DOCUMENT_ACCEPT}
+      {docs.length === 0 && !uploading ? (
+        <div>
+          <Dropzone
+            label={step.multiple ? "Upload files" : "Upload file"}
+            hint={`PDF, JPG or PNG · up to 10 MB${step.multiple ? " each" : ""} · stored privately`}
             multiple={step.multiple}
             disabled={uploading}
-            onChange={(event) => {
-              onPickFiles(event.target.files);
-              event.target.value = "";
-            }}
-            className="sr-only"
+            accept={DOCUMENT_ACCEPT}
+            onFiles={onPickFiles}
           />
-          </label>
+          {cameraButton}
         </div>
-      ) : (
-      <div>
-        <label className="flex w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-dashed border-primary-300 bg-background-50 px-4 py-6 text-sm font-semibold text-primary-700 transition-colors hover:bg-primary-50">
-          <i className="ri-upload-cloud-2-line text-lg" aria-hidden="true" />
-          {step.multiple ? "Upload files" : "Upload file"}
-          <input
-            type="file"
-            accept={DOCUMENT_ACCEPT}
-            multiple={step.multiple}
-            disabled={uploading}
-            onChange={(event) => {
-              onPickFiles(event.target.files);
-              event.target.value = "";
-            }}
-            className="sr-only"
-          />
-        </label>
-        {cameraButton}
-        <p className="mt-2 text-center text-[11px] text-foreground-400">
-          PDF, JPG or PNG &middot; up to 10 MB each &middot; stored privately{dropzone ? " \u00b7 or drag a file here" : null}
-        </p>
-      </div>
-      )}
+      ) : null}
 
       {hasFile ? (
-        <ul className="space-y-1.5" aria-live="polite">
-          {pending.map((item) => (
-            <li key={item.key} className={CHIP}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-2">
-                  <i className={item.error ? "ri-error-warning-line text-sm text-primary-700" : "ri-loader-4-line animate-spin text-sm text-primary-600"} aria-hidden="true" />
-                  <span className="truncate">{item.file.name}</span>
-                  <span className="shrink-0 text-foreground-400">{formatBytes(item.file.size)}</span>
-                </span>
-                {item.error ? null : <span className="shrink-0 text-foreground-500">Uploading&hellip;{typeof item.progress === "number" ? ` ${Math.round(item.progress * 100)}%` : null}</span>}
-              </div>
-              {!item.error && typeof item.progress === "number" ? (
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-background-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(item.progress * 100)} aria-label={`Uploading ${item.file.name}`}>
-                  <div className="h-full rounded-full bg-primary-500 transition-[width]" style={{ width: `${Math.round(item.progress * 100)}%` }} />
-                </div>
-              ) : null}
-              {item.error ? <ErrorActions message={item.error} onRetry={() => onRetryUpload(item)} onManual={() => onDropUpload(item)} /> : null}
-            </li>
+        <div className="space-y-1.5" aria-live="polite">
+          {pending.map((item) => item.error ? (
+            <DocumentRow key={item.key} filename={item.file.name} pill={{ text: "Not uploaded", tone: "failed" }} actions={null}>
+              <ReadFailure message={item.error} onRetry={() => onRetryUpload(item)} onManual={() => onDropUpload(item)} />
+            </DocumentRow>
+          ) : (
+            <DocumentReadingState key={item.key} filename={item.file.name} file={item.file} phase="uploading" uploadProgress={item.progress} />
           ))}
           {docs.map((doc) => {
             const reading = doc.extraction === "queued" || doc.extraction === "processing";
+            if (reading) return <DocumentReadingState key={doc.id} filename={doc.filename} file={pickedRef.current.get(doc.filename)} phase={doc.extraction as "queued" | "processing"} />;
             const failed = doc.extraction === "failed" && !dismissed.has(doc.id);
+            const values = readValues(doc);
+            const expiry = expiryNote(step, doc);
             return (
-              <li key={doc.id} className={CHIP}>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <i className={reading ? "ri-loader-4-line animate-spin text-sm text-primary-600" : failed ? "ri-error-warning-line text-sm text-primary-700" : "ri-file-shield-2-line text-sm text-accent-600"} aria-hidden="true" />
-                    <span className="truncate">{doc.filename}</span>
-                    {doc.fileSize ? <span className="shrink-0 text-foreground-400">{formatBytes(doc.fileSize)}</span> : null}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    {failed ? null : (
-                      <span className="text-foreground-500">
-                        {reading
-                          ? `Reading your ${step.noun}…`
-                          : doc.extraction === "done"
-                            ? "Done ✓"
-                            : doc.extraction === "empty"
-                              ? "Done ✓ nothing readable, add details in the form"
-                              : "Add details in the form"}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => void handleView(doc)}
-                      disabled={viewing === doc.id || !doc.storagePath}
-                      aria-label={`View ${doc.filename}`}
-                      title="View"
-                      className="flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md px-1.5 font-semibold text-primary-700 transition-colors hover:bg-primary-50 disabled:opacity-50"
-                    >
-                      <i className={viewing === doc.id ? "ri-loader-4-line animate-spin" : "ri-eye-line"} aria-hidden="true" />
-                      View
+              <DocumentRow
+                key={doc.id}
+                filename={doc.filename}
+                pill={doc.extraction === "done" ? { text: "Ready for review", tone: "ready" }
+                  : doc.extraction === "empty" ? { text: "No details found", tone: "warn", title: "Nothing readable; add the details in the form" }
+                    : failed ? { text: "Couldn’t read", tone: "failed" } : { text: "Add details in the form", tone: "neutral" }}
+                actions={
+                  <>
+                    <button type="button" onClick={() => void handleView(doc)} disabled={viewing === doc.id || !doc.storagePath} aria-label={`View ${doc.filename}`} title="View"
+                      className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-foreground-600 transition-colors duration-150 hover:bg-background-100 hover:text-foreground-900 disabled:opacity-50">
+                      <i className={`${viewing === doc.id ? "ri-loader-4-line animate-spin" : "ri-eye-line"} text-base leading-none`} aria-hidden="true" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteCandidate(doc)}
-                      disabled={removing === doc.id}
-                      aria-label={`Remove ${doc.filename}`}
-                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-foreground-500 transition-colors hover:bg-primary-50 hover:text-primary-700 disabled:opacity-50"
-                    >
-                      <i className={removing === doc.id ? "ri-loader-4-line animate-spin" : "ri-delete-bin-line"} aria-hidden="true" />
+                    {step.multiple ? null : replaceButton(doc)}
+                    <button type="button" onClick={() => setDeleteCandidate(doc)} disabled={removing === doc.id} aria-label={`Remove ${doc.filename}`} title="Delete"
+                      className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-foreground-600 transition-colors duration-150 hover:bg-background-100 hover:text-foreground-900 disabled:opacity-50">
+                      <i className={`${removing === doc.id ? "ri-loader-4-line animate-spin" : "ri-delete-bin-line"} text-base leading-none`} aria-hidden="true" />
                     </button>
-                  </span>
-                </div>
-                {expiryNote(step, doc) ? <p className={`mt-1.5 flex items-center gap-1.5 ${expiryNote(step, doc)!.tone}`}><i className="ri-time-line" aria-hidden="true" />{expiryNote(step, doc)!.text}</p> : null}
-                {failed ? <ErrorActions message={doc.error ?? "We could not read this document."} onRetry={() => onRetryDoc(doc)} onManual={() => onDismissDoc(doc)} /> : null}
-              </li>
+                  </>
+                }
+              >
+                {expiry ? <p className={`mt-1.5 flex items-center gap-1.5 text-xs ${expiry.tone}`}><i className="ri-time-line" aria-hidden="true" />{expiry.text}</p> : null}
+                {failed ? <ReadFailure message={doc.error ?? "We couldn’t read this document."} onRetry={() => onRetryDoc(doc)} onManual={() => onDismissDoc(doc)} /> : null}
+                {doc.extraction === "empty" ? <p className="mt-1.5 text-xs text-foreground-600">Nothing readable on this one; add the details in the form.</p> : null}
+                {values.length ? (
+                  <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-0.5 px-1 sm:grid-cols-2">
+                    {values.map(([label, value], index) => (
+                      <div key={label} className="field-filled grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 text-xs leading-5" style={{ animationDelay: `${index * 40}ms` }}>
+                        <dt className="truncate text-foreground-500" title={label}>{label}</dt>
+                        <dd className="truncate text-foreground-900" title={value}>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+              </DocumentRow>
             );
           })}
-        </ul>
+          {step.multiple ? (
+            <label className={`inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-medium text-foreground-600 transition-colors hover:bg-background-100 hover:text-foreground-900 ${uploading ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
+              <i className="ri-add-line text-base leading-none" aria-hidden="true" />
+              Add more files
+              <input type="file" accept={DOCUMENT_ACCEPT} multiple disabled={uploading} onChange={(event) => { onPickFiles(event.target.files); event.target.value = ""; }} className="sr-only" />
+            </label>
+          ) : null}
+        </div>
       ) : null}
 
       {removeError ? (
-        <p role="alert" className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
+        <p role="alert" className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
           <i className="ri-alert-line mt-px" aria-hidden="true" />
           {removeError}
         </p>
       ) : null}
+
+      <Toast message={toast.message} onDismiss={toast.dismiss} />
 
       {preview ? (
         <div

@@ -117,8 +117,8 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const setRole = (index: number, patch: Partial<SigningRole>) => set({ roles: draft.roles.map((r, i) => i === index ? { ...r, ...patch } : r) });
   const kindLabel = draft.kind === "email" ? "email" : draft.kind === "pdf" ? "PDF template" : hrms ? "letter" : "document template";
 
-  if (placing) return <Modal open title={`Place fields: ${draft.name || "template"}`} width="max-w-6xl" onClose={() => setPlacing(null)} footer={<Button onClick={() => setPlacing(null)}>Done placing fields</Button>}>
-    {draft.kind === "text" && <p className="mb-3 text-sm text-foreground-600">The sample shows [variable] where a value will go. Long values can move text, so place signature fields near the end of the document, and check the preview of each request.</p>}
+  if (placing) return <Modal open fill title={`Place fields: ${draft.name || "template"}`} width="max-w-6xl" onClose={() => setPlacing(null)} footer={<Button onClick={() => setPlacing(null)}>Done placing fields</Button>}>
+    {draft.kind === "text" && <p className="mb-3 shrink-0 text-sm text-foreground-600">The sample shows [variable] where a value will go. Long values can move text, so place signature fields near the end of the document, and check the preview of each request.</p>}
     <FieldEditor source={placing} owners={owners} fields={editorFields} onChange={(fields) => set({ fields: fromEditor(fields) })} />
   </Modal>;
   if (preview) return <Modal open title="Template preview (PDF)" width="max-w-4xl" onClose={() => setPreview(null)}><PdfPages source={preview} /></Modal>;

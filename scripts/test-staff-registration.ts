@@ -533,6 +533,17 @@ test("apply: the honeypot and an existing application get the same thank-you and
   assert.ok(!run.names().includes("upload") && !run.names().includes("hr_svc_apply_resume"));
 });
 
+test("apply (email unique within a role, 2026-11-12): an email that already has a staff record is a public 409; a mobile duplicate stays the thank-you", async () => {
+  let run = applyDeps({ apply: { ok: false, reason: "exists", field: "email" } });
+  const taken = await apply.handleApply(applyForm(), { ip: null }, run.deps);
+  assert.equal(taken.status, 409);
+  assert.deepEqual(taken.body, { code: "email_taken", message: "An account with this email already exists. Sign in or reset your password.", details: null,
+    error: "An account with this email already exists. Sign in or reset your password." }, "the public sentence; never the role");
+  assert.ok(!run.names().includes("upload"), "nothing is stored");
+  run = applyDeps({ apply: { ok: false, reason: "exists", field: "phone" } });
+  assert.deepEqual(await apply.handleApply(applyForm(), { ip: null }, run.deps), { status: 200, body: { ok: true } }, "a mobile on another record is not reported");
+});
+
 test("apply: field checks, and a failed record removes the stored file", async () => {
   const cases: Array<[Record<string, string>, string]> = [
     [{ firstName: "" }, "firstName"], [{ lastName: "<script>" }, "lastName"], [{ email: "nope" }, "email"], [{ phone: "12345" }, "phone"], [{ agreed: "false" }, "agreed"],
@@ -1465,6 +1476,10 @@ test("Add staff member: the record first, then the document link to the new reco
   run = adminDeps({ db: { hr_admin_staff_add: { error: { code: "23505", message: "This email or mobile already has a staff record. Open it from Employees." } } } });
   r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
   assert.deepEqual([r.status, run.names()], [400, ["admin:hr_admin_staff_add"]]);
+  // Email unique within a role (20261113240000): the email refusal carries hint email_taken and is a 409 for the email field.
+  run = adminDeps({ db: { hr_admin_staff_add: { error: { code: "23505", hint: "email_taken", message: "This email or mobile already has a staff record. Open it from Employees." } as { code: string; message: string } } } });
+  r = await staffAdmin.handleAdmin({ action: "add", firstName: "Ada", lastName: "Added", email: "ada@example.test", phone: "+61412345678" }, run.deps);
+  assert.deepEqual([r.status, r.body.code, r.body.message, run.names()], [409, "email_taken", "This email is already in use. Please use a different email address.", ["admin:hr_admin_staff_add"]]);
   const jobs = await load.import<typeof import("../src/lib/jobs.ts")>("../src/lib/jobs.ts");
   assert.deepEqual(jobs.applyProblems({ hasResume: false, coverLetter: "" }), ["Attach your resume."]);
   assert.deepEqual(jobs.applyProblems({ hasResume: true, coverLetter: "" }), [], "the cover letter is optional");

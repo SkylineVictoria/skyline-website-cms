@@ -11,6 +11,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
+import { emailConflictBody } from "../_shared/identity-email.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,30 +44,36 @@ async function findAuthUserByEmail(admin: any, email: string) {
   return { user: null, error: null };
 }
 
-async function upsertProfile(
-  admin: any,
-  payload: { email: string; name: string; role: string; authUserId: string; status?: string },
-) {
+// One email = one CMS user (identity_email_guard). The profile row is written BEFORE any Auth user exists, so a login the
+// trigger would refuse is never created: a new row starts Inactive with no login, then gets the login and goes Active.
+// An existing row with this email (a re-invite) is reused as before.
+async function reserveProfile(admin: any, payload: { email: string; name: string; role: string }) {
   const { data: existing } = await admin
     .from("cms_users")
     .select("id")
     .ilike("email", payload.email)
     .maybeSingle();
+  if (existing && existing.id) return { id: existing.id as string, created: false, error: null };
+  const id = crypto.randomUUID();
+  const { error } = await admin.from("cms_users").insert({
+    id, name: payload.name, email: payload.email, role: payload.role === "Admin" ? "Admin" : "Editor", status: "Inactive", auth_user_id: null,
+  });
+  return { id, created: !error, error };
+}
 
-  const row = {
+async function activateProfile(
+  admin: any,
+  id: string,
+  payload: { email: string; name: string; role: string; authUserId: string },
+) {
+  const { error } = await admin.from("cms_users").update({
     name: payload.name,
     email: payload.email,
     role: payload.role === "Admin" ? "Admin" : "Editor",
-    status: payload.status ?? "Active",
+    status: "Active",
     auth_user_id: payload.authUserId,
-  };
-
-  if (existing && existing.id) {
-    const { error } = await admin.from("cms_users").update(row).eq("id", existing.id);
-    return { error: error ? error.message : null };
-  }
-  const { error } = await admin.from("cms_users").insert({ id: crypto.randomUUID(), ...row });
-  return { error: error ? error.message : null };
+  }).eq("id", id);
+  return { error };
 }
 
 Deno.serve(async (req) => {
@@ -130,8 +137,22 @@ Deno.serve(async (req) => {
         let inviteLink: string | null = null;
         let emailSent = false;
 
+        // 1) The CMS profile first: the identity trigger decides before any login or email exists.
+        const reserved = await reserveProfile(admin, { email, name, role });
+        if (reserved.error) {
+          const conflict = emailConflictBody(reserved.error);
+          if (conflict) return json(conflict, 409);
+          return json({ error: "Could not create the user profile." }, 500);
+        }
+        // Undo a row this request created when a later step fails (a re-invited existing row is left alone).
+        const fail = async (body: Record<string, unknown>, status: number) => {
+          if (reserved.created) await admin.from("cms_users").delete().eq("id", reserved.id).is("auth_user_id", null);
+          return json(body, status);
+        };
+
+        // 2) The Auth identity.
         const existing = await findAuthUserByEmail(admin, email);
-        if (existing.error) return json({ error: existing.error }, 400);
+        if (existing.error) return await fail({ error: existing.error }, 400);
         if (existing.user) {
           // Existing identities sign in normally. Never disclose a recovery
           // credential simply because another module wants to link the account.
@@ -142,20 +163,24 @@ Deno.serve(async (req) => {
           else {
             const { error: createErr } = await admin.auth.admin.createUser({ email, email_confirm: true, user_metadata: { name } });
             const found = await findAuthUserByEmail(admin, email);
-            if (!found.user) return json({ error: createErr?.message || inviteErr?.message || "Could not create user." }, 400);
+            if (!found.user) return await fail({ error: createErr?.message || inviteErr?.message || "Could not create user." }, 400);
             authUserId = found.user.id;
             // A concurrent registration is an existing identity, not permission
             // to reset its password. Only our successfully created account gets a link.
             if (!createErr) {
               const { data: link, error: linkErr } = await admin.auth.admin.generateLink({ type: "recovery", email, options: redirectTo ? { redirectTo } : undefined });
-              if (linkErr) return json({ error: linkErr.message }, 400);
+              if (linkErr) return await fail({ error: linkErr.message }, 400);
               inviteLink = link?.properties?.action_link || null;
             }
           }
         }
 
-        const profileRes = await upsertProfile(admin, { email, name, role, authUserId, status: "Active" });
-        if (profileRes.error) return json({ error: profileRes.error }, 500);
+        // 3) Link the login and activate the profile.
+        const profileRes = await activateProfile(admin, reserved.id, { email, name, role, authUserId });
+        if (profileRes.error) {
+          const conflict = emailConflictBody(profileRes.error);
+          return await fail(conflict ?? { error: "Could not save the user profile." }, conflict ? 409 : 500);
+        }
 
         return json({ ok: true, authUserId, emailSent, inviteLink });
       }

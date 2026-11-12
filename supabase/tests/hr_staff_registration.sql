@@ -2,7 +2,7 @@ begin;
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(689);
+select plan(697);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -28,6 +28,17 @@ create temp table t(k text primary key, v text);
 grant select, insert on t to public;
 create function pg_temp.v(text) returns uuid language sql stable as $$ select v::uuid from t where k = $1 $$;
 create function pg_temp.h(text) returns text language sql immutable as $$ select encode(sha256(convert_to($1, 'UTF8')), 'hex') $$;
+-- 'ok' or '<sqlstate>:<hint>' (email unique within a role: the hint the forms map, 20261113240000).
+create function pg_temp.email_err(p_sql text) returns text language plpgsql as $$
+declare c text; h text;
+begin
+  execute p_sql;
+  return 'ok';
+exception when others then
+  get stacked diagnostics c = returned_sqlstate, h = pg_exception_hint;
+  return c || ':' || coalesce(h, '');
+end $$;
+grant execute on function pg_temp.email_err(text) to public;
 create function pg_temp.obj(text) returns void language sql as $$ insert into storage.objects(bucket_id, name) values ('staff-documents', $1) $$;
 -- Checked categories (20261112100000): a staff document row needs the uploader's validation receipt on its Storage object. The fixture
 -- files stand for files the Edge Function checked, so this records a receipt for every checked category on every fixture object.
@@ -132,6 +143,8 @@ select is((select auth_user_id from hr.staff_profiles where id = pg_temp.v('a1')
 select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '0400 000 101')->>'profileId', pg_temp.v('a1')::text, 'the same email before the resume arrives reuses the application');
 select is(public.hr_svc_apply('X', 'Y', 'fresh.one@example.test', '+61 400 000 101')->>'reason', 'exists', 'another email with the same number is refused neutrally');
 select is(public.hr_svc_apply('X', 'Y', 'ADMIN.USER@example.test', '0400 000 199')->>'reason', 'exists', 'an admin user cannot apply');
+select is(public.hr_svc_apply('X', 'Y', 'fresh.one@example.test', '+61 400 000 101')->>'field', 'phone', 'identity (20261113250000): a mobile on another record is "exists" for the phone');
+select is(public.hr_svc_apply('X', 'Y', 'ADMIN.USER@example.test', '0400 000 199')->>'field', 'email', '...and an admin console email is "exists" for the email');
 select is(public.hr_svc_apply('X', 'Y', 'not-an-email', '0400 000 199')->>'reason', 'invalid_email', 'an invalid email is reported');
 select is(public.hr_svc_apply('X', 'Y', 'ok@example.test', 'nope')->>'reason', 'invalid_phone', 'an invalid number is reported');
 select is(public.hr_svc_apply('', 'Y', 'ok@example.test', '0400 000 199')->>'reason', 'invalid_name', 'a name is required');
@@ -144,6 +157,7 @@ select lives_ok($$select public.hr_svc_apply_resume(pg_temp.v('a1'), pg_temp.v('
 select is((select string_agg(kind || ':' || audience || ':' || coalesce(to_email, '-'), ',' order by id) from hr.staff_emails where profile_id = pg_temp.v('a1')),
  'application_received:applicant:ann.applicant@example.test,admin_new_application:admin:-', 'received (applicant) and new application (admin) are queued');
 select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '0400 000 101')->>'reason', 'exists', 'a complete application cannot be submitted twice');
+select is(public.hr_svc_apply('Ann', 'Again', 'ann.applicant@example.test', '0400 000 101')->>'field', 'email', 'identity (20261113250000): a second application for the same email is "exists" for the email');
 select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('a1') and kind = 'already_applied' and to_email = 'ann.applicant@example.test'), 1, 'that address is told it already has an application');
 select is(public.hr_svc_apply('Ann', 'Thrice', 'ann.applicant@example.test', '0400 000 101')->>'reason', 'exists', 'a third try');
 select is((select count(*)::int from hr.staff_emails where profile_id = pg_temp.v('a1') and kind = 'already_applied'), 1, 'at most one such email an hour');
@@ -604,7 +618,8 @@ select is((select c->>'staffStatus' || '/' || (c->>'source') || '/' || (c->>'rec
 select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"mia.manual@example.test","phone":"0400 000 818"}', '', '')$$, '23505',
  'This email belongs to a staff record with a different mobile number. Open it from Employees.', 'the same email with another mobile is refused');
 select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"mia.manual@example.test","phone":"0400 000 817"}', '', '')$$, '23505', 'This person already has an open application for this job.', 'one open application per job');
-select throws_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Ad","lastName":"Min","email":"admin.user@example.test","phone":"0400 000 819"}', '', '')$$, '23505', 'This email belongs to an active admin console user.', 'an active admin console user is not a candidate');
+select is(pg_temp.email_err($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Mia","lastName":"Manual","email":"Mia.Manual@example.test","phone":"0400 000 818"}', '', '')$$), '23505:email_taken', 'identity: the same candidate email with another mobile carries hint email_taken');
+select lives_ok($$select public.hr_admin_candidate_save(null, pg_temp.v('jjob1'), '{"firstName":"Ad","lastName":"Min","email":"admin.user@example.test","phone":"0400 000 819"}', '', '')$$, 'identity (20261113250000): a CMS user may also be an HR candidate; email is unique within a role');
 reset role;
 insert into t select 'jc3', profile_id::text from hr.job_applications where id = pg_temp.v('japp3');
 select is((select count(*)::int from auth.users where lower(email) = 'mia.manual@example.test'), 0, 'no login is created for a manual candidate');
@@ -623,6 +638,13 @@ set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select is(public.hr_admin_staff_add('Ada', 'Added', 'ada.added@example.test', '0400 000 813')->>'ok', 'true', 'an administrator adds a staff member');
 select throws_ok($$select public.hr_admin_staff_add('Ada', 'Again', 'ada.added@example.test', '0400 000 814')$$, '23505', 'This email or mobile already has a staff record. Open it from Employees.', 'the same email cannot be added twice');
 select throws_ok($$select public.hr_admin_staff_add('X', 'Y', 'not-an-email', '0400 000 815')$$, '22023', 'Enter a valid email address.', 'the address is checked');
+select is(pg_temp.email_err($$select public.hr_admin_staff_add('Ada', 'Again', ' Ada.Added@example.test', '0400 000 899')$$), '23505:email_taken', 'identity: adding a second staff record with the same email carries hint email_taken');
+select is(pg_temp.email_err($$select public.hr_admin_staff_add('Ada', 'Other', 'ada.other@example.test', '0400 000 813')$$), '23505:', 'identity: a mobile-only duplicate keeps no email hint');
+select ok(pg_get_functiondef('public.hr_admin_emp_save(uuid,jsonb)'::regprocedure) like '%is already an employee (%).'', v_email, p.status using errcode = ''23505'', hint = ''email_taken''%'
+  and pg_get_functiondef('public.hr_admin_emp_save(uuid,jsonb)'::regprocedure) like '%Another staff record already uses %.'', v_email using errcode = ''23505'', hint = ''email_taken''%'
+  and pg_get_functiondef('public.hr_admin_emp_save(uuid,jsonb)'::regprocedure) like '%Another staff record already uses the mobile number %.'', v_phone using errcode = ''23505''; end if;%',
+  'identity: Employees edit marks both duplicate-email refusals email_taken and leaves the mobile refusal as it was');
+select ok(pg_get_functiondef('hr.admin_save_person(uuid,jsonb)'::regprocedure) not like '%active admin console user%', 'identity (20261113250000): candidates no longer refuse a CMS user''s email');
 select lives_ok($$select public.hr_admin_staff_invite((select id from hr.staff_profiles where email = 'ada.added@example.test'), 'documents', pg_temp.h('ada-link'))$$, 'an added person (no job application) gets the document link from Employees');
 -- Employment details on Employees.
 select throws_ok($$select public.hr_admin_staff_employment_save(pg_temp.v('jc1'), '{"jobTitle":"Senior Trainer","employmentType":"part_time","workLocation":"Melbourne CBD"}')$$, '22023', 'Choose the work location from the list (HRMS > Locations).', 'a work location that is not on the list is refused');

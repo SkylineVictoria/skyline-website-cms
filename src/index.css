@@ -472,3 +472,115 @@
   .data-table > :is(tbody, tfoot) > tr { grid-template-columns: minmax(0, 1fr); }
 }
 
+
+/* Compact application form (ApplicationWorkspace, StepShell): one input height, radius and text size for every control on
+   every step, including custom controls (phone, USI, year, course and address search) and any field added later. */
+.form-compact :is(input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]):not(.sr-only), select) {
+  height: 40px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 14px;
+  border-radius: 8px;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+.form-compact textarea {
+  font-size: 14px;
+  border-radius: 8px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.form-compact :is(input, select, textarea):not([type="radio"]):not([type="checkbox"]):hover:not(:disabled):not(:focus) {
+  border-color: oklch(var(--foreground-300));
+}
+
+/* SegmentedControl: neutral track, a white thumb that slides to the chosen option, the chosen option in orange.
+   Button groups set --seg-index themselves; radio groups (the field kit) are moved by :has(:checked). */
+.seg-track {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  height: 36px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid oklch(var(--background-200));
+  background-color: oklch(var(--background-100));
+}
+.seg-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / var(--seg-count, 2));
+  border-radius: 6px;
+  background-color: oklch(var(--background-50));
+  box-shadow: 0 1px 2px oklch(var(--foreground-950) / 0.08), 0 0 0 1px oklch(var(--background-200));
+  transform: translateX(calc(var(--seg-index, 0) * 100%));
+  transition: transform 200ms ease, opacity 150ms ease;
+}
+.seg-track:not(:has(input:checked)):not([data-selected]) .seg-thumb { opacity: 0; }
+.seg-track:has(> .seg-item:nth-of-type(1) input:checked) { --seg-index: 0; }
+.seg-track:has(> .seg-item:nth-of-type(2) input:checked) { --seg-index: 1; }
+.seg-track:has(> .seg-item:nth-of-type(3) input:checked) { --seg-index: 2; }
+.seg-item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: oklch(var(--foreground-600));
+  transition: color 150ms ease;
+}
+.seg-item:hover { color: oklch(var(--foreground-900)); }
+.seg-item[aria-checked="true"], .seg-item:has(input:checked) { color: oklch(var(--primary-600)); font-weight: 500; }
+.seg-item:focus-visible, .seg-item:has(input:focus-visible) { outline: 2px solid oklch(var(--primary-500)); outline-offset: 1px; }
+.seg-item:has(input:disabled), .seg-item:disabled { cursor: not-allowed; opacity: 0.7; }
+
+/* A step card slides in from the side it was reached from; a panel switched by a choice cross-fades. */
+@keyframes step-in-forward { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes step-in-back { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes open-in { from { opacity: 0; transform: scaleY(0.96); } to { opacity: 1; transform: none; } }
+.step-in-forward { animation: step-in-forward 220ms ease-out both; }
+.step-in-back { animation: step-in-back 220ms ease-out both; }
+.fade-in { animation: fade-in 200ms ease-out both; }
+.open-in { animation: open-in 200ms ease-out both; transform-origin: top; }
+/* Fields a document (or an address pick) just filled: shown one after another (the delay is set per field). */
+.field-filled { animation: rise-in 240ms ease-out both; }
+
+/* StepDrawer: a panel from the right (a sheet from the bottom on phones) over a backdrop. */
+@keyframes drawer-in-right { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes drawer-in-up { from { transform: translateY(100%); } to { transform: none; } }
+.drawer-backdrop { animation: fade-in 250ms ease-out both; }
+.drawer-panel { animation: drawer-in-up 250ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (min-width: 640px) { .drawer-panel { animation-name: drawer-in-right; } }
+
+/* DocumentReadingState: an orange line sweeps the document while it is read. */
+@keyframes doc-scan { 0% { top: -12%; } 100% { top: 100%; } }
+.doc-scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 12%;
+  background: linear-gradient(to bottom, oklch(var(--primary-500) / 0), oklch(var(--primary-500) / 0.35) 70%, oklch(var(--primary-500) / 0.9));
+  animation: doc-scan 1.8s ease-in-out infinite;
+}
+@keyframes check-pop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes check-draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+.check-pop { animation: check-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.check-draw { stroke-dasharray: 24; animation: check-draw 320ms 200ms ease-out both; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.toast-in { animation: toast-in 200ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .seg-thumb, .form-compact :is(input, select, textarea) { transition: none; }
+  .step-in-forward, .step-in-back, .fade-in, .open-in, .field-filled, .drawer-backdrop, .drawer-panel, .check-pop, .check-draw, .toast-in { animation: none; }
+  .check-draw { stroke-dasharray: none; }
+  .doc-scan-line { display: none; }
+}

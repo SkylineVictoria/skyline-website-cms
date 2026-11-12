@@ -32,11 +32,11 @@ export default function RequestDetail({ id, onClose, onChanged, startPlacing = f
   if (!detail) return <Modal open title="Signing request" onClose={onClose}>{error ? <p role="alert" className="text-red-700">{error}</p> : <p role="status">Loading…</p>}</Modal>;
   const status = signingStatus(detail.status), open = ["sent", "viewed", "partial"].includes(detail.status), draft = detail.state === "draft";
 
-  if (placing) return <Modal open title={`Place fields: ${detail.title}`} width="max-w-6xl" onClose={() => setPlacing(null)}
+  if (placing) return <Modal open fill title={`Place fields: ${detail.title}`} width="max-w-6xl" onClose={() => setPlacing(null)}
     footer={<Button disabled={busy} data-testid="save-fields" onClick={() => void act(async () => {
       await signingAdmin("fields_save", id, { fields: placing.fields.map((f) => ({ recipient_id: f.owner, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label })) }); setPlacing(null);
     }, "Fields saved.")}>Save fields</Button>}>
-    {error && <p role="alert" className="mb-3 rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
+    {error && <p role="alert" className="mb-3 shrink-0 rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
     <FieldEditor source={placing.url} owners={detail.recipients.map((r) => ({ id: r.id, label: `${r.role_label}: ${r.name}` }))} fields={placing.fields} onChange={(fields) => setPlacing({ ...placing, fields })} />
   </Modal>;
 

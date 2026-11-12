@@ -9,6 +9,8 @@ import type { AdminUser, Role } from "@/pages/admin/lib/types";
 import DraftStatus from "@/pages/admin/components/DraftStatus";
 import DraftResume from "@/pages/admin/components/DraftResume";
 import { useSlotDraft } from "@/pages/admin/lib/useSlotDraft";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError, normalizeEmail } from "@/lib/identity/email";
 
 const PERMISSIONS: { area: string; admin: boolean; editor: boolean }[] = [
   { area: "Dashboard", admin: true, editor: true },
@@ -34,7 +36,7 @@ const emptyUser = (): AdminUser => ({
   lastLogin: "—",
 });
 
-type EdgeResult = { ok: boolean; error?: string; data?: Record<string, unknown> | null };
+type EdgeResult = { ok: boolean; error?: string; data?: Record<string, unknown> | null; body?: unknown };
 
 /**
  * All auth provisioning goes through the `cms-admin-users` Edge Function,
@@ -45,16 +47,18 @@ async function callAdminUsers(body: Record<string, unknown>): Promise<EdgeResult
   const { data, error } = await supabase.functions.invoke("cms-admin-users", { body });
   if (error) {
     let message = error.message || "Request failed.";
+    let body: unknown = null;
     try {
       const ctx = (error as { context?: Response }).context;
       if (ctx && typeof ctx.json === "function") {
         const parsed = (await ctx.json()) as { error?: string } | null;
+        body = parsed;
         if (parsed?.error) message = parsed.error;
       }
     } catch {
       /* keep the default message */
     }
-    return { ok: false, error: message, data: null };
+    return { ok: false, error: message, data: null, body };
   }
   const payload = (data ?? null) as Record<string, unknown> | null;
   if (payload && typeof payload.error === "string") {
@@ -74,6 +78,9 @@ export default function UsersPage() {
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  // One email per CMS user: the live check and the server's answer both show under the email field.
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
 
   const readOnly = !can("governance");
 
@@ -89,6 +96,7 @@ export default function UsersPage() {
   const close = () => {
     slot.close();
     setEditing(null);
+    setEmailError(null);
   };
 
   const save = async () => {
@@ -97,9 +105,21 @@ export default function UsersPage() {
       push("Name and email are required", "error");
       return;
     }
+    if (emailBlocking) return;
+    const email = normalizeEmail(draft.email);
+    setEmailError(null);
     if (editing) {
-      const next = users.map((u) => (u.id === draft.id ? draft : u));
-      saveUsers(next);
+      // Only this row, and the result is checked: the identity trigger may refuse a changed email.
+      setBusy(true);
+      const { error } = await supabase.from("cms_users")
+        .update({ name: draft.name.trim(), email, role: draft.role, status: draft.status }).eq("id", draft.id);
+      setBusy(false);
+      if (error) {
+        if (isEmailTakenError(error)) { setEmailError(error); return; }
+        push("Could not save the user", "error");
+        return;
+      }
+      saveUsers(users.map((u) => (u.id === draft.id ? { ...draft, name: draft.name.trim(), email } : u)));
       logActivity("Updated", draft.name, "Users");
       push("User updated");
       close();
@@ -110,13 +130,14 @@ export default function UsersPage() {
     setBusy(true);
     const res = await callAdminUsers({
       action: "invite",
-      email: draft.email.trim(),
+      email,
       name: draft.name.trim(),
       role: draft.role,
       redirectTo: passwordResetUrl(),
     });
     setBusy(false);
     if (!res.ok) {
+      if (isEmailTakenError(res.body)) { setEmailError(res.body); return; }
       push(res.error ?? "Could not create the invitation", "error");
       return;
     }
@@ -313,7 +334,7 @@ export default function UsersPage() {
             <Button variant="outline" onClick={close}>
               Cancel
             </Button>
-            <Button icon="ri-check-line" onClick={save} disabled={busy}>
+            <Button icon="ri-check-line" onClick={save} disabled={busy || emailBlocking}>
               {editing ? "Save changes" : busy ? "Sending invite…" : "Send invite"}
             </Button>
           </>
@@ -326,7 +347,16 @@ export default function UsersPage() {
               <TextInput value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
             </Field>
             <Field label="Email" required>
-              <TextInput type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} />
+              <EmailField
+                value={draft.email}
+                onChange={(email) => setDraft({ ...draft, email })}
+                kind="staff"
+                context="admin"
+                recordId={editing?.id ?? null}
+                savedEmail={editing?.email ?? null}
+                serverError={emailError}
+                onStatusChange={(_status, blocking) => setEmailBlocking(blocking)}
+              />
             </Field>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Role">

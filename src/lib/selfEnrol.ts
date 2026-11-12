@@ -23,14 +23,19 @@ async function invoke(body: Record<string, unknown>): Promise<Record<string, unk
   const { data, error } = await supabase.functions.invoke("portal-self-register", { body });
   if (error) {
     let message = error.message;
+    let status: number | undefined;
+    let body: unknown = null;
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
+      status = context.status;
       try {
         const parsed = (await context.clone().json()) as { error?: string };
+        body = parsed;
         if (parsed?.error) message = parsed.error;
       } catch { /* keep the generic message */ }
     }
-    throw new Error(message || "We could not reach the enrolment service. Please try again.");
+    // The parsed body stays on `cause` so a 409 email_taken reaches the email field (isEmailTakenError).
+    throw Object.assign(new Error(message || "We could not reach the enrolment service. Please try again.", { cause: body ?? error }), { status });
   }
   if (data?.error) throw new Error(String(data.error));
   return (data ?? {}) as Record<string, unknown>;

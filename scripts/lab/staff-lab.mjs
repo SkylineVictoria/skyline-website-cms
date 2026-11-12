@@ -92,9 +92,10 @@ const EXCLUDE = "studio,imgproxy,logflare,vector,supavisor,realtime,postgres-met
 
 // LAB ONLY stand-ins for hosted state the repo cannot replay (file name = position in the migration order). Never shipped.
 const LAB_SHIMS = {
-  // 20261102094611 references public.student_profiles(id), a hosted table that no repo migration creates.
+  // 20261102094611 references public.student_profiles(id), a hosted table that no repo migration creates;
+  // 20261112035802 (one email = one person) reads and guards its email column.
   "00000000000000_lab_shim_student_profiles.sql":
-    "create table if not exists public.student_profiles (id uuid primary key default gen_random_uuid());\n",
+    "create table if not exists public.student_profiles (id uuid primary key default gen_random_uuid(), email text);\n",
   // Hosted ran remove_omara (2 Nov 2026, not in the repo) before 20261104090000, so nothing referenced omara_agents any more.
   "20261104085959_lab_shim_remove_omara_references.sql": `do $$
 declare r record;
@@ -2205,6 +2206,74 @@ async function signingBrowser() {
     await page.getByRole("status").filter({ hasText: "Fields saved." }).waitFor({ timeout: 15000 });
     const placed = JSON.parse(psql(`select json_agg(json_build_object('type', f.type, 'who', c.name, 'page', f.page, 'x', f.x, 'y', f.y)) from hr.sign_fields f join hr.sign_recipients c on c.id = f.recipient_id where f.request_id = '${made.body.id}';`));
     check("browser: the placed fields are stored for the right signers and pages", placed.length === 3 && placed.filter((f) => f.who === "Una Phone").length === 2 && placed.some((f) => f.who === "Theo Second" && f.type === "signature" && f.x > 0.4) && placed.every((f) => f.page === 1), JSON.stringify(placed));
+    // Field editor drag (2026-11-12): one scroll container, pointer capture, auto-scroll at the edges, a drop on another page, resize at the
+    // bottom edge, mouse and touch; positions stay fractions of the page, so a reload shows every field where it was.
+    {
+      const pagesArea = page.getByTestId("field-pages");
+      const atBottom = () => page.waitForFunction(() => { const s = document.querySelector("[data-testid='field-pages']"); return s.scrollTop + s.clientHeight >= s.scrollHeight - 2; }, null, { timeout: 20000 });
+      const toTop = () => page.evaluate(() => { document.querySelector("[data-testid='field-pages']").scrollTop = 0; });
+      const fieldsJson = () => JSON.parse(psql(`select json_agg(json_build_object('type', f.type, 'who', c.name, 'page', f.page, 'x', f.x, 'y', f.y, 'w', f.w, 'h', f.h) order by c.name, f.type) from hr.sign_fields f join hr.sign_recipients c on c.id = f.recipient_id where f.request_id = '${made.body.id}';`));
+      const openPlacing = async () => { await page.getByTestId("place-fields").click(); await page.locator("[data-pdf-page='2'] canvas").waitFor({ timeout: 30000 }); await toTop(); };
+      await openPlacing();
+      check("browser: in the field editor only the pages area scrolls (the modal body does not)", await page.evaluate(() => {
+        const pages = document.querySelector("[data-testid='field-pages']"), panel = document.querySelector("[data-testid='field-panel']");
+        const dialog = pages.closest(".fixed");
+        const scrollers = [...dialog.querySelectorAll("*")].filter((el) => el !== panel && /(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1);
+        return scrollers.length === 1 && scrollers[0] === pages && dialog.scrollHeight <= dialog.clientHeight + 1;
+      }));
+      // Mouse: a signature from page 1 to the bottom of the last page in one drag (held at the bottom edge until it has scrolled).
+      const theo = page.locator("[data-pdf-page='1'] [data-testid='placed-field'][data-field-type='signature']").first();
+      await theo.scrollIntoViewIfNeeded(); const sb = await pagesArea.boundingBox(); const fb = await theo.boundingBox();
+      await page.mouse.move(fb.x + 10, fb.y + 5); await page.mouse.down();
+      await page.mouse.move(fb.x + 20, sb.y + sb.height - 6, { steps: 12 });
+      await atBottom();
+      const last = await page.locator("[data-pdf-page='2']").boundingBox();
+      await page.mouse.move(fb.x + 20, last.y + last.height - 70, { steps: 6 });
+      await page.mouse.up();
+      check("browser: a field dragged once from page 1 lands on the last page", (await page.getByTestId("field-details").innerText()).includes("page 2"));
+      // Resize at the bottom edge: the field grows but stays inside its page.
+      const moved = page.locator("[data-pdf-page='2'] [data-testid='placed-field']").first();
+      const handle = moved.getByTestId("field-resize"); const hb = await handle.boundingBox();
+      await page.mouse.move(hb.x + 3, hb.y + 3); await page.mouse.down();
+      await page.mouse.move(hb.x + 60, sb.y + sb.height - 4, { steps: 8 });
+      await page.waitForTimeout(400);
+      await page.mouse.up();
+      const pb2 = await page.locator("[data-pdf-page='2']").boundingBox(), mb = await moved.boundingBox();
+      check("browser: resizing at the bottom edge keeps the field inside its page", mb.y + mb.height <= pb2.y + pb2.height + 1 && mb.width > fb.width + 30, JSON.stringify({ mb, pb2 }));
+      // Touch: Una's text field from page 1 to page 2, with the same auto-scroll (Chrome's touch emulation sends pointerType "touch").
+      await toTop();
+      const cdp = await desk.newCDPSession(page);
+      await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+      const una = page.locator("[data-pdf-page='1'] [data-testid='placed-field'][data-field-type='text']").first(); await una.scrollIntoViewIfNeeded(); const ub = await una.boundingBox();
+      const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y) }] });
+      await touch("touchStart", ub.x + 8, ub.y + 4);
+      for (let i = 1; i <= 12; i++) await touch("touchMove", ub.x + 8, ub.y + 4 + (sb.y + sb.height - 6 - ub.y - 4) * i / 12);
+      await atBottom();
+      const lastTouch = await page.locator("[data-pdf-page='2']").boundingBox();
+      for (let i = 1; i <= 4; i++) await touch("touchMove", ub.x + 8, sb.y + sb.height - 6 + (lastTouch.y + lastTouch.height * 0.5 - (sb.y + sb.height - 6)) * i / 4);
+      await touch("touchEnd", 0, 0);
+      await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+      check("browser: a touch drag moves a field to the last page too", (await page.getByTestId("field-details").innerText()).includes("page 2"));
+      await page.screenshot({ path: path.join(shots, "field-editor-dragged.png") });
+      await page.getByTestId("save-fields").click();
+      await page.getByRole("status").filter({ hasText: "Fields saved." }).waitFor({ timeout: 15000 });
+      const saved = fieldsJson();
+      const movedSignature = saved.find((f) => f.type === "signature" && f.page === 2), movedText = saved.find((f) => f.type === "text");
+      check("browser: the moved fields are stored on page 2, inside the page, as fractions", saved.length === 3 && Boolean(movedSignature) && movedText?.page === 2 && movedSignature.y > 0.6 && movedSignature.y + movedSignature.h <= 1.0001
+        && saved.filter((f) => f.type === "signature" && f.page === 1).length === 1 && saved.every((f) => f.x >= 0 && f.y >= 0 && f.x + f.w <= 1.0001 && f.y + f.h <= 1.0001), JSON.stringify(saved));
+      // Reload: every field is shown where it is stored (unmoved ones too).
+      await page.reload(); await page.getByTestId("request-search").fill(run);
+      await page.getByTestId("request-table").getByText(`UI agreement ${run}`).click();
+      await openPlacing();
+      const shown = await page.evaluate(() => [...document.querySelectorAll("[data-testid='placed-field']")].map((el) => {
+        const pageEl = el.closest("[data-pdf-page]"), p = pageEl.getBoundingClientRect(), r = el.getBoundingClientRect();
+        return { type: el.getAttribute("data-field-type"), page: Number(pageEl.getAttribute("data-pdf-page")), x: (r.left - p.left) / p.width, y: (r.top - p.top) / p.height };
+      }));
+      const near = (a, b) => Math.abs(a - b) < 0.006;
+      check("browser: after a reload every field is where it was saved", saved.length === shown.length && saved.every((f) => shown.some((s) => s.type === f.type && s.page === f.page && near(s.x, f.x) && near(s.y, f.y))), JSON.stringify({ saved, shown }));
+      await page.screenshot({ path: path.join(shots, "field-editor-reloaded.png") });
+      await page.getByRole("button", { name: "Close" }).last().click();
+    }
     page.once("dialog", (d) => d.accept());
     await page.getByTestId("send-request").click();
     await page.getByRole("status").filter({ hasText: "Sent for signature." }).waitFor({ timeout: 20000 });

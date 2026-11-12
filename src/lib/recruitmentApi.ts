@@ -41,7 +41,7 @@ export type { EmploymentType };
 
 async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.rpc(name, args);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message, { cause: error });
   return data as T;
 }
 

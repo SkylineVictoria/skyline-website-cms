@@ -9,6 +9,8 @@ import { setBusinessStatus } from "@/pages/admin/lib/businessData";
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
+import EmailField from "@/components/identity/EmailField";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 type Errors = AgencyFormErrors & { form?: string };
 
@@ -58,6 +60,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [editing, setEditing] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [saving, setSaving] = useState(false);
+  // The contact's email is also the first administrator's invite email: an agent / portal login with it already is refused.
+  const [emailError, setEmailError] = useState<unknown>(null);
+  const [emailBlocking, setEmailBlocking] = useState(false);
 
   // Look the ABN up once it is complete and valid; a newer ABN discards an older response.
   useEffect(() => {
@@ -110,7 +115,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (saving || lookupLoading) return;
+    if (saving || lookupLoading || emailBlocking) return;
+    setEmailError(null);
     if (!ready) { setAbnTouched(true); setErrors({ registrationNumber: abnProblem || (abnInactive ? "This ABN is not active on the government register." : "Look up this ABN successfully before creating the business.") }); return; }
     const checked = validateAgencyForm({ ...form, registrationNumber: abn }, true);
     const next: Errors = { ...checked.errors };
@@ -148,6 +154,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       }
       onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
     } catch (e) {
+      if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
       const text = e instanceof Error ? e.message : "";
       setErrors({ form: /agencies_abn_unique|duplicate key|already exists/i.test(text) ? text.includes("code") ? "This agency code is already used. Edit the details and choose another code." : "A business with this ABN already exists. Open it from Businesses." : text || "We could not create this business." });
     } finally {
@@ -246,7 +253,14 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s administrator and receives the portal invitation.</p>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             {input("primaryContact", "Name", "The person at the business we deal with.", { required: true, autoComplete: "name" })}
-            {input("businessEmail", "Email", "Receives the administrator invitation.", { required: true, type: "email", autoComplete: "email" })}
+            <div>
+              <Field label="Email" hint={errors.businessEmail ? undefined : "Receives the administrator invitation."} required>
+                <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
+                  onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
+                  onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
+              </Field>
+              {error("businessEmail")}
+            </div>
             <div>
               {/* The shared phone control (country code + number, formatted as typed); it writes the E.164 value to a hidden input. */}
               <Field label="Phone" required hint={errors.phone ? undefined : "Choose the country code, then the number, for example 041 234 5678."}>
@@ -262,7 +276,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       {errors.form ? <p role="alert" className="mt-4 text-sm font-medium text-red-700">{errors.form}</p> : null}
       <div className={`mt-5 flex items-center gap-3 ${inDialog ? "justify-end" : ""}`}>
         {inDialog ? cancel : null}
-        <Button type="submit" icon="ri-save-line" disabled={saving || lookupLoading || !ready}>{saving ? "Creating…" : "Create business"}</Button>
+        <Button type="submit" icon="ri-save-line" disabled={saving || lookupLoading || !ready || emailBlocking}>{saving ? "Creating…" : "Create business"}</Button>
         {inDialog ? null : cancel}
       </div>
     </form>

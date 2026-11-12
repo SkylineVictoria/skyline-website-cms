@@ -29,6 +29,7 @@ import { isEditableApplicationStatus } from "@/pages/agency/lib/applicationAcces
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
+import { isEmailTakenError } from "@/lib/identity/email";
 
 function newClientKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -106,6 +107,8 @@ export default function NewApplicationPage() {
   const [initialAgentName, setInitialAgentName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  // An email refused when the student is saved (email unique within the student role) goes back to the email field.
+  const [emailError, setEmailError] = useState<unknown>(null);
   // A self-enrolled student's first application: are they working with an education agency?
   const [agencyChoices, setAgencyChoices] = useState<Array<{ id: string; name: string }>>([]);
   const [withAgency, setWithAgency] = useState<boolean | null>(null);
@@ -178,6 +181,7 @@ export default function NewApplicationPage() {
       if (notes.length) push(notes.join(" "));
       openWizard(id);
     } catch (e) {
+      if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
     } finally {
       setCreating(false);
@@ -188,6 +192,7 @@ export default function NewApplicationPage() {
   const continueFromStudent = async (student: StudentDraft, existing: StudentMatch | null) => {
     setDraft(student);
     setError("");
+    setEmailError(null);
     // A resumed draft keeps its student, business and agent; only the contact details are added to it.
     if (applicationId) {
       setCreating(true);
@@ -195,6 +200,7 @@ export default function NewApplicationPage() {
         await saveContact(applicationId, student);
         setPhase("wizard");
       } catch (e) {
+        if (isEmailTakenError(e)) { setEmailError(e); return; }
         setError(e instanceof Error ? e.message : "We could not start a new application.");
       } finally {
         setCreating(false);
@@ -331,6 +337,7 @@ export default function NewApplicationPage() {
       clientKeyRef.current = newClientKey();
       openWizard(id);
     } catch (e) {
+      if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
     } finally {
       setCreating(false);
@@ -448,6 +455,7 @@ export default function NewApplicationPage() {
         />
         <div className="mt-6 max-w-2xl rounded-card border border-background-200 bg-background-50 p-6">
           <StudentDetailsStep initial={draft ?? undefined} busy={creating} error={error} allowStudentWithoutApplication offerInvite={role !== "agent"}
+            context={role === "slit_admin" ? "admin" : "portal"} emailError={emailError}
             onContinue={(student, existing) => void continueFromStudent(student, existing)}
             cancel={<Link to={paths.list} className={secondary}>Cancel</Link>} />
         </div>

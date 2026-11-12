@@ -1,12 +1,12 @@
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, useLayoutEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, useLayoutEffect } from "react";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
 import CourseSearchField from "@/pages/agency/components/CourseSearchField";
 import { validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AppField, AppSection } from "@/data/applicationForms";
 import { ApplicationFieldControl } from "@/components/feature/applicationFieldKit";
-import { isConditionMet, isFieldFilled, sectionHeading, sectionIcon } from "@/components/feature/applicationFieldHelpers";
+import { isConditionMet, isFieldFilled, sectionHeading } from "@/components/feature/applicationFieldHelpers";
 import TermsDeclaration from "@/components/feature/TermsDeclaration";
 import { applyFormValues, collectFormValues, type DraftValues } from "@/lib/applicationDraft";
 import {
@@ -43,6 +43,15 @@ import WorkspaceIntakeField from "@/pages/agency/components/WorkspaceIntakeField
 import { baseFieldClass } from "@/components/feature/applicationFieldHelpers";
 import { DEGREE_LEVELS, schoolLevelFor } from "@/pages/agency/lib/educationLevels";
 import { PortalError } from "@/pages/agency/components/PortalUI";
+import StepShell, { FooterMessage } from "@/components/shared/application-form/StepShell";
+import type { NavStep } from "@/components/shared/application-form/StepDrawer";
+import SectionCard from "@/components/shared/application-form/SectionCard";
+import Field, { FieldMessage, FORM_LABEL } from "@/components/shared/application-form/Field";
+import InfoTip from "@/components/shared/application-form/InfoTip";
+import SegmentedControl from "@/components/shared/application-form/SegmentedControl";
+import Toast from "@/components/shared/application-form/Toast";
+import { useToast } from "@/components/shared/application-form/useToast";
+import { stepTitle } from "@/components/shared/application-form/stepTitle";
 
 const FORM_ID = "portal-application-form";
 const STUDENT_CONTACT_FIELDS = new Set(["mobile", "email", "confirm_email", "email_note"]);
@@ -123,12 +132,34 @@ const PAGE_DOCUMENTS: ReadonlyArray<{ marker: string; category: string; noun: st
 const ENGLISH_UPLOAD_FIELD: AppField = { name: "english_results", label: "English test result", type: "file" };
 const LICENCE_FIELD: AppField = { name: "licence_copy", label: "Driving licence", type: "file" };
 
-// A fixed green (not the institution's theme colours) marks values already read from a document, so they read as
-// "done, leave as is" next to the white fields that still need filling in. Applied to the control's own elements.
-const DOCUMENT_FILLED_INPUT =
-  "[&_input:not([type=radio]):not([type=checkbox])]:!border-emerald-300 [&_input:not([type=radio]):not([type=checkbox])]:!bg-emerald-50 [&_input]:!text-emerald-950 " +
-  "[&_select]:!border-emerald-300 [&_select]:!bg-emerald-50 [&_select]:!text-emerald-950 [&_textarea]:!border-emerald-300 [&_textarea]:!bg-emerald-50 [&_textarea]:!text-emerald-950";
-const DOCUMENT_FILLED_GROUP = "rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-emerald-950";
+/** What the toast calls a document of each category ("We filled 9 fields from your passport"). */
+const DOCUMENT_NOUN: Record<string, string> = { Passport: "passport", Visa: "visa document", "English Test": "English test result", "Driving Licence": "driving licence", Academic: "academic documents" };
+/**
+ * Shows the fields a document (or an address pick) just filled one after another (40ms apart). Presentation only: the values
+ * are already in the form; this adds a short animation to their wrappers. Nothing moves with reduced motion (CSS).
+ */
+function revealFields(form: HTMLFormElement | null, names: readonly string[]) {
+  if (!form) return;
+  let order = 0;
+  for (const name of names) {
+    const wrapper = form.querySelector<HTMLElement>(`[data-field="${CSS.escape(name)}"]`);
+    if (!wrapper || wrapper.hidden) continue;
+    wrapper.classList.remove("field-filled");
+    void wrapper.offsetWidth; // restart the animation
+    wrapper.style.animationDelay = `${order * 40}ms`;
+    wrapper.classList.add("field-filled");
+    order += 1;
+  }
+}
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+// A step description up to this length is shown as its one subtitle line; a longer one goes into the title's (i).
+const SUBTITLE_MAX = 90;
+/** "PLEASE NOTIFY SKYLINE OF ANY CHANGES." as a sentence ("Please notify Skyline of any changes."); other text unchanged. */
+function sentenceCase(text: string): string {
+  if (text !== text.toUpperCase()) return text;
+  const lower = text.toLowerCase().replace(/\b(slit|usi|oshc|rpl|skyline institute of technology)\b/g, (word) => (word.startsWith("skyline") ? "Skyline Institute of Technology" : word.toUpperCase()));
+  return lower.replace(/(^|[.!?]\s+)([a-z])/g, (_, start: string, letter: string) => start + letter.toUpperCase());
+}
 const DEBOUNCE_MS = 1200;
 const DECLARATION_VERSION = "1.0";
 
@@ -266,6 +297,7 @@ export default function ApplicationWorkspace({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
+  const submittedDoneRef = useRef<(() => void) | null>(null);
   const [documentMessage, setDocumentMessage] = useState("");
   const [attachments, setAttachments] = useState<DocumentRow[]>([]);
   const [attachmentsLoaded, setAttachmentsLoaded] = useState(false);
@@ -280,6 +312,12 @@ export default function ApplicationWorkspace({
   const [qualifications, setQualifications] = useState(() => readQualifications(application.data));
 
   const formRef = useRef<HTMLFormElement>(null);
+  // Presentation: which way the step card slides in, the "We filled N fields" toast, and what the last server sync filled in.
+  const [direction, setDirection] = useState<"forward" | "back">("forward");
+  const toast = useToast();
+  const showToast = toast.show;
+  const serverFillsRef = useRef<string[]>([]);
+  const readingStatesRef = useRef(new Map<string, string>());
   const sectionRefs = useRef<Array<HTMLElement | null>>([]);
   const timerRef = useRef<number | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
@@ -317,15 +355,28 @@ export default function ApplicationWorkspace({
       if (!filled) fills[name] = value;
     }
     if (Object.keys(fills).length) applyFormValues(form, fills);
+    serverFillsRef.current = Object.keys(fills);
     return detail;
   }, [application.id]);
 
   const refreshAttachments = useCallback(async () => {
     const [rows, detail] = await Promise.all([listApplicationDocuments(application.id), syncWithServer()]);
     setAttachments(rows.filter((document) => document.isCurrent));
+    // A document whose reading just finished, and the empty fields the server filled from it: show them and say so.
+    const finished = rows.filter((document) => {
+      const before = readingStatesRef.current.get(document.id);
+      return (before === "queued" || before === "processing") && !["queued", "processing"].includes(extractionStatus(document.metadata));
+    });
+    readingStatesRef.current = new Map(rows.map((document) => [document.id, extractionStatus(document.metadata)]));
+    const filledNow = serverFillsRef.current;
+    serverFillsRef.current = [];
+    if (finished.length && filledNow.length) {
+      window.requestAnimationFrame(() => revealFields(formRef.current, filledNow));
+      showToast(`We filled ${plural(filledNow.length, "field")} from your ${DOCUMENT_NOUN[finished[0].category] ?? "document"}. Please review.`);
+    }
     setAttachmentsLoaded(true);
     if (detail) setQualifications(readQualifications(detail.data));
-  }, [application.id, syncWithServer]);
+  }, [application.id, syncWithServer, showToast]);
 
   useEffect(() => {
     void refreshAttachments().catch((error) => setDocumentMessage(error instanceof Error ? error.message : "We could not load saved documents."));
@@ -517,6 +568,13 @@ export default function ApplicationWorkspace({
     if (target?.name && event.nativeEvent.isTrusted && documentFields.has(target.name)) {
       setEditedFields((prev) => (prev.has(target.name) ? prev : new Set(prev).add(target.name)));
     }
+    // Fields are edited in place (there is no Edit button any more): a hand edit of a value filled from a document, worked out
+    // from one, or pre-filled unlocks it exactly as Edit did, so nothing read later replaces it.
+    const editedName = target?.name?.replace(/\[\]$/, "") ?? "";
+    if (editedName && event.nativeEvent.isTrusted && !(editedName in FIXED_VALUES)
+      && (documentFields.has(editedName) || derivedFields.has(editedName) || prefilledFields.has(editedName))) {
+      setUnlockedFields((prev) => (prev.has(editedName) ? prev : new Set(prev).add(editedName)));
+    }
     if (target?.name && (target.type === "radio" || target.type === "select-one")) {
       setValues((prev) => ({ ...prev, [target.name]: target.value }));
     }
@@ -567,7 +625,7 @@ export default function ApplicationWorkspace({
   /* ------------------------------------------------ Australian address */
 
   const [licenceNote, setLicenceNote] = useState("");
-  const [addressMode, setAddressMode] = useState<"search" | "licence">("search");
+  const [addressMode, setAddressMode] = useState<"search" | "licence" | "manual">(() => (String(storedValues.address_source ?? "") === "manual" ? "manual" : "search"));
   // The address fields stay hidden until a search pick or a licence fills them (or an address is already saved).
   // An address only counts once it came from a search pick or a licence (or the manual fallback); the saved
   // address_source records which, so an address typed in before this step existed has to be found again.
@@ -604,6 +662,7 @@ export default function ApplicationWorkspace({
     setUnlockedFields((prev) => new Set([...prev, ...names]));
     setEditedFields((prev) => new Set([...prev, ...names]));
     applyFormValues(form, { ...updates, ...AUSTRALIAN_ADDRESS, address_source: source });
+    window.requestAnimationFrame(() => revealFields(formRef.current, names));
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
     return names.length;
@@ -653,10 +712,11 @@ export default function ApplicationWorkspace({
         continue;
       }
       const filled = fillAustralianAddress(extracted, false, "licence");
+      if (filled) showToast(`We filled ${plural(filled, "address field")} from your driving licence. Please review.`);
       if (!filled) setLicenceUnreadable(true);
       setLicenceNote(filled ? `Filled ${filled} address field${filled === 1 ? "" : "s"} from ${document.filename}. Check them before continuing.` : `No new address details were found on ${document.filename}; fields already filled were left as they were.`);
     }
-  }, [licences, fillAustralianAddress]);
+  }, [licences, fillAustralianAddress, showToast]);
 
   /* ------------------------------------------------------------- visa */
 
@@ -746,9 +806,11 @@ export default function ApplicationWorkspace({
       setUnlockedFields((prev) => new Set([...prev, ...VISA_DETAIL_FIELDS]));
       if (form) applyFormValues(form, updates); // retried shortly if the fields are still being added
       const filled = Object.values(updates).filter(Boolean).length;
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => revealFields(formRef.current, Object.keys(updates).filter((name) => updates[name]))));
+      if (filled) showToast(`We filled ${plural(filled, "field")} from your visa document. Please review.`);
       setVisaNote(`Filled ${filled} visa field${filled === 1 ? "" : "s"} from ${document.filename}. Check them before continuing.`);
     }
-  }, [visas, refreshAttachments, setHoldsVisa]);
+  }, [visas, refreshAttachments, setHoldsVisa, showToast]);
 
   useEffect(() => {
     if (!attachmentsLoaded || visaMode !== "upload" || !visaRead || visas.length > 0) return;
@@ -892,9 +954,11 @@ export default function ApplicationWorkspace({
     if (!names.length) return;
     applyFormValues(form, updates);
     setDerivedFields((prev) => new Set([...prev, ...names]));
+    window.requestAnimationFrame(() => revealFields(formRef.current, names));
+    showToast(`We filled ${plural(names.length, "field")} from your academic documents. Please review.`);
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
-  }, [academicDocuments, readOnly, computeProgress, scheduleSave]);
+  }, [academicDocuments, readOnly, computeProgress, scheduleSave, showToast]);
 
   /* ---------------------------------------------------------- English */
 
@@ -954,9 +1018,11 @@ export default function ApplicationWorkspace({
       window.requestAnimationFrame(() => computeProgress());
       scheduleSave(true);
       const filled = Object.keys(updates).length;
+      window.requestAnimationFrame(() => revealFields(formRef.current, Object.keys(updates)));
+      if (filled) showToast(`We filled ${plural(filled, "field")} from your English test result. Please review.`);
       setEnglishNote(`Filled ${filled} English field${filled === 1 ? "" : "s"} from ${document.filename}. Check them before continuing.`);
     }
-  }, [englishDocuments, refreshAttachments, computeProgress, scheduleSave]);
+  }, [englishDocuments, refreshAttachments, computeProgress, scheduleSave, showToast]);
 
   const deleteVisaRef = useRef<(document: DocumentRow) => Promise<void>>(async () => undefined);
   const deleteVisa = useCallback((document: DocumentRow) => deleteVisaRef.current(document), []);
@@ -1023,7 +1089,14 @@ export default function ApplicationWorkspace({
   const blockedHere = (index: number): boolean => {
     if (readOnly || index <= step || step >= reviewIndex || (!pageMissing(step) && !documentProblem(step))) return false;
     setErrorStep(step);
-    window.requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[data-step-missing="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    // Inline: scroll to the first missing answer on the step and put the cursor in it.
+    window.requestAnimationFrame(() => {
+      const marker = formRef.current?.querySelector<HTMLElement>('[data-current-step="true"] [data-field-missing="true"]')
+        ?? formRef.current?.querySelector<HTMLElement>('[data-step-missing="true"]');
+      marker?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const wrapper = marker?.closest<HTMLElement>("[data-field]") ?? marker?.parentElement;
+      wrapper?.querySelector<HTMLElement>('input:not([type=hidden]):not([tabindex="-1"]), select, textarea, button, [role=radio]')?.focus({ preventScroll: true });
+    });
     return true;
   };
 
@@ -1041,9 +1114,15 @@ export default function ApplicationWorkspace({
     }
     setUsiError("");
     void flushSave().catch(() => undefined);
-    setStep(index);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    showStep(index);
   };
+
+  /** Opens a step: its card slides in from the side it is reached from, and the form scrolls to its top. */
+  function showStep(index: number) {
+    setDirection(index < step ? "back" : "forward");
+    setStep(index);
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
 
   const fieldMissing = useCallback((field: AppField): boolean => {
     const form = formRef.current;
@@ -1093,8 +1172,7 @@ export default function ApplicationWorkspace({
     if (!form || blockedHere(reviewIndex)) return;
     const collected = collectFormValues(form);
     setReviewValues(collected);
-    setStep(reviewIndex);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    showStep(reviewIndex);
   };
 
   const handleSubmit = async () => {
@@ -1103,12 +1181,12 @@ export default function ApplicationWorkspace({
     const { missing, firstIndex } = collectMissing();
     setShowErrors(true);
     if (missing.length > 0) {
-      setStep(firstIndex >= 0 ? firstIndex : 0);
+      showStep(firstIndex >= 0 ? firstIndex : 0);
       return;
     }
     const wrongDocumentPage = sections.findIndex((_, index) => documentProblem(index));
     if (wrongDocumentPage >= 0) {
-      setStep(wrongDocumentPage);
+      showStep(wrongDocumentPage);
       setErrorStep(wrongDocumentPage);
       return;
     }
@@ -1135,7 +1213,10 @@ export default function ApplicationWorkspace({
         },
       });
       setSubmittedRef(reference || application.reference);
-      onSubmitted?.(reference || application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
+      // The success screen (its check animation) shows for a moment before the caller moves on; Continue skips the wait.
+      const done = () => onSubmitted?.(reference || application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
+      submittedDoneRef.current = done;
+      window.setTimeout(() => { if (submittedDoneRef.current === done) { submittedDoneRef.current = null; done(); } }, 1800);
       onSaved?.();
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Submission failed. Please try again.");
@@ -1148,64 +1229,59 @@ export default function ApplicationWorkspace({
 
   if (submittedRef) {
     return (
-      <div className="rounded-card border border-accent-200 bg-accent-50 p-6 text-center md:p-10">
-        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-accent-500 text-2xl text-background-50">
-          <i className="ri-check-line" aria-hidden="true" />
+      <div className="mx-auto w-full max-w-[960px] rounded-xl border border-background-200 bg-background-50 p-6 text-center sm:p-10" role="status">
+        <span className="check-pop mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-background-50">
+          <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path className="check-draw" d="M5 12.5l4.5 4.5L19 7.5" />
+          </svg>
         </span>
-        <h3 className="mt-4 font-heading text-xl font-bold text-foreground-950">Application submitted</h3>
+        <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Application submitted</h3>
         <p className="mx-auto mt-2 max-w-lg text-sm text-foreground-600">
           We received the application for {String(values.first_name ?? "")} {String(values.last_name ?? "")}. SLIT admissions
           will review it and any status change will appear in your notifications.
         </p>
-        <p className="mt-4 inline-flex items-center gap-2 rounded-full bg-background-50 px-4 py-2 font-mono text-sm font-semibold text-foreground-900">
-          <i className="ri-file-list-3-line text-primary-600" aria-hidden="true" />
+        <p className="mt-4 inline-flex items-center gap-2 rounded-full bg-background-100 px-4 py-1.5 font-mono text-sm font-semibold text-foreground-900">
+          <i className="ri-file-list-3-line text-base leading-none text-foreground-500" aria-hidden="true" />
           {submittedRef}
         </p>
+        {onSubmitted ? (
+          <div className="mt-5">
+            <button type="button" onClick={() => { const done = submittedDoneRef.current; submittedDoneRef.current = null; done?.(); }}
+              className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-lg border border-background-300 px-4 text-sm font-medium text-foreground-700 transition-colors hover:bg-background-100">
+              Continue
+              <i className="ri-arrow-right-line text-base leading-none" aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
       </div>
     );
   }
 
   const isReview = step === reviewIndex;
+  const errorsShown = showErrors || errorStep === step;
 
   const saveIndicator = () => {
     if (readOnly) return null;
     if (saveState === "saving") {
       return (
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground-600" aria-live="polite">
+        <span className="inline-flex items-center gap-1" aria-live="polite">
           <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
           Saving&hellip;
         </span>
       );
     }
     if (saveState === "saved" && lastSavedAt) {
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-700" aria-live="polite">
-          <i className="ri-cloud-line" aria-hidden="true" />
-          Saved {new Date(lastSavedAt).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
-        </span>
-      );
+      return <span aria-live="polite">Saved {new Date(lastSavedAt).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}</span>;
     }
     if (saveState === "error") {
       return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium text-primary-800" role="alert">
-          <i className="ri-error-warning-line" aria-hidden="true" />
+        <span className="inline-flex items-center gap-1.5 text-red-700" role="alert">
           Draft not saved
-          <button
-            type="button"
-            onClick={() => void enqueueSave()}
-            className="cursor-pointer rounded-md border border-primary-300 bg-background-50 px-2 py-0.5 font-semibold text-primary-700 hover:bg-primary-100"
-          >
-            Retry
-          </button>
+          <button type="button" onClick={() => void enqueueSave()} className="cursor-pointer font-medium underline underline-offset-2">Retry</button>
         </span>
       );
     }
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground-500">
-        <i className="ri-save-3-line" aria-hidden="true" />
-        Draft saved automatically
-      </span>
-    );
+    return <span>Saves automatically</span>;
   };
 
   const renderExpiryWarning = (name: string) => {
@@ -1224,6 +1300,23 @@ export default function ApplicationWorkspace({
     );
   };
 
+  /** A value read from a document (or worked out from one) that has not been edited since: it shows a small dot. */
+  const isAutoFilled = (name: string) =>
+    (documentFields.has(name) && !editedFields.has(name)) || (derivedFields.has(name) && !documentFields.has(name) && !unlockedFields.has(name));
+
+  /** Out of sight until the page's own choice shows it (an address found, a visa added, academic details chosen). */
+  const hiddenField = (name: string) =>
+    (!addressShown && (name === "au_country" || (AU_ADDRESS_FIELDS as readonly string[]).includes(name)))
+    || (!visaShown && (VISA_DETAIL_FIELDS as readonly string[]).includes(name))
+    || (!academicShown && ACADEMIC_FIELDS.includes(name))
+    || (name === "academic_upload" && academicMode !== "upload");
+
+  /** Shown as a field on its page (not a value the form keeps out of sight, and not a note or reference table). */
+  const visibleField = (field: AppField) =>
+    !(contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) && !LOCKED_AGENT_FIELDS.has(field.name)
+    && !["address_type", "holds_visa", "visa_copy", "english_upload", "checklist"].includes(field.name)
+    && !["static", "table", "terms"].includes(field.type) && isConditionMet(field.showIf, values) && !hiddenField(field.name);
+
   const renderField = (field: AppField) => {
     // The student's email and mobile are set once, uniquely, when the application is started; they are kept with the
     // form (saved, counted as filled) but not shown or editable here.
@@ -1233,14 +1326,12 @@ export default function ApplicationWorkspace({
       return <input key={field.name} type="hidden" name={field.name} defaultValue={saved} />;
     }
     const fixedAustralia = field.name in FIXED_VALUES;
-    const fromDocument = documentFields.has(field.name) || derivedFields.has(field.name);
-    const documentLocked = !readOnly && !fixedAustralia && field.type !== "file" && (fromDocument || prefilledFields.has(field.name)) && !unlockedFields.has(field.name);
-    const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || documentLocked || fixedAustralia;
-    // Always "Australian Address": the two ways to fill it (search or licence) are offered above the fields instead.
+    const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || fixedAustralia;
+    // Always "Australian Address": the ways to fill it (search, licence, by hand) are offered above the fields instead.
     if (field.name === "address_type") return <input key={field.name} type="hidden" name={field.name} defaultValue={AUSTRALIAN_ADDRESS.address_type} />;
     // Kept in the form (saved, fillable) but out of sight until the address has been found. Only visibility changes, never
     // the element tree: rebuilding the inputs would reset them to their saved values and undo a search pick.
-    // The visa question is answered by the choice card on the Visa page; the old file field is replaced by its upload.
+    // The visa question is answered by the choice on the Visa page; the old file field is replaced by its upload.
     if (field.name === "holds_visa") return <KeptValue key={field.name} name={field.name} value={String(mergedInitial.holds_visa ?? "")} />;
     if (field.name === "visa_copy" || field.name === "english_upload") return null;
     // The Application checklist page is gone; its required answer is always ticked and kept out of sight.
@@ -1258,91 +1349,57 @@ export default function ApplicationWorkspace({
       const kept = mergedInitial[field.name];
       return <input key={field.name} type="hidden" name={field.name} defaultValue={Array.isArray(kept) ? kept.join(", ") : String(kept ?? "")} />;
     }
-    const hidden = (!addressShown && (field.name === "au_country" || (AU_ADDRESS_FIELDS as readonly string[]).includes(field.name)))
-      || (!visaShown && (VISA_DETAIL_FIELDS as readonly string[]).includes(field.name))
-      || (!academicShown && ACADEMIC_FIELDS.includes(field.name))
-      || (field.name === "academic_upload" && academicMode !== "upload");
-    return renderFieldBody(field, locked, documentLocked, fixedAustralia, hidden);
+    const autoFilled = !readOnly && !fixedAustralia && field.type !== "file" && isAutoFilled(field.name);
+    return renderFieldBody(field, locked, autoFilled, fixedAustralia, hiddenField(field.name));
   };
 
-  const renderFieldBody = (field: AppField, locked: boolean, documentLocked: boolean, fixedAustralia: boolean, hidden = false) => {
-    if (field.type === "static") {
+  const renderFieldBody = (field: AppField, locked: boolean, autoFilled: boolean, fixedAustralia: boolean, hidden = false) => {
+    // Notes from the step config are shown in the step title's (i), not as banners.
+    if (field.type === "static") return null;
+    if (field.type === "table") {
       return (
-        <div key={field.name} className="md:col-span-2">
-          <ApplicationFieldControl field={field} formId={FORM_ID} />
-        </div>
+        <details key={field.name} hidden={hidden} className="group md:col-span-2">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-foreground-600 transition-colors hover:text-foreground-900">
+            <i className="ri-arrow-right-s-line text-base leading-none transition-transform duration-200 group-open:rotate-90" aria-hidden="true" />
+            {field.label}
+          </summary>
+          <div className="open-in mt-2">
+            <ApplicationFieldControl field={field} formId={FORM_ID} />
+          </div>
+        </details>
       );
     }
     if (field.type === "terms") {
       return (
         <div key={field.name} className="md:col-span-2">
-          <TermsDeclaration heading={field.label} terms={field.options ?? []} />
+          <TermsDeclaration heading={field.label} terms={field.options ?? []} plain />
         </div>
       );
     }
     const spanFull = field.full || field.type === "textarea" || field.type === "checkbox";
-    const missing = (showErrors || errorStep === step) && field.required && fieldMissing(field);
+    const missing = errorsShown && field.required && fieldMissing(field);
+    const fixedNote = fixedAustralia ? (field.name === "has_usi" ? "A USI is always required." : "Only an Australian address is accepted.") : "";
+    const help = [field.description, fixedNote].filter(Boolean).join(" ");
     return (
-      <div key={field.name} data-scan-field hidden={hidden} className={spanFull ? "md:col-span-2" : ""}>
-        <label
-          htmlFor={`${FORM_ID}-${field.name}`}
-          className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-700"
-        >
-          {field.label}
-          {field.required ? <span className="text-primary-600">*</span> : null}
-          {derivedFields.has(field.name) && !documentFields.has(field.name) && !unlockedFields.has(field.name) ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-emerald-900" title="Worked out from the uploaded documents. Check it; you can edit it.">
-              <i className="ri-file-text-line" aria-hidden="true" />
-              From document
-            </span>
-          ) : null}
-          {prefilledFields.has(field.name) && !documentFields.has(field.name) && !unlockedFields.has(field.name) ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-emerald-900" title="Already filled in. Use Edit to change it.">
-              <i className="ri-checkbox-circle-line" aria-hidden="true" />
-              Pre-filled
-            </span>
-          ) : null}
-          {documentFields.has(field.name) && !editedFields.has(field.name) ? (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-emerald-900"
-              title={`From document: ${attachments.find((document) => document.id === documentFields.get(field.name))?.filename ?? "uploaded document"}. Check it; you can edit it.`}
-            >
-              <i className="ri-file-text-line" aria-hidden="true" />
-              From document
-            </span>
-          ) : null}
-          {renderExpiryWarning(field.name)}
-          {fixedAustralia ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-background-200 px-2 py-0.5 text-[10px] font-semibold normal-case text-foreground-700">
-              <i className="ri-lock-line" aria-hidden="true" />
-              {field.name === "has_usi" ? "Required" : "Australia only"}
-            </span>
-          ) : null}
-          {documentLocked ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.preventDefault();
-                setUnlockedFields((prev) => new Set(prev).add(field.name));
-                window.setTimeout(() => document.getElementById(`${FORM_ID}-${field.name}`)?.focus(), 0);
-              }}
-              aria-label={`Edit ${field.label}`}
-              className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold normal-case tracking-normal text-primary-700 hover:bg-primary-50"
-            >
-              <i className="ri-edit-line" aria-hidden="true" />
-              Edit
-            </button>
-          ) : null}
-          {locked && LOCKED_AGENT_FIELDS.has(field.name) ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-secondary-100 px-2 py-0.5 text-[10px] font-semibold normal-case text-secondary-900">
-              <i className="ri-lock-line" aria-hidden="true" />
-              Auto-filled
-            </span>
-          ) : null}
-        </label>
-        {field.description ? (
-          <p className="mb-2 text-xs leading-relaxed text-foreground-500">{field.description}</p>
-        ) : null}
+      <Field
+        key={field.name}
+        id={`${FORM_ID}-${field.name}`}
+        name={field.name}
+        label={field.label}
+        required={field.required}
+        help={help || undefined}
+        adornment={renderExpiryWarning(field.name)}
+        autoFilled={autoFilled}
+        dotInset={field.type === "select" || field.type === "date" || field.format === "year"}
+        full={spanFull}
+        hidden={hidden}
+        messages={
+          <>
+            {field.name === "usi_number" && usiError ? <FieldMessage>{usiError}</FieldMessage> : null}
+            {missing ? <FieldMessage alert={false} missingMarker>This field is required.</FieldMessage> : null}
+          </>
+        }
+      >
         {field.type === "file" && documentCategoryForField(field.name) ? (
           <ApplicationAttachmentField
             field={field}
@@ -1354,169 +1411,126 @@ export default function ApplicationWorkspace({
             onExtract={extractAttachment}
             onDelete={deleteAttachment}
           />
+        ) : field.name === COURSE_FIELD ? (
+          <CourseSearchField name={field.name} options={field.options ?? []} disabled={locked} single />
+        ) : field.name === "preferred_intake" ? (
+          <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
+            courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
+            initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} />
+        ) : field.name === "school_level" ? (
+          <SchoolLevelField field={field} id={`${FORM_ID}-${field.name}`} locked={locked}
+            choice={String(mergedInitial.highest_education ?? "")} schoolLevel={String(mergedInitial.school_level ?? "")} />
         ) : (
-          <div className={documentLocked ? (field.type === "radio" || field.type === "checkbox" ? DOCUMENT_FILLED_GROUP : DOCUMENT_FILLED_INPUT) : undefined}>
-            {field.name === COURSE_FIELD ? (
-              <CourseSearchField name={field.name} options={field.options ?? []} disabled={locked} single />
-            ) : field.name === "preferred_intake" ? (
-              <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
-                courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
-                initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} />
-            ) : field.name === "school_level" ? (
-              <SchoolLevelField field={field} id={`${FORM_ID}-${field.name}`} locked={locked}
-                choice={String(mergedInitial.highest_education ?? "")} schoolLevel={String(mergedInitial.school_level ?? "")} />
-            ) : (
-              <ApplicationFieldControl field={field.name === "agent_agency" ? { ...field, options: [seed.agent_agency] } : field} formId={FORM_ID} value={mergedInitial[field.name] as string | undefined} locked={locked} />
-            )}
-          </div>
+          <ApplicationFieldControl field={field.name === "agent_agency" ? { ...field, options: [seed.agent_agency] } : field} formId={FORM_ID} value={mergedInitial[field.name] as string | undefined} locked={locked} compact />
         )}
-        {field.name === "usi_number" && usiError ? (
-          <p className="mt-1.5 flex items-center gap-1 text-xs text-primary-700" role="alert">
-            <i className="ri-error-warning-line" aria-hidden="true" />
-            {usiError}
-          </p>
-        ) : null}
-        {missing ? (
-          <p className="mt-1.5 flex items-center gap-1 text-xs text-primary-700">
-            <i className="ri-error-warning-line" aria-hidden="true" />
-            This field is required.
-          </p>
-        ) : null}
-      </div>
+      </Field>
     );
   };
 
-  const renderSectionBody = (section: AppSection) => (
-    <>
-      {section.description ? (
-        <p className="text-xs leading-relaxed text-foreground-500">{section.description}</p>
-      ) : null}
-      {section.scans?.length && !section.fields.some((field) => field.name === "english_type") ? <p className={`rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-xs text-secondary-900 ${section.description ? "mt-4" : ""}`}>Attached identity documents are securely processed in the background. Use the Documents tab to review suggestions before relying on them.</p> : null}
-      {section.scans?.some((scan) => scan.type === "licence") && !readOnly ? (
-        <div className="mt-4 rounded-md border border-background-200 bg-background-50 p-4">
-          <KeptValue name="address_source" value={String(storedValues.address_source ?? "") || (addressFromWizardLicence ? "licence" : "")} />
-          <p className="text-sm font-semibold text-foreground-900">How would you like to fill the address?</p>
-          <div role="radiogroup" aria-label="How to fill the address" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {([
-              ["search", "ri-search-line", "Search address", "Find the student's address and pick it"],
-              ["licence", "ri-profile-line", "Upload driving licence", "The address is read from the licence"],
-            ] as const).map(([mode, icon, title, hint]) => (
+  const statusLine = (text: ReactNode, busy = false) => (
+    <p className="fade-in mt-1.5 flex items-center gap-1.5 text-xs text-foreground-600" role="status">
+      {busy ? <i className="ri-loader-4-line animate-spin text-base leading-none" aria-hidden="true" /> : null}
+      {text}
+    </p>
+  );
+
+  // The existing manual fallback: offered once search is unavailable or the licence cannot be read (or it was chosen before).
+  const manualAddressAllowed = searchUnavailable || licenceUnreadable || addressMode === "manual" || String(storedValues.address_source ?? "") === "manual";
+  const enterAddressManually = () => {
+    setAddressMode("manual");
+    setAddressShown(true);
+    if (formRef.current) applyFormValues(formRef.current, { address_source: "manual" });
+    scheduleSave(true);
+    window.requestAnimationFrame(() => {
+      revealFields(formRef.current, AU_ADDRESS_FIELDS);
+      formRef.current?.querySelector<HTMLInputElement>('[name="au_street"]')?.focus();
+    });
+  };
+
+  const renderSectionBody = (section: AppSection) => {
+    const hasVisa = section.fields.some((field) => field.name === "visa_subclass");
+    const hasAcademic = section.fields.some((field) => field.name === "academic_upload");
+    return (
+      <>
+        {section.scans?.some((scan) => scan.type === "licence") && !readOnly ? (
+          <div className="mb-4">
+            <KeptValue name="address_source" value={String(storedValues.address_source ?? "") || (addressFromWizardLicence ? "licence" : "")} />
+            <p className={`${FORM_LABEL} mb-1`}>Fill the address by</p>
+            <SegmentedControl<"search" | "licence" | "manual">
+              label="How to fill the address"
+              value={addressMode}
+              onChange={(mode) => (mode === "manual" ? enterAddressManually() : setAddressMode(mode))}
+              options={[
+                { value: "search", label: "Search address", icon: "ri-search-line", hint: "Find the student's address and pick it" },
+                { value: "licence", label: "Driving licence", icon: "ri-profile-line", hint: "The address is read from an Australian driving licence" },
+                ...(manualAddressAllowed ? [{ value: "manual" as const, label: "Enter manually", icon: "ri-edit-line", hint: "Type the address yourself" }] : []),
+              ]}
+            />
+            <div key={addressMode} className="fade-in mt-3">
+              {addressMode === "search" ? (
+                <AddressSearch
+                  onUnavailable={() => setSearchUnavailable(true)}
+                  onManual={manualAddressAllowed ? enterAddressManually : undefined}
+                  onPick={(pick) => fillAustralianAddress({ au_street: pick.line, au_line2: pick.line2, au_suburb: pick.suburb, au_state: pick.state, au_zip: pick.postcode }, true, "search")}
+                />
+              ) : addressMode === "licence" ? (
+                <ApplicationAttachmentField
+                  field={LICENCE_FIELD}
+                  documents={licences}
+                  disabled={Boolean(documentBusy)}
+                  busyDocumentId={documentBusy}
+                  onUpload={uploadLicence}
+                  onPreview={previewAttachment}
+                  onExtract={extractAttachment}
+                  onDelete={deleteAttachment}
+                />
+              ) : (
+                <p className="text-xs text-foreground-600">Type the student&apos;s Australian address in the fields below.</p>
+              )}
+            </div>
+            {addressMode === "licence" && licenceNote ? statusLine(licenceNote) : null}
+            {overseasLicence && !(addressMode === "licence" && licenceNote) ? (
+              <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-800" role="status">
+                <i className="ri-error-warning-line text-base leading-none" aria-hidden="true" />
+                The driving licence on file ({overseasLicence.filename}) has an overseas address, so it can&apos;t be used here. Search for the student&apos;s Australian address.
+              </p>
+            ) : null}
+            {!addressShown && errorsShown ? <FieldMessage missingMarker>Search for the address or upload a driving licence to fill it.</FieldMessage> : null}
+            {addressShown && addressMode === "search" ? (
               <button
-                key={mode}
                 type="button"
-                role="radio"
-                aria-checked={addressMode === mode}
-                onClick={() => setAddressMode(mode)}
-                className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
-                  addressMode === mode ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500" : "border-background-300 hover:bg-background-100"
-                }`}
+                onClick={() => formRef.current?.querySelector<HTMLInputElement>('[name="au_street"]')?.focus()}
+                className="mt-1 inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-foreground-600 underline-offset-2 transition-colors hover:text-foreground-900 hover:underline"
               >
-                <i className={`${icon} mt-0.5 text-lg ${addressMode === mode ? "text-primary-600" : "text-foreground-500"}`} aria-hidden="true" />
-                <span>
-                  <span className="block text-sm font-semibold text-foreground-900">{title}</span>
-                  <span className="block text-xs text-foreground-600">{hint}</span>
-                </span>
+                <i className="ri-edit-line text-base leading-none" aria-hidden="true" />
+                Edit manually
               </button>
-            ))}
+            ) : null}
           </div>
-          <div className="mt-4">
-            {addressMode === "search" ? (
-              <AddressSearch onUnavailable={() => setSearchUnavailable(true)} onPick={(pick) => fillAustralianAddress({ au_street: pick.line, au_line2: pick.line2, au_suburb: pick.suburb, au_state: pick.state, au_zip: pick.postcode }, true, "search")} />
-            ) : (
-              <ApplicationAttachmentField
-                field={LICENCE_FIELD}
-                documents={licences}
-                disabled={Boolean(documentBusy)}
-                busyDocumentId={documentBusy}
-                onUpload={uploadLicence}
-                onPreview={previewAttachment}
-                onExtract={extractAttachment}
-                onDelete={deleteAttachment}
-              />
-            )}
+        ) : null}
+        {hasAcademic && !readOnly ? (
+          <div className="mb-4">
+            <p className={`${FORM_LABEL} mb-1`}>Fill in the academic details by</p>
+            <SegmentedControl<"upload" | "manual">
+              label="How to fill in the academic details"
+              value={academicMode}
+              onChange={setAcademicMode}
+              options={[
+                { value: "upload", label: "Upload documents", icon: "ri-upload-2-line", hint: "Certificates or transcripts; the answers are read from them" },
+                { value: "manual", label: "Enter manually", icon: "ri-edit-line", hint: "Answer the questions yourself" },
+              ]}
+            />
+            {academicMode === "upload" && academicReading ? statusLine("Reading the academic documents…", true) : null}
+            {academicMode === "upload" && !academicDocuments.length ? statusLine("Upload the documents below; the questions appear, filled in, once they are read.") : null}
+            {errorsShown && !academicShown ? <FieldMessage missingMarker>Upload academic documents or choose Enter manually.</FieldMessage> : null}
           </div>
-          {addressMode === "licence" && licenceNote ? <p className="mt-2 text-xs text-foreground-700" role="status">{licenceNote}</p> : null}
-          {overseasLicence && !(addressMode === "licence" && licenceNote) ? (
-            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="status">
-              <i className="ri-information-line mt-px" aria-hidden="true" />
-              The driving licence on file ({overseasLicence.filename}) has an overseas address, so it can&apos;t be used here. Only an Australian address is accepted: search for the student&apos;s Australian address.
-            </p>
-          ) : null}
-          {addressShown ? (
-            <p className="mt-3 text-xs text-foreground-500">The address fields below were filled in automatically; check them before continuing.</p>
-          ) : showErrors || errorStep === step ? (
-            <p className="mt-3 flex items-center gap-1 text-xs text-primary-700" role="alert">
-              <i className="ri-error-warning-line" aria-hidden="true" />
-              Search for the address or upload a driving licence to fill it.
-            </p>
-          ) : null}
-          {!addressShown && (searchUnavailable || licenceUnreadable) ? (
-            <button
-              type="button"
-              onClick={() => {
-                setAddressShown(true);
-                if (formRef.current) applyFormValues(formRef.current, { address_source: "manual" });
-                scheduleSave(true);
-              }}
-              className="mt-2 cursor-pointer text-xs font-semibold text-primary-700 underline"
-            >
-              Enter the address manually
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      {section.fields.some((field) => field.name === "academic_upload") && !readOnly ? (
-        <div className="mb-4 rounded-md border border-background-200 bg-background-50 p-4">
-          <p className="text-sm font-semibold text-foreground-900">How would you like to fill in the academic details?</p>
-          <div role="radiogroup" aria-label="How to fill in the academic details" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {([
-              ["upload", "ri-upload-cloud-2-line", "Upload academic documents", "Certificates or transcripts; the answers are read from them"],
-              ["manual", "ri-edit-line", "Enter manually", "Answer the questions yourself"],
-            ] as const).map(([mode, icon, title, hint]) => (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={academicMode === mode}
-                onClick={() => setAcademicMode(mode)}
-                className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
-                  academicMode === mode ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500" : "border-background-300 hover:bg-background-100"
-                }`}
-              >
-                <i className={`${icon} mt-0.5 text-lg ${academicMode === mode ? "text-primary-600" : "text-foreground-500"}`} aria-hidden="true" />
-                <span>
-                  <span className="block text-sm font-semibold text-foreground-900">{title}</span>
-                  <span className="block text-xs text-foreground-600">{hint}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-          {academicMode === "upload" && academicReading ? (
-            <p className="mt-3 flex items-center gap-1.5 text-xs text-foreground-700" role="status">
-              <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-              Reading the academic documents…
-            </p>
-          ) : null}
-          {academicMode === "upload" && !academicDocuments.length ? (
-            <p className="mt-3 text-xs text-foreground-600">Upload the documents below; the questions appear, filled in, once they are read.</p>
-          ) : null}
-          {(showErrors || errorStep === step) && !academicShown ? (
-            <p className="mt-3 flex items-center gap-1 text-xs text-primary-700" role="alert">
-              <i className="ri-error-warning-line" aria-hidden="true" />
-              Upload academic documents or choose Enter manually to answer the academic questions.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      {section.fields.some((field) => field.name === "english_type") ? (
-        <div className="mb-4 rounded-md border border-background-200 bg-background-50 p-4">
-          <p className="text-sm font-semibold text-foreground-900">English test result</p>
-          <p className="mt-0.5 text-xs text-foreground-600">
-            {englishDocuments.length
-              ? "The details below were read from this document. Use Edit to correct a field, view or delete the document, or upload a newer result."
-              : "Upload an IELTS, PTE, TOEFL or Cambridge result, or other accepted proof of English proficiency. Fill in any applicable details we could not read."}
-          </p>
-          <div className="mt-3">
+        ) : null}
+        {section.fields.some((field) => field.name === "english_type") ? (
+          <div className="mb-4">
+            <div className="mb-1 flex items-center gap-1.5">
+              <p className={FORM_LABEL}>English test result</p>
+              <InfoTip text="An IELTS, PTE, TOEFL or Cambridge result, or other accepted proof of English proficiency. Details that can be read fill the fields below; fill in any that could not be read." />
+            </div>
             <ApplicationAttachmentField
               field={ENGLISH_UPLOAD_FIELD}
               documents={englishDocuments}
@@ -1527,67 +1541,43 @@ export default function ApplicationWorkspace({
               onExtract={extractAttachment}
               onDelete={deleteAttachment}
             />
+            {englishNote ? statusLine(englishNote) : null}
           </div>
-          {englishNote ? <p className="mt-2 text-xs text-foreground-700" role="status">{englishNote}</p> : null}
-        </div>
-      ) : null}
-      {section.fields.some((field) => field.name === "visa_subclass") && !readOnly && !(visaMode === "upload" && visaRead) ? (
-        <div className="mb-4 rounded-md border border-background-200 bg-background-50 p-4">
-          <p className="text-sm font-semibold text-foreground-900">How would you like to add the student&apos;s Australian visa?</p>
-          <div role="radiogroup" aria-label="How to add the visa" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {([
-              ["upload", "ri-upload-cloud-2-line", "Upload visa document", "Details are read from the grant notice or VEVO"],
-              ["manual", "ri-edit-line", "Enter manually", "Type the four visa details"],
-              ["none", "ri-close-circle-line", "No Australian visa", "The student does not hold one"],
-            ] as const).map(([mode, icon, title, hint]) => (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={visaMode === mode}
-                onClick={() => chooseVisaMode(mode)}
-                className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
-                  visaMode === mode ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500" : "border-background-300 hover:bg-background-100"
-                }`}
-              >
-                <i className={`${icon} mt-0.5 text-lg ${visaMode === mode ? "text-primary-600" : "text-foreground-500"}`} aria-hidden="true" />
-                <span>
-                  <span className="block text-sm font-semibold text-foreground-900">{title}</span>
-                  <span className="block text-xs text-foreground-600">{hint}</span>
-                </span>
-              </button>
-            ))}
+        ) : null}
+        {hasVisa && !readOnly && !(visaMode === "upload" && visaRead) ? (
+          <div className="mb-4">
+            <p className={`${FORM_LABEL} mb-1`}>Add the visa by</p>
+            <SegmentedControl<"upload" | "manual" | "none">
+              label="How to add the visa"
+              value={visaMode}
+              onChange={chooseVisaMode}
+              options={[
+                { value: "upload", label: "Upload document", icon: "ri-upload-2-line", hint: "Details are read from the grant notice or VEVO record" },
+                { value: "manual", label: "Enter manually", icon: "ri-edit-line", hint: "Type the four visa details" },
+                { value: "none", label: "No Australian visa", icon: "ri-close-circle-line", hint: "The student does not hold one" },
+              ]}
+            />
+            {visaMode === "upload" && !visaRead ? (
+              <div className="fade-in mt-3">
+                <ApplicationAttachmentField
+                  field={VISA_UPLOAD_FIELD}
+                  documents={visas}
+                  disabled={Boolean(documentBusy) || visaReading}
+                  busyDocumentId={documentBusy}
+                  onUpload={uploadVisa}
+                  onPreview={previewAttachment}
+                  onExtract={extractAttachment}
+                  onDelete={deleteAttachment}
+                />
+              </div>
+            ) : null}
+            {visaNote ? statusLine(visaNote) : null}
+            {errorsShown && !visaMode ? <FieldMessage missingMarker>Choose how to add the visa, or select No Australian visa.</FieldMessage> : null}
           </div>
-          {visaMode === "upload" && !visaRead ? (
-            <div className="mt-4">
-              <ApplicationAttachmentField
-                field={VISA_UPLOAD_FIELD}
-                documents={visas}
-                disabled={Boolean(documentBusy) || visaReading}
-                busyDocumentId={documentBusy}
-                onUpload={uploadVisa}
-                onPreview={previewAttachment}
-                onExtract={extractAttachment}
-                onDelete={deleteAttachment}
-              />
-            </div>
-          ) : null}
-          {visaNote ? <p className="mt-2 text-xs text-foreground-700" role="status">{visaNote}</p> : null}
-          {(showErrors || errorStep === step) && !visaMode ? (
-            <p className="mt-3 flex items-center gap-1 text-xs text-primary-700" role="alert">
-              <i className="ri-error-warning-line" aria-hidden="true" />
-              Choose how to add the visa, or select No Australian visa.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      {section.fields.some((field) => field.name === "visa_subclass") && visaMode === "upload" && visaRead ? (
-        <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-xs text-emerald-900">
-            The visa details below were read from the visa document. Use Edit to correct a field, upload a newer document to replace them,
-            or delete the document to choose again.
-          </p>
-          <div className="mt-3">
+        ) : null}
+        {hasVisa && visaMode === "upload" && visaRead ? (
+          <div className="mb-4">
+            <p className={`${FORM_LABEL} mb-1`}>{VISA_UPLOAD_FIELD.label}</p>
             <ApplicationAttachmentField
               field={VISA_UPLOAD_FIELD}
               documents={visas}
@@ -1598,38 +1588,63 @@ export default function ApplicationWorkspace({
               onExtract={extractAttachment}
               onDelete={deleteVisa}
             />
+            {visaNote ? statusLine(visaNote) : null}
           </div>
-          {visaNote ? <p className="mt-2 text-xs text-emerald-900" role="status">{visaNote}</p> : null}
+        ) : null}
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
+          {section.fields
+            .filter((field) => isConditionMet(field.showIf, values))
+            .map((field) => renderField(field))}
         </div>
-      ) : null}
-      <div
-        className={`grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-5 ${
-          section.description || section.scans?.length ? "mt-4" : ""
-        }`}
-      >
-        {section.fields
-          .filter((field) => isConditionMet(field.showIf, values))
-          .map((field) => renderField(field))}
-      </div>
-      {section.fields.some((field) => field.name === "academic_upload") && qualifications.length > 0 ? (
-        <div className="mt-4 rounded-md border border-background-200 bg-background-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Qualifications read from documents</p>
-          <ul className="mt-2 space-y-1.5">
-            {qualifications.map((item, index) => (
-              <li key={`${qualificationTitle(item)}-${index}`} className="text-xs text-foreground-700">
-                <span className="font-semibold text-foreground-900">{qualificationTitle(item)}</span>
-                {qualificationDetail(item) ? <span> &middot; {qualificationDetail(item)}</span> : null}
-                {item.documentIds.length > 0 ? (
-                  <span className="text-foreground-500"> (from {item.documentIds.map((id) => attachments.find((document) => document.id === id)?.filename ?? "a document").join(", ")})</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] text-foreground-500">Removing an uploaded file removes only the qualifications read from it.</p>
-        </div>
-      ) : null}
-    </>
-  );
+        {hasAcademic && qualifications.length > 0 ? (
+          <div className="mt-4 border-t border-background-200 pt-3">
+            <div className="mb-1 flex items-center gap-1.5">
+              <p className={FORM_LABEL}>Qualifications read from documents</p>
+              <InfoTip text="Removing an uploaded file removes only the qualifications read from it." />
+            </div>
+            <ul className="space-y-0.5">
+              {qualifications.map((item, index) => (
+                <li key={`${qualificationTitle(item)}-${index}`} className="truncate text-[13px] text-foreground-700">
+                  <span className="font-medium text-foreground-900">{qualificationTitle(item)}</span>
+                  {qualificationDetail(item) ? <span> &middot; {qualificationDetail(item)}</span> : null}
+                  {item.documentIds.length > 0 ? (
+                    <span className="text-foreground-500"> (from {item.documentIds.map((id) => attachments.find((document) => document.id === id)?.filename ?? "a document").join(", ")})</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
+  /** The step's longer help: its description when too long for one line, plus the notes the step config holds. */
+  const stepHelp = (section: AppSection): { subtitle: string; tip: string } => {
+    const description = section.description?.trim() ?? "";
+    const notes = section.fields
+      .filter((field) => field.type === "static" && field.description && isConditionMet(field.showIf, values) && !(contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)))
+      .map((field) => sentenceCase(field.description ?? ""));
+    const short = description.length > 0 && description.length <= SUBTITLE_MAX;
+    return { subtitle: short ? description : "", tip: [short ? "" : description, ...notes].filter(Boolean).join(" ") };
+  };
+
+  const navSteps: NavStep[] = [
+    ...sections.map((section, index): NavStep => {
+      // The same check that holds a step back (required answers, documents), so the list agrees with Review & submit.
+      const complete = !pageMissing(index) && !documentProblem(index);
+      const issue = (showErrors || errorStep === index) && !complete;
+      return { key: `step-${index}`, title: stepTitle(section.title, index), state: index === step ? "current" : complete ? "done" : issue ? "issue" : "pending" };
+    }),
+    { key: "review", title: "Review & submit", state: isReview ? "current" : "pending", final: true },
+  ];
+
+  const missingNow = isReview ? collectMissing().missing : [];
+  const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
+  const stepProblem = isReview ? "" : documentProblem(step);
+  const footerMessage = stepProblem || (!isReview && errorStep === step && pageMissing(step) ? "Fill in the required fields marked on this page to continue." : "");
+  const canSubmitHere = canSubmitApplicationStatus(application.status);
+  const lastSection = step >= sections.length - 1;
 
   return (
     <form
@@ -1637,179 +1652,111 @@ export default function ApplicationWorkspace({
       ref={formRef}
       noValidate
       onChange={handleChange}
-      className="grid grid-cols-1 gap-5 lg:grid-cols-[264px_1fr]"
+      className="form-compact mx-auto w-full max-w-[960px] scroll-mt-20"
     >
-      {documentMessage ? <p className="lg:col-span-2 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-xs text-secondary-900" role="status">{documentMessage}</p> : null}
-      {/* Section navigation */}
-      <aside className="lg:sticky lg:top-24 lg:self-start">
-        <div className="rounded-card border border-background-200 bg-background-50 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Progress</p>
-            <p className="text-sm font-bold text-foreground-950">{progress.overall}%</p>
-          </div>
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-background-200">
-            <div
-              className="h-full rounded-full bg-accent-500 transition-all duration-500"
-              style={{ width: `${progress.overall}%` }}
-            />
-          </div>
-          <p className="mt-2 text-[11px] text-foreground-500">{saveIndicator()}</p>
-        </div>
-
-        <nav className="mt-3 max-h-[calc(100vh-16rem)] overflow-y-auto rounded-card border border-background-200 bg-background-50 p-2">
-          {sections.map((section, index) => {
-            const stat = progress.sections[index];
-            const complete = stat && stat.total > 0 && stat.done === stat.total;
-            const touched = stat && stat.done > 0;
-            const active = step === index;
-            return (
-              <button
-                key={section.title ?? index}
-                type="button"
-                onClick={() => goTo(index)}
-                className={`mb-0.5 flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors ${
-                  active ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"
-                }`}
-              >
-                <span
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                    active
-                      ? "bg-background-50/25 text-background-50"
-                      : complete
-                        ? "bg-accent-100 text-accent-900"
-                        : showErrors && touched
-                          ? "bg-primary-100 text-primary-800"
-                          : "bg-background-100 text-foreground-600"
-                  }`}
-                >
-                  {complete ? <i className="ri-check-line" aria-hidden="true" /> : index + 1}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{sectionHeading(section.title, index)}</span>
-                <i className={`${sectionIcon(section.title)} shrink-0 text-sm opacity-70`} aria-hidden="true" />
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => (readOnly ? goTo(reviewIndex) : openReview())}
-            className={`mt-1 flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors ${
-              isReview ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"
-            }`}
-          >
-            <span
-              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] ${
-                isReview ? "bg-background-50/25 text-background-50" : "bg-accent-100 text-accent-900"
-              }`}
-            >
-              <i className="ri-clipboard-line" aria-hidden="true" />
-            </span>
-            <span className="flex-1 truncate">Review & submit</span>
-          </button>
-        </nav>
-
-        {!readOnly ? (
-          <button
-            type="button"
-            onClick={() => void flushSave().catch(() => undefined)}
-            className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700"
-          >
-            <i className="ri-save-3-line" aria-hidden="true" />
-            Save draft
-          </button>
-        ) : null}
-      </aside>
-
-      {/* Main panel */}
-      <div className="min-w-0">
+      <StepShell
+        steps={navSteps}
+        current={step}
+        percent={progress.overall}
+        status={saveIndicator()}
+        onSelect={(index) => (index === reviewIndex ? (readOnly ? goTo(reviewIndex) : openReview()) : goTo(index))}
+        onPrevious={() => goTo(Math.max(0, step - 1))}
+        previousDisabled={step === 0}
+        onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
+        message={footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
+        primary={
+          isReview
+            ? !readOnly && canSubmitHere
+              ? {
+                label: "Submit application",
+                icon: "ri-send-plane-line",
+                onClick: () => void handleSubmit(),
+                // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document.
+                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean),
+                busy: submitting,
+                busyLabel: "Submitting…",
+                testId: "submit-application",
+              }
+              : null
+            : {
+              label: lastSection ? "Review" : "Next",
+              icon: "ri-arrow-right-line",
+              onClick: () => (lastSection ? openReview() : goTo(step + 1)),
+            }
+        }
+      >
         {readOnly ? (
-          <div className="mb-4 flex items-center gap-2 rounded-md border border-secondary-200 bg-secondary-50 px-4 py-3 text-sm text-secondary-900">
-            <i className="ri-lock-line" aria-hidden="true" />
-            This application has been submitted and is read-only. Contact SLIT admissions if a correction is required.
-          </div>
+          <p className="mb-3 flex items-center gap-1.5 text-xs text-foreground-600">
+            <i className="ri-lock-line text-base leading-none" aria-hidden="true" />
+            Submitted and read-only. Contact SLIT admissions if a correction is required.
+          </p>
         ) : null}
-
+        {documentMessage ? <p className="mb-3 text-xs text-foreground-500" role="status">{documentMessage}</p> : null}
         {saveState === "error" && saveError ? (
-          <div className="mb-4">
+          <div className="mb-3">
             <PortalError message={saveError} onRetry={() => void enqueueSave()} />
           </div>
         ) : null}
 
         {isReview ? (
-          <ApplicationReview
-            values={reviewValues ?? storedValues}
-            courses={
-              (((reviewValues ?? storedValues)[COURSE_FIELD] as string[] | undefined) ?? [])
-            }
-            sections={sections}
-            application={application}
-            qualifications={qualifications}
-            agentName={agentName}
-            agencyName={agencyName}
-            consent={consent}
-            onConsentChange={(patch) => setConsent((prev) => ({ ...prev, ...patch }))}
-            onEditSection={(index) => goTo(index)}
-            missing={collectMissing().missing}
-            submitting={submitting}
-            submitError={submitError}
-            readOnly={readOnly}
-            canSubmit={canSubmitApplicationStatus(application.status)}
-            onSubmit={() => void handleSubmit()}
-          />
+          <div className={direction === "back" ? "step-in-back" : "step-in-forward"}>
+            <ApplicationReview
+              values={reviewValues ?? storedValues}
+              courses={
+                (((reviewValues ?? storedValues)[COURSE_FIELD] as string[] | undefined) ?? [])
+              }
+              sections={sections}
+              application={application}
+              qualifications={qualifications}
+              agentName={agentName}
+              agencyName={agencyName}
+              consent={consent}
+              onConsentChange={(patch) => setConsent((prev) => ({ ...prev, ...patch }))}
+              onEditSection={(index) => goTo(index)}
+              missing={missingNow}
+              documentProblems={documentProblems}
+              submitError={submitError}
+              readOnly={readOnly}
+              canSubmit={canSubmitApplicationStatus(application.status)}
+            />
+          </div>
         ) : null}
         {/* Keep controls mounted across navigation/review so snapshots and
             validation include every section and never discard earlier input. */}
-        {sections.map((section, index) => (
-          <div key={index} hidden={isReview || index !== step || !isConditionMet(section.showIf, values)} className="rounded-card border border-background-200 bg-background-50 p-5 md:p-6">
-            <h3 className="font-heading text-lg font-bold text-foreground-950">
-              {sectionHeading(section.title, index)}
-            </h3>
-            <div className="mt-4">{renderSectionBody(section)}</div>
+        {sections.map((section, index) => {
+          const { subtitle, tip } = stepHelp(section);
+          const open = index === step && !isReview;
+          return (
+            <SectionCard
+              key={index}
+              id={`${FORM_ID}-step-${index}`}
+              title={stepTitle(section.title, index)}
+              tip={tip || undefined}
+              subtitle={subtitle || undefined}
+              open={open}
+              hidden={!isConditionMet(section.showIf, values)}
+              direction={direction}
+              note={!readOnly && section.fields.some((field) => visibleField(field) && field.type !== "file" && !(field.name in FIXED_VALUES) && isAutoFilled(field.name)) ? (
+                <p className="flex items-center gap-1.5 text-xs text-foreground-500">
+                  <span className="h-1.5 w-1.5 rounded-full bg-foreground-400" aria-hidden="true" />
+                  Auto-filled from your document. Click any field to edit.
+                </p>
+              ) : null}
+            >
+              {renderSectionBody(section)}
+            </SectionCard>
+          );
+        })}
+      </StepShell>
 
-            <div className="mt-6 flex flex-col gap-3 border-t border-background-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
-              <button
-                type="button"
-                onClick={() => goTo(Math.max(0, step - 1))}
-                disabled={step === 0}
-                className="inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-5 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <i className="ri-arrow-left-line" aria-hidden="true" />
-                Previous
-              </button>
-              {index === step && documentProblem(step) ? (
-                <span className="flex items-center gap-1.5 text-xs font-medium text-primary-700" role="alert" data-step-missing="true">
-                  <i className="ri-error-warning-line" aria-hidden="true" />
-                  {documentProblem(step)}
-                </span>
-              ) : errorStep === step && pageMissing(step) ? (
-                <span className="flex items-center gap-1.5 text-xs font-medium text-primary-700" role="alert" data-step-missing="true">
-                  <i className="ri-error-warning-line" aria-hidden="true" />
-                  Fill in the required fields marked on this page to continue.
-                </span>
-              ) : (
-                <span className="flex items-center gap-2 text-xs text-foreground-500">
-                  Section {step + 1} of {sections.length}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => (step >= sections.length - 1 ? openReview() : goTo(step + 1))}
-                className="inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"
-              >
-                {step >= sections.length - 1 ? "Review application" : "Next"}
-                <i className="ri-arrow-right-line" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        ))}
-
-        <span
-          ref={(element) => {
-            sectionRefs.current[step] = element;
-          }}
-          className="hidden"
-          aria-hidden="true"
-        />
-      </div>
+      <Toast message={toast.message} onDismiss={toast.dismiss} />
+      <span
+        ref={(element) => {
+          sectionRefs.current[step] = element;
+        }}
+        className="hidden"
+        aria-hidden="true"
+      />
     </form>
   );
 }

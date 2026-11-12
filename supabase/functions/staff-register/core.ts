@@ -11,6 +11,7 @@
 // recorded (20261110230000).
 import type { CaptchaVerifier } from "../_shared/captcha.ts";
 import { cleanEmail } from "../_shared/user-input.ts";
+import { publicEmailTakenBody } from "../_shared/identity-email.ts";
 import { toE164 } from "../_shared/staff-phone.ts";
 import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_shared/resume-file.ts";
 
@@ -98,7 +99,7 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
 
   const { data, error } = await deps.rpc("hr_svc_apply", { p_first_name: first.value, p_last_name: last.value, p_email: email.value, p_phone: phone,
     p_job: jobRaw || null, p_cover_letter: coverText || null });
-  const applied = data as { ok?: boolean; reason?: string; profileId?: string; jobApplicationId?: string | null } | null;
+  const applied = data as { ok?: boolean; reason?: string; field?: string; profileId?: string; jobApplicationId?: string | null } | null;
   if (error || !applied) return { status: 503, body: { error: "We could not save your application right now. Please try again shortly." } };
   if (applied.ok !== true) {
     if (applied.reason === "invalid_email") return fieldError("email", "Enter a valid email address.");
@@ -106,7 +107,10 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
     if (applied.reason === "invalid_name") return fieldError("firstName", "Check your name.");
     if (applied.reason === "job_closed") return fieldError("jobId", "This job is no longer open.");
     if (applied.reason === "invalid_cover_letter") return fieldError("coverLetter", `Keep the cover letter under ${MAX_COVER_LETTER_CHARS} characters.`);
-    return THANKS; // 'exists': same answer as success, nothing stored, nothing sent.
+    // 'exists' for this email (owner decision 2026-11-12): the public "account already exists" answer, never the role.
+    // Any other 'exists' (the mobile is on another record, or an older database without `field`): the same answer as success.
+    if (applied.reason === "exists" && applied.field === "email") return { status: 409, body: publicEmailTakenBody() };
+    return THANKS; // nothing stored, nothing sent.
   }
 
   const path = `${applied.profileId}/resume/${deps.newId()}.${kind}`;

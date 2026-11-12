@@ -12,6 +12,7 @@ import { MAX_RESUME_BYTES, RESUME_TYPES, detectResume, safeFilename } from "../_
 import { builtInLoginEmail } from "../_shared/hr-mail.ts";
 import { longDate, placeholderLabels, renderMessage, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type RenderedMessage, type TemplatePerson, type TemplateSource, type TemplateType } from "../_shared/hr-template.ts";
 import { letterFileName } from "../_shared/offer-rules.ts";
+import { emailConflictBody } from "../_shared/identity-email.ts";
 //
 // Onboarding flow (2026-11-10): `send_documents` is "Send document link" on the employee page (a Careers applicant is hired for their
 // open job application, anyone else gets the plain link). Document and re-upload emails use the HRMS template of that kind when one
@@ -40,7 +41,7 @@ export interface LoginInfo { id: string; confirmed: boolean; invited: boolean; s
 type LinkKind = "document_invite" | "reupload_invite" | "offer";
 type LinkPurpose = "documents" | "reupload" | "offer";
 export interface AdminResult { status: number; body: Record<string, unknown> }
-type DbError = { code?: string; message?: string } | null;
+type DbError = { code?: string; message?: string; hint?: string; details?: string } | null;
 export interface AdminDeps {
   /** hr_admin_* with the caller's JWT. */
   adminRpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: DbError }>;
@@ -89,6 +90,9 @@ export interface AdminDeps {
 }
 
 function fromDb(error: NonNullable<DbError>): AdminResult {
+  // An email refused by the identity rule is a 409 the email field shows (never a generic 400 / 500).
+  const conflict = emailConflictBody(error);
+  if (conflict) return { status: 409, body: conflict };
   if (error.code === "42501") return { status: 403, body: { error: error.message || "Only an administrator can do this." } };
   if (["23514", "22023", "P0002", "23505"].includes(error.code ?? "")) return { status: 400, body: { error: error.message || "That could not be done." } };
   return { status: 500, body: { error: "Something went wrong. Please try again shortly." } };

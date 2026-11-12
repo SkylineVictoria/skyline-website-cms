@@ -1,7 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 
 /** TKT-01 support tickets. All reads and writes go through the support_* database functions. */
-export type TicketCategory = "enrolment_documents" | "fees_payments" | "course_training";
+export type TicketCategory = "enrolment_documents" | "fees_payments" | "course_training" | "other";
 export type TicketStatus = "open" | "in_progress" | "waiting" | "resolved" | "closed";
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
 export type TicketAttachment = { path: string; name: string; size: number; type: string };
@@ -10,6 +10,7 @@ export const CATEGORY_LABEL: Record<TicketCategory, string> = {
   enrolment_documents: "Enrolment & documents",
   fees_payments: "Fees & payments",
   course_training: "Course & training",
+  other: "Other",
 };
 export const STATUS_LABEL: Record<TicketStatus, string> = {
   open: "Open", in_progress: "In progress", waiting: "Waiting on requester", resolved: "Resolved", closed: "Closed",

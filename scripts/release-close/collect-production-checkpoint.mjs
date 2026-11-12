@@ -17,8 +17,9 @@ async function collect(){
  stage='history';const frozen=JSON.parse(await readFile(dir+'/release-manifest.json','utf8')),baseline=JSON.parse(await readFile(dir+'/hosted-refreshed.json','utf8')).rows[0].inspection.migrations.map(m=>m.version),final=[...baseline,...frozen.migrations.ordered.map(m=>m.version)].sort();
  assert.ok(JSON.stringify(meta.migrations)===JSON.stringify(baseline.sort())||JSON.stringify(meta.migrations)===JSON.stringify(final),'Hosted history outside approved baseline or final release; checkpoint withheld');
  const roleMetadata=(await query(await readFile('scripts/release-close/checkpoint-role-metadata.sql','utf8')))[0].recovery_roles;assert.equal(roleMetadata.system_identifier,identity.system_identifier);
- const before=await inventory(),recurring=process.argv.includes('--approved-scheduled-backup'),buckets=await query('begin read only;select id,public from storage.buckets;commit;'),allowedBuckets=['cms-media','student-documents','enrollment-documents','tenant-public-media','staff-documents','signing-documents'];
+ const before=await inventory(),recurring=process.argv.includes('--approved-scheduled-backup'),buckets=await query('begin read only;select id,public from storage.buckets;commit;'),allowedBuckets=['cms-media','student-documents','enrollment-documents','tenant-public-media','staff-documents','signing-documents','support-attachments'];
  // Owner-approved 2026-11-11: the hr schema (staff records, HRMS, signing) and the staff-documents and signing-documents buckets are in scope.
+ // 2026-11-12 (owner's go): support-attachments (TKT-01 ticket attachments, private).
  // 2026-11-11: integration_private too (External Integrations: connection id, kind and Vault reference only, no secret values);
  // public functions reference it, so a checkpoint without it cannot be restored (restore-schema 3F000).
  if(!recurring){assert.equal(before.length,2,'One-time export is limited to the two approved objects');assert.ok(before.every(o=>o.bucket_id==='enrollment-documents'));assert.equal(before.reduce((s,o)=>s+Number(o.metadata?.size||0),0),802087,'Approved one-time byte inventory changed');}

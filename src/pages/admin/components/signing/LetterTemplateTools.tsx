@@ -1,67 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, Card, Modal } from "../ui";
+import { Button, Modal } from "../ui";
 import LetterPreview, { VariableCheck } from "@/components/shared/offer-letter/LetterPreview";
-import { loadLetterRegistry, sampleValues, testApplications, testLetterValues, type LetterValues } from "@/lib/offerLetters";
-import type { SigningTemplate } from "@/lib/signingApi";
+import { sampleValues, testApplications, testLetterValues, type LetterValues } from "@/lib/offerLetters";
 import { replaceToken, unmappedTokens, type LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
 import type { Sections } from "@/lib/templateSections";
 
 type Template = Sections & { title: string };
-const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 
-/**
- * HRMS > Templates: student offer letter (LOO) templates with name, version, last updated and active / inactive. A template with
- * unmapped tokens shows how many and cannot be made active (the database refuses it too).
- */
-export function LetterTemplatesCard({ templates, busy, onNew, onEdit, onPreview, onDuplicate, onActive, onDefault, onDelete }: {
-  templates: SigningTemplate[]; busy: string; onNew: () => void; onEdit: (t: SigningTemplate) => void; onPreview: (t: SigningTemplate) => void; onDuplicate: (t: SigningTemplate) => void;
-  onActive: (t: SigningTemplate, active: boolean) => void; onDefault: (t: SigningTemplate) => void; onDelete: (t: SigningTemplate) => void;
-}) {
-  const [registry, setRegistry] = useState<LetterVariable[]>([]);
-  useEffect(() => { void loadLetterRegistry().then(setRegistry, () => setRegistry([])); }, []);
-  return (
-    <Card className="p-5"><section data-testid="templates-offer-letters">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="font-heading text-base font-bold text-foreground-950">Student offer letters (LOO)</h2>
-          <p className="text-sm text-foreground-600">The letter of offer sent from an application (Take action › Issue offer letter): header, body and footer with {"{{variables}}"} filled from the application, course, fees, agent and institute.</p>
-        </div>
-        <Button size="sm" variant="outline" icon="ri-add-line" onClick={onNew} data-testid="template-new-offer-letter">New offer letter</Button>
-      </div>
-      {templates.length ? (
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs text-foreground-500"><tr><th className="py-1 font-medium">Name</th><th className="py-1 font-medium">Version</th><th className="py-1 font-medium">Last updated</th><th className="py-1 font-medium">Status</th><th /></tr></thead>
-          <tbody className="divide-y divide-background-200">
-            {templates.map((t) => {
-              const unmapped = registry.length ? unmappedTokens(`${t.title}\n${t.header_html ?? ""}\n${t.body_html ?? ""}\n${t.footer_html ?? ""}`, registry).length : 0;
-              const active = t.status === "active";
-              return (
-                <tr key={t.id} data-testid="letter-template-row" data-template-id={t.id}>
-                  <td className="py-2 pr-2 font-semibold text-foreground-950">{t.name}{t.is_default ? <span className="ml-2 align-middle"><Badge tone="success">Default</Badge></span> : null}
-                    {unmapped ? <span className="ml-2 align-middle text-xs font-normal text-amber-800" data-testid="letter-template-unmapped">{unmapped} unmapped</span> : null}</td>
-                  <td className="py-2 pr-2">v{t.version}</td>
-                  <td className="py-2 pr-2">{day(t.updated_at)}</td>
-                  <td className="py-2 pr-2" data-testid="letter-template-status">{active ? <Badge tone="success">Active</Badge> : <Badge tone="muted">Inactive</Badge>}</td>
-                  <td className="py-2 text-right">
-                    <span className="inline-flex flex-wrap justify-end gap-1.5">
-                      <Button size="sm" variant="outline" onClick={() => onPreview(t)}>Preview</Button>
-                      <Button size="sm" variant="outline" onClick={() => onEdit(t)} data-testid="letter-template-edit">Edit</Button>
-                      <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => onDuplicate(t)}>Duplicate</Button>
-                      <Button size="sm" variant="outline" disabled={Boolean(busy) || (!active && unmapped > 0) || (active && t.is_default)} onClick={() => onActive(t, !active)} data-testid="letter-template-toggle"
-                        title={!active && unmapped ? "Map every variable before making it active" : active && t.is_default ? "Make another template the default first" : undefined}>{active ? "Make inactive" : "Make active"}</Button>
-                      {active && !t.is_default ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => onDefault(t)}>Make default</Button> : null}
-                      {t.is_default ? null : <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => onDelete(t)}>Delete</Button>}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      ) : <p className="text-sm text-foreground-500">No offer letter templates yet.</p>}
-    </section></Card>
-  );
-}
 
 /**
  * Unmapped tokens of an offer letter template ({{unknown}}, $[field], {field:inline}, an old [Variable]): each with "Map to variable"

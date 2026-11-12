@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT } from "./env";
 import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, latestLink, markStudentDocumentRead, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
 import { courses } from "../src/data/courses";
@@ -751,7 +752,7 @@ test("status workflow: a template letter goes to the student when staff created 
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Student");
   await expect(drawer.getByTestId("offer-recipient")).toContainText(`tem.plate.${tag}@example.test`);
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Staff created this application for the student");
-  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag} (v1)` });
+  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag} · v1` });
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", "1", { timeout: 30_000 });
   await expect(drawer.getByTestId("needs-input")).toContainText("Every detail is filled from the application");
   // The fixture has no answers, so Review has open items: an admin issues the letter anyway with a note.
@@ -792,13 +793,95 @@ async function pdfPages(bytes: Uint8Array): Promise<string[]> {
   return pages;
 }
 
+test("offer letter: the Standard Letter of Offer on an application like SLIT-2026-0080 (course by slug, no CRICOS, fees or intake): auto-selected, Needs your input, preview, sent", async ({ page }) => {
+  const admin = await createAdmin("loo-standard");
+  // The seed (20261113300000) needs an admin; run it again here (idempotent) and make the standard letter the default.
+  sql(readFileSync("supabase/migrations/20261113300000_standard_letter_of_offer.sql", "utf8"));
+  sql(`update hr.sign_templates set is_default = (name = 'Standard Letter of Offer') where category = 'student_offer_letter' and deleted_at is null`);
+  const standard = sql(`select id from hr.sign_templates where category = 'student_offer_letter' and name = 'Standard Letter of Offer' and deleted_at is null`);
+  expect(sql(`select status || '|' || cardinality(public.letter_template_unmapped(concat_ws(' ', title, header_html, body_html, footer_html))) from hr.sign_templates where id = '${standard}'`)).toBe("active|0");
+  const agency = wfAgency("loo standard");
+  const tag = person("loo-std").local.slice(-6);
+  const course = `c-${tag}`, slug = `msf${tag}-certificate-iii-in-glass-and-glazing`;
+  sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing', 'Published')`);
+  const values = { title: "Miss", first_name: "Hima", middle_name: "G", last_name: "Patel", dob: "1995-03-13", nationality: "India", passport_number: "P0000000",
+    au_street: "10 Example Gra", au_suburb: "Tarneit", au_state: "VIC", au_zip: "3029", preferred_intake: "December 2026" };
+  const id = wfApplication(agency, "submitted", `Hima ${tag}`, { student_email: `hima.${tag}@example.test`, intake: "December 2026", data: JSON.stringify({ values }) });
+  // As on hosted: the application's course row holds the course page's slug, not the course id, and no intake.
+  sql(`begin; select set_config('portal.draft_command', '${id}', true); insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title) values ('${id}', '${slug}', 'MSF${tag}', 'MSF${tag} Certificate III in Glass and Glazing'); commit;`);
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  // The default (standard) letter is selected by itself; the preview is made.
+  const picked = drawer.getByTestId("offer-template-single").or(drawer.getByLabel("Template"));
+  await expect(picked.first()).toBeVisible();
+  if (await drawer.getByLabel("Template").count()) await expect(drawer.getByLabel("Template")).toHaveValue(standard);
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9]$/, { timeout: 30_000 });
+  // Needs your input: the start date, CRICOS and fees the course setup does not have (the course is found by its slug).
+  const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
+  for (const key of ["course.start_date", "course.cricos", "fees.tuition"]) expect(keys, key).toContain(key);
+  expect(keys, "the course name comes from the course setup").not.toContain("course.name");
+  await shot(page, "loo-standard-needs-input");
+  // Fill every required detail for this letter, tick the optional ones blank.
+  const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));
+  for (const key of keys) {
+    const spec = registry[key];
+    if (spec.required) await drawer.getByTestId(`letter-input-${key}`).fill(spec.input === "date" ? "2027-02-03" : spec.input === "money" ? "1000" : "0101234");
+    else await drawer.getByTestId(`leave-blank-${key}`).check();
+  }
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-missing", "", { timeout: 30_000 });
+  // The review still has open items for this fixture: the override note (unchanged).
+  await drawer.getByLabel(/Note to issue anyway/).fill("Checked with the student");
+  await expect(drawer.getByTestId("send-offer-letter")).toHaveText(/Send offer letter/);
+  await drawer.getByTestId("send-offer-letter").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Send offer letter" }).click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
+  expect(sql(`select template_name || '|' || (jsonb_array_length(manual_values) > 0)::text from public.enrollment_offer_letters where application_id = '${id}'`)).toBe("Standard Letter of Offer|true");
+  const pages = await pdfPages(Uint8Array.from(Buffer.from(sql(`select encode(content, 'base64') from public.enrollment_offer_letters where application_id = '${id}'`).replace(/\s+/g, ""), "base64")));
+  pages.forEach((text, i) => expect(text, `page ${i + 1}`).toContain(`Page ${i + 1} of ${pages.length}`));
+  expect(pages.join(" ")).toContain(`Dear Miss Hima G Patel`);
+});
+
+test("offer letter: no active student template: the drawer offers Create template and Upload letter instead", async ({ page }) => {
+  const admin = await createAdmin("loo-none");
+  const agency = wfAgency("loo none");
+  const id = wfApplication(agency, "submitted", `NoTpl ${person("loo-none").local.slice(-6)}`);
+  const active = sql(`select coalesce(string_agg(id::text, ','), '') from hr.sign_templates where category = 'student_offer_letter' and status = 'active' and deleted_at is null`);
+  if (active) sql(`set session_replication_role = replica; update hr.sign_templates set status = 'archived' where id in ('${active.split(",").join("','")}');`);
+  try {
+    await signInThroughTheForm(page, admin.email);
+    await expect(page).toHaveURL(/\/admin/);
+    await page.goto(`/admin/applications/${id}?stage=review`);
+    await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+    await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+    const drawer = page.getByTestId("offer-letter-drawer");
+    await expect(drawer.getByTestId("offer-no-template")).toContainText("No offer letter template yet");
+    await expect(drawer.getByTestId("offer-no-template")).toContainText("Sign › Templates");
+    await expect(drawer.getByTestId("offer-preview-placeholder")).toBeVisible();
+    const [tab] = await Promise.all([page.context().waitForEvent("page"), drawer.getByTestId("offer-create-template").click()]);
+    await expect(tab).toHaveURL(/\/admin\/signing\/templates\?new=student_offer_letter/);
+    await expect(tab.getByTestId("template-category")).toHaveValue("student_offer_letter");
+    await tab.close();
+    await drawer.getByTestId("offer-upload-instead").click();
+    await expect(drawer.locator("#offer-upload")).toBeAttached();
+  } finally {
+    if (active) sql(`set session_replication_role = replica; update hr.sign_templates set status = 'active' where id in ('${active.split(",").join("','")}');`);
+  }
+});
+
 test("offer letter templates: a logo inserted and pictures pasted go to template-assets, a pasted Word table keeps its borders and alignment, variables are chips, unmapped tokens keep it inactive", async ({ page }) => {
   const admin = await createAdmin("loo-tpl");
   const tag = person("loo-tag").local.slice(-6);
   await signInThroughTheForm(page, admin.email);
   await expect(page).toHaveURL(/\/admin/);
-  await page.goto("/admin/staff/templates");
-  await page.getByTestId("template-new-offer-letter").click();
+  // Sign › Templates: New template asks who it is for; Students / Applications opens the Letter of Offer (student) editor.
+  await page.goto("/admin/signing/templates");
+  await page.getByTestId("new-template").click();
+  await page.getByTestId("template-audience-student").click();
+  await expect(page.getByTestId("template-category")).toHaveValue("student_offer_letter");
   const dialog = page.getByTestId("template-dialog");
   await dialog.getByTestId("template-name").fill(`E2E LOO tpl ${tag}`);
   await dialog.getByTestId("template-subject").fill("Letter of offer");
@@ -838,10 +921,12 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   await expect(check.getByTestId("unmapped-token")).toHaveCount(1);
   await expect(check.getByTestId("unmapped-token")).toHaveAttribute("data-token", "$[dogField]");
   await page.getByRole("button", { name: "Save as inactive" }).click();
-  const row = page.getByTestId("letter-template-row").filter({ hasText: `E2E LOO tpl ${tag}` });
-  await expect(row.getByTestId("letter-template-status")).toHaveText("Inactive");
-  await expect(row.getByTestId("letter-template-unmapped")).toHaveText("1 unmapped");
-  await expect(row.getByTestId("letter-template-toggle")).toBeDisabled();
+  await page.getByTestId("template-for-filter").selectOption("student");
+  const row = page.getByTestId("sign-template-row").filter({ hasText: `E2E LOO tpl ${tag}` });
+  await expect(row).toContainText("inactive");
+  await expect(row).toContainText("Letter of Offer (student)");
+  await row.getByTestId("letter-template-toggle").click();
+  await expect(page.getByRole("alert")).toContainText("Map every variable");
   const saved = sql(`select status || '|' || version || '|' || header_html || '|' || body_html from hr.sign_templates where name = 'E2E LOO tpl ${tag}'`);
   expect(saved.startsWith("archived|1|")).toBe(true);
   for (const kept of ["template-assets/default/", "{{student.full_name}}", "{{fees.tuition}}", "{{course.name}}", "border-top:1pt solid #000000", "border-left:none", "padding:0pt 5.4pt", "text-align:right"])
@@ -851,19 +936,19 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   const id = sql(`select id from hr.sign_templates where name = 'E2E LOO tpl ${tag}'`);
   expect((await client.rpc("letter_template_set_active", { p_id: id, p_active: true })).error?.message).toMatch(/Map every variable/);
   // Map to variable converts it everywhere; saved again (version 2) it can be made active.
-  await row.getByTestId("letter-template-edit").click();
+  await row.getByRole("button", { name: "Edit" }).click();
   await page.getByTestId("unmapped-tokens").getByTestId("unmapped-map-select").selectOption("application.reference");
   await page.getByTestId("unmapped-tokens").getByTestId("unmapped-convert").click();
   await expect(page.getByTestId("unmapped-tokens")).toHaveCount(0);
   await page.getByTestId("template-save").click();
   await expect(page.getByTestId("unmapped-none")).toBeVisible();
   await page.getByTestId("template-save-confirm").click();
-  await expect(row.getByTestId("letter-template-toggle")).toBeEnabled();
   await row.getByTestId("letter-template-toggle").click();
-  await expect(row.getByTestId("letter-template-status")).toHaveText("Active");
+  await expect(row).toContainText("· active");
   expect(sql(`select status || '|' || version || '|' || (body_html like '%Ref {{application.reference}}%')::text from hr.sign_templates where id = '${id}'`)).toBe("active|2|true");
   // Preview with the sample application: the letter is made in the browser, with the uploaded logo.
-  await row.getByRole("button", { name: "Preview" }).click();
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.getByTestId("letter-preview-sample").click();
   await expect(page.getByTestId("letter-preview")).toHaveAttribute("data-pages", "1", { timeout: 30_000 });
   await expect(page.getByTestId("letter-preview")).toHaveAttribute("data-missing", "");
 });
@@ -891,7 +976,7 @@ test("offer letter: values from the application, course, intake and fees; missin
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO issue ${tag} (v1)` });
+  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO issue ${tag} · v1` });
   const preview = drawer.getByTestId("offer-letter-preview");
   await expect(preview).toHaveAttribute("data-pages", /^[2-9]$/, { timeout: 30_000 });
   // Needs your input: the passport and CRICOS (required) and the material fee (optional); Send says how many.

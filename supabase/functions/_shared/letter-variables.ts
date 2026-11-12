@@ -12,7 +12,7 @@ export interface LetterVariable {
   description: string;
   sourceKind: "application" | "record" | "computed" | "course" | "intake" | "fee" | "agent" | "agency" | "institute" | "entered" | "render";
   source: string;
-  format: "text" | "name" | "date" | "money" | "list" | "multiline";
+  format: "text" | "name" | "date" | "money" | "list" | "multiline" | "image";
   inputType: "text" | "date" | "money" | "textarea" | "email" | "tel";
   required: boolean;
   editableSource: boolean;
@@ -68,7 +68,7 @@ export function unmappedTokens(html: string, registry: readonly LetterVariable[]
     const { key, modifier } = parseCurly(m[1]);
     const token = `{{${m[1].trim()}}}`;
     if (!keys.has(key)) out.set(token, { token, kind: "unknown", suggestion: suggestVariable(key.replace(/^[a-z]+\./, ""), registry) ?? suggestVariable(key, registry) });
-    else if (modifier !== null && !(LETTER_MODIFIERS as readonly string[]).includes(modifier)) out.set(token, { token, kind: "modifier", suggestion: registry.find((v) => v.key === key) });
+    else if (modifier !== null && !(LETTER_MODIFIERS as readonly string[]).includes(modifier) && !PICTURE_HEIGHT.test(modifier)) out.set(token, { token, kind: "modifier", suggestion: registry.find((v) => v.key === key) });
   }
   for (const m of text.matchAll(/\$\[([^[\]]{1,80})\]/g)) out.set(`$[${m[1]}]`, { token: `$[${m[1]}]`, kind: "legacy", suggestion: suggestVariable(m[1], registry) });
   for (const m of text.matchAll(/\{([A-Za-z][A-Za-z0-9_ ]{0,60}):inline\}/g)) out.set(`{${m[1]}:inline}`, { token: `{${m[1]}:inline}`, kind: "legacy", suggestion: suggestVariable(m[1], registry) });
@@ -135,7 +135,12 @@ export type ManualMode = "letter" | "source" | "blank";
 /** A detail staff filled by hand for one letter. */
 export interface ManualFill { key: string; value: string; mode: ManualMode }
 
+/** A picture variable's height modifier: |h42 ... |h200 (points). */
+export const PICTURE_HEIGHT = /^h(\d{2,3})$/;
+export const DEFAULT_PICTURE_HEIGHT = 42;
+
 export type CurlyResolution =
+  | { kind: "image"; src: string; height: number }
   | { kind: "value"; text: string }
   | { kind: "missing"; key: string; label: string }
   | { kind: "page" | "total" };
@@ -154,6 +159,13 @@ export function letterResolver(registry: readonly LetterVariable[], values: Reco
     if (key === "page.number") return { kind: "page" };
     if (key === "page.total") return { kind: "total" };
     if (key === "student.initial_line") return { kind: "value", text: INITIALS_LINE };
+    if (spec.format === "image") {
+      const src = values[key] && !values[key].missing ? values[key].value : "";
+      const h = PICTURE_HEIGHT.exec(modifier ?? "");
+      if (src) return { kind: "image", src, height: Math.min(200, Math.max(10, h ? Number(h[1]) : DEFAULT_PICTURE_HEIGHT)) };
+      if (fills.get(key)?.mode === "blank" || sample) return { kind: "value", text: "" };
+      return { kind: "missing", key, label: spec.label };
+    }
     if (key === "offer.conditions") return { kind: "value", text: applyModifier({ value: conditionsText(conditions), raw: conditions, source: "", missing: false }, modifier) };
     const fill = fills.get(key);
     if (fill && fill.mode !== "blank" && fill.value.trim()) return { kind: "value", text: applyModifier({ value: fill.value.trim(), raw: fill.value.trim(), source: "", missing: false }, modifier) };

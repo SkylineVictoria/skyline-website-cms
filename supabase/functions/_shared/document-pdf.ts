@@ -255,6 +255,7 @@ function resolveInlines(inlines: Inline[], ctx: TokenContext): Inline[] {
         emit(at, start);
         if (r.kind === "value") out.push(...textInlines(r.text, style));
         else if (r.kind === "missing") { ctx.missing.add(key); out.push({ t: "text", text: `[${r.label}]`, style: { ...style, background: MARK_BACKGROUND }, mark: key }); }
+        else if (r.kind === "image") out.push({ t: "image", src: r.src, w: null, h: r.height, style });
         else out.push({ t: "var", which: r.kind, style });
         at = end;
         continue;

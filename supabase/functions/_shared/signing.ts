@@ -33,7 +33,7 @@ export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student
   offer_letter: { label: "Offer letter", audience: "employee" }, hr_declaration: { label: "HR declaration", audience: "employee" },
   agency_agreement: { label: "Agency agreement", audience: "agent" }, commission_agreement: { label: "Commission agreement", audience: "agent" },
   other: { label: "Other document", audience: "any" },
-  student_offer_letter: { label: "Student offer letter (LOO)", audience: "student" },
+  student_offer_letter: { label: "Letter of Offer (student)", audience: "student" },
 };
 /** The variables each kind of record fills by itself (hr.sign_subject); anything else is typed by the administrator. */
 export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent", string[]> = {

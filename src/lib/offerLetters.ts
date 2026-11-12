@@ -1,7 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite } from "@/lib/tenantSite";
 import { isTemplateAsset } from "../../supabase/functions/_shared/rich-html";
-import { letterResolver, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
+import { letterKeys, letterResolver, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
 
 /**
  * Offer letters (LOO): the variable registry, an application's values, student offer letter templates, pictures in the template-assets
@@ -136,7 +136,10 @@ export async function buildLetterPdf(input: LetterPdfInput) {
   const { buildDocumentPdf, linkedImages } = await import("../../supabase/functions/_shared/document-pdf");
   const { headerHtml, bodyHtml, footerHtml } = input.template;
   const images: Record<string, Uint8Array> = {};
-  await Promise.all(linkedImages(headerHtml, bodyHtml, footerHtml).map(async (url) => { const bytes = await loadImage(url); if (bytes) images[url] = bytes; }));
+  // Pictures in the HTML (template-assets) and picture variables ({{institute.logo}}: the URL from Settings).
+  const used = new Set(letterKeys(`${headerHtml ?? ""}\n${bodyHtml ?? ""}\n${footerHtml ?? ""}`));
+  const pictureValues = input.registry.filter((v) => v.format === "image" && used.has(v.key)).map((v) => input.values[v.key]?.value).filter((url): url is string => Boolean(url && /^https?:\/\//.test(url)));
+  await Promise.all([...new Set([...linkedImages(headerHtml, bodyHtml, footerHtml), ...pictureValues])].map(async (url) => { const bytes = await loadImage(url); if (bytes) images[url] = bytes; }));
   return buildDocumentPdf({
     title: input.template.title || "Offer letter", header: headerHtml, body: bodyHtml || "<p></p>", footer: footerHtml, values: {}, brackets: false, images,
     curly: letterResolver(input.registry, input.values, input.manual ?? [], input.conditions ?? "", Boolean(input.sample)),

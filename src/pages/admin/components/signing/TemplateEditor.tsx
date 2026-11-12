@@ -47,18 +47,21 @@ function recordPlaceholders(audience: SigningTemplate["audience"]): PlaceholderS
   return out;
 }
 /** The categories a kind may have: emails have their own five; letters and documents the signing ones. */
-const categoryOptions = (kind: Kind): Array<[string, string]> => kind === "email" ? EMAIL_TYPES.map((t) => [t.type, t.label]) : Object.entries(SIGN_CATEGORIES).map(([key, c]) => [key, c.label]);
+/** For a new template the audience is chosen first: only its types are offered (students: the Letter of Offer and the student documents). */
+const categoryOptions = (kind: Kind, audience?: SigningTemplate["audience"]): Array<[string, string]> => kind === "email" ? EMAIL_TYPES.map((t) => [t.type, t.label])
+  : Object.entries(SIGN_CATEGORIES).filter(([, c]) => !audience || audience === "any" || c.audience === audience || c.audience === "any").map(([key, c]) => [key, c.label]);
 
 /**
  * One editor for every template (the one table since 20261113170000): a letter or document to sign (rich text with placeholders, or a
  * ready-made PDF), or an email. Signer roles, placed fields, expiry and reminders apply to documents; a default per kind; versions.
  */
-export default function TemplateEditor({ template, onClose, onSaved, newKind = "text", newCategory }: {
+export default function TemplateEditor({ template, onClose, onSaved, newKind = "text", newCategory, audience }: {
   template: SigningTemplate | null; onClose: () => void; onSaved: (message: string) => void; newKind?: Kind; newCategory?: string;
+  /** A new template: the audience chosen first (only its types are offered). */ audience?: SigningTemplate["audience"];
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
     ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), is_default: Boolean(template.is_default) }
-    : blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")));
+    : { ...blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")), ...(audience ? { audience } : {}) });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [placing, setPlacing] = useState<string | Uint8Array | null>(null); const [preview, setPreview] = useState<Uint8Array | null>(null);
@@ -201,7 +204,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
           : <Field label={hrms ? "Letter title" : "Document title"} required hint={hrms ? "Placeholders work here too; it is also the PDF's name." : "Shown to signers. Variables are allowed."}><TextInput value={draft.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} data-testid="template-subject" /></Field>}
         <Field label={draft.kind === "email" ? "Kind of email" : "Document type"}>
           <Select value={draft.category} disabled={Boolean(template) && hrms} onChange={(e) => set({ category: e.target.value, ...(isTemplateType(e.target.value) ? { audience: "employee" } : {}) })} data-testid="template-category">
-            {categoryOptions(draft.kind).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            {categoryOptions(draft.kind, template ? undefined : audience).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </Select>
         </Field>
         {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>}

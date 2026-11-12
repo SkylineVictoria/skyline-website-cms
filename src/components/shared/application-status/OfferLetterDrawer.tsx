@@ -61,12 +61,17 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     void offerLetterRecipient(application.id).then(setRecipient, (e: Error) => setError(e.message));
     void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message));
     void letterValues(application.id).then(setValues, (e: Error) => setError(e.message));
-    void loadLetterTemplates().then((list) => {
-      const usable = list.filter((t) => t.active);
-      setTemplates(usable);
-      setTemplateId((prev) => (prev && usable.some((t) => t.id === prev) ? prev : (usable.find((t) => t.isDefault) ?? usable[0])?.id ?? ""));
-    }, (e: Error) => { setTemplates([]); setError(e.message); });
+    reloadTemplates();
   }, [application.id]);
+  /** Active student letters, the default first; one is selected by itself (the default, else the first). */
+  function reloadTemplates() {
+    setTemplates(null);
+    void loadLetterTemplates().then((list) => {
+      const usable = list.filter((t) => t.active).sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+      setTemplates(usable);
+      setTemplateId((prev) => (prev && usable.some((t) => t.id === prev) ? prev : usable[0]?.id ?? ""));
+    }, (e: Error) => { setTemplates([]); setError(e.message); });
+  }
 
   const template = templates?.find((t) => t.id === templateId) ?? null;
   const used = template ? { title: template.title, headerHtml: template.headerHtml, bodyHtml: bodyEdit ?? template.bodyHtml, footerHtml: template.footerHtml } : null;
@@ -180,14 +185,37 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
 
           {mode === "template" ? (
             <>
-              <div>
-                <label htmlFor="offer-template" className={`${FORM_LABEL} mb-1 block`}>Template</label>
-                <select id="offer-template" value={templateId} disabled={!templates?.length} onChange={(e) => { setTemplateId(e.target.value); setBodyEdit(null); setLetter(null); }}
-                  className="h-10 w-full rounded-lg border border-background-300 bg-background-50 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40">
-                  {templates === null ? <option>Loading templates&hellip;</option> : templates.length === 0 ? <option value="">No active offer letter templates (HRMS › Templates)</option>
-                    : templates.map((t) => <option key={t.id} value={t.id}>{t.name} (v{t.version})</option>)}
-                </select>
-              </div>
+              {templates?.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-background-300 bg-background-100/50 px-4 py-5 text-center" data-testid="offer-no-template">
+                  <i className="ri-file-text-line text-2xl text-foreground-400" aria-hidden="true" />
+                  <p className="mt-1 text-sm font-semibold text-foreground-900">No offer letter template yet</p>
+                  <p className="mt-0.5 text-xs text-foreground-600">Student letters live in Sign &rsaquo; Templates (For: Students / Applications).</p>
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <button type="button" data-testid="offer-create-template"
+                      onClick={() => window.open("/admin/signing/templates?new=student_offer_letter", "_blank", "noopener")}
+                      className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
+                      <i className="ri-add-line" aria-hidden="true" />Create template
+                    </button>
+                    <button type="button" onClick={reloadTemplates} className="h-9 cursor-pointer rounded-lg border border-background-300 px-3 text-sm font-medium text-foreground-700 hover:bg-background-100">Refresh</button>
+                  </div>
+                  <button type="button" onClick={() => setMode("upload")} data-testid="offer-upload-instead" className="mt-2 text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Upload letter instead</button>
+                </div>
+              ) : templates && templates.length === 1 ? (
+                <div>
+                  <p className={`${FORM_LABEL} mb-1`}>Template</p>
+                  <p className="flex h-10 items-center gap-2 rounded-lg border border-background-200 bg-background-100/60 px-3 text-sm text-foreground-900" data-testid="offer-template-single">
+                    <i className="ri-file-text-line text-foreground-500" aria-hidden="true" />{templates[0].name} <span className="text-xs text-foreground-500">v{templates[0].version}</span>
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="offer-template" className={`${FORM_LABEL} mb-1 block`}>Template</label>
+                  <select id="offer-template" value={templateId} disabled={!templates?.length} onChange={(e) => { setTemplateId(e.target.value); setBodyEdit(null); setLetter(null); }}
+                    className="h-10 w-full rounded-lg border border-background-300 bg-background-50 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40">
+                    {templates === null ? <option>Loading templates&hellip;</option> : templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? " (default)" : ""} · v{t.version}</option>)}
+                  </select>
+                </div>
+              )}
 
               {template && registry && values ? (
                 <section className={`rounded-lg border p-3 ${blocking.length ? "border-amber-300 bg-amber-50/60" : "border-emerald-200 bg-emerald-50/50"}`} data-testid="needs-input" aria-label="Needs your input">
@@ -289,8 +317,14 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                 {showCheck ? <VariableCheck html={usedHtml} registry={registry} values={values.values} manual={manual} /> : null}
                 <LetterPreview input={{ template: used, registry, values: values.values, manual, conditions }} onBuilt={(made) => setLetter(made)} onMark={focusInput} testId="offer-letter-preview" />
               </>
-            ) : templates?.length === 0 ? <p className="text-sm text-foreground-500">Add an offer letter template in HRMS › Templates, or upload the letter.</p>
-              : <p className="text-sm text-foreground-500" role="status">Loading the letter&hellip;</p>}
+            ) : (
+              // A clean A4-shaped placeholder until a template is selected and the letter is made.
+              <div className="flex aspect-[1/1.414] max-h-[70vh] w-full flex-col items-center justify-center rounded-lg border border-dashed border-background-300 bg-background-100/50 px-6 text-center" data-testid="offer-preview-placeholder">
+                <i className={`${templates === null ? "ri-loader-4-line animate-spin" : "ri-file-paper-2-line"} text-3xl text-foreground-400`} aria-hidden="true" />
+                <p className="mt-2 text-sm font-medium text-foreground-700">{templates === null ? "Loading the letter…" : templates.length === 0 ? "The preview appears here once there is a template." : "Preparing the preview…"}</p>
+                <p className="mt-0.5 text-xs text-foreground-500">A4, with the header and footer on every page.</p>
+              </div>
+            )}
           </div>
         ) : null}
       </div>

@@ -87,6 +87,7 @@ import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
 import JobsPage from "@/pages/admin/JobsPage";
+import CourseFeesPage from "@/pages/admin/CourseFeesPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
 import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
@@ -233,6 +234,7 @@ const routes: RouteObject[] = [
           { path: "staff/candidates", element: <RequireAdmin><CandidatesPage /></RequireAdmin> },
           { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
+          { path: "course-fees", element: <RequireAdmin><CourseFeesPage /></RequireAdmin> },
           // HRMS (time & attendance, leave, pay schedules, public holidays, Xero export).
           { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
           { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },

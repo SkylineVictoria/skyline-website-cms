@@ -1,6 +1,48 @@
 import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { BRACKET_TOKEN, isTokenName, MAX_IMAGE_CHARS, sanitizeRichHtml } from "../../../../supabase/functions/_shared/rich-html";
 import { lookupVariable, type TemplateVariable } from "../../../../supabase/functions/_shared/template-variables";
+import { CURLY_TOKEN, LETTER_GROUPS, parseCurly, unmappedTokens, type LetterVariable } from "../../../../supabase/functions/_shared/letter-variables";
+import { rehostImagesIn, uploadTemplateAsset } from "@/lib/offerLetters";
+
+/* Offer letter variables: {{key}} text is shown as a chip (edited as one piece) and saved back as the text token. */
+const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function chipElement(raw: string, registry: readonly LetterVariable[]): HTMLSpanElement {
+  const { key, modifier } = parseCurly(raw);
+  const spec = registry.find((v) => v.key === key);
+  const chip = document.createElement("span");
+  chip.className = "var-chip";
+  chip.contentEditable = "false";
+  chip.dataset.var = raw.trim();
+  if (!spec) chip.dataset.unknown = "";
+  chip.title = spec ? `{{${raw.trim()}}} · ${spec.source}` : `{{${raw.trim()}}} is not a variable: map it before the template can be active`;
+  chip.textContent = spec ? `${spec.group === "Page" ? "" : `${spec.group} · `}${spec.label}${modifier ? ` (${modifier})` : ""}` : `{{${raw.trim()}}}`;
+  return chip;
+}
+/** Turns every {{key}} in the editor's text into a chip. */
+function chipify(root: HTMLElement, registry: readonly LetterVariable[]): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) if (/\{\{[^{}]+\}\}/.test(node.textContent ?? "") && !(node.parentElement?.closest(".var-chip"))) nodes.push(node as Text);
+  for (const node of nodes) {
+    const text = node.textContent ?? "";
+    const fragment = document.createDocumentFragment();
+    let at = 0;
+    for (const m of text.matchAll(CURLY_TOKEN)) {
+      const start = m.index ?? 0;
+      if (start > at) fragment.append(text.slice(at, start));
+      fragment.append(chipElement(m[1], registry));
+      at = start + m[0].length;
+    }
+    if (at < text.length) fragment.append(text.slice(at));
+    node.replaceWith(fragment);
+  }
+}
+/** The editor's HTML with each chip back as its {{key}} text. */
+function serializeLetter(root: HTMLElement): string {
+  const copy = root.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll<HTMLElement>("[data-var]").forEach((chip) => chip.replaceWith(`{{${chip.dataset.var}}}`));
+  return copy.innerHTML.replace(/​/g, "");
+}
 
 /**
  * Lightweight rich-text editor used across the CMS for long-form content.
@@ -83,6 +125,8 @@ export default function RichTextEditor({
   minHeight = 220,
   mode = "cms",
   variables,
+  letterVariables,
+  storageImages = false,
   label = "Rich text editor",
   testId,
 }: {
@@ -93,10 +137,19 @@ export default function RichTextEditor({
   mode?: "cms" | "document";
   /** Document mode: the registry variables offered in the picker beside the text. */
   variables?: readonly TemplateVariable[];
+  /** Offer letters: the {{group.key}} registry; variables are inserted as chips from the "Insert variable" picker. */
+  letterVariables?: readonly LetterVariable[];
+  /** Pictures go to the template-assets bucket (inserted, pasted or dropped), never into the HTML as base64. */
+  storageImages?: boolean;
   label?: string;
   testId?: string;
 }) {
   const doc = mode === "document";
+  const letter = doc && Boolean(letterVariables);
+  const registry = letterVariables ?? [];
+  const [notice, setNotice] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [varSearch, setVarSearch] = useState("");
   const editorId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
@@ -112,6 +165,19 @@ export default function RichTextEditor({
     const walker = document.createTreeWalker(ref.current, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const text = node.textContent ?? "";
+      if (letter) {
+        // Old placeholders ($[field], {field:inline}, [Page Number]) are marked until they are mapped to a variable.
+        for (const old of unmappedTokens(text, registry)) {
+          if (old.kind !== "legacy") continue;
+          for (let at = text.indexOf(old.token); at >= 0; at = text.indexOf(old.token, at + 1)) {
+            const range = document.createRange();
+            range.setStart(node, at);
+            range.setEnd(node, at + old.token.length);
+            found.field.push(range);
+          }
+        }
+        continue;
+      }
       for (const m of text.matchAll(BRACKET_TOKEN)) {
         if (!isTokenName(m[1])) continue;
         const spec = lookupVariable(m[1]);
@@ -136,9 +202,10 @@ export default function RichTextEditor({
   const [tableCols, setTableCols] = useState(3);
 
   useEffect(() => {
-    if (ref.current && ref.current.innerHTML !== (value ?? "")) {
+    if (ref.current && (letter ? serializeLetter(ref.current) : ref.current.innerHTML) !== (value ?? "")) {
       // A document template's HTML only ever enters the page through the allow-list.
       ref.current.innerHTML = doc ? sanitizeRichHtml(value ?? "") : value ?? "";
+      if (letter) chipify(ref.current, registry);
     }
     // Keep the table toolbar in sync when content is loaded/saved externally.
     setHasTable(Boolean(ref.current?.querySelector("table")));
@@ -146,9 +213,57 @@ export default function RichTextEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- markTokens reads the DOM only
   }, [value]);
 
-  const emit = () => {
-    if (ref.current) onChange(ref.current.innerHTML);
+  // The registry arrives after the text: the chips are drawn again with their labels.
+  useEffect(() => {
+    if (!letter || !ref.current) return;
+    ref.current.querySelectorAll<HTMLElement>("[data-var]").forEach((chip) => chip.replaceWith(`{{${chip.dataset.var}}}`));
+    ref.current.normalize();
+    chipify(ref.current, registry);
     markTokens();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the registry changes
+  }, [letterVariables]);
+
+  const emit = () => {
+    if (ref.current) onChange(letter ? serializeLetter(ref.current) : ref.current.innerHTML);
+    markTokens();
+  };
+
+  /** Offer letters: inserts a variable chip at the cursor. */
+  const insertVariable = (key: string) => {
+    restoreSelection();
+    ref.current?.focus();
+    const chip = chipElement(key, registry);
+    document.execCommand("insertHTML", false, `${chip.outerHTML}&#8203;`);
+    emit();
+  };
+
+  /** Inserts HTML where the cursor was (or at the end), then draws chips and reports the change. */
+  const insertAt = (html: string, range: Range | null) => {
+    const sel = window.getSelection();
+    ref.current?.focus();
+    if (range && sel) { sel.removeAllRanges(); sel.addRange(range); }
+    document.execCommand("insertHTML", false, html);
+    if (letter && ref.current) chipify(ref.current, registry);
+    emit();
+  };
+  const pictureNotice = (failed: number) => setNotice(failed
+    ? `${failed === 1 ? "1 picture" : `${failed} pictures`} could not be copied into the template (a picture on your computer, or a site that does not allow copying). Save it and use Insert image.`
+    : "");
+  /** Pictures pasted or dropped: uploaded to template-assets first; HTML with linked pictures is re-hosted before the allow-list sees it. */
+  const pasteWithPictures = (html: string, files: File[], range: Range | null) => {
+    setUploading(true); setNotice("");
+    void (async () => {
+      let source = html, failed = 0;
+      try {
+        if (html) ({ html: source, failed } = await rehostImagesIn(html, files));
+        else {
+          const urls: string[] = [];
+          for (const file of files) { try { urls.push(await uploadTemplateAsset(file)); } catch { failed++; } }
+          source = urls.map((url) => `<img src="${url}" alt="">`).join("");
+        }
+        if (source) insertAt(sanitizeRichHtml(source), range);
+      } finally { setUploading(false); pictureNotice(failed); }
+    })();
   };
 
   /** Document mode: a size in points (execCommand only knows 1-7, so size 7 is set and then replaced by the real size). */
@@ -174,6 +289,17 @@ export default function RichTextEditor({
   const uploadImage = (file: File | undefined) => {
     setImgError("");
     if (!file) return;
+    if (storageImages) {
+      if (!/^image\//.test(file.type)) { setImgError("Choose a picture (PNG, JPEG, GIF, WebP or SVG)."); return; }
+      const range = savedRange.current;
+      setUploading(true);
+      void uploadTemplateAsset(file).then((url) => {
+        const width = Number(imgWidth);
+        insertAt(`<img src="${url}" alt=""${width > 0 && width <= 1200 ? ` style="width:${width}px"` : ""}>`, range);
+        setImgOpen(false); setImgWidth("");
+      }, (e: Error) => setImgError(e.message)).finally(() => setUploading(false));
+      return;
+    }
     if (!/^image\/(png|jpeg)$/.test(file.type)) { setImgError("Choose a PNG or JPEG picture."); return; }
     const reader = new FileReader();
     reader.onload = () => {
@@ -192,15 +318,24 @@ export default function RichTextEditor({
   const pasteClean = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (!doc) return;
     const html = event.clipboardData.getData("text/html");
+    const files = [...event.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+    if (storageImages && ((html && /<img\b/i.test(html)) || (!html && files.length))) {
+      event.preventDefault();
+      const sel = window.getSelection();
+      pasteWithPictures(html, files, sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null);
+      return;
+    }
     if (!html) return;
     event.preventDefault();
+    if (letter) { insertAt(sanitizeRichHtml(html), null); return; }
     document.execCommand("insertHTML", false, sanitizeRichHtml(html));
     emit();
   };
   const toggleSource = () => {
     if (!ref.current) return;
-    if (!sourceOpen) { setSourceText(ref.current.innerHTML); setSourceOpen(true); return; }
+    if (!sourceOpen) { setSourceText(letter ? serializeLetter(ref.current) : ref.current.innerHTML); setSourceOpen(true); return; }
     ref.current.innerHTML = sanitizeRichHtml(sourceText);
+    if (letter) chipify(ref.current, registry);
     setSourceOpen(false);
     emit();
   };
@@ -648,8 +783,10 @@ export default function RichTextEditor({
         <div className="flex flex-wrap items-center gap-2 border-b border-background-200 bg-primary-50 px-2 py-2">
           <i className="ri-image-line text-foreground-500" aria-hidden="true" />
           <label className="text-xs text-foreground-700">Width in pixels (optional) <input type="number" min={10} max={1200} value={imgWidth} onChange={(e) => setImgWidth(e.target.value)} className="ml-1 w-20 rounded border border-background-300 bg-background-50 px-2 py-1 text-xs" /></label>
-          <input type="file" accept="image/png,image/jpeg" aria-label="Picture to insert" onChange={(e) => uploadImage(e.target.files?.[0])} className="text-xs" />
-          {imgError ? <span role="alert" className="text-xs text-red-700">{imgError}</span> : <span className="text-xs text-foreground-500">PNG or JPEG, stored inside the template.</span>}
+          <input type="file" accept={storageImages ? "image/*" : "image/png,image/jpeg"} aria-label="Picture to insert" disabled={uploading} data-testid={testId ? `${testId}-image-input` : undefined}
+            onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ""; }} className="text-xs" />
+          {imgError ? <span role="alert" className="text-xs text-red-700">{imgError}</span>
+            : <span className="text-xs text-foreground-500">{uploading ? "Uploading…" : storageImages ? "Uploaded to the template's picture store (PNG / JPEG; other formats are converted)." : "PNG or JPEG, stored inside the template."}</span>}
         </div>
       ) : null}
       {imgOpen && !doc ? (
@@ -714,8 +851,16 @@ export default function RichTextEditor({
         </div>
       ) : null}
 
+      {notice || uploading ? (
+        <div role={notice ? "alert" : "status"} className={`flex items-start gap-2 border-b px-3 py-1.5 text-xs ${notice ? "border-amber-200 bg-amber-50 text-amber-900" : "border-background-200 bg-background-100 text-foreground-600"}`} data-testid={testId ? `${testId}-notice` : undefined}>
+          <i className={notice ? "ri-error-warning-line" : "ri-loader-4-line animate-spin"} aria-hidden="true" />
+          <span className="flex-1">{notice || "Copying pictures into the template…"}</span>
+          {notice ? <button type="button" onClick={() => setNotice("")} className="font-medium underline">Dismiss</button> : null}
+        </div>
+      ) : null}
+
       {/* Editable area (document mode: with the variable picker beside it) */}
-      <div className={doc && variables?.length ? "grid lg:grid-cols-[1fr_220px]" : ""}>
+      <div className={doc && (variables?.length || letter) ? "grid lg:grid-cols-[1fr_240px]" : ""}>
         <div className="relative min-w-0">
           {(!value || value === "<p></p>") && !focused && !sourceOpen ? (
             <span className="pointer-events-none absolute left-3 top-3 text-sm text-foreground-400">{placeholder}</span>
@@ -734,6 +879,16 @@ export default function RichTextEditor({
             suppressContentEditableWarning
             onInput={emit}
             onPaste={pasteClean}
+            onDragOver={(e) => { if (storageImages && [...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
+            onDrop={(e) => {
+              if (!storageImages) return;
+              const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+              const html = e.dataTransfer.getData("text/html");
+              if (!files.length && !(html && /<img\b/i.test(html))) return;
+              e.preventDefault();
+              const doc2 = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null };
+              pasteWithPictures(files.length ? "" : html, files, doc2.caretRangeFromPoint?.(e.clientX, e.clientY) ?? null);
+            }}
             onMouseUp={() => { syncActiveTable(); saveSelection(); }}
             onKeyUp={() => { syncActiveTable(); saveSelection(); }}
             onBlur={() => {
@@ -745,7 +900,38 @@ export default function RichTextEditor({
             style={doc ? { minHeight, maxHeight: "60vh" } : { minHeight }}
           />
         </div>
-        {doc && variables?.length ? (
+        {letter ? (
+          <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Insert variable" data-testid={testId ? `${testId}-variables` : undefined}>
+            <p className="text-[13px] font-semibold text-foreground-900">Insert variable</p>
+            <p className="mb-1.5 text-[11px] text-foreground-600">Click to insert at the cursor. Saved as {"{{group.key}}"}; add |upper or |raw in the source view.</p>
+            <input type="search" value={varSearch} onChange={(e) => setVarSearch(e.target.value)} placeholder="Search variables" aria-label="Search variables"
+              className="mb-2 h-8 w-full rounded border border-background-300 bg-background-50 px-2 text-xs focus:border-primary-400 focus:outline-none" />
+            <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
+              {registry.length === 0 ? <p className="text-xs text-foreground-500">Loading variables…</p> : LETTER_GROUPS.map((group) => {
+                const q = varSearch.trim().toLowerCase();
+                const list = registry.filter((v) => v.group === group && (!q || `${v.label} ${v.key} ${v.group}`.toLowerCase().includes(q)));
+                if (!list.length) return null;
+                return (
+                  <div key={group}>
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
+                    <ul className="space-y-1">
+                      {list.map((v) => (
+                        <li key={v.key}>
+                          <button type="button" onMouseDown={stop} onClick={() => insertVariable(v.key)} title={`{{${v.key}}} · ${v.source}${v.required ? " · required" : ""}. Example: ${v.sample}`}
+                            data-testid={`letter-var-${v.key}`}
+                            className="flex w-full items-center justify-between gap-1 rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
+                            <span className="truncate text-foreground-900">{v.label}</span>
+                            {v.required ? <span className="shrink-0 text-[10px] text-foreground-500">required</span> : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        ) : doc && variables?.length ? (
           <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Variables">
             <p className="text-[13px] font-semibold text-foreground-900">Variables</p>
             <p className="mb-2 text-[11px] text-foreground-600">Click to insert at the cursor. Any other [text in square brackets] is filled in by the signer.</p>

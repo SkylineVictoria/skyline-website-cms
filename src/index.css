@@ -337,6 +337,12 @@
 .rte-content.doc-content table[style*="border: none"] td,
 .rte-content.doc-content table[style*="border:none"] th,
 .rte-content.doc-content table[style*="border: none"] th { border: 1px dashed oklch(var(--background-300)); }
+/* Offer letter variables: {{group.key}} shown as a chip that is edited as one piece (stored as the text token). */
+.rte-content .var-chip {
+  display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; line-height: 1.35;
+  background: #dbeafe; color: #1e3a8a; border: 1px solid #93c5fd; font-size: 0.92em; white-space: nowrap; cursor: default; user-select: all;
+}
+.rte-content .var-chip[data-unknown] { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
 ::highlight(tpl-known) { background-color: #dbeafe; }
 ::highlight(tpl-field) { background-color: #fde68a; }
 ::highlight(tpl-auto) { background-color: #dcfce7; }
@@ -547,6 +553,11 @@
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes open-in { from { opacity: 0; transform: scaleY(0.96); } to { opacity: 1; transform: none; } }
+/* In-app dialogs (Reject, Withdraw, Action required, Enrol): fade and scale, 150 ms. */
+@keyframes modal-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+.modal-in { animation: modal-in 150ms ease-out both; }
+.modal-backdrop-in { animation: fade-in 150ms ease-out both; }
+@media (prefers-reduced-motion: reduce) { .modal-in, .modal-backdrop-in { animation: none; } }
 .step-in-forward { animation: step-in-forward 220ms ease-out both; }
 .step-in-back { animation: step-in-back 220ms ease-out both; }
 .fade-in { animation: fade-in 200ms ease-out both; }

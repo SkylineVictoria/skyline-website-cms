@@ -242,6 +242,11 @@ export interface AdminSettings {
   address: string;
   rto: string;
   cricos: string;
+  /** Offer letters ({{institute.abn}}, {{institute.website}}, {{offer.expiry_date}}, date format of every date variable). */
+  abn?: string;
+  website?: string;
+  offerValidityDays?: number;
+  letterDateFormat?: "DD/MM/YYYY" | "D Month YYYY" | "DD Mon YYYY";
   signInUrl: string;
   homeHeroImages: string[];
   homeAboutImage: string;

@@ -6,6 +6,12 @@ import { docxToTemplateHtml } from "@/lib/docxImport";
 import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
 import { TEMPLATE_VARIABLES } from "../../../../../supabase/functions/_shared/template-variables";
 import { SECTION_TITLES as TITLES, type Section, type Sections } from "@/lib/templateSections";
+import type { LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
+const LETTER_HINT: Record<Section, string> = {
+  header: "Printed at the top of every page. A two-column table with its borders off puts the logo (Insert image, or paste) on the left and the office details on the right.",
+  body: "The text of the letter. It flows across as many pages as it needs. Insert variables from the list; they print the application's details.",
+  footer: "Printed at the bottom of every page. Page number and Total pages (Page group) are filled per page; Initials line puts the student's initials line on every page.",
+};
 const HINT: Record<Section, string> = {
   header: "Printed at the top of every page. A table with its borders turned off puts the logo on the left and the office details on the right.",
   body: "The text of the document. It flows across as many pages as it needs.",
@@ -16,7 +22,11 @@ const HINT: Record<Section, string> = {
  * Header, Body and Footer of a document template (TPL-02), each with the full document toolbar and the variable picker. A header or
  * footer can be filled from a saved preset (the preset's HTML is copied in) or saved as one; a Word document can start the body.
  */
-export default function DocumentSections({ value, onChange, onError }: { value: Sections; onChange: (patch: Partial<Sections>) => void; onError: (message: string) => void }) {
+export default function DocumentSections({ value, onChange, onError, letterVariables, storageImages = false }: {
+  value: Sections; onChange: (patch: Partial<Sections>) => void; onError: (message: string) => void;
+  /** Offer letters: {{variable}} chips from the registry instead of [Variables]. */ letterVariables?: readonly LetterVariable[];
+  /** Pictures go to the template-assets bucket. */ storageImages?: boolean;
+}) {
   const [tab, setTab] = useState<Section>("body");
   const [parts, setParts] = useState<TemplatePart[] | null>(null);
   const [presetName, setPresetName] = useState("");
@@ -69,7 +79,7 @@ export default function DocumentSections({ value, onChange, onError }: { value: 
           </button>
         ))}
       </div>
-      <p className="text-xs text-foreground-600">{HINT[tab]}</p>
+      <p className="text-xs text-foreground-600">{(letterVariables ? LETTER_HINT : HINT)[tab]}</p>
       {kind ? (
         <div className="flex flex-wrap items-end gap-2 rounded-md border border-background-200 bg-background-50 p-2 text-sm">
           <label className="flex flex-col gap-1 text-xs font-medium text-foreground-700">Use a saved {kind}
@@ -91,7 +101,8 @@ export default function DocumentSections({ value, onChange, onError }: { value: 
             onChange={(e) => { void importDocx(e.target.files?.[0]); e.target.value = ""; }} /></label>
       )}
       {note ? <p role="status" className="text-xs text-foreground-700">{note}</p> : null}
-      <RichTextEditor key={tab} mode="document" value={value[key]} onChange={(html) => onChange({ [key]: html })} variables={TEMPLATE_VARIABLES} minHeight={tab === "body" ? 360 : 140}
+      <RichTextEditor key={tab} mode="document" value={value[key]} onChange={(html) => onChange({ [key]: html })} variables={letterVariables ? undefined : TEMPLATE_VARIABLES} minHeight={tab === "body" ? 360 : 140}
+        letterVariables={letterVariables} storageImages={storageImages}
         label={`${TITLES[tab]} of the template`} testId={`section-editor-${tab}`} placeholder={tab === "body" ? "Write the document, or start from a Word document." : `The ${tab} of every page (optional).`} />
     </div>
   );

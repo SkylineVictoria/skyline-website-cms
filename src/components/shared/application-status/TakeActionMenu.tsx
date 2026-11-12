@@ -1,31 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import ActionDrawer, { ConfirmDialog } from "./ActionDrawer";
+import { ConfirmDialog } from "./ActionDrawer";
 import OfferLetterDrawer, { type OfferApplication } from "./OfferLetterDrawer";
+import { FinalBadge } from "./StatusBadge";
+import { CoeVoeDrawer, EnrolDialog, ReasonDialog, type StatusResult } from "./StatusDialogs";
 import { FORM_LABEL } from "@/components/shared/application-form/Field";
-import { actionsFor, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
-import { resendOfferLetter, sendActionReminder, setApplicationStatus } from "@/pages/agency/lib/portalApplications";
+import type { ToastAction } from "@/components/shared/application-form/useToast";
+import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
+import { changeApplicationStatus, revertApplicationStatus } from "@/pages/agency/lib/portalApplications";
+
+type Variant = "menu" | "row";
 
 /**
- * "Take action ▾" for one application (staff): only what the database's workflow allows from the current status. Actions that
- * need input (the offer letter, a required reason) open a right-side drawer; simple ones a small confirm dialog. A status change
- * is shown at once (onStatus) and undone if the database refuses it; the outcome is reported through onResult (a toast).
+ * The staff actions of one application, from the database's transitions for the current status and the user's role
+ * (getAllowedActions; the database checks again). `row` (the list): the primary action as an icon button with a tooltip and a "⋯"
+ * menu with the rest, Reject / Withdraw in red below a divider. `menu` (the detail page): "Take action ▾" with all of them. Issue
+ * offer letter and Issue CoE / VoE open a right-side drawer; Enrol and the moves that need a reason a small dialog; the rest a confirm.
+ * After a change the badge updates at once (onStatus) and a toast says so, with Undo for a change made with a reason.
  */
-export default function TakeActionMenu({ application, onStatus, onDone, onResult, onCoe, align = "right", size = "sm" }: {
+export default function TakeActionMenu({ application, onStatus, onDone, onResult, variant = "menu", align = "right", size = "sm", reviewIssues = 0 }: {
   application: OfferApplication & { status: string };
-  /** The status to show now (optimistic), and the previous one again on failure. */
+  /** The status to show now; the previous one again after Undo. */
   onStatus?: (status: string) => void;
   /** After a successful action (reload what depends on it). */
   onDone?: () => void;
-  onResult?: (message: string, ok: boolean) => void;
-  /** Issue CoE / VoE: opens the registration workbench (the CoE / VoE is issued there). */
-  onCoe?: () => void;
+  onResult?: (message: string, ok: boolean, action?: ToastAction) => void;
+  variant?: Variant;
   align?: "left" | "right";
   size?: "sm" | "md";
+  /** Review problems still open (validation errors): Issue offer letter then needs an override note. */
+  reviewIssues?: number;
 }) {
   const workflow = useApplicationStatuses();
   const [open, setOpen] = useState(false);
-  // Under the button, or above it when there is no room below (the review bar sits at the bottom of the screen).
   const [place, setPlace] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const [active, setActive] = useState<StatusAction | null>(null);
   const [note, setNote] = useState("");
@@ -33,7 +40,10 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const [error, setError] = useState("");
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const actions = actionsFor(workflow, application.status, "staff");
+  const actions = getAllowedActions(workflow, application.status);
+  const primary = variant === "row" ? actions.find((a) => a.primary) : undefined;
+  const listed = primary ? actions.filter((a) => a !== primary) : actions;
+  const dialogApp = { id: application.id, reference: application.reference, studentName: application.studentName };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -47,122 +57,118 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); window.removeEventListener("scroll", reflow, true); };
   }, [open]);
 
-  if (!workflow.ready) return <span className="inline-block h-8 w-28 animate-pulse rounded-lg bg-background-100" aria-label="Loading actions" />;
-  if (!actions.length) return <span className="text-xs text-foreground-400" data-testid="no-action">No action</span>;
+  if (!workflow.ready) return <span className="inline-block h-8 w-20 animate-pulse rounded-lg bg-background-100" aria-label="Loading actions" />;
+  if (!actions.length) {
+    return statusInfo(workflow, application.status).final ? <FinalBadge />
+      : <span className="cursor-default px-2 text-sm text-foreground-400" title="No action available for your role" aria-label="No action available for your role" data-testid="no-action">—</span>;
+  }
 
   const toggle = () => {
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
-      const needed = 8 + actions.length * 40;
+      const needed = 8 + listed.length * 40;
       const below = window.innerHeight - rect.bottom;
       const left = align === "right" ? rect.right : rect.left;
       setPlace(below < needed && rect.top > below ? { bottom: window.innerHeight - rect.top + 4, left } : { top: rect.bottom + 4, left });
     }
     setOpen((value) => !value);
   };
-  const choose = (action: StatusAction) => {
-    setOpen(false); setNote(""); setError("");
-    if (action.kind === "coe") { onCoe?.(); return; }
-    setActive(action);
-  };
+  const choose = (action: StatusAction) => { setOpen(false); setNote(""); setError(""); setActive(action); };
   const close = () => { if (!busy) { setActive(null); setError(""); } };
 
-  const run = async () => {
-    if (!active) return;
-    if (active.note === "required" && !note.trim()) { setError("Add a note to continue."); return; }
-    const before = application.status;
-    setBusy(true); setError("");
-    try {
-      if (active.kind === "status" && active.to) {
-        onStatus?.(active.to);
-        try { await setApplicationStatus(application.id, active.to, note.trim()); } catch (e) { onStatus?.(before); throw e; }
-        onResult?.(`${application.studentName || "Application"} is now ${statusInfo(workflow, active.to).label}.`, true);
-      } else if (active.kind === "resend_offer") {
-        await resendOfferLetter(application.id, note.trim());
-        onResult?.("The offer letter was sent again.", true);
-      } else if (active.kind === "reminder") {
-        await sendActionReminder(application.id, note.trim());
-        onResult?.("Reminder sent.", true);
-      }
-      setActive(null);
-      onDone?.();
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "The action could not be completed.";
-      setError(message);
-      onResult?.(message, false);
-    } finally { setBusy(false); }
+  /** After a change: the badge at once, a toast, Undo when the database allows it. */
+  const changed = (result: StatusResult) => {
+    const from = application.status;
+    setActive(null);
+    onStatus?.(result.status);
+    const undo: ToastAction | undefined = result.undoable ? {
+      label: "Undo",
+      onClick: () => void revertApplicationStatus(application.id).then((back) => { onStatus?.(back.status); onResult?.(`Undone: ${application.studentName || "the application"} is ${back.label} again.`, true); onDone?.(); },
+        (e: Error) => onResult?.(e.message, false)),
+    } : undefined;
+    onResult?.(`${application.studentName || "Application"} is now ${result.label}.`, true, undo);
+    void from;
+    onDone?.();
   };
 
-  const noteField = (required: boolean, placeholder: string) => (
-    <div>
-      <label htmlFor={`action-note-${application.id}`} className={`${FORM_LABEL} mb-1 block`}>
-        {required ? "Reason" : "Note (optional)"}{required ? <span className="ml-0.5 text-red-600" aria-hidden="true">*</span> : null}
-      </label>
-      <textarea id={`action-note-${application.id}`} rows={required ? 4 : 2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={placeholder}
-        className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40" />
+  // Confirm (no reason): Send reminder, Resend offer letter, any other move without a reason.
+  const runSimple = async () => {
+    if (!active) return;
+    setBusy(true); setError("");
+    try {
+      const result = await changeApplicationStatus(application.id, active.action, { note: note.trim() });
+      if (active.kind === "reminder") { onResult?.("Reminder sent.", true); setActive(null); onDone?.(); }
+      else if (active.kind === "resend_offer") { onResult?.("The offer letter was sent again.", true); setActive(null); onDone?.(); }
+      else changed(result);
+    } catch (e) { setError(e instanceof Error ? e.message : "The action could not be completed."); }
+    finally { setBusy(false); }
+  };
+
+  const item = (action: StatusAction, index: number, list: StatusAction[]) => (
+    <div key={action.action}>
+      {index > 0 && action.tone === "danger" && list[index - 1].tone !== "danger" ? <div className="my-1 border-t border-background-200" /> : null}
+      <button type="button" role="menuitem" onClick={() => choose(action)} data-action={action.action}
+        className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-background-100 focus:bg-background-100 focus:outline-none ${action.tone === "danger" ? "text-red-700" : action.primary ? "font-medium text-foreground-950" : "text-foreground-800"}`}>
+        {action.icon ? <i className={`${action.icon} text-base leading-none ${action.tone === "danger" ? "text-red-600" : "text-foreground-500"}`} aria-hidden="true" /> : null}
+        {action.label}
+      </button>
     </div>
   );
 
   const sizeClass = size === "md" ? "h-9 px-3 text-sm" : "h-8 px-2.5 text-xs";
+  const isEnrol = (a: StatusAction | null) => a?.kind === "enrol";
   return (
-    <>
-      <button ref={buttonRef} type="button" aria-haspopup="menu" aria-expanded={open} onClick={toggle} data-testid="take-action"
-        className={`inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-lg border border-background-300 bg-background-50 font-medium text-foreground-800 transition-colors duration-150 hover:bg-background-100 ${sizeClass}`}>
-        Take action
-        <i className={`ri-arrow-down-s-line text-base leading-none transition-transform duration-150 ${open ? "rotate-180" : ""}`} aria-hidden="true" />
-      </button>
+    <span className="inline-flex items-center gap-1">
+      {primary ? (
+        <button type="button" onClick={() => choose(primary)} title={primary.label} aria-label={primary.label} data-testid="primary-action" data-action={primary.action}
+          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-primary-200 bg-primary-50 text-primary-700 transition-colors hover:bg-primary-100">
+          <i className={`${primary.icon || "ri-arrow-right-line"} text-base leading-none`} aria-hidden="true" />
+        </button>
+      ) : null}
+      {listed.length ? (
+        variant === "row" ? (
+          <button ref={buttonRef} type="button" aria-haspopup="menu" aria-expanded={open} onClick={toggle} data-testid="take-action" title="More actions" aria-label="More actions"
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-foreground-600 transition-colors hover:bg-background-100 hover:text-foreground-900">
+            <i className="ri-more-fill text-lg leading-none" aria-hidden="true" />
+          </button>
+        ) : (
+          <button ref={buttonRef} type="button" aria-haspopup="menu" aria-expanded={open} onClick={toggle} data-testid="take-action"
+            className={`inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-lg border border-background-300 bg-background-50 font-medium text-foreground-800 transition-colors duration-150 hover:bg-background-100 ${sizeClass}`}>
+            Take action
+            <i className={`ri-arrow-down-s-line text-base leading-none transition-transform duration-150 ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+          </button>
+        )
+      ) : null}
       {open && place ? createPortal(
         <div ref={menuRef} role="menu" aria-label="Actions" data-testid="take-action-menu"
           style={{ position: "fixed", ...(place.bottom !== undefined ? { bottom: place.bottom } : { top: place.top }), ...(align === "right" ? { right: window.innerWidth - place.left } : { left: place.left }) }}
           className="fade-in z-[86] min-w-[13rem] overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
-          {actions.map((action, index) => (
-            <div key={action.action}>
-              {index > 0 && action.tone === "danger" && actions[index - 1].tone !== "danger" ? <div className="my-1 border-t border-background-200" /> : null}
-              <button type="button" role="menuitem" onClick={() => choose(action)}
-                className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-background-100 focus:bg-background-100 focus:outline-none ${action.tone === "danger" ? "text-red-700" : action.tone === "primary" ? "font-medium text-foreground-950" : "text-foreground-800"}`}>
-                {action.label}
-                {action.kind === "offer_letter" || action.note === "required" ? <i className="ri-arrow-right-s-line ml-auto text-base leading-none text-foreground-400" aria-hidden="true" /> : null}
-              </button>
-            </div>
-          ))}
+          {listed.map((action, index) => item(action, index, listed))}
         </div>,
         document.body,
       ) : null}
 
       {active?.kind === "offer_letter" ? (
-        <OfferLetterDrawer application={application} onClose={close}
+        <OfferLetterDrawer application={application} reviewIssues={reviewIssues} onClose={close}
           onSent={() => { const to = active.to; setActive(null); if (to) onStatus?.(to); onResult?.("Offer letter sent.", true); onDone?.(); }} />
       ) : null}
-      {active && active.kind !== "offer_letter" && (active.note === "required" || active.kind === "reminder") ? (
-        <ActionDrawer title={active.label} subtitle={<>{application.studentName || "Application"}{application.reference ? <> &middot; {application.reference}</> : null}</>}
-          busy={busy} onClose={close} testId="action-drawer"
-          footer={<>
-            <button type="button" onClick={close} disabled={busy} className="h-9 cursor-pointer rounded-lg border border-background-300 px-3 text-sm font-medium text-foreground-700 hover:bg-background-100 disabled:opacity-50">Cancel</button>
-            <button type="button" onClick={() => void run()} disabled={busy || (active.note === "required" && !note.trim())} data-testid="action-confirm"
-              className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-background-50 disabled:cursor-not-allowed disabled:opacity-60 ${active.tone === "danger" ? "bg-red-600 hover:bg-red-700" : "bg-primary-500 hover:bg-primary-600"}`}>
-              {busy ? <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> : null}{active.label}
-            </button>
-          </>}>
-          <div className="space-y-3">
-            <p className="text-sm text-foreground-600">
-              {active.kind === "reminder" ? "The student or agent is emailed what this application still needs." :
-                active.to === "action_required" ? "The reason is sent to the student or agent, who corrects the application and resubmits it." :
-                  active.to === "rejected" ? "The reason is kept in the status history and sent with the status change." :
-                    active.to === "offer_accepted" ? "Record how the offer was accepted (for example by email). The note is kept in the status history." :
-                      "The note is kept in the status history."}
-            </p>
-            {noteField(active.note === "required", active.to === "action_required" ? "What needs to be corrected" : active.to === "rejected" ? "Why the application is rejected" : active.to === "offer_accepted" ? "e.g. Accepted by email on 12 November" : "")}
-            {error ? <p className="text-sm text-red-700" role="alert">{error}</p> : null}
-          </div>
-        </ActionDrawer>
-      ) : null}
-      {active && active.kind !== "offer_letter" && active.note !== "required" && active.kind !== "reminder" ? (
-        <ConfirmDialog title={`${active.label}?`} confirmLabel={active.label} tone={active.tone === "danger" ? "danger" : "primary"} busy={busy} onClose={close} onConfirm={() => void run()}
-          body={active.kind === "resend_offer" ? "The same offer letter is emailed to the same recipient again." : active.to ? `${application.studentName || "The application"} moves to ${statusInfo(workflow, active.to).label}.` : undefined}>
-          {active.note === "optional" ? noteField(false, "") : null}
+      {active?.kind === "coe" ? <CoeVoeDrawer application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {active && active.kind === "status" && active.requiresReason ? <ReasonDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {active && !["offer_letter", "coe"].includes(active.kind) && !(active.kind === "status" && active.requiresReason) && !isEnrol(active) ? (
+        <ConfirmDialog title={`${active.label}?`} confirmLabel={active.label} tone={active.tone === "danger" ? "danger" : "primary"} busy={busy} onClose={close} onConfirm={() => void runSimple()}
+          body={active.kind === "resend_offer" ? "The same offer letter is emailed to the same recipient again." : active.kind === "reminder" ? "The student or agent is emailed what this application still needs."
+            : active.to ? `${application.studentName || "The application"} moves to ${statusInfo(workflow, active.to).label}.` : undefined}>
+          {active.note !== "none" ? (
+            <div className="mt-2">
+              <label htmlFor={`action-note-${application.id}`} className={`${FORM_LABEL} mb-1 block`}>Note (optional)</label>
+              <textarea id={`action-note-${application.id}`} rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)}
+                className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40" />
+            </div>
+          ) : null}
           {error ? <p className="mt-2 text-sm text-red-700" role="alert">{error}</p> : null}
         </ConfirmDialog>
       ) : null}
-    </>
+    </span>
   );
 }

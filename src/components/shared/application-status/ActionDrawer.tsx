@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
  * A right-side drawer for an action that needs input (an offer letter, a reason): the same slide-over as the form's All steps
  * (StepDrawer), wider (440px), a full-height sheet on phones; Escape or the backdrop closes it unless it is busy.
  */
-export default function ActionDrawer({ title, subtitle, busy, onClose, footer, children, testId }: {
+export default function ActionDrawer({ title, subtitle, busy, onClose, footer, children, testId, wide = false }: {
   title: string;
   subtitle?: ReactNode;
   busy?: boolean;
@@ -13,6 +13,8 @@ export default function ActionDrawer({ title, subtitle, busy, onClose, footer, c
   footer: ReactNode;
   children: ReactNode;
   testId?: string;
+  /** Room for a document beside the controls (the offer letter preview). */
+  wide?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -31,7 +33,7 @@ export default function ActionDrawer({ title, subtitle, busy, onClose, footer, c
     <div className="fixed inset-0 z-[88]" role="presentation">
       <div className="drawer-backdrop absolute inset-0 bg-foreground-950/30" aria-hidden="true" onClick={() => { if (!busy) onClose(); }} />
       <div ref={panelRef} role="dialog" aria-modal="true" aria-label={title} data-testid={testId}
-        className="drawer-panel absolute inset-x-0 bottom-0 top-0 flex flex-col bg-background-50 sm:left-auto sm:w-[440px] sm:border-l sm:border-background-200 sm:shadow-xl">
+        className={`drawer-panel absolute inset-x-0 bottom-0 top-0 flex flex-col bg-background-50 sm:left-auto ${wide ? "sm:w-[min(1200px,96vw)]" : "sm:w-[440px]"} sm:border-l sm:border-background-200 sm:shadow-xl`}>
         <div className="flex items-start justify-between gap-3 border-b border-background-200 px-5 py-4">
           <div className="min-w-0">
             <h2 className="font-heading text-base font-semibold text-foreground-950">{title}</h2>

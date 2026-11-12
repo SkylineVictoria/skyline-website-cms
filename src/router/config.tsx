@@ -3,6 +3,7 @@ import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
 import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
 import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
 import IntegrationSettingsPage from "@/pages/admin/integrations/SettingsPage";
+import ApplicationStatusesPage from "@/pages/admin/ApplicationStatusesPage";
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import SiteLayout from "@/components/feature/SiteLayout";
@@ -253,6 +254,7 @@ const routes: RouteObject[] = [
           { path: "integrations/logs", element: <IntegrationLogsPage /> },
           { path: "integrations/settings", element: <RequireAdmin><IntegrationSettingsPage /></RequireAdmin> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
+          { path: "settings/application-statuses", element: <RequireAdmin><ApplicationStatusesPage /></RequireAdmin> },
           // The Document Extraction page was removed; old links land on the dashboard.
           { path: "knowledge/documents", element: <Navigate to="/admin" replace /> },
         ],

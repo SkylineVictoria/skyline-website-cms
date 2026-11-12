@@ -190,7 +190,7 @@ interface WorkspaceProps {
   /** Called once the application is submitted (e.g. to go back to the list). */
   onSubmitted?: (reference: string, studentName: string) => void;
   /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
-  reviewBar?: ReactNode;
+  reviewBar?: ReactNode | ((reviewIssues: number) => ReactNode);
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -1841,7 +1841,7 @@ export default function ApplicationWorkspace({
         onPrevious={() => showStage(stage - 1)}
         previousDisabled={stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
-        message={isReview && reviewBar ? reviewBar : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
+        message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
           isReview
             ? !readOnly && canSubmitHere

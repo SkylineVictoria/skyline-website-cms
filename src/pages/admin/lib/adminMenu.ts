@@ -29,7 +29,7 @@ export const menuIcon = (key: string) => Object.hasOwn(icons, key) ? icons[key] 
 const routes = new Set([
   '/admin/integrations',
   '/', '/admin', '/admin/courses', '/admin/pages', '/admin/navigation', '/admin/footer',
-  '/admin/settings', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
+  '/admin/settings', '/admin/settings/application-statuses', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
   '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',

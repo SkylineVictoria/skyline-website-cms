@@ -341,15 +341,15 @@ export default function ApplicationsTable({
                             application={{ id: row.id, status: row.status, reference: row.reference, studentName: row.studentName, studentId: null,
                               course: row.courses[0] ? { title: row.courses[0].title, code: row.courses[0].code } : null, intake: row.intake }}
                             onStatus={(next) => setStatusOverride((prev) => ({ ...prev, [row.id]: next }))}
-                            onResult={(message) => toast.show(message)}
-                            onCoe={() => navigate("/agency/registrations")}
+                            onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)}
+                            variant="row"
                           />
                         ) : applicantAction ? (
                           <Link to={paths.detail(row.id)} className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-lg border border-background-300 px-2.5 text-xs font-medium text-foreground-800 transition-colors hover:bg-background-100">
                             {applicantAction.kind === "submit" ? "Resume draft" : applicantAction.label}
                           </Link>
                         ) : (
-                          <span className="text-xs text-foreground-400" data-testid="no-action">No action</span>
+                          <span className="px-2 text-sm text-foreground-400" title="No action available for your role" data-testid="no-action">—</span>
                         )}
                       </td>
                     </tr>

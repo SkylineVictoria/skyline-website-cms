@@ -34,7 +34,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const [copyText, setCopyText] = useState<string | null>(null);
   const [copyIsHtml, setCopyIsHtml] = useState(false);
   // Emails are not signed; everything else of the one template table is offered.
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && t.category !== "student_offer_letter" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
 
   // The record's own values (name, address, course…) and the first recipient.

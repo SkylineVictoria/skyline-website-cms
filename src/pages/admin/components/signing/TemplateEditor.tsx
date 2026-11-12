@@ -5,6 +5,10 @@ import PdfPages from "@/components/signing/PdfPages";
 import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
 import TemplatePreviewDialog from "./TemplatePreviewDialog";
 import DocumentSections from "./DocumentSections";
+import { LetterTestDialog, UnmappedTokens } from "./LetterTemplateTools";
+import { LETTER_CATEGORY, loadLetterRegistry, rehostImagesIn } from "@/lib/offerLetters";
+import { unmappedTokens, type LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
+import { isTemplateAsset } from "../../../../../supabase/functions/_shared/rich-html";
 import { sectionsReport } from "@/lib/templateSections";
 import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
 import { docxText, pdfBytes, signingAction, signingAdmin, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
@@ -62,12 +66,18 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   /** Sectioned documents: what the template asks for, shown before it is saved (TPL-02). */
   const [confirming, setConfirming] = useState<ReturnType<typeof sectionsReport> | null>(null);
   const [versions, setVersions] = useState<Array<{ version: number; created_at: string; name: string }> | null>(null);
+  /** Student offer letters (LOO): the {{variable}} registry, the save check of unmapped tokens, and the test dialog. */
+  const [registry, setRegistry] = useState<LetterVariable[] | null>(null);
+  const [letterCheck, setLetterCheck] = useState(false);
+  const [letterTest, setLetterTest] = useState<"sample" | "application" | null>(null);
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   useEffect(() => { if (template) void signingAdmin<Array<{ version: number; created_at: string; name: string }>>("template_versions", template.id).then(setVersions).catch(() => setVersions([])); }, [template]);
 
   const hrms = isTemplateType(draft.category);
+  const loo = draft.category === LETTER_CATEGORY;
+  useEffect(() => { if (loo && !registry) void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message)); }, [loo, registry]);
   const spec = hrms ? TEMPLATE_TYPES.find((t) => t.type === draft.category) : undefined;
-  const signed = draft.kind !== "email";
+  const signed = draft.kind !== "email" && !loo;
   // A document template (not an HRMS letter or email, not a PDF) has a header, a body and a footer, and [Variable] tokens.
   const sections = draft.kind === "text" && !hrms;
   const html = sections ? sanitizeRichHtml(draft.body_html) : sanitizeTemplateHtml(draft.body_html);
@@ -79,7 +89,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const payload = () => ({
     name: draft.name.trim(), title: (draft.kind === "email" ? draft.subject : draft.title).trim(), subject: draft.kind === "email" ? draft.subject.trim() : null,
     body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : sections ? richPlainText(html).slice(0, 200000) || null : templateText(html), kind: draft.kind,
-    ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: true } : {}), audience: draft.audience, category: draft.category,
+    ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: !loo } : {}), audience: loo ? "student" : draft.audience, category: draft.category,
     signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [], is_default: draft.is_default,
   });
   /** The same checks the database makes (hr.template_problem for letters and emails; the signing variable rules for the rest). */
@@ -97,15 +107,31 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       const missing = spec.requires.filter((k) => !templatePlaceholders(text).includes(k));
       if (missing.length) throw new Error(`This email must contain ${missing.map((k) => `{{${k}}}`).join(" and ")} (${placeholderLabels(missing)}).`);
     }
-    signingVariables([draft.title, text, ...draft.fields.filter((f) => f.role === SENDER).map((f) => f.value ?? "")].join("\n"));
+    if (!loo) signingVariables([draft.title, text, ...draft.fields.filter((f) => f.role === SENDER).map((f) => f.value ?? "")].join("\n"));
+  };
+  const letterParts = () => ({ title: draft.title, header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html });
+  const unmapped = loo && registry ? unmappedTokens(Object.values(letterParts()).join("\n"), registry) : [];
+  /** Offer letters keep no embedded pictures: any left from an older version or a Word import go to template-assets before saving. */
+  const rehostSections = async () => {
+    const patch: Partial<Draft> = {};
+    let failed = 0;
+    for (const field of ["header_html", "body_html", "footer_html"] as const) {
+      const srcs = [...draft[field].matchAll(/<img\b[^>]*\ssrc="([^"]*)"/g)].map((m) => m[1]);
+      if (!srcs.some((src) => !isTemplateAsset(src))) continue;
+      const result = await rehostImagesIn(draft[field]);
+      patch[field] = result.html; failed += result.failed;
+    }
+    if (Object.keys(patch).length) setDraft((d) => ({ ...d, ...patch }));
+    if (failed) throw new Error(`${failed} picture(s) could not be copied to the picture store. Insert them again with Insert image.`);
   };
   const save = (confirmed = false) => run(async () => {
     check();
-    if (sections && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
-    setConfirming(null);
+    if (loo && !confirmed) { await rehostSections(); setLetterCheck(true); return; }
+    if (sections && !loo && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
+    setConfirming(null); setLetterCheck(false);
     if (draft.kind === "pdf" && file) await signingAction({ action: "template_upload", id: draft.id, template: payload() }, file);
     else await signingAdmin("template_save", draft.id, payload());
-    onSaved(draft.id ? "The template was saved as a new version." : "The template was added.");
+    onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : ""));
   });
   const documentSource = async (): Promise<string | Uint8Array> => {
     if (draft.kind === "pdf") return file ? new Uint8Array(await file.arrayBuffer()) : (await signingAction<{ url: string }>({ action: "template_url", id: draft.id })).url;
@@ -137,12 +163,27 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       </div>
     </Modal>;
   }
+  if (letterTest && registry) return <LetterTestDialog template={letterParts()} registry={registry} mode={letterTest} onClose={() => setLetterTest(null)} />;
+  if (letterCheck && registry) {
+    return <Modal open title="Check the variables before saving" width="max-w-2xl" onClose={() => setLetterCheck(false)}
+      footer={<><Button variant="outline" disabled={busy} onClick={() => setLetterCheck(false)}>Back to editing</Button>
+        <Button disabled={busy} onClick={() => void save(true)} data-testid="template-save-confirm">{busy ? "Saving…" : unmapped.length ? "Save as inactive" : "Save template"}</Button></>}>
+      <div className="space-y-3 text-sm" data-testid="letter-variable-check">
+        {error && <p role="alert" className={ALERT}>{error}</p>}
+        <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} />
+        <p className="text-foreground-600">Each saved version is kept: letters already issued keep the version they were made from.</p>
+      </div>
+    </Modal>;
+  }
   if (previewWith && hrms) return <TemplatePreviewDialog template={{ id: draft.id, type: draft.category as TemplateType, name: draft.name, subject: draft.kind === "email" ? draft.subject : draft.title, bodyHtml: html }} onClose={() => setPreviewWith(false)} />;
 
   return <Modal open title={template ? `Edit ${kindLabel} (version ${draft.version})` : `New ${kindLabel}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<>
       {hrms && draft.kind !== "pdf" && <Button variant="outline" disabled={busy} onClick={() => setPreviewWith(true)} data-testid="template-draft-preview">Preview with an employee's details</Button>}
-      {draft.kind !== "email" && <Button variant="outline" disabled={busy} onClick={() => void run(async () => { check(); const source = await documentSource(); setPreview(typeof source === "string" ? new Uint8Array(await (await fetch(source)).arrayBuffer()) : source); })}>Preview the PDF</Button>}
+      {loo ? <>
+        <Button variant="outline" disabled={busy || !registry} onClick={() => setLetterTest("sample")} data-testid="letter-preview-sample">Preview with sample application</Button>
+        <Button variant="outline" disabled={busy || !registry} onClick={() => setLetterTest("application")} data-testid="letter-test-application-open">Test with application</Button>
+      </> : draft.kind !== "email" && <Button variant="outline" disabled={busy} onClick={() => void run(async () => { check(); const source = await documentSource(); setPreview(typeof source === "string" ? new Uint8Array(await (await fetch(source)).arrayBuffer()) : source); })}>Preview the PDF</Button>}
       <span className="flex-1" />
       <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
       <Button disabled={busy} onClick={() => void save()} data-testid="template-save">{busy ? "Saving…" : "Save template"}</Button></>}>
@@ -163,10 +204,12 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
             {categoryOptions(draft.kind).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </Select>
         </Field>
-        {draft.kind !== "email" && <Field label="Used for"><Select value={draft.audience} disabled={hrms} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>}
+        {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>}
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
-      {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError} />
+      {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}
+      {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError}
+        {...(loo ? { letterVariables: registry ?? [], storageImages: true } : {})} />
       : draft.kind !== "pdf" ? <div className="space-y-2">
         <RichTextEditor key={draft.id ?? `new-${draft.kind}`} value={draft.body_html} onChange={(body_html) => setDraft((d) => ({ ...d, body_html }))} placeholders={placeholders} />
         <div className="flex flex-wrap items-center gap-4 text-xs text-foreground-600">

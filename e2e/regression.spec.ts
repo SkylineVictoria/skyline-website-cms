@@ -484,6 +484,14 @@ const wfApplication = (agency: string, status: string, name: string, extra: Reco
   const vals = cols.map((c) => values[columns.indexOf(c)]);
   return sql(`insert into public.enrollment_applications(${cols.join(", ")}) values (${vals.join(", ")}) returning id`).split("\n")[0];
 };
+/** What the list offers for a status, from the transitions table (primary icon button; the "⋯" menu: the rest, Reject / Withdraw last). */
+const wfMenu = (status: string) => {
+  const rows = sql(`select label || chr(9) || is_primary::text from public.application_status_transitions where from_status = '${status}' and is_active and not is_automatic order by (tone = 'danger'), sort, action_key`)
+    .split("\n").filter(Boolean).map((line) => line.split("\t"));
+  return { primary: rows.find((r) => r[1] === "true")?.[0] ?? null, menu: rows.filter((r) => r[1] !== "true").map((r) => r[0]) };
+};
+const wfLabel = (status: string, action: string) => sql(`select label from public.application_status_transitions where from_status = '${status}' and action_key = '${action}'`);
+const wfStatusLabel = (status: string) => sql(`select label from public.application_statuses where value = '${status}'`);
 const wfPortalUser = async (label: string, agency: string, role: "agent" | "student", studentId?: string) => {
   const who = person(label);
   const authId = await createAuthUser(who.email);
@@ -512,28 +520,39 @@ test("status workflow: the list opens an application from its name; Take action 
   await expect(page).toHaveURL(new RegExp(`/admin/applications/${ids.submitted}`));
   await page.goBack();
   await page.getByPlaceholder("Search name, email or reference").fill(`WF${tag}`);
-  // Take action: exactly the staff moves of each status, from the backend.
+  // Actions: exactly the staff moves of each status from the backend (expected values read from the database, not written here):
+  // the primary one as an icon button, the rest in the "⋯" menu with Reject / Withdraw last.
   const menuOf = async (name: string) => {
     await row(name).getByTestId("take-action").click();
     const items = await page.getByTestId("take-action-menu").getByRole("menuitem").allInnerTexts();
     await page.keyboard.press("Escape");
     return items.map((item) => item.trim());
   };
-  expect(await menuOf(names.submitted)).toEqual(["Issue offer letter", "Action required", "Withdraw", "Reject"]);
-  expect(await menuOf(names.action_required)).toEqual(["Send reminder", "Withdraw", "Reject"]);
-  expect(await menuOf(names.offer_issued)).toEqual(["Resend offer letter", "Mark offer accepted", "Withdraw", "Reject"]);
-  await expect(row(names.enrolled).getByTestId("no-action")).toHaveText("No action");
+  for (const status of ["submitted", "action_required", "offer_issued", "enrolled"] as const) {
+    const expected = wfMenu(sql(`select status from public.enrollment_applications where id = '${ids[status]}'`));
+    if (expected.primary) await expect(row(names[status]).getByTestId("primary-action")).toHaveAttribute("aria-label", expected.primary);
+    else await expect(row(names[status]).getByTestId("primary-action")).toHaveCount(0);
+    expect(await menuOf(names[status]), status).toEqual(expected.menu);
+  }
+  expect(wfMenu("offer_issued").menu, "no manual Mark offer accepted").not.toContain("Mark offer accepted");
   await shot(page, "workflow-list");
-  // A reason is required to reject; the badge changes at once and the toast confirms.
+  // A reason from the backend's list is required to reject; the badge changes at once, the toast offers Undo, then Final.
   await row(names.action_required).getByTestId("take-action").click();
-  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Reject" }).click();
-  const drawer = page.getByTestId("action-drawer");
-  await expect(drawer.getByTestId("action-confirm")).toBeDisabled();
-  await drawer.getByLabel(/Reason/).fill("Course is full");
-  await drawer.getByTestId("action-confirm").click();
-  await expect(row(names.action_required).getByTestId("status-badge")).toHaveText("Rejected");
-  await expect(page.getByText(`${names.action_required} is now Rejected.`)).toBeVisible();
-  expect(sql(`select status from public.enrollment_applications where id = '${ids.action_required}'`)).toBe("rejected");
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: wfLabel("action_required", "reject") }).click();
+  const dialog = page.getByTestId("reason-dialog");
+  await expect(dialog.getByTestId("dialog-application")).toContainText(names.action_required);
+  await expect(dialog.getByTestId("reason-confirm")).toBeDisabled();
+  const reasons = (await dialog.getByTestId("reason-select").locator("option").allInnerTexts()).slice(1);
+  expect(reasons).toEqual(sql(`select string_agg(label, '|' order by is_other, sort, lower(label)) from public.status_reasons where status = 'rejected' and is_active`).split("|"));
+  await dialog.getByTestId("reason-select").selectOption({ label: "Other" });
+  await expect(dialog.getByTestId("reason-confirm")).toBeDisabled();
+  await dialog.getByTestId("reason-other").fill("Course is full");
+  await dialog.getByTestId("reason-confirm").click();
+  await expect(row(names.action_required).getByTestId("status-badge")).toHaveText(wfStatusLabel("rejected"));
+  await expect(page.getByText(`${names.action_required} is now ${wfStatusLabel("rejected")}.`)).toBeVisible();
+  await expect(page.getByTestId("toast-action")).toHaveText("Undo");
+  await expect(row(names.action_required).getByTestId("final-badge")).toBeVisible();
+  expect(sql(`select status || '|' || h.reason from public.enrollment_applications a join public.enrollment_application_status_history h on h.application_id = a.id where a.id = '${ids.action_required}' order by h.created_at desc limit 1`)).toBe("rejected|Course is full");
   // The backend refuses moves the workflow does not allow, whoever asks.
   const client = await signedInClient(admin.email);
   const jump = await client.rpc("portal_set_application_status", { p_application_id: ids.submitted, p_status: "offer_accepted", p_note: "skip the letter" });
@@ -543,7 +562,117 @@ test("status workflow: the list opens an application from its name; Take action 
   const back = await client.rpc("portal_set_application_status", { p_application_id: ids.enrolled, p_status: "submitted", p_note: "" });
   expect(back.error?.message).toMatch(/Invalid admissions transition/);
   const staffAccept = await client.rpc("portal_offer_accept", { p_application: ids.offer_issued });
-  expect(staffAccept.error?.message).toMatch(/Mark offer accepted/);
+  expect(staffAccept.error?.message).toMatch(/Only the student or agent/);
+  const automatic = await client.rpc("change_application_status", { p_application: ids.offer_issued, p_action: "accept_offer", p_payload: {} });
+  expect(automatic.error?.message).toMatch(/automatically/);
+});
+
+test("status flow: Submitted → Issue offer letter → accepted → Issue CoE / VoE → Enrol → Enrolled; Withdraw needs a reason", async ({ page, browser }) => {
+  const admin = await createAdmin("flow-main");
+  const agency = wfAgency("main flow");
+  const agent = await wfPortalUser("flow-agent", agency, "agent");
+  const tag = agent.local.slice(-6);
+  const name = `Flow${tag} Student`;
+  const id = wfApplication(agency, "submitted", name, { created_by: agent.profile, assigned_agent_id: agent.profile, data: '{"values":{"first_name":"Flow","last_name":"Student"}}' });
+  const other = wfApplication(agency, "submitted", `Flow${tag} Other`);
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto("/admin/applications");
+  await page.getByPlaceholder("Search name, email or reference").fill(`Flow${tag}`);
+  const row = (text: string) => page.locator("tr", { hasText: text });
+  const statusOf = () => sql(`select status from public.enrollment_applications where id = '${id}'`);
+  const primaryOf = (status: string) => wfMenu(status).primary!;
+
+  // 1. Submitted: the primary icon button issues the offer letter (uploaded here; templates are covered by their own tests).
+  await expect(row(name).getByTestId("primary-action")).toHaveAttribute("aria-label", primaryOf("submitted"));
+  await row(name).getByTestId("primary-action").click();
+  const offer = page.getByTestId("offer-letter-drawer");
+  await expect(offer.getByTestId("offer-recipient")).toContainText(agent.email);
+  await offer.getByTestId("offer-mode").getByRole("radio", { name: "Upload letter" }).click();
+  await offer.locator("#offer-upload").setInputFiles({ name: "LOO.pdf", mimeType: "application/pdf", buffer: PDF });
+  await offer.getByTestId("send-offer-letter").click();
+  await expect.poll(statusOf).toBe("offer_issued");
+  await expect(row(name).getByTestId("status-badge")).toHaveText(wfStatusLabel("offer_issued"));
+
+  // 2. The agent accepts in the portal (the system path; no staff "Mark offer accepted"); who and when are recorded.
+  const agentContext = await browser.newContext({ baseURL: `http://127.0.0.1:${E2E_PORT}` });
+  const agentPage = await agentContext.newPage();
+  await signInThroughTheForm(agentPage, agent.email);
+  await expect(agentPage).toHaveURL(/\/agency/, { timeout: 30_000 });
+  await agentPage.goto(`/agency/applications/${id}`);
+  await agentPage.getByTestId("accept-offer").click();
+  await agentPage.getByRole("alertdialog").getByRole("button", { name: "Accept offer" }).click();
+  await expect.poll(statusOf).toBe("offer_accepted");
+  await agentContext.close();
+  expect(sql(`select action_key || '|' || (actor is not null)::text from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_accepted'`)).toBe("accept_offer|true");
+
+  // 3. Offer accepted: Issue CoE / VoE is the primary action (it showed "No action" before). The registration is verified in PRISMS first.
+  const adminAuth = sql(`select auth_user_id from public.cms_users where email = '${admin.email}'`);
+  sql(`insert into public.enrollment_registrations(application_id, state, coe_number, created_by, lodged_at, lodged_by, verified_at, verified_by) values ('${id}', 'verified', 'COE${tag}', '${adminAuth}', now(), '${adminAuth}', now(), '${adminAuth}')`);
+  await page.reload();
+  await page.getByPlaceholder("Search name, email or reference").fill(`Flow${tag}`);
+  await expect(row(name).getByTestId("primary-action")).toHaveAttribute("aria-label", primaryOf("offer_accepted"));
+  await row(name).getByTestId("primary-action").click();
+  const coe = page.getByTestId("coe-drawer");
+  await expect(coe.getByTestId("coe-confirm")).toBeDisabled();
+  await coe.getByTestId("coe-number").fill(`COE${tag}`);
+  await coe.locator("#coe-upload").setInputFiles({ name: "CoE.pdf", mimeType: "application/pdf", buffer: PDF });
+  await expect(coe.getByTestId("coe-recipient")).toContainText(agent.email);
+  await coe.getByTestId("coe-confirm").click();
+  await expect.poll(statusOf).toBe("coe_issued");
+  await expect(row(name).getByTestId("status-badge")).toHaveText(wfStatusLabel("coe_issued"));
+  expect(sql(`select kind || '|' || document_number || '|' || (issued_at is not null)::text from public.enrollment_coe_documents where application_id = '${id}'`)).toBe(`coe|COE${tag}|true`);
+
+  // 4. CoE / VoE issued: Enrol (the date defaults to the intake's start or today) → Enrolled, then only Withdraw is left.
+  await expect(row(name).getByTestId("primary-action")).toHaveAttribute("aria-label", primaryOf("coe_issued"));
+  await row(name).getByTestId("primary-action").click();
+  const enrol = page.getByTestId("enrol-dialog");
+  await expect(enrol.getByTestId("enrol-date")).not.toHaveValue("");
+  await enrol.getByTestId("enrol-date").fill("2027-02-03");
+  await enrol.getByTestId("enrol-confirm").click();
+  await expect.poll(statusOf).toBe("enrolled");
+  await expect(row(name).getByTestId("status-badge")).toHaveText(wfStatusLabel("enrolled"));
+  expect(sql(`select payload->>'enrolment_date' from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'enrolled'`)).toBe("2027-02-03");
+  await expect(row(name).getByTestId("primary-action")).toHaveCount(0);
+  await row(name).getByTestId("take-action").click();
+  expect((await page.getByTestId("take-action-menu").getByRole("menuitem").allInnerTexts()).map((t) => t.trim())).toEqual(wfMenu("enrolled").menu);
+  await page.keyboard.press("Escape");
+  await shot(page, "status-flow-enrolled");
+
+  // 5. Withdraw another application with a reason, without notifying: Final, no email queued.
+  await row(`Flow${tag} Other`).getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: wfLabel("submitted", "withdraw") }).click();
+  const reason = page.getByTestId("reason-dialog");
+  await expect(reason.getByTestId("reason-confirm")).toBeDisabled();
+  await reason.getByTestId("reason-select").selectOption({ label: "Student request" });
+  await reason.getByTestId("dialog-notify").uncheck();
+  await reason.getByTestId("reason-confirm").click();
+  await expect(row(`Flow${tag} Other`).getByTestId("status-badge")).toHaveText(wfStatusLabel("withdrawn"));
+  await expect(row(`Flow${tag} Other`).getByTestId("final-badge")).toBeVisible();
+  expect(sql(`select h.reason || '|' || (select count(*) from public.admission_event_outbox o where o.application_id = h.application_id) from public.enrollment_application_status_history h where h.application_id = '${other}' and h.new_status = 'withdrawn'`)).toBe("Student request|0");
+});
+
+test("Settings › Application statuses: an admin renames a status (live everywhere, audited), the automatic moves are locked, reasons per status", async ({ page }) => {
+  const admin = await createAdmin("status-settings");
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto("/admin/settings/application-statuses");
+  await expect(page.getByTestId("status-row")).toHaveCount(Number(sql("select count(*) from public.application_statuses")));
+  const label = page.locator('[data-testid=status-row][data-key="withdrawn"]').getByTestId("status-label");
+  const original = wfStatusLabel("withdrawn");
+  await label.fill("Withdrawn by request");
+  await label.blur();
+  await expect.poll(() => wfStatusLabel("withdrawn")).toBe("Withdrawn by request");
+  await expect(page.locator('[data-testid=status-row][data-key="submitted"]').getByTestId("status-active")).toBeDisabled();
+  await page.getByTestId("status-settings-tabs").getByRole("radio", { name: "Transitions" }).click();
+  await expect(page.locator('[data-testid=transition-row][data-action="accept_offer"]').getByTestId("transition-active")).toBeDisabled();
+  await page.getByTestId("status-settings-tabs").getByRole("radio", { name: "Reasons" }).click();
+  await expect(page.locator('[data-testid=reason-group][data-status="rejected"]').getByTestId("reason-row").last()).toContainText("");
+  await page.getByTestId("status-settings-tabs").getByRole("radio", { name: "Statuses" }).click();
+  await page.getByTestId("status-history-link").click();
+  await expect(page.getByTestId("status-history")).toContainText("Withdrawn by request");
+  await shot(page, "status-settings");
+  sql(`update public.application_statuses set label = '${original.replace(/'/g, "''")}' where value = 'withdrawn'`);
 });
 
 test("status workflow: an offer letter is uploaded and sent to the agent who started the application; the agent accepts it", async ({ page, browser }) => {
@@ -566,6 +695,10 @@ test("status workflow: an offer letter is uploaded and sent to the agent who sta
   await drawer.getByTestId("offer-mode").getByRole("radio", { name: "Upload letter" }).click();
   await drawer.locator("#offer-upload").setInputFiles({ name: "Signed LOO.pdf", mimeType: "application/pdf", buffer: PDF });
   await drawer.getByLabel(/Message/).fill("Welcome to Skyline");
+  // Review has open items (the fixture has no answers): Send needs an admin override note.
+  await expect(drawer.getByTestId("offer-review-issues")).toBeVisible();
+  await expect(drawer.getByTestId("send-offer-letter")).toBeDisabled();
+  await drawer.getByLabel(/Note to issue anyway/).fill("Documents checked by phone");
   await shot(page, "workflow-offer-upload");
   await drawer.getByTestId("send-offer-letter").click();
   await expect(page.getByText("Offer letter sent.")).toBeVisible();
@@ -592,11 +725,11 @@ test("status workflow: a template letter goes to the student when staff created 
   const adminAuth = sql(`select auth_user_id from public.cms_users where email = '${admin.email}'`);
   const agency = wfAgency("workflow template");
   const tag = person("wf-tpl").local.slice(-6);
-  sql(`insert into hr.sign_templates(name, title, body, body_html, created_by, kind, audience, category, bracket_variables)
-    values ('E2E LOO ${tag}', 'Letter of offer', 'Dear [Student Name]', '<p>Dear [Student Name], we are pleased to offer you a place.</p>', '${adminAuth}', 'text', 'student', 'other', true)`);
+  sql(`insert into hr.sign_templates(name, title, body_html, created_by, kind, audience, category)
+    values ('E2E LOO ${tag}', 'Letter of offer', '<p>Dear {{student.full_name}}, we are pleased to offer you a place.</p>', '${adminAuth}', 'text', 'student', 'student_offer_letter')`);
   // Staff created it for the student (no creator): the letter goes to the student.
   const student = sql(`insert into public.enrollment_students(agency_id, full_name, email) values ('${agency}', 'Tem Plate ${tag}', 'tem.plate.${tag}@example.test') returning id`).split("\n")[0];
-  const staffMade = wfApplication(agency, "submitted", `Tem Plate ${tag}`, { student_id: student, student_email: `tem.plate.${tag}@example.test` });
+  const staffMade = wfApplication(agency, "submitted", `Tem Plate ${tag}`, { student_id: student, student_email: `tem.plate.${tag}@example.test`, data: `{"values":{"first_name":"Tem","last_name":"Plate ${tag}"}}` });
   // The student applied directly: also the student.
   const directStudent = sql(`insert into public.enrollment_students(agency_id, full_name, email) values ('${agency}', 'Di Rect ${tag}', 'di.rect.${tag}@example.test') returning id`).split("\n")[0];
   const studentUser = await wfPortalUser("wf-direct", agency, "student", directStudent);
@@ -617,9 +750,12 @@ test("status workflow: a template letter goes to the student when staff created 
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Student");
   await expect(drawer.getByTestId("offer-recipient")).toContainText(`tem.plate.${tag}@example.test`);
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Staff created this application for the student");
-  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag}` });
-  await drawer.getByTestId("offer-preview").click();
-  await expect(drawer.getByTestId("offer-preview-frame")).toBeVisible({ timeout: 30_000 });
+  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag} (v1)` });
+  await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", "1", { timeout: 30_000 });
+  await expect(drawer.getByTestId("needs-input")).toContainText("Every detail is filled from the application");
+  // The fixture has no answers, so Review has open items: an admin issues the letter anyway with a note.
+  await expect(drawer.getByTestId("offer-review-issues")).toBeVisible();
+  await drawer.getByLabel(/Note to issue anyway/).fill("Checked with the student");
   await shot(page, "workflow-offer-template");
   await drawer.getByTestId("send-offer-letter").click();
   await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${staffMade}'`)).toBe("offer_issued");
@@ -641,4 +777,174 @@ test("status workflow: a template letter goes to the student when staff created 
   await expect(drawer.getByTestId("send-offer-letter")).toBeDisabled();
   await drawer.getByLabel(/Note to issue anyway/).fill("Confirmed with the student by phone");
   await expect(drawer.getByTestId("send-offer-letter")).toBeEnabled();
+});
+
+/* ------------------------------------------------------------------ offer letter (LOO) templates and the issue drawer */
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const ASSET_SRC = /\/storage\/v1\/object\/public\/template-assets\/default\/[0-9a-f-]{36}\.png$/;
+/** The text of each page of a PDF (pdf.js in Node; the browser in the lab cannot draw pdf.js pages). */
+async function pdfPages(bytes: Uint8Array): Promise<string[]> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({ data: bytes, verbosity: 0 }).promise;
+  const pages: string[] = [];
+  for (let n = 1; n <= doc.numPages; n++) pages.push(((await (await doc.getPage(n)).getTextContent()).items as Array<{ str: string }>).map((t) => t.str).join(" "));
+  return pages;
+}
+
+test("offer letter templates: a logo inserted and pictures pasted go to template-assets, a pasted Word table keeps its borders and alignment, variables are chips, unmapped tokens keep it inactive", async ({ page }) => {
+  const admin = await createAdmin("loo-tpl");
+  const tag = person("loo-tag").local.slice(-6);
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto("/admin/staff/templates");
+  await page.getByTestId("template-new-offer-letter").click();
+  const dialog = page.getByTestId("template-dialog");
+  await dialog.getByTestId("template-name").fill(`E2E LOO tpl ${tag}`);
+  await dialog.getByTestId("template-subject").fill("Letter of offer");
+  // Header: the logo through Insert image is uploaded to template-assets (not embedded).
+  await dialog.getByTestId("section-tab-header").click();
+  const header = dialog.getByTestId("section-editor-header");
+  await header.click();
+  await page.getByRole("button", { name: "Insert image" }).click();
+  await page.getByTestId("section-editor-header-image-input").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: Buffer.from(PNG_B64, "base64") });
+  await expect(header.locator("img")).toHaveAttribute("src", ASSET_SRC, { timeout: 30_000 });
+  // Body: pasted from Word: an embedded picture is re-hosted, one from another site is reported, the table keeps its borders and alignment,
+  // {{variables}} become chips; an old $[placeholder] stays marked.
+  await dialog.getByTestId("section-tab-body").click();
+  const body = dialog.getByTestId("section-editor-body");
+  await body.click();
+  const pasted = `<p>Dear {{student.full_name}},</p><p><img src="data:image/png;base64,${PNG_B64}" width="80" height="40"></p><p><img src="https://evil.example/logo.png"></p>`
+    + `<table class=MsoTableGrid border=1 style='border-collapse:collapse;border:none'><tr><td style='border:solid windowtext 1.0pt;padding:0cm 5.4pt 0cm 5.4pt'><p class=MsoNormal>Tuition</p></td>`
+    + `<td style='border:solid windowtext 1.0pt;border-left:none;padding:0cm 5.4pt 0cm 5.4pt'><p class=MsoNormal align=right style='text-align:right'>{{fees.tuition}}</p></td></tr></table><p>Ref $[dogField]</p>`;
+  await body.evaluate((el, html) => {
+    const data = new DataTransfer(); data.setData("text/html", html);
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, pasted);
+  await expect(body.locator("img")).toHaveCount(1, { timeout: 30_000 });
+  await expect(body.locator("img")).toHaveAttribute("src", ASSET_SRC);
+  await expect(page.getByTestId("section-editor-body-notice")).toContainText("1 picture could not be copied");
+  await expect(body.locator('.var-chip[data-var="student.full_name"]')).toHaveText("Student · Full name");
+  await expect(body.locator('.var-chip[data-var="fees.tuition"]')).toBeVisible();
+  // Insert variable: a chip at the cursor, saved as {{course.name}}.
+  await body.locator("p", { hasText: "Ref" }).click();
+  await page.keyboard.press("End");
+  await page.getByTestId("letter-var-course.name").click();
+  await expect(body.locator('.var-chip[data-var="course.name"]')).toBeVisible();
+  await shot(page, "loo-template-editor");
+  // Save: the unmapped token is listed; the template is saved inactive.
+  await page.getByTestId("template-save").click();
+  const check = page.getByTestId("letter-variable-check");
+  await expect(check.getByTestId("unmapped-token")).toHaveCount(1);
+  await expect(check.getByTestId("unmapped-token")).toHaveAttribute("data-token", "$[dogField]");
+  await page.getByRole("button", { name: "Save as inactive" }).click();
+  const row = page.getByTestId("letter-template-row").filter({ hasText: `E2E LOO tpl ${tag}` });
+  await expect(row.getByTestId("letter-template-status")).toHaveText("Inactive");
+  await expect(row.getByTestId("letter-template-unmapped")).toHaveText("1 unmapped");
+  await expect(row.getByTestId("letter-template-toggle")).toBeDisabled();
+  const saved = sql(`select status || '|' || version || '|' || header_html || '|' || body_html from hr.sign_templates where name = 'E2E LOO tpl ${tag}'`);
+  expect(saved.startsWith("archived|1|")).toBe(true);
+  for (const kept of ["template-assets/default/", "{{student.full_name}}", "{{fees.tuition}}", "{{course.name}}", "border-top:1pt solid #000000", "border-left:none", "padding:0pt 5.4pt", "text-align:right"])
+    expect(saved, kept).toContain(kept);
+  for (const gone of ["data:image", "evil.example", "MsoTableGrid", "var-chip"]) expect(saved, gone).not.toContain(gone);
+  const client = await signedInClient(admin.email);
+  const id = sql(`select id from hr.sign_templates where name = 'E2E LOO tpl ${tag}'`);
+  expect((await client.rpc("letter_template_set_active", { p_id: id, p_active: true })).error?.message).toMatch(/Map every variable/);
+  // Map to variable converts it everywhere; saved again (version 2) it can be made active.
+  await row.getByTestId("letter-template-edit").click();
+  await page.getByTestId("unmapped-tokens").getByTestId("unmapped-map-select").selectOption("application.reference");
+  await page.getByTestId("unmapped-tokens").getByTestId("unmapped-convert").click();
+  await expect(page.getByTestId("unmapped-tokens")).toHaveCount(0);
+  await page.getByTestId("template-save").click();
+  await expect(page.getByTestId("unmapped-none")).toBeVisible();
+  await page.getByTestId("template-save-confirm").click();
+  await expect(row.getByTestId("letter-template-toggle")).toBeEnabled();
+  await row.getByTestId("letter-template-toggle").click();
+  await expect(row.getByTestId("letter-template-status")).toHaveText("Active");
+  expect(sql(`select status || '|' || version || '|' || (body_html like '%Ref {{application.reference}}%')::text from hr.sign_templates where id = '${id}'`)).toBe("active|2|true");
+  // Preview with the sample application: the letter is made in the browser, with the uploaded logo.
+  await row.getByRole("button", { name: "Preview" }).click();
+  await expect(page.getByTestId("letter-preview")).toHaveAttribute("data-pages", "1", { timeout: 30_000 });
+  await expect(page.getByTestId("letter-preview")).toHaveAttribute("data-missing", "");
+});
+
+test("offer letter: values from the application, course, intake and fees; missing details block Send; fill for this letter vs save to source; an optional one needs the blank tick; header and footer on every page", async ({ page }) => {
+  const admin = await createAdmin("loo-issue");
+  const adminAuth = sql(`select auth_user_id from public.cms_users where email = '${admin.email}'`);
+  const agency = wfAgency("loo issue");
+  const tag = person("loo-iss").local.slice(-6);
+  const course = `loo-course-${tag}`;
+  sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', '${course}', 'BSB${tag}', 'Diploma of Business ${tag}', 'Published')`);
+  const intake = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${course}', '2027-02-03', '2028-02-02', 'February 2027') returning id`).split("\n")[0];
+  sql(`insert into public.course_fee_setups(course_id, intake_id, tuition_fee, enrolment_fee) values ('${course}', null, 14000, 250), ('${course}', '${intake}', 14500, null)`);
+  const values = { title: "ms", first_name: "ASHA", middle_name: "rani", last_name: "o'neil", dob: "2001-04-12", nationality: "India", au_street: "1 Example St", au_suburb: "Melbourne", au_state: "VIC", au_zip: "3000" };
+  const id = wfApplication(agency, "submitted", `Asha ${tag}`, { student_email: `asha.${tag}@example.test`, data: JSON.stringify({ values }) });
+  sql(`begin; select set_config('portal.draft_command', '${id}', true); insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id) values ('${id}', '${course}', 'BSB${tag}', 'Diploma of Business ${tag}', '${intake}'); commit;`);
+  const clauses = Array.from({ length: 45 }, (_, i) => `<p>Clause ${i + 1}: the student agrees to the terms of enrolment, refunds, attendance and course progress.</p>`).join("");
+  sql(`insert into hr.sign_templates(name, title, header_html, body_html, footer_html, created_by, kind, audience, category) values ('E2E LOO issue ${tag}', 'Letter of offer',
+    '<table style="border:none;width:100%"><tr><td style="width:50%"><strong>Skyline Institute of Technology</strong></td><td style="text-align:right;width:50%">Level 8, 310 King Street, Melbourne VIC 3000</td></tr></table>',
+    '<p>Dear {{student.full_name}}, born {{student.dob}}, passport {{student.passport_number}}.</p><p>{{course.name}} (CRICOS {{course.cricos}}) starts {{course.start_date}} ({{course.intake}}). Tuition {{fees.tuition}}, total {{fees.total}}, material {{fees.material}}.</p>${clauses}',
+    '<p>Page {{page.number}} of {{page.total}} · {{student.initial_line}}</p>', '${adminAuth}', 'text', 'student', 'student_offer_letter')`);
+  await signInThroughTheForm(page, admin.email);
+  await expect(page).toHaveURL(/\/admin/);
+  await page.goto(`/admin/applications/${id}?stage=review`);
+  await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
+  await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
+  const drawer = page.getByTestId("offer-letter-drawer");
+  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO issue ${tag} (v1)` });
+  const preview = drawer.getByTestId("offer-letter-preview");
+  await expect(preview).toHaveAttribute("data-pages", /^[2-9]$/, { timeout: 30_000 });
+  // Needs your input: the passport and CRICOS (required) and the material fee (optional); Send says how many.
+  await expect(drawer.getByTestId("needs-input-count")).toHaveText("3");
+  await expect(drawer.getByTestId("needs-input-item")).toHaveCount(3);
+  await expect(drawer.getByTestId("send-offer-letter")).toHaveText(/Send \(3 details missing\)/);
+  await expect(drawer.getByTestId("send-offer-letter")).toBeDisabled();
+  // The values resolved from the application, the course, the intake and the fee setup.
+  await drawer.getByTestId("toggle-variable-check").click();
+  const valueOf = (key: string) => drawer.locator(`[data-testid=variable-check-row][data-key="${key}"]`).getByTestId("variable-check-value");
+  await expect(valueOf("student.full_name")).toHaveText("Ms Asha Rani O'Neil");
+  await expect(valueOf("student.dob")).toHaveText("12/04/2001");
+  await expect(valueOf("course.start_date")).toHaveText("03/02/2027");
+  await expect(valueOf("fees.tuition")).toHaveText("AUD$14,500.00");
+  await expect(valueOf("fees.total")).toHaveText("AUD$14,750.00");
+  // A yellow mark in the preview focuses its input.
+  await expect(preview.getByTestId("letter-mark").first()).toBeVisible();
+  await preview.locator('[data-testid=letter-mark][data-key="course.cricos"]').first().click();
+  await expect(drawer.getByTestId("letter-input-course.cricos")).toBeFocused();
+  await shot(page, "loo-issue-needs-input");
+  // CRICOS for this letter only; the passport saved to the application (confirmed).
+  await drawer.getByTestId("letter-input-course.cricos").fill("0101234");
+  await drawer.getByTestId("letter-input-student.passport_number").fill("P7654321");
+  await drawer.getByTestId("save-source-student.passport_number").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Save to source" }).click();
+  await expect(drawer.getByTestId("saved-to-source")).toContainText("Passport number");
+  expect(sql(`select public.application_values('${id}')->>'passport_number'`)).toBe("P7654321");
+  // The optional material fee: Send stays disabled until it is filled or ticked blank.
+  await expect(drawer.getByTestId("send-offer-letter")).toHaveText(/Send \(1 detail missing\)/);
+  await drawer.getByTestId("leave-blank-fees.material").check();
+  await expect(drawer.getByTestId("send-offer-letter")).toHaveText(/Send offer letter/);
+  await expect(preview).toHaveAttribute("data-missing", "", { timeout: 30_000 });
+  // Review still has open items for this short fixture: the admin override note.
+  await drawer.getByLabel(/Note to issue anyway/).fill("Checked with the student");
+  // The final check lists what was filled by hand.
+  await drawer.getByTestId("send-offer-letter").click();
+  const finalCheck = page.getByTestId("final-check");
+  await expect(finalCheck).toContainText("CRICOS course code: 0101234");
+  await expect(finalCheck).toContainText("Passport number: P7654321");
+  await expect(finalCheck).toContainText("Material fee: left blank");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Send offer letter" }).click();
+  await expect.poll(() => sql(`select status from public.enrollment_applications where id = '${id}'`)).toBe("offer_issued");
+  expect(sql(`select template_name || '|' || template_version || '|' || jsonb_array_length(manual_values) from public.enrollment_offer_letters where application_id = '${id}'`)).toBe(`E2E LOO issue ${tag}|1|3`);
+  expect(sql(`select cricos from public.cms_courses where id = '${course}'`), "a value for this letter does not change the course").toBe("");
+  const note = sql(`select note from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'offer_issued'`);
+  for (const part of ["Filled by hand:", "CRICOS course code (this letter only)", "Material fee (left blank)", "Passport number (saved to Application form › Passport number)"]) expect(note).toContain(part);
+  // The PDF that was sent: the header and the footer with its page number on every page; the values in the text.
+  const pages = await pdfPages(Uint8Array.from(Buffer.from(sql(`select encode(content, 'base64') from public.enrollment_offer_letters where application_id = '${id}'`).replace(/\s+/g, ""), "base64")));
+  expect(pages.length).toBeGreaterThanOrEqual(2);
+  pages.forEach((text, i) => {
+    expect(text, `page ${i + 1} header`).toContain("Skyline Institute");
+    expect(text, `page ${i + 1} footer`).toContain(`Page ${i + 1} of ${pages.length}`);
+    expect(text, `page ${i + 1} initials`).toContain("Student initials:");
+  });
+  const all = pages.join(" ");
+  for (const expected of ["Dear Ms Asha Rani O'Neil, born 12/04/2001, passport P7654321.", "(CRICOS 0101234) starts 03/02/2027 (February 2027)", "Tuition AUD$14,500.00, total AUD$14,750.00, material ."]) expect(all).toContain(expected);
 });

@@ -1,7 +1,8 @@
 // Rich document HTML (TPL-02): the header, body and footer of a document template. Runtime-neutral (browser, Deno, Node tests); no DOM.
 // One allow-list for everything: the editor sanitises what it loads and saves, the Edge Function sanitises again before it renders, and
 // the database refuses scripts, frames, handlers and linked pictures on top (hr.rich_html_problem). Kept: paragraphs, headings, lists,
-// quotes, rules, tables (with column widths, borders on/off, cell shading), pictures uploaded into the template (PNG / JPEG data URIs),
+// quotes, rules, tables (column widths, borders on/off, per-cell borders and padding, colspan / rowspan, cell shading), line and paragraph
+// spacing, pictures uploaded into the template (PNG / JPEG data URIs, or files in the template-assets Storage bucket),
 // bold / italic / underline / strike / sub / sup, text colour and highlight, font size, alignment and links (https, mailto). Font families
 // are dropped: the PDF has one family (Arimo, Arial-compatible), so a family the editor showed would silently change in the PDF.
 // Everything else is removed; the text inside an unknown tag is kept, the content of a script, style, frame or form is not.
@@ -129,8 +130,54 @@ export function safeHref(value: string | undefined): string | null {
   if (/^(https?:\/\/|mailto:)[^\s<>"'\u0000-\u001f]+$/i.test(href) && href.length <= 2000) return href;
   return null;
 }
+/** A picture in the template-assets bucket (the project's Storage, or the local stack's): the only linked pictures a template may hold. */
+export const TEMPLATE_ASSET_URL = /^(?:https:\/\/[a-z0-9-]+\.supabase\.co|http:\/\/(?:127\.0\.0\.1|localhost):\d{2,5})\/storage\/v1\/object\/public\/template-assets\/(?:default|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg)$/;
+export const isTemplateAsset = (src: string | undefined) => TEMPLATE_ASSET_URL.test(String(src ?? "").trim());
+
+const BORDER_WIDTHS: Record<string, number> = { thin: 0.75, medium: 1.5, thick: 2.25 };
+/** One border side ("solid windowtext 1.0pt", "1px solid #333", "none") as "0.75pt solid #000000" / "none", or null when it says nothing. */
+export function borderOf(value: string | undefined): string | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return null;
+  const parts = v.replace(/rgba?\([^)]*\)/g, (m) => m.replace(/\s+/g, "")).split(/\s+/);
+  if (parts.some((p) => p === "none" || p === "hidden")) return "none";
+  let width: number | null = null, colour: string | null = null, style = false;
+  for (const p of parts) {
+    if (p === "windowtext" || p === "auto") { colour ??= "#000000"; continue; }
+    if (/^(solid|dashed|dotted|double|groove|ridge|inset|outset)$/.test(p)) { style = true; continue; }
+    if (Object.hasOwn(BORDER_WIDTHS, p)) { width = BORDER_WIDTHS[p]; continue; }
+    if (/^0(\.0+)?(pt|px|cm|mm|in)?$/.test(p)) { width = 0; continue; }
+    const len = lengthOf(p);
+    if (len && "pt" in len) { width = Math.round(len.pt * 100) / 100; continue; }
+    colour ??= colourOf(p);
+  }
+  if (width === 0) return "none";
+  if (width === null && !style) return null;
+  return `${Math.min(6, width ?? 0.75)}pt solid ${colour ?? "#000000"}`;
+}
+/** A spacing length in points (0 to 72), or null. */
+function spacingOf(value: string | undefined): number | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return null;
+  if (/^0(\.0+)?([a-z]+)?$/.test(v)) return 0;
+  const len = lengthOf(v);
+  return len && "pt" in len && len.pt <= 72 ? Math.round(len.pt * 10) / 10 : null;
+}
+/** Line spacing as a multiple ("1.5", "115%") or in points ("18pt"), normalised; "normal" and nonsense say nothing. */
+export function lineHeightOf(value: string | undefined): string | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  let m = v.match(/^(\d+(?:\.\d+)?)%$/);
+  if (m) { const n = Number(m[1]) / 100; return n >= 0.8 && n <= 3 ? String(Math.round(n * 100) / 100) : null; }
+  m = v.match(/^(\d+(?:\.\d+)?)$/);
+  if (m) { const n = Number(m[1]); return n >= 0.8 && n <= 3 ? String(Math.round(n * 100) / 100) : null; }
+  if (!/(pt|px)$/.test(v)) return null;
+  const len = lengthOf(v);
+  return len && "pt" in len && len.pt >= 4 && len.pt <= 120 ? `${Math.round(len.pt * 10) / 10}pt` : null;
+}
+
 export function safeImageSrc(value: string | undefined): string | null {
   const src = String(value ?? "").trim();
+  if (isTemplateAsset(src)) return src;
   return /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(src) && src.length <= MAX_IMAGE_CHARS ? src : null;
 }
 
@@ -151,6 +198,14 @@ function cleanStyle(tag: string, attrs: Record<string, string>): string {
   if (background && background !== "#ffffff") out.push(`background-color:${background}`);
   const size = pointsOf(css["font-size"]) ?? (tag === "span" && attrs.size && /^[1-7]$/.test(attrs.size) ? FONT_TAG_SIZES[Number(attrs.size)] : null);
   if (size) out.push(`font-size:${size}pt`);
+  if (/^(p|div|h[1-6]|li)$/.test(tag)) {
+    const leading = lineHeightOf(css["line-height"]);
+    if (leading) out.push(`line-height:${leading}`);
+    for (const side of ["top", "bottom"] as const) {
+      const space = spacingOf(css[`margin-${side}`]);
+      if (space !== null) out.push(`margin-${side}:${space}pt`);
+    }
+  }
   // No font family is kept: the PDF prints every text in Arimo (Arial metrics), so the editor shows Arial too and nothing changes on the way.
   const weight = (css["font-weight"] ?? "").toLowerCase();
   if (weight === "bold" || weight === "bolder" || /^[6-9]00$/.test(weight)) out.push("font-weight:bold");
@@ -169,6 +224,19 @@ function cleanStyle(tag: string, attrs: Record<string, string>): string {
   if (tag === "table") {
     const border = (css.border ?? css["border-style"] ?? "").toLowerCase();
     if (attrs.border === "0" || /^(none|0|hidden)\b/.test(border)) out.push("border:none");
+  }
+  if (tag === "td" || tag === "th") {
+    // Word sets each cell's borders (border, then border-top / -right / -bottom / -left over it); without them the table's apply.
+    const all = borderOf(css.border);
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const one = borderOf(css[`border-${side}`]) ?? all;
+      if (one) out.push(`border-${side}:${one}`);
+    }
+    const pad = String(css.padding ?? "").trim().split(/\s+/).filter(Boolean);
+    const [top, right = top, bottom = top, left = right] = pad;
+    const v = spacingOf(css["padding-top"] ?? top) ?? spacingOf(css["padding-bottom"] ?? bottom);
+    const h = spacingOf(css["padding-left"] ?? left) ?? spacingOf(css["padding-right"] ?? right);
+    if (v !== null || h !== null) out.push(`padding:${Math.min(v ?? 4, 30)}pt ${Math.min(h ?? 4, 30)}pt`);
   }
   return out.join(";");
 }
@@ -193,6 +261,8 @@ function serialise(node: Node, out: string[]): void {
   if (tag === "td" || tag === "th") {
     const span = Number(node.attrs.colspan);
     if (Number.isInteger(span) && span > 1 && span <= 20) attrs.push(`colspan="${span}"`);
+    const rows = Number(node.attrs.rowspan);
+    if (Number.isInteger(rows) && rows > 1 && rows <= 50) attrs.push(`rowspan="${rows}"`);
   }
   const style = cleanStyle(tag, { ...node.attrs, ...(node.tag === "font" ? { size: node.attrs.size, face: node.attrs.face, color: node.attrs.color } : {}) });
   if (style) attrs.push(`style="${escapeHtml(style).replace(/&#39;/g, "'")}"`);

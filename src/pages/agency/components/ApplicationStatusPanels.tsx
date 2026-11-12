@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/shared/application-status/ActionDraw
 import { actionsFor, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import { acceptOffer, currentOfferLetter, offerLetterList, openOfferLetter, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
+import type { ToastAction } from "@/components/shared/application-form/useToast";
 
 /** The reason the latest Action required was sent with (from the status history). */
 const actionRequiredNote = (history: StatusHistoryRow[]) => history.find((row) => row.newStatus === "action_required")?.note ?? "";
@@ -13,12 +14,13 @@ const actionRequiredNote = (history: StatusHistoryRow[]) => history.find((row) =
  * Staff, at the bottom of Review: the status, what is needed next (from the status catalogue), the outstanding note of an Action
  * required, and the same Take action menu as the list.
  */
-export function StaffReviewBar({ application, history, onDone, onResult, onCoe }: {
+export function StaffReviewBar({ application, history, onDone, onResult, reviewIssues = 0 }: {
   application: ApplicationDetail;
   history: StatusHistoryRow[];
   onDone: () => void;
-  onResult: (message: string, ok: boolean) => void;
-  onCoe: () => void;
+  onResult: (message: string, ok: boolean, action?: ToastAction) => void;
+  /** Review problems still open: Issue offer letter needs an override note while there are any. */
+  reviewIssues?: number;
 }) {
   const workflow = useApplicationStatuses();
   const [status, setStatus] = useState(application.status);
@@ -34,7 +36,7 @@ export function StaffReviewBar({ application, history, onDone, onResult, onCoe }
         {note ? <> &middot; Asked: {note}</> : null}
       </span>
       <span className="ml-auto">
-        <TakeActionMenu align="right" size="md" onStatus={setStatus} onDone={onDone} onResult={onResult} onCoe={onCoe}
+        <TakeActionMenu align="right" size="md" onStatus={setStatus} onDone={onDone} onResult={onResult} reviewIssues={reviewIssues}
           application={{ id: application.id, status, reference: application.reference, studentName: application.studentName, studentId: application.studentId,
             course: application.courses[0] ? { title: application.courses[0].title, code: application.courses[0].code } : null, intake: application.intake }} />
       </span>
@@ -175,7 +177,7 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
           <li key={letter.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
             <i className="ri-file-pdf-2-line text-base text-foreground-500" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate font-medium text-foreground-900">{letter.fileName}</span>
-            <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}</span>
+            <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}{letter.templateName ? <> &middot; {letter.templateName} v{letter.templateVersion}</> : null}</span>
             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>{letter.acceptedAt ? `Accepted ${formatDate(letter.acceptedAt)}` : "Awaiting acceptance"}</span>
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">View</button>
           </li>

@@ -8,12 +8,14 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import ApplicationsList from "@/pages/admin/components/ApplicationsList";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
+import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import { deactivateAgent, getAgentOverview, resendInvitation, type AgentOverview, awaitingPassword } from "@/pages/admin/lib/businessData";
 import { groupByStudent } from "@/pages/admin/lib/businessGroups";
 import { formatDate } from "@/pages/agency/lib/portalData";
 
 /** Agencies > Agents > {name}. The id may be the agent record, the portal login or the OMARA record. */
 export default function AgentDetailPage() {
+  const workflow = useApplicationStatuses();
   const { id = "" } = useParams();
   const { push } = useToast();
   const [agent, setAgent] = useState<AgentOverview | null>(null);
@@ -139,7 +141,7 @@ export default function AgentDetailPage() {
             <ApplicationStatusPills counts={counts} />
             <Select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
               <option value="">All statuses</option>
-              {Object.keys(counts).map((s) => <option key={s} value={s}>{s.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} ({counts[s]})</option>)}
+              {Object.keys(counts).map((s) => <option key={s} value={s}>{statusInfo(workflow, s).label} ({counts[s]})</option>)}
             </Select>
           </span>
         ) : null}

@@ -1,6 +1,7 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatDate } from "@/pages/agency/lib/portalData";
+import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import CoeVoePanel from "@/pages/agency/components/CoeVoePanel";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading, PortalModal, StatusBadge } from "@/pages/agency/components/PortalUI";
 import {
@@ -23,6 +24,7 @@ const primary = "cursor-pointer whitespace-nowrap rounded-md bg-primary-600 px-4
 const outline = "cursor-pointer whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50";
 
 export default function RegistrationWorkbenchPage() {
+  const workflow = useApplicationStatuses();
   const [rows, setRows] = useState<WorkbenchRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -112,7 +114,7 @@ export default function RegistrationWorkbenchPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold text-foreground-950">{EXCEPTION_TEXT[x.kind].label} · {x.reference}</p>
-                      <p className="text-foreground-600">{x.studentName || "Student"} · application {x.status.replace(/_/g, " ")}{x.registration ? ` · registration ${STATE_LABEL[x.registration.state]}` : ""}</p>
+                      <p className="text-foreground-600">{x.studentName || "Student"} · application {statusInfo(workflow, x.status).label}{x.registration ? ` · registration ${STATE_LABEL[x.registration.state]}` : ""}</p>
                       <p className="mt-1 text-foreground-600">{EXCEPTION_TEXT[x.kind].explanation}</p>
                       {x.accepted ? <p className="mt-1 text-foreground-800">Accepted by {x.accepted.by} on {formatDate(x.accepted.at)}: {x.accepted.note}</p> : null}
                     </div>
@@ -181,7 +183,7 @@ export default function RegistrationWorkbenchPage() {
       <PortalModal
         open={open !== null}
         title={open ? `Registration · ${open.reference}` : "Registration"}
-        description={open ? `${open.studentName || "Student"} · application ${open.status.replace(/_/g, " ")}` : undefined}
+        description={open ? `${open.studentName || "Student"} · application ${statusInfo(workflow, open.status).label}` : undefined}
         onClose={() => setOpen(null)}
         footer={<button type="button" className={outline} onClick={() => setOpen(null)}>Close</button>}
       >

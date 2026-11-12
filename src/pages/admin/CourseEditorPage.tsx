@@ -13,6 +13,7 @@ import { removeCmsObject, uploadCmsDocument } from "@/pages/admin/lib/storage";
 import { NationalCourseFields, SkylineStatusBadge } from "@/pages/admin/components/CourseCatalogue";
 import { fetchCatalogueCourse, type CatalogueCourse } from "@/pages/admin/lib/courseCatalogue";
 import CourseIntakes from "@/pages/admin/components/CourseIntakes";
+import CourseFees from "@/pages/admin/components/CourseFees";
 
 const TABS = [
   { id: "basic", label: "Basic Info", icon: "ri-information-line" },
@@ -369,7 +370,7 @@ export default function CourseEditorPage() {
         ) : null}
 
         {tab === "intakes" ? (
-          original ? <CourseIntakes courseId={draft.id} /> : <p className="text-sm text-foreground-600">Save the course first, then add its intakes.</p>
+          original ? <div className="space-y-8"><CourseIntakes courseId={draft.id} /><CourseFees courseId={draft.id} /></div> : <p className="text-sm text-foreground-600">Save the course first, then add its intakes.</p>
         ) : null}
 
         {tab === "delivery" ? (

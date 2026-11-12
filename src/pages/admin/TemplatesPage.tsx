@@ -3,6 +3,9 @@ import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components
 import PdfPages from "@/components/signing/PdfPages";
 import TemplateEditor from "@/pages/admin/components/signing/TemplateEditor";
 import TemplatePreviewDialog from "@/pages/admin/components/signing/TemplatePreviewDialog";
+import { LetterTemplatesCard, LetterTestDialog } from "@/pages/admin/components/signing/LetterTemplateTools";
+import { LETTER_CATEGORY, loadLetterRegistry, setLetterTemplateActive } from "@/lib/offerLetters";
+import type { LetterVariable } from "../../../supabase/functions/_shared/letter-variables";
 import { pdfBytes, signingAction, signingAdmin, type SigningContext, type SigningTemplate } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 import { TEMPLATE_TYPES, isTemplateType, textToHtml, type TemplateType } from "../../../supabase/functions/_shared/hr-template";
@@ -26,6 +29,9 @@ export default function TemplatesPage() {
   const [previewing, setPreviewing] = useState<SigningTemplate | null>(null);
   const [pdfPreview, setPdfPreview] = useState<Uint8Array | null>(null);
   const [busy, setBusy] = useState("");
+  const [letterPreview, setLetterPreview] = useState<SigningTemplate | null>(null);
+  const [registry, setRegistry] = useState<LetterVariable[] | null>(null);
+  useEffect(() => { if (letterPreview && !registry) void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message)); }, [letterPreview, registry]);
 
   const load = useCallback(async () => {
     try { setTemplates((await signingAdmin<SigningContext>("list")).templates); setError(""); }
@@ -73,7 +79,8 @@ export default function TemplatesPage() {
     </li>
   );
   const visible = (list: SigningTemplate[]) => list.filter((t) => showArchived || t.status !== "archived");
-  const documents = templates ? visible(templates.filter((t) => !isTemplateType(t.category))) : [];
+  const documents = templates ? visible(templates.filter((t) => !isTemplateType(t.category) && t.category !== LETTER_CATEGORY)) : [];
+  const letters = templates ? templates.filter((t) => t.category === LETTER_CATEGORY) : [];
 
   return (
     <div>
@@ -102,6 +109,11 @@ export default function TemplatesPage() {
               </section></Card>
             );
           })}
+          <LetterTemplatesCard templates={letters} busy={busy} onNew={() => setEditing({ template: null, kind: "text", category: LETTER_CATEGORY })} onEdit={(t) => setEditing({ template: t })}
+            onPreview={(t) => setLetterPreview(t)} onDuplicate={(t) => void act(`copy-${t.id}`, () => signingAction({ action: "template_duplicate", id: t.id }), "A copy was made (inactive until saved).")}
+            onActive={(t, active) => void act(`active-${t.id}`, () => setLetterTemplateActive(t.id, active), active ? `“${t.name}” is active.` : `“${t.name}” is inactive.`)}
+            onDefault={(t) => void act(`default-${t.id}`, () => signingAdmin("template_default", t.id), `“${t.name}” is now the default.`)}
+            onDelete={(t) => { if (window.confirm(`Delete “${t.name}”? Letters already issued keep their own copy.`)) void act(`delete-${t.id}`, () => signingAdmin("template_delete", t.id), "The template was deleted."); }} />
           <Card className="p-5"><section data-testid="templates-signing">
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -125,6 +137,8 @@ export default function TemplatesPage() {
       {editing ? <TemplateEditor template={editing.template} newKind={editing.kind} newCategory={editing.category} onClose={() => setEditing(null)}
         onSaved={(message) => { setEditing(null); setNotice(message); setError(""); void load(); }} /> : null}
       {previewing ? <TemplatePreviewDialog template={{ id: previewing.id, type: previewing.category as TemplateType, name: previewing.name, subject: previewing.subject ?? previewing.title, bodyHtml: previewing.body_html?.trim() ? previewing.body_html : textToHtml(previewing.body ?? "") }} onClose={() => setPreviewing(null)} /> : null}
+      {letterPreview && registry ? <LetterTestDialog mode="sample" registry={registry} onClose={() => setLetterPreview(null)}
+        template={{ title: letterPreview.title, header_html: letterPreview.header_html ?? "", body_html: letterPreview.body_html ?? "", footer_html: letterPreview.footer_html ?? "" }} /> : null}
       {pdfPreview ? <Modal open title="Template preview (PDF)" width="max-w-4xl" onClose={() => setPdfPreview(null)}><PdfPages source={pdfPreview} /></Modal> : null}
     </div>
   );

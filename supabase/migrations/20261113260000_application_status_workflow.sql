@@ -87,6 +87,27 @@ create policy application_statuses_read on public.application_statuses for selec
 create policy application_status_actions_read on public.application_status_actions for select to authenticated using (true);
 grant select on public.application_statuses, public.application_status_actions to authenticated;
 
+-- Stored values that are not catalogue keys are mapped first (case, spacing, old spellings such as "Submitted" or "offer_accept"),
+-- through the status command guard so the history records it; a value with no key stops the migration. Application data is never deleted.
+do $$
+declare r record; v_to text; v_id uuid;
+begin
+ for r in select distinct status from public.enrollment_applications where status is not null and status not in (select s.value from public.application_statuses s) loop
+  v_to := regexp_replace(lower(btrim(r.status)), '[^a-z]+', '_', 'g');
+  v_to := case v_to when 'offer_accept' then 'offer_accepted' when 'accepted' then 'offer_accepted' when 'offer_letter_issued' then 'offer_issued' when 'offer_sent' then 'offer_issued'
+    when 'coe_voe_issued' then 'coe_issued' when 'coe' then 'coe_issued' when 'enroled' then 'enrolled' when 'withdraw' then 'withdrawn' when 'reject' then 'rejected'
+    when 'in_review' then 'under_review' when 'new' then 'submitted' else v_to end;
+  if not exists (select 1 from public.application_statuses s where s.value = v_to) then raise exception 'Application status "%" has no catalogue key; map it before this migration', r.status; end if;
+  raise notice 'status mapping: % -> %', r.status, v_to;
+  for v_id in select id from public.enrollment_applications where status = r.status loop
+   perform set_config('portal.status_command', v_id::text, true);
+   perform set_config('portal.status_note', 'Status value normalised: ' || r.status || ' -> ' || v_to, true);
+   update public.enrollment_applications set status = v_to where id = v_id;
+  end loop;
+ end loop;
+ perform set_config('portal.status_command', '', true);
+end $$;
+
 -- Every stored status is one of the catalogue's.
 alter table public.enrollment_applications add constraint enrollment_applications_status_catalogue_fk foreign key (status) references public.application_statuses(value);
 

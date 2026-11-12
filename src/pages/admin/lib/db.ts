@@ -50,6 +50,10 @@ function settingsRow(s: AdminSettings): Row {
     rto: s.rto,
     cricos: s.cricos,
     sign_in_url: s.signInUrl,
+    ...(s.abn !== undefined ? { abn: s.abn.trim() || null } : {}),
+    ...(s.website !== undefined ? { website: s.website.trim() || null } : {}),
+    ...(s.offerValidityDays !== undefined ? { offer_validity_days: s.offerValidityDays } : {}),
+    ...(s.letterDateFormat !== undefined ? { letter_date_format: s.letterDateFormat } : {}),
     home_hero_images: s.homeHeroImages,
     home_about_image: s.homeAboutImage,
     primary_color: s.primaryColor ?? "#2563eb",
@@ -505,6 +509,10 @@ export async function loadAdminData(): Promise<LoadResult> {
         rto: str(settingsRow.rto),
         cricos: str(settingsRow.cricos),
         signInUrl: str(settingsRow.sign_in_url),
+        ...(settingsRow.offer_validity_days !== undefined ? {
+          abn: str(settingsRow.abn), website: str(settingsRow.website), offerValidityDays: Number(settingsRow.offer_validity_days) || 30,
+          letterDateFormat: (str(settingsRow.letter_date_format) || "DD/MM/YYYY") as AdminSettings["letterDateFormat"],
+        } : {}),
         homeHeroImages: Array.isArray(settingsRow.home_hero_images)
           ? (settingsRow.home_hero_images as unknown[]).map((v) => str(v)).filter(Boolean)
           : seed.settings.homeHeroImages,

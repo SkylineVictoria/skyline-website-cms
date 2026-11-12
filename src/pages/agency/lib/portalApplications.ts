@@ -722,7 +722,7 @@ export const issueOfferLetter = (input: { applicationId: string; source: "templa
 export const resendOfferLetter = (applicationId: string, note = "") => rpcOrThrow<void>("portal_offer_letter_resend", { p_application: applicationId, p_note: note });
 export const currentOfferLetter = (applicationId: string) => rpcOrThrow<OfferLetter | null>("portal_offer_letter_current", { p_application: applicationId });
 export const offerLetterList = (applicationId: string) =>
-  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string }>>("portal_offer_letter_list", { p_application: applicationId });
+  rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null }>>("portal_offer_letter_list", { p_application: applicationId });
 /** Opens an offer letter PDF in a new tab (the tab is opened first, while the click still counts). */
 export async function openOfferLetter(letterId: string): Promise<void> {
   const tab = window.open("", "_blank");
@@ -740,6 +740,17 @@ export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_o
 export const resubmitApplication = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note });
 /** Send reminder: emails the student or agent what Action required still asks for. */
 export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });
+/** Payload of change_application_status: a reason from status_reasons ("Other" with its text), a note, notify (default true), the enrolment date. */
+export interface StatusChangePayload { reason_id?: string; reason_text?: string; note?: string; notify?: boolean; enrolment_date?: string }
+/** The one staff command for status moves, reminders and resends (the database checks the transition, the role, access and the reason). */
+export const changeApplicationStatus = (applicationId: string, action: string, payload: StatusChangePayload = {}) =>
+  rpcOrThrow<{ status: string; label: string; from?: string; undoable?: boolean }>("change_application_status", { p_application: applicationId, p_action: action, p_payload: payload });
+/** Undo (the toast, 15 seconds) of the caller's last change with a reason. */
+export const revertApplicationStatus = (applicationId: string) => rpcOrThrow<{ status: string; label: string }>("revert_application_status", { p_application: applicationId });
+/** Issue CoE / VoE in one step: the document (PDF, base64), its number and issue date, a note; the status moves to CoE / VoE issued. */
+export const issueCoeVoe = (input: { applicationId: string; kind: "coe" | "voe"; number: string; issueDate: string; fileName: string; contentBase64: string; note: string; notify: boolean }) =>
+  rpcOrThrow<{ documentId: string; status?: string; label?: string }>("issue_coe_voe", { p_application: input.applicationId, p_kind: input.kind, p_number: input.number, p_issue_date: input.issueDate,
+    p_file_name: input.fileName, p_content: input.contentBase64, p_note: input.note, p_notify: input.notify });
 
 /* --------------------------------------------------------------- Agents */
 

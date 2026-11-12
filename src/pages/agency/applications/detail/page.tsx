@@ -333,9 +333,9 @@ export default function ApplicationDetailPage() {
             agencyName={agencyName}
             readOnly={readOnly}
             auditAccess={isSlit}
-            reviewBar={isSlit ? (
-              <StaffReviewBar application={application} history={history} onDone={() => void load()} onResult={(message) => toast.show(message)}
-                onCoe={() => navigate("/agency/registrations")} />
+            reviewBar={isSlit ? (reviewIssues: number) => (
+              <StaffReviewBar application={application} history={history} reviewIssues={reviewIssues} onDone={() => void load()}
+                onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)} />
             ) : undefined}
             onSaved={refreshAfterSave}
             onSubmitted={(reference, studentName) =>

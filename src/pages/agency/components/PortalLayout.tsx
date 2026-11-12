@@ -78,7 +78,7 @@ export default function PortalLayout() {
 
   return (
     <WorkspaceShell
-      portalLabel={isStudent ? "Student Portal" : "Agency Portal"}
+      portalLabel={isStudent ? "Student Portal" : isSlit ? "Admin · Applications" : "Agency Portal"}
       workspaceName={workspaceName}
       roleLabel={role ? ROLE_LABELS[role] : ""}
       roleSuffix={!isSlit && agency?.code ? <span className="text-foreground-400">&middot; {agency.code}</span> : null}
@@ -87,7 +87,7 @@ export default function PortalLayout() {
         <>
           <Link to="/admin" className={`mb-0.5 ${FOOTER_LINK}`}>
             <i className="ri-shield-keyhole-line text-lg" aria-hidden="true" />
-            Website CMS
+            Back to Admin CMS
           </Link>
           <Link to="/" className={FOOTER_LINK}>
             <i className="ri-external-link-line text-lg" aria-hidden="true" />

@@ -23,17 +23,17 @@ export default function CareerDetailPage() {
       <Seo title={`${title} | Careers | Skyline Institute Of Technology`} description={job ? `${EMPLOYMENT_TYPE_LABEL[job.employmentType]} · ${job.location}. ${job.description.slice(0, 150)}` : "Job opening at Skyline Institute Of Technology."} path={`/careers/${id}`}
         jsonLd={[breadcrumbSchema([{ name: "Home", path: "/" }, { name: "Careers", path: "/careers" }, { name: title, path: `/careers/${id}` }])]} />
       <PageHero title={title} breadcrumb="Careers" lead={job ? `${EMPLOYMENT_TYPE_LABEL[job.employmentType]} · ${job.location}${job.salary ? ` · ${job.salary}` : ""}` : undefined} />
-      <section className="bg-background-50 py-12 md:py-16">
+      <section className="bg-background-50 py-section-sm">
         <div className="site-container grid grid-cols-1 gap-10 lg:grid-cols-12 lg:gap-12">
           <div className="lg:col-span-8">
             <p className="text-sm"><Link to="/careers" className="font-semibold text-primary-700 hover:underline">&larr; All openings</Link></p>
             {error ? <p role="alert" className="mt-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
             {job === undefined ? <p className="mt-4 text-sm text-foreground-600" role="status">Loading…</p> : null}
-            {job === null && !error ? <p className="mt-4 text-sm text-foreground-700">This job post does not exist or has been removed.</p> : null}
+            {job === null && !error ? <p className="mt-4 text-base text-foreground-700">This job post does not exist or has been removed.</p> : null}
             {job ? (
               <article className="mt-4">
                 <h2 className="font-heading text-xl font-bold text-ink">About the role</h2>
-                <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-foreground-700 md:text-base">{job.description}</div>
+                <div className="mt-3 whitespace-pre-line text-base leading-relaxed text-foreground-700">{job.description}</div>
               </article>
             ) : null}
           </div>

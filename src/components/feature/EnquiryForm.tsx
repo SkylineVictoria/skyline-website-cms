@@ -105,7 +105,7 @@ export default function EnquiryForm({
     <div className="rounded-card border border-background-200 bg-background-50 p-6 md:p-8">
       <h3 className="font-heading text-xl font-semibold text-foreground-950 md:text-2xl">{title}</h3>
       {description ? (
-        <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-foreground-600">{description}</p>
+        <p className="mt-3 whitespace-pre-line text-base leading-relaxed text-foreground-600">{description}</p>
       ) : null}
 
       <form

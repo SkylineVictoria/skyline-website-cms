@@ -17,7 +17,7 @@ export default function TenantPublicContent() {
   return <section className="site-container py-12">
     <Seo title={page?.seoTitle || title} description={page?.seoDescription || ""} path={normalizeCmsPath(pathname) || pathname} />
     <h1 className="font-heading text-3xl font-bold">{title}</h1>
-    {pathname === "/" && data.settings.homeHeroImages[0] ? <img src={data.settings.homeHeroImages[0]} alt={data.settings.name} className="my-6 max-h-96 w-full object-cover" /> : null}
+    {pathname === "/" && data.settings.homeHeroImages[0] ? <div className="my-6 aspect-[21/9] max-h-96 w-full overflow-hidden bg-background-100"><img src={data.settings.homeHeroImages[0]} alt={data.settings.name} fetchPriority="high" decoding="async" className="h-full w-full object-cover" /></div> : null}
     {page ? <HtmlContent html={page.body} /> : null}
     {pathname === "/forms-policies" ? <><DocumentLibrary /><ul>{data.forms.map((form) => <li key={form.id}><Link to={`/forms/${form.id}`}>{form.name}</Link></li>)}</ul></> : null}
     {pathname === "/contact" ? <address className="my-6 not-italic"><p>{data.settings.address}</p><a href={data.settings.emailHref}>{data.settings.email}</a><p><a href={data.settings.phoneHref}>{data.settings.phone}</a></p></address> : null}

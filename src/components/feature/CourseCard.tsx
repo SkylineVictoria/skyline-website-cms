@@ -4,7 +4,7 @@ import type { Course } from "@/data/courses";
 export default function CourseCard({ course }: { course: Course }) {
   return (
     <article className="group flex h-full flex-col overflow-hidden rounded-card border border-background-200 bg-background-50 transition-all duration-300 hover:-translate-y-1 hover:border-primary-300">
-      <Link to={`/courses/${course.slug}`} className="relative block h-48 w-full overflow-hidden bg-background-100">
+      <Link to={`/courses/${course.slug}`} className="relative block aspect-[16/10] w-full overflow-hidden bg-background-100">
         {course.image ? (
           <img
             src={course.image}
@@ -36,9 +36,9 @@ export default function CourseCard({ course }: { course: Course }) {
           </Link>
         </h3>
         {course.summary ? (
-          <p className="mt-3 line-clamp-4 text-sm leading-relaxed text-foreground-600">{course.summary}</p>
+          <p className="mt-3 line-clamp-4 text-base leading-relaxed text-foreground-600">{course.summary}</p>
         ) : (
-          <p className="mt-3 text-sm leading-relaxed text-foreground-600">
+          <p className="mt-3 text-base leading-relaxed text-foreground-600">
             Contact us for the full course brochure, intake dates and fees.
           </p>
         )}

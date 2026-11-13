@@ -93,7 +93,7 @@ function RouteRefresh() {
 function SiteLayoutInner() {
   const { data } = usePublicSite();
   return (
-    <div className="flex min-h-screen flex-col bg-background-50 font-body" data-tenant-site={data.tenantSite?.tenantId} style={tenantThemeStyle(data.theme)}>
+    <div className="site-public flex min-h-screen flex-col bg-background-50 font-body text-base" data-tenant-site={data.tenantSite?.tenantId} style={tenantThemeStyle(data.theme)}>
       {!data.tenantSite ? <StructuredData data={[organizationSchema, websiteSchema]} /> : <StructuredData data={[
         { "@context": "https://schema.org", "@type": "EducationalOrganization", name: data.settings.name, url: window.location.origin, logo: data.settings.logo, email: data.settings.email, telephone: data.settings.phone, address: data.settings.address },
         { "@context": "https://schema.org", "@type": "WebSite", name: data.settings.name, url: window.location.origin },

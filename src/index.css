@@ -33,7 +33,7 @@
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem;
   --gutter: clamp(1rem, 0.7573rem + 1.0356vw, 2rem);
   --section-y: clamp(3rem, 2.2718rem + 3.1068vw, 6rem);
-  --section-y-sm: clamp(2rem, 1.5146rem + 2.0712vw, 4rem);
+  --section-y-sm: clamp(2.5rem, 2.1359rem + 1.5534vw, 4rem);
   --container: 1240px;
 
   /* radius */
@@ -642,6 +642,11 @@
 .drawer-backdrop { animation: fade-in 250ms ease-out both; }
 .drawer-panel { animation: drawer-in-up 250ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 @media (min-width: 640px) { .drawer-panel { animation-name: drawer-in-right; } }
+/* The website and its forms: 16px fields on phones (no zoom on focus); the CMS keeps its own sizes. */
+@media (max-width: 767px) {
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea):not([data-density] *) { font-size: 1rem; }
+}
+
 /* The CMS: compact density (default) and the sidebar width (narrower at 1366px and below). */
 :root { --sidebar-w: 248px; }
 @media (max-width: 1366px) { :root { --sidebar-w: 216px; } }

@@ -55,7 +55,7 @@ export default function CoursesPage() {
         breadcrumb="Our Courses"
         lead="Search our published courses by qualification, code or study area."
       />
-      <section className="bg-background-100 py-12 md:py-16">
+      <section className="bg-background-100 py-section-sm">
         <div className="site-container">
           <Reveal>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -110,7 +110,7 @@ export default function CoursesPage() {
                 <i className="ri-search-eye-line text-2xl" aria-hidden="true" />
               </span>
               <h2 className="mt-4 font-heading text-lg font-semibold text-foreground-950">No courses found</h2>
-              <p className="mt-2 text-sm text-foreground-600">
+              <p className="mt-2 text-base text-foreground-600">
                 Try a different search term or category, or contact us for the full list of programs.
               </p>
             </div>

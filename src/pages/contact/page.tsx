@@ -23,11 +23,11 @@ export default function ContactPage() {
         ]}
       />
       {bookingSrc ? (
-        <section className="bg-background-50 py-8 md:py-12" aria-labelledby="booking-title">
+        <section className="bg-background-50 py-section-sm" aria-labelledby="booking-title">
           <div className="site-container max-w-6xl">
             <div className="text-center">
               <h1 id="booking-title" className="font-heading text-3xl font-bold tracking-tight text-foreground-950 md:text-4xl">Book a call</h1>
-              <p className="mt-2 text-sm text-foreground-600 md:text-base">Choose a time and we’ll call you.</p>
+              <p className="mt-2 text-base text-foreground-600">Choose a time and we’ll call you.</p>
             </div>
             <iframe
               title="Schedule a call with Skyline Institute of Technology"

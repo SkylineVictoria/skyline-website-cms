@@ -21,7 +21,7 @@ function ParagraphsBlock({ block }: { block: Extract<Block, { type: "paragraphs"
       {block.heading ? <SectionHeading>{block.heading}</SectionHeading> : null}
       <div className={block.heading ? "mt-4 space-y-4" : "space-y-4"}>
         {block.paragraphs.map((paragraph, index) => (
-          <p key={index} className="text-sm leading-relaxed text-foreground-700 md:text-base">
+          <p key={index} className="text-base leading-relaxed text-foreground-700">
             {paragraph}
           </p>
         ))}
@@ -36,7 +36,7 @@ function ListBlock({ block }: { block: Extract<Block, { type: "list" }> }) {
       {block.heading ? <SectionHeading level="h3">{block.heading}</SectionHeading> : null}
       <ul className={`${block.heading ? "mt-4" : ""} space-y-3`}>
         {block.items.map((item, index) => (
-          <li key={index} className="flex items-start gap-3 text-sm leading-relaxed text-foreground-700 md:text-base">
+          <li key={index} className="flex items-start gap-3 text-base leading-relaxed text-foreground-700">
             <i className="ri-checkbox-circle-line mt-0.5 text-base text-primary-600" aria-hidden="true" />
             <span>{item}</span>
           </li>
@@ -149,6 +149,8 @@ function MediaBlock({ block }: { block: Extract<Block, { type: "media" }> }) {
             <img
               src={item.image}
               alt={item.alt}
+              loading="lazy"
+              decoding="async"
               className="h-full w-full object-contain object-center transition-transform duration-700 ease-out group-hover:scale-[1.04]"
             />
           </div>

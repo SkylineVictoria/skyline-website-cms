@@ -72,13 +72,16 @@ export default function Home() {
             key={src}
             src={src}
             alt="Student looking ahead on an Australian campus"
+            loading={index === 0 ? "eager" : "lazy"}
+            fetchPriority={index === 0 ? "high" : "low"}
+            decoding="async"
             className={`absolute inset-0 h-full w-full object-cover object-top transition-opacity duration-1000 ${
               index === slide ? "opacity-100" : "opacity-0"
             }`}
           />
         ))}
         <div className="absolute inset-0 bg-gradient-to-r from-foreground-950/85 via-foreground-950/60 to-foreground-950/20" />
-        <div className="site-container relative py-20 md:py-28">
+        <div className="site-container relative py-section">
           <div key={slide} className="max-w-2xl">
             <span className="inline-flex animate-fade-up items-center gap-3 font-label text-xs font-semibold uppercase tracking-[0.28em] text-primary-300">
               <span className="inline-block h-px w-8 bg-primary-400" />
@@ -142,20 +145,22 @@ export default function Home() {
                   <i className={`${service.icon} text-3xl`} aria-hidden="true" />
                 </span>
                 <h2 className="mt-5 font-heading text-lg font-semibold text-foreground-950">{service.title}</h2>
-                <p className="mt-3 text-sm leading-relaxed text-foreground-600">{service.text}</p>
+                <p className="mt-3 text-base leading-relaxed text-foreground-600">{service.text}</p>
               </div>
             </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="bg-background-50 py-16 md:py-24">
+      <section className="bg-background-50 py-section">
         <div className="site-container grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
           <Reveal>
             <div className="relative overflow-hidden rounded-card border border-background-200 bg-background-100">
               <img
                 src={aboutImage}
                 alt="Skyline Institute of Technology campus and students"
+                loading="lazy"
+                decoding="async"
                 className="h-[320px] w-full object-contain object-center md:h-[420px]"
               />
             </div>
@@ -168,13 +173,13 @@ export default function Home() {
             <h2 className="mt-4 font-heading text-3xl font-bold leading-tight text-foreground-950 md:text-4xl">
               A Few Words About the Skyline
             </h2>
-            <p className="mt-5 text-sm leading-relaxed text-foreground-700 md:text-base">
+            <p className="mt-5 text-base leading-relaxed text-foreground-700">
               Skyline Institute is at the forefront of delivering exceptional technical education and training in
               various professions and industries. Our commitment lies in equipping businesses with the necessary skills
               and talents to excel, while also assisting individuals in their career journeys, regardless of whether
               they are embarking on a new path or advancing further.
             </p>
-            <p className="mt-4 text-sm leading-relaxed text-foreground-700 md:text-base">
+            <p className="mt-4 text-base leading-relaxed text-foreground-700">
               Our approach involves empowering students from diverse backgrounds, as they represent the future's
               trailblazers and visionaries. Through our outstanding technical education and hands-on opportunities, we
               provide them with the tools they need to succeed in their careers and make a positive impact in the world.
@@ -191,7 +196,7 @@ export default function Home() {
       </section>
 
       {coursesLoading || homeCourses.length > 0 ? (
-      <section className="bg-background-100 py-16 md:py-24">
+      <section className="bg-background-100 py-section">
         <div className="site-container">
           <Reveal className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
             <div>
@@ -218,7 +223,7 @@ export default function Home() {
 
       ) : null}
 
-      <section className="bg-accent-950 py-14 md:py-16">
+      <section className="bg-accent-950 py-section-sm">
         <div className="site-container flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-center">
           <div>
             <h2 className="font-heading text-2xl font-bold text-background-50 md:text-3xl">Get In Touch</h2>

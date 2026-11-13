@@ -36,7 +36,7 @@ export default function ContentPageRoute({ data: page }: { data: ContentPageData
         ]}
       />
       <PageHero title={title} breadcrumb={page.breadcrumb} lead={undefined} />
-      <section className="relative overflow-hidden bg-background-50 py-14 md:py-20">
+      <section className="relative overflow-hidden bg-background-50 py-section">
         <div className="site-container relative">
           <div className="mx-auto max-w-4xl">
             {body ? <HtmlContent html={body} /> : <p role="status" className="text-foreground-600">{status === "loading" ? "Loading information…" : "No information is currently published for this page."}</p>}

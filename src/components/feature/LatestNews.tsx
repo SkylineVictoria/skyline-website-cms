@@ -3,7 +3,7 @@ import Reveal from "@/components/base/Reveal";
 
 export default function LatestNews() {
   return (
-    <section className="bg-background-50 py-16 md:py-20">
+    <section className="bg-background-50 py-section">
       <div className="site-container">
         <Reveal className="text-center">
           <p className="font-label text-xs font-semibold uppercase tracking-[0.2em] text-primary-600">Stay informed</p>
@@ -22,6 +22,8 @@ export default function LatestNews() {
                   <img
                     src={item.image}
                     alt={item.alt}
+                    loading="lazy"
+                    decoding="async"
                     className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-105"
                   />
                 </div>

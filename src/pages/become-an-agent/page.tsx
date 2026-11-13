@@ -31,11 +31,11 @@ export default function BecomeAnAgentPage() {
         ]}
       />
       <PageHero title="Become an Agent" breadcrumb="Become an Agent" />
-      <section className="bg-background-50 py-12 md:py-16">
+      <section className="bg-background-50 py-section-sm">
         <div className="site-container grid grid-cols-1 gap-10 lg:grid-cols-12 lg:gap-12">
           <div className="lg:col-span-4">
             <h2 className="font-heading text-xl font-bold text-ink md:text-2xl">AGENT APPLICATION FORM</h2>
-            <p className="mt-4 text-sm leading-relaxed text-foreground-700 md:text-base">
+            <p className="mt-4 text-base leading-relaxed text-foreground-700">
               Complete the agent application form and our partnerships team will be in touch.
             </p>
 

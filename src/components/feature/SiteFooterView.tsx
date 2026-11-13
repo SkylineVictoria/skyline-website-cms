@@ -50,7 +50,7 @@ export default function SiteFooterView({ model, preview = false }: { model: Foot
           <div className="sm:col-span-2 lg:col-span-4">
             {model.mainLogo ? <img src={model.mainLogo} alt={model.logoAlt} className="h-12 w-auto object-contain" /> : <p className="font-heading text-base font-bold text-background-50">{model.logoAlt}</p>}
             <h2 className="mt-6 font-heading text-base font-semibold text-background-50">About Us</h2>
-            <p className="mt-3 max-w-md text-sm leading-relaxed text-background-200">{footer.about}</p>
+            <p className="mt-3 max-w-md text-base leading-relaxed text-background-200">{footer.about}</p>
             <div className="mt-5 flex flex-wrap items-center gap-2">
               {social.map((item) => (
                 <a

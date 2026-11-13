@@ -300,7 +300,7 @@ export function SiteHeaderView({ navigation, settings, preview = false }: { navi
       </div>
 
       {mobileOpen ? (
-        <div className="max-h-[calc(100vh-4rem)] overflow-y-auto border-b border-background-200 bg-background-50 lg:hidden">
+        <div className="max-h-[calc(100dvh-4rem)] overflow-y-auto border-b border-background-200 bg-background-50 lg:hidden">
           <nav className="site-container py-4" aria-label="Mobile navigation">
             <ul className="space-y-1">
               {navigation.map((item) => (
@@ -311,7 +311,7 @@ export function SiteHeaderView({ navigation, settings, preview = false }: { navi
                         type="button"
                         onClick={() => setOpenAccordion(openAccordion === item.label ? null : item.label)}
                         aria-expanded={openAccordion === item.label}
-                        className="flex w-full items-center justify-between py-3 text-left text-sm font-medium text-foreground-900"
+                        className="flex w-full items-center justify-between py-3 text-left text-base font-medium text-foreground-900"
                       >
                         {item.label}
                         <i
@@ -326,7 +326,7 @@ export function SiteHeaderView({ navigation, settings, preview = false }: { navi
                       {openAccordion === item.label ? (
                         <div className="pb-3">
                           {item.to ? (
-                            <Link to={item.to} className="block py-2 text-sm font-medium text-primary-600">
+                            <Link to={item.to} className="block py-2 text-base font-medium text-primary-600">
                               {item.label}
                             </Link>
                           ) : null}

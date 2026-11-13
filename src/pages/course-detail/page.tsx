@@ -22,10 +22,10 @@ export default function CourseDetailPage() {
     <>
       <Seo title={course.name} description={course.summary || course.name} path={`/courses/${course.slug}`} image={course.image} />
       <PageHero title={course.name} breadcrumb="Courses" lead={course.category} />
-      <section className="bg-background-50 py-12 md:py-16">
+      <section className="bg-background-50 py-section-sm">
         <div className="site-container grid items-start gap-10 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-10">
-            {course.image ? <img src={course.image} alt={course.imageAlt} className="max-h-[420px] w-full object-cover" /> : null}
+            {course.image ? <div className="aspect-[16/9] max-h-[420px] w-full overflow-hidden bg-background-100"><img src={course.image} alt={course.imageAlt} fetchPriority="high" decoding="async" className="h-full w-full object-cover" /></div> : null}
             {content?.description || course.summary ? <section><h2 className="mb-4 font-heading text-2xl font-semibold text-ink">Course overview</h2>{content?.description ? <HtmlContent html={content.description} /> : <p className="leading-relaxed text-foreground-700">{course.summary}</p>}</section> : null}
             {course.entry ? <section className="border-t border-background-200 pt-8"><h2 className="mb-4 font-heading text-2xl font-semibold text-ink">Entry requirements</h2><p className="whitespace-pre-line leading-relaxed text-foreground-700">{course.entry}</p></section> : null}
             {content?.sections.map((section, index) => <section key={index} className="border-t border-background-200 pt-8"><h2 className="mb-4 font-heading text-2xl font-semibold text-ink">{section.title}</h2><HtmlContent html={section.body} /></section>)}

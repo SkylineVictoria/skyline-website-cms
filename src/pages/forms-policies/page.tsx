@@ -18,7 +18,7 @@ export default function FormsPoliciesPage() {
         ]}
       />
       <PageHero title="Forms & Policies" breadcrumb="Forms & Policies" />
-      <section className="bg-background-50 py-12 md:py-16">
+      <section className="bg-background-50 py-section-sm">
         <div className="site-container">
           <DocumentLibrary />
         </div>

@@ -124,14 +124,14 @@ export default function CareerApplyPage() {
 
   let body: ReactNode;
   if (job === undefined) body = <Card><p className="text-sm text-foreground-600" role="status">Loading…</p></Card>;
-  else if (job === null) body = <Card><p className="text-sm text-foreground-700">{loadError || "This job could not be found."}</p><p className="mt-4"><Link to="/careers" className={outline}>All jobs</Link></p></Card>;
-  else if (job.status !== "open") body = <Card><p className="text-sm text-foreground-700">Applications for <strong>{job.title}</strong> have closed.</p><p className="mt-4"><Link to="/careers" className={outline}>All jobs</Link></p></Card>;
+  else if (job === null) body = <Card><p className="text-base text-foreground-700">{loadError || "This job could not be found."}</p><p className="mt-4"><Link to="/careers" className={outline}>All jobs</Link></p></Card>;
+  else if (job.status !== "open") body = <Card><p className="text-base text-foreground-700">Applications for <strong>{job.title}</strong> have closed.</p><p className="mt-4"><Link to="/careers" className={outline}>All jobs</Link></p></Card>;
   else if (sent) {
     body = (
       <Card>
         <div data-testid="job-apply-thanks" role="status">
           <h2 className="font-heading text-xl font-bold text-foreground-950">Thank you for applying</h2>
-          <p className="mt-2 text-sm text-foreground-700">We have received your application for <strong>{job.title}</strong>. An administrator will review it, and if we would like to continue we will email you a private link to add your details and documents. You do not need an account.</p>
+          <p className="mt-2 text-base text-foreground-700">We have received your application for <strong>{job.title}</strong>. An administrator will review it, and if we would like to continue we will email you a private link to add your details and documents. You do not need an account.</p>
           <p className="mt-4"><Link to="/careers" className={outline}>All jobs</Link></p>
         </div>
       </Card>
@@ -186,7 +186,7 @@ export default function CareerApplyPage() {
     <>
       {seo}
       {hero}
-      <section className="bg-background-100 py-12 md:py-16">
+      <section className="bg-background-100 py-section-sm">
         <div className="site-container max-w-3xl">
           {body}
           {!sent && job?.status === "open" ? <p className="mt-4 text-xs text-foreground-500"><Link to={jobPath(id)} className="font-semibold text-primary-700 hover:underline">&larr; Back to the job</Link></p> : null}

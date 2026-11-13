@@ -170,7 +170,7 @@ function OptionalRules({ rules, onSaved }: { rules: OptionalRule[] | null; onSav
       <p className="mt-1 text-sm text-foreground-600">Each employee may take this many of the year's optional holidays (Diwali, Eid, Lunar New Year, Christmas Eve, ...), paid or unpaid. Approved days show on the timesheet and in the Xero export; an unpicked optional day is an ordinary work day.</p>
       {error ? <p role="alert" className={`mt-3 ${ALERT}`}>{error}</p> : null}
       {!rules ? <p className="mt-3 text-sm text-foreground-600">Loading…</p> : (
-        <table className="mt-3 w-full max-w-3xl text-left text-sm" data-testid="optional-rules">
+        <div className="mt-3 max-w-3xl overflow-x-auto"><table className="w-full min-w-[34rem] text-left text-sm" data-testid="optional-rules">
           <thead className="text-xs uppercase tracking-wide text-foreground-600"><tr><th className="py-1 pr-3">Year</th><th className="py-1 pr-3">Optional holidays listed</th><th className="py-1 pr-3">Each employee may take</th><th className="py-1 pr-3">Paid</th><th className="py-1 pr-3">Picked so far</th><th className="py-1" /></tr></thead>
           <tbody className="divide-y divide-background-200">
             {rules.map((r) => {
@@ -188,7 +188,7 @@ function OptionalRules({ rules, onSaved }: { rules: OptionalRule[] | null; onSav
               );
             })}
           </tbody>
-        </table>
+        </table></div>
       )}
     </Card>
   );

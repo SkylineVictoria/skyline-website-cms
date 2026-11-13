@@ -61,10 +61,10 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   await page.getByRole("button", { name: "Add task" }).click();
   await page.getByRole("button", { name: "Add question" }).first().click();
   await page.getByRole("button", { name: /Short answer/ }).click();
-  await page.getByLabel("Question", { exact: true }).fill("Name two items of PPE and say what each protects.");
+  await page.getByLabel("Question *").fill("Name two items of PPE and say what each protects.");
   await page.getByRole("button", { name: "Add question" }).first().click();
   await page.getByRole("button", { name: /^Single choice/ }).click();
-  await page.getByLabel("Question", { exact: true }).fill("Which comes first?");
+  await page.getByLabel("Question *").fill("Which comes first?");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Publish v1/ }).click();
@@ -99,7 +99,7 @@ test("the student completes and submits it with the declaration and gets a recei
 test("the trainer marks it Satisfactory and records the unit outcome", async ({ page }) => {
   await signInStaff(page, trainer.email, "/staff/assessments");
   await expect(page.getByRole("heading", { name: "Assessments" })).toBeVisible();
-  await page.getByRole("button", { name: "Mark" }).first().click();
+  await page.getByRole("button", { name: "Mark", exact: true }).first().click();
   await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
   await expect(page.getByText("Model answer").or(page.getByText("Auto-check suggests"))).toBeVisible();
   // Every "Satisfactory" pick in order: the criterion, the two questions, the task, then the decision.
@@ -124,9 +124,10 @@ test("the student sees the result and the admin sees the outcome", async ({ page
   await page.getByRole("button", { name: "Results & progress" }).click();
   await expect(page.getByText(/Competent/)).toBeVisible({ timeout: 10_000 });
 
+  await signOutEverywhere(page);
   await signInAsAdmin(page, admin.email);
   await page.goto(`${assessmentUrl}?tab=versions`);
   await expect(page.getByText("Version 1")).toBeVisible();
   await page.goto("/admin/assessments?tab=outcomes");
-  await expect(page.getByText("Work safely in the lab")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Work safely in the lab").first()).toBeVisible({ timeout: 10_000 });
 });

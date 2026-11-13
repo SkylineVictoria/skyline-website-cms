@@ -23,6 +23,7 @@ function adminPathFor(pathname: string): string {
     [/^\/agency(?:\/(?:applications|all-applications|dashboard|workspace|documents))?$/, () => "/admin/applications"],
     [/^\/agency\/tickets\/([^/]+)$/, (m) => `/admin/tickets/${m[1]}`],
     [/^\/agency\/tickets$/, () => "/admin/tickets"],
+    [/^\/agency\/bookings$/, () => "/admin/bookings"],
     [/^\/agency\/(agencies|agency-profile)$/, () => "/admin/businesses"],
     [/^\/agency\/audit-log$/, () => "/admin/audit-log"],
     [/^\/agency\/registrations$/, () => "/admin/registrations"],

@@ -3,6 +3,7 @@ import CourseCard from "@/components/feature/CourseCard";
 import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import HtmlContent from "@/components/feature/HtmlContent";
+import CourseFeesIntakes from "@/components/feature/CourseFeesIntakes";
 import { usePublicSite } from "@/hooks/publicSiteContext";
 
 export default function CourseDetailPage() {
@@ -34,6 +35,7 @@ export default function CourseDetailPage() {
           <aside className="border-t-4 border-primary-600 bg-[#f5f6f7] p-6 lg:sticky lg:top-24">
             <h2 className="font-heading text-2xl font-semibold text-[#102b46]">At a glance</h2>
             <dl className="mt-6 divide-y divide-background-300">{facts.map(([label,value]) => <div key={label} className="py-4"><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{label}</dt><dd className="mt-2 text-sm font-medium text-[#102b46]">{value}</dd></div>)}</dl>
+            <CourseFeesIntakes slug={course.slug} tenantId={data.tenantSite?.tenantId ?? null} />
             <Link to="/enroll-now" className="mt-6 block bg-[#102b46] px-5 py-3 text-center font-semibold text-white hover:bg-secondary-800">Apply to study</Link>
             <Link to="/contact" className="mt-3 block border border-[#102b46] px-5 py-3 text-center font-semibold text-[#102b46] hover:bg-white">Book a call</Link>
             {data.settings.admissionsEmail ? <a href={data.settings.admissionsHref} className="mt-6 block break-all text-sm text-primary-700 underline">{data.settings.admissionsEmail}</a> : null}

@@ -89,6 +89,10 @@ import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
 import JobsPage from "@/pages/admin/JobsPage";
 import CourseFeesPage from "@/pages/admin/CourseFeesPage";
+import CourseWizardPage, { CourseWizardRedirect } from "@/pages/admin/CourseWizardPage";
+import IntakesPage from "@/pages/admin/IntakesPage";
+import IntakeDetailPage from "@/pages/admin/IntakeDetailPage";
+import ClassroomsPage from "@/pages/admin/ClassroomsPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
 import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
@@ -248,6 +252,13 @@ const routes: RouteObject[] = [
           { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
           { path: "course-fees", element: <RequireAdmin><CourseFeesPage /></RequireAdmin> },
+          // One course record (facts, units, fees, intakes, batches, website); website editors see the Website tab only.
+          { path: "course-fees/:id", element: <CourseWizardRedirect /> },
+          // The guided course flow: /admin/courses/:id/details | timetable | fees | intakes | website (website editors: website only).
+          { path: "courses/:id/:step", element: <CourseWizardPage /> },
+          { path: "intakes", element: <RequireAdmin><IntakesPage /></RequireAdmin> },
+          { path: "intakes/:id", element: <RequireAdmin><IntakeDetailPage /></RequireAdmin> },
+          { path: "classrooms", element: <RequireAdmin><ClassroomsPage /></RequireAdmin> },
           // HRMS (time & attendance, leave, pay schedules, public holidays, Xero export).
           { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
           { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },

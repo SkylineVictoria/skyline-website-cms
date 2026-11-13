@@ -27,6 +27,9 @@ type SortKey = "order" | "name" | "updated";
 
 const FEATURED_LIMIT = HOME_COURSE_LIMIT;
 
+/** A course row opens its Website tab in Master Data › Courses. */
+const websiteTab = (slug: string) => `/admin/courses/${slug}`;
+
 export default function CoursesPage() {
   const { data, update, saveNow, reload, logActivity } = useAdminData();
   const { push } = useToast();
@@ -45,7 +48,7 @@ export default function CoursesPage() {
   // After the server creates or links a course, open its editor once the reloaded store contains it.
   useEffect(() => {
     if (openWhenLoaded && data.courses.some((c) => c.slug === openWhenLoaded)) {
-      navigate(`/admin/courses/${openWhenLoaded}`);
+      navigate(websiteTab(openWhenLoaded));
       setOpenWhenLoaded(null);
     }
   }, [openWhenLoaded, data.courses, navigate]);
@@ -61,7 +64,7 @@ export default function CoursesPage() {
 
   const manage = (cmsCourseId: string) => {
     const course = data.courses.find((c) => c.id === cmsCourseId);
-    if (course) navigate(`/admin/courses/${course.slug}`);
+    if (course) navigate(websiteTab(course.slug));
     else push("That Skyline course is not available in this workspace.", "error");
   };
 
@@ -278,7 +281,7 @@ export default function CoursesPage() {
                           <i className="ri-eye-line" aria-hidden="true" />
                         </Link>
                         <Link
-                          to={`/admin/courses/${c.slug}`}
+                          to={`/admin/courses/${encodeURIComponent(c.id)}/website`}
                           aria-label="Edit"
                           className="flex h-8 w-8 items-center justify-center rounded-md text-foreground-500 hover:bg-background-100"
                         >

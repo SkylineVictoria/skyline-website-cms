@@ -34,14 +34,22 @@ export const parseCurly = (inner: string): { key: string; modifier: string | nul
 };
 
 /* ------------------------------------------------------------------ blocks: packaged offers */
-/** {{#each courses}} ... {{/each}} repeats per course; {{#if multiple_courses}} ... {{/if}} prints only for more than one course. */
+/**
+ * {{#each courses}} ... {{/each}} repeats per course; {{#if multiple_courses}} ... {{/if}} prints only for more than one course;
+ * {{#each other_fees}} ... {{/each}} repeats per row of Settings › Other fees and charges ({{charges.label}}, {{charges.amount}});
+ * {{#if gst}} ... {{/if}} prints only when a fee line of the offer is taxable. Blocks are not nested.
+ */
 export const EACH_COURSES = "#each courses";
 export const IF_MULTIPLE = "#if multiple_courses";
-const BLOCK_MARKER = /^\s*(#each courses|\/each|#if multiple_courses|\/if)\s*$/i;
+export const EACH_CHARGES = "#each other_fees";
+export const IF_GST = "#if gst";
+const BLOCK_MARKER = /^\s*(#each courses|#each other_fees|\/each|#if multiple_courses|#if gst|\/if)\s*$/i;
 export const isBlockMarker = (inner: string) => BLOCK_MARKER.test(inner);
 /** A course variable of the n-th course after the first is written key#n (course.name#1 is the second course's name). */
 export const baseKey = (key: string) => key.split("#")[0];
 export const courseIndexOf = (key: string) => { const n = Number(key.split("#")[1]); return Number.isInteger(n) && n > 0 ? n : 0; };
+/** Variables of one row of Settings › Other fees and charges (repeated by {{#each other_fees}}). */
+export const isChargeKey = (key: string) => /^charges\./.test(key);
 /** Variables that belong to one course (repeated by {{#each courses}}). */
 export const isCourseKey = (key: string) => /^(course|fees)\./.test(key) && key !== "fees.combined_total";
 const courseLabel = (variable: LetterVariable, key: string) => (courseIndexOf(key) ? `${variable.label} (course ${courseIndexOf(key) + 1})` : variable.label);
@@ -79,7 +87,7 @@ function nextMarker(html: string, from: number, name: RegExp): { at: number; len
  * fee variables of the n-th course written key#n), {{#if multiple_courses}} blocks kept only for more than one course. With one course
  * (or none) the letter reads exactly as without the blocks.
  */
-export function expandLetterBlocks(html: string, courseCount: number): string {
+export function expandLetterBlocks(html: string, courseCount: number, extras: { charges?: number; gst?: boolean } = {}): string {
   const count = Math.max(1, Math.floor(courseCount) || 1);
   let out = String(html ?? "");
   const openEach = /\{\{\s*#each courses\s*\}\}/gi, closeEach = /\{\{\s*\/each\s*\}\}/gi;
@@ -94,6 +102,30 @@ export function expandLetterBlocks(html: string, courseCount: number): string {
       (whole, key: string, mod: string | undefined) => (isCourseKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole))));
     out = out.slice(0, a.start) + copies.join("") + out.slice(b.end);
   }
+  // {{#each other_fees}}: once per row (none: the block goes); the n-th copy's charges.* variables are written key#n.
+  const rows = Math.max(0, Math.floor(extras.charges ?? 1));
+  const openCharges = /\{\{\s*#each other_fees\s*\}\}/gi;
+  for (let guard = 0; guard < 50; guard++) {
+    const open = nextMarker(out, 0, openCharges);
+    if (!open) break;
+    const close = nextMarker(out, open.at + open.length, closeEach);
+    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
+    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
+    const inner = out.slice(a.end, b.start);
+    const copies = Array.from({ length: rows }, (_, n) => (n === 0 ? inner : inner.replace(/\{\{\s*([a-z]+\.[a-z_]+)(\s*\|[^{}]*)?\s*\}\}/g,
+      (whole, key: string, mod: string | undefined) => (isChargeKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole))));
+    out = out.slice(0, a.start) + copies.join("") + out.slice(b.end);
+  }
+  // {{#if gst}}: kept only when a fee line is taxable.
+  const openGst = /\{\{\s*#if gst\s*\}\}/gi, closeAnyIf = /\{\{\s*\/if\s*\}\}/gi;
+  for (let guard = 0; guard < 200; guard++) {
+    const open = nextMarker(out, 0, openGst);
+    if (!open) break;
+    const close = nextMarker(out, open.at + open.length, closeAnyIf);
+    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
+    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
+    out = out.slice(0, a.start) + (extras.gst ? out.slice(a.end, b.start) : "") + out.slice(b.end);
+  }
   const openIf = /\{\{\s*#if multiple_courses\s*\}\}/gi, closeIf = /\{\{\s*\/if\s*\}\}/gi;
   for (let guard = 0; guard < 50; guard++) {
     const open = nextMarker(out, 0, openIf);
@@ -103,6 +135,12 @@ export function expandLetterBlocks(html: string, courseCount: number): string {
     const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
     out = out.slice(0, a.start) + (count > 1 ? out.slice(a.end, b.start) : "") + out.slice(b.end);
   }
+  return out;
+}
+/** The values with the 2nd, 3rd... row of Settings › Other fees and charges added as charges.label#1, charges.amount#1... */
+export function withChargeValues(values: Record<string, LetterValue>, charges: ReadonlyArray<Record<string, LetterValue>> = []): Record<string, LetterValue> {
+  const out: Record<string, LetterValue> = { ...values };
+  charges.forEach((row, n) => { if (n > 0) for (const [key, value] of Object.entries(row)) out[`${key}#${n}`] = value; });
   return out;
 }
 /** The application's values with the 2nd, 3rd... course's course and fee variables added as key#1, key#2... */

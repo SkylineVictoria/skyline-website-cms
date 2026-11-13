@@ -10,6 +10,7 @@ import { HistoryButton } from "@/pages/admin/components/workflow";
 import { SOCIAL_PLATFORMS, isKnownPlatform, socialIconFor } from "@/lib/socialPlatforms";
 import SenderSettings from "@/pages/admin/components/SenderSettings";
 import EventRecipients from "@/pages/admin/components/EventRecipients";
+import OtherFeesSettings from "@/pages/admin/components/OtherFeesSettings";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import { MIN_PASSWORD_LENGTH, passwordProblem } from "@/lib/passwords";
 
@@ -307,7 +308,7 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        <div className="space-y-5 xl:col-span-2"><SenderSettings tenantId={null} /><EventRecipients tenantId={null} /></div>
+        <div className="space-y-5 xl:col-span-2"><SenderSettings tenantId={null} /><EventRecipients tenantId={null} /><OtherFeesSettings /></div>
       </div>
 
       <div className="mt-5 flex justify-end">

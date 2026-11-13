@@ -83,15 +83,16 @@ test("accepted, polled, succeeded: exact request, mapped candidates, evidence, r
   assert.deepEqual(sleeps, [2000, 5000, 13000]);
   assert.equal(outcome.operationId, RESULT);
   assert.equal(outcome.categoryMismatch, false);
-  assert.deepEqual(outcome.fields, { first_name: "Asha", last_name: "Testperson", dob: "1999-04-05", gender: "Female", passport_number: "X1234567", passport_expiry: "2031-08-09" });
+  // Country codes are passed on as printed; buildExtractionEnvelope's shared normaliser maps them to the form's options (production v34 behaviour).
+  assert.deepEqual(outcome.fields, { first_name: "Asha", last_name: "Testperson", dob: "1999-04-05", gender: "Female", passport_number: "X1234567", passport_expiry: "2031-08-09", nationality: "IND", citizenship: "IND", issuing_country: "IND" });
   assert.deepEqual(outcome.confidence, { first_name: 0.98, last_name: 0.97, passport_number: 0.91 });
   assert.ok(outcome.evidence.some((e) => e.field === "passport_number" && e.page === 1 && e.source === "Azure DocumentNumber"));
-  assert.ok(outcome.warnings.some((w) => /country/i.test(w)), "unconverted country codes must be disclosed, not guessed");
   assert.equal(outcome.usage.model, "prebuilt-idDocument");
   assert.equal(outcome.usage.apiVersion, "2024-11-30");
   assert.ok(!JSON.stringify(outcome).includes(KEY));
   const envelope = buildExtractionEnvelope(provider, outcome, "t");
   assert.equal(envelope.source.engine, "azure-document-intelligence");
+  assert.ok(envelope.extracted.nationality && envelope.extracted.nationality !== "IND" && envelope.extracted.citizenship === envelope.extracted.nationality, "codes become the form's country name");
   assert.equal(envelope.status, "unreviewed");
 });
 
@@ -289,7 +290,7 @@ test("driving licence: Florida address without a printed country keeps street, c
 
 test("driving licence: US address with a printed country keeps it; an Australian address with no country is unchanged", async () => {
   const us = envelopeOf(await licenceFields(auLicence({ Address: field({ type: "address", valueAddress: { streetAddress: "1 Main St", city: "Austin", state: "TX", postalCode: "73301", countryRegion: "USA" } }) })));
-  assert.deepEqual([us.extracted.address_type, us.extracted.ov_country, us.extracted.ov_state], ["Overseas Address", "USA", "TX"]);
+  assert.deepEqual([us.extracted.address_type, us.extracted.ov_country, us.extracted.ov_state], ["Overseas Address", "United States", "TX"]); // the printed code, mapped to the form's country name
   const au = envelopeOf(await licenceFields(auLicence()));
   assert.deepEqual([au.extracted.address_type, au.extracted.au_state, au.extracted.au_country, au.extracted.ov_street], ["Australian Address", "NSW", "Australia", undefined]);
 });

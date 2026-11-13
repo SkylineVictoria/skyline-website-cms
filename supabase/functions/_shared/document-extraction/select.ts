@@ -21,7 +21,7 @@ const blank = (value: string | undefined) => !(value ?? "").trim();
 
 type Choice = "openai" | "azure";
 type Options = { fetch?: typeof fetch; category?: ExtractionCategory };
-const ROUTE_KEYS: Record<string, ExtractionCategory> = { passport: "Passport", driving_licence: "Driving Licence", visa: "Visa", english_test: "English Test", academic: "Academic" };
+const ROUTE_KEYS: Record<string, ExtractionCategory> = { passport: "Passport", driving_licence: "Driving Licence", visa: "Visa", english_test: "English Test", academic: "Academic", health_insurance: "Health Insurance" };
 
 /** null = malformed. Blank = no routes. Strict: known lowercase keys, openai|azure values, no duplicates or empty entries. */
 function parseRoutes(raw: string | undefined): Map<ExtractionCategory, Choice> | null {

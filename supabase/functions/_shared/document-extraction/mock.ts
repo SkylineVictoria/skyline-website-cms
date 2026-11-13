@@ -41,6 +41,11 @@ const FIXTURES: Record<ExtractionCategory, Fixture> = {
     fields: { academic_institution: "Example Institute of Technology", academic_qualification: "Bachelor of Science", academic_program: "विज्ञान स्नातक (Computer Science)", academic_year: "2025", academic_result: "GPA 3.4/4.0" },
     evidence: [ev("academic_institution", 1, "Transcript header"), ev("academic_result", 2, "Semester summary"), ev("academic_year", 3, "Completion statement")],
   },
+  "Health Insurance": {
+    detectedType: "Health Insurance",
+    fields: { oshc_provider: "Example Health", oshc_policy_number: "OSHC-SYN-0001", oshc_cover_start: "2026-02-01", oshc_expiry: "2027-03-31", oshc_cover_type: "Single" },
+    evidence: [ev("oshc_provider", 1, "Certificate header"), ev("oshc_policy_number", 1, "Membership details")],
+  },
 };
 
 

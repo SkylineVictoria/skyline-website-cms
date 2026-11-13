@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
-import { oauthCallback, oauthConfig, oauthProviders, readOAuthCredential, stateHash, authorizeUrl, exchange } from '../_shared/integrations/oauth.ts';
+import { pkceChallenge, oauthCallback, oauthConfig, oauthProviders, readOAuthCredential, stateHash, authorizeUrl, exchange, revokeAtProvider } from '../_shared/integrations/oauth.ts';
 import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
@@ -75,11 +75,11 @@ Deno.serve(async(req:Request)=>{
   }
   if(action==='event_recheck'&&selectedEvent){
    if(c.connector_id!=='stripe'||c.status==='disabled')return json({error:'Enable the Stripe connection first.'},409);
-   const stored=await admin.rpc('integration_credential_read',{p_connection:c.id,p_kind:'api_key'});check(stored.error);
-   if(!stored.data)return json({error:'Save and test a Stripe API credential first.'},409);
+   const stored=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));
+   if(!stored.token)return json({error:'Save and test a Stripe API credential first.'},409);
    let ok=false,code='provider_unreachable';
    try{
-    const response=await fetch('https://api.stripe.com/v1/events/'+encodeURIComponent(selectedEvent.provider_event_id),{headers:{Authorization:`Bearer ${stored.data}`},signal:AbortSignal.timeout(10000),redirect:'error'});
+    const response=await fetch('https://api.stripe.com/v1/events/'+encodeURIComponent(selectedEvent.provider_event_id),{headers:{Authorization:`Bearer ${stored.token}`,...(stored.stripeAccount?{'Stripe-Account':stored.stripeAccount}:{})},signal:AbortSignal.timeout(10000),redirect:'error'});
     code=response.status===404?'event_not_available':response.ok?'event_verified':'provider_rejected';
     if(response.ok){const event=await response.json();ok=event.id===selectedEvent.provider_event_id&&event.type===selectedEvent.event_type;if(!ok)code='event_mismatch';}else{await response.body?.cancel();}
    }catch{/* persist a safe failure code */}
@@ -90,12 +90,13 @@ Deno.serve(async(req:Request)=>{
    if(c.connector_id!=='stripe'||c.status!=='connected')return json({error:'Verify a Stripe connection first.'},409);
    const existing=await caller.from('integration_webhook_registrations').select('id').eq('connection_id',c.id).maybeSingle();check(existing.error);
    if(existing.data)return json({error:'A registration already exists. Manage the endpoint in Stripe.'},409);
-   const token=await admin.rpc('integration_credential_read',{p_connection:c.id,p_kind:'api_key'});check(token.error);
-   if(!token.data)return json({error:'Stripe credential missing.'},409);
+   const token=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));
+   if(token.stripeAccount)return json({error:'This Stripe sign-in grants read-only access. Use a restricted API key with webhook permissions to register webhooks.'},409);
+   if(!token.token)return json({error:'Stripe credential missing.'},409);
    const endpoint=`${url}/functions/v1/integrations-webhook?connection=${c.id}`;
    const events=['invoice.paid','invoice.payment_failed','customer.subscription.updated','customer.subscription.deleted'];
    const payload=new URLSearchParams({url:endpoint});events.forEach(e=>payload.append('enabled_events[]',e));
-   const response=await fetch('https://api.stripe.com/v1/webhook_endpoints',{method:'POST',headers:{Authorization:`Bearer ${token.data}`,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':`crm-webhook-${c.id}`},body:payload,signal:AbortSignal.timeout(15000),redirect:'error'});
+   const response=await fetch('https://api.stripe.com/v1/webhook_endpoints',{method:'POST',headers:{Authorization:`Bearer ${token.token}`,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':`crm-webhook-${c.id}`},body:payload,signal:AbortSignal.timeout(15000),redirect:'error'});
    if(!response.ok)return json({error:'Stripe could not register the endpoint. Verify API key permissions and retry.'},409);
    const registration=await response.json();
    if(typeof registration.id!=='string'||typeof registration.secret!=='string')return json({error:'Unexpected provider registration response.'},502);
@@ -107,80 +108,83 @@ Deno.serve(async(req:Request)=>{
    if(!oauthProviders.includes(c.connector_id))return json({error:'This application does not use sign-in authorization.'},400);
    const env=(name:string)=>Deno.env.get(name);
    const callbackUrl=oauthCallback(env);
-   if(action==='oauth_app_save'){
-    const clientId=typeof body.clientId==='string'?body.clientId.trim():'';
-    const clientSecret=typeof body.clientSecret==='string'?body.clientSecret.trim():'';
-    const environment=c.connector_id==='docusign'?body.environment:undefined;
-    if(!clientId||clientId.length>300||!clientSecret||clientSecret.length>3000||
-       /[\x00-\x20\x7f]/.test(clientId+clientSecret)||
-       (c.connector_id==='docusign'&&environment!=='demo'&&environment!=='production')){
-     return json({error:'Enter a valid app ID and client secret, and select the environment for DocuSign.'},400);
-    }
-    if(c.status==='disabled')return json({error:'Enable the connection first.'},409);
-    const saved=await admin.rpc('integration_credential_write',{
-     p_connection:c.id,p_kind:'api_key',p_version:c.updated_at,
-     p_secret:JSON.stringify({version:1,app:{clientId,clientSecret,environment}})
-    });
-    if(saved.error)return json({error:'The app credentials could not be saved. Reload and try again.'},409);
-    return json({ok:true});
-   }
-   const {app,token:existingToken}=await readOAuthCredential(c.id,(name,args)=>admin.rpc(name,args));
+   // Skyline is registered once per provider; app credentials come only from Edge Function secrets.
+   if(action==='oauth_app_save')return json({error:'App credentials are managed by Skyline. Click Connect to sign in with your account.'},410);
+   const {token:existingToken}=await readOAuthCredential(c.id,(name,args)=>admin.rpc(name,args));
    let config;
-   try{config=oauthConfig(c.connector_id,env,app);}catch{/* Report missing app credentials below. */}
-   if(action==='oauth_setup')return json({callbackUrl,configured:!!config,authorized:!!existingToken,environment:app?.environment ?? (env('EF_DOCUSIGN_ENVIRONMENT')==='production'?'production':'demo')});
+   try{config=oauthConfig(c.connector_id,env);}catch{/* Report missing platform app registration below. */}
+   if(action==='oauth_setup')return json({callbackUrl,configured:!!config,authorized:!!existingToken,environment:env('EF_DOCUSIGN_ENVIRONMENT')==='production'?'production':'demo'});
    if(c.status==='disabled')return json({error:'Enable the connection first.'},409);
-   if(!config)return json({error:'Enter the app credentials before signing in.'},409);
+   if(!config)return json({error:'Skyline is not yet registered with this provider. Ask the platform administrator to add the app registration.'},409);
    if(action==='oauth_start'){
     if(req.headers.get('origin') && req.headers.get('origin')!==new URL(callbackUrl).origin){
      return json({error:'Open the CRM at the domain shown in the redirect URL to sign in.'},409);
     }
-    const state=crypto.randomUUID()+crypto.randomUUID();
+    const verifier=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
+    const state=crypto.randomUUID()+'.'+await stateHash(verifier);
     const r=await admin.rpc('integration_oauth_state',{p_hash:await stateHash(state),p_connection:c.id,p_user:user.user.id,p_consume:false});check(r.error);
     const latest=await caller.from('integration_connections').select('updated_at').eq('id',c.id).maybeSingle();check(latest.error);
     if(!r.data||latest.data?.updated_at!==c.updated_at)return json({error:'Connection changed. Reload and retry.'},409);
-    return json({url:authorizeUrl(config,state),state});
+    return json({url:authorizeUrl(config,state,await pkceChallenge(verifier)),state,verifier});
    }
    if(typeof body.state!=='string'||typeof body.code!=='string'||body.state.length>200||body.code.length>4000)return json({error:'Invalid authorization response.'},400);
+   if(c.connector_id==='calendly' && (typeof body.verifier!=='string'||!/^[a-zA-Z0-9_-]{43,128}$/.test(body.verifier)||!body.state.endsWith('.'+await stateHash(body.verifier))))return json({error:'Sign-in session could not be verified. Reconnect.'},409);
    const r=await admin.rpc('integration_oauth_state',{p_hash:await stateHash(body.state),p_connection:c.id,p_user:user.user.id,p_consume:true});check(r.error);
    if(!r.data)return json({error:'Authorization expired, already used, or belongs to a different session. Reconnect.'},409);
-   let token;try{token=await exchange(config,body.code);}catch{return json({error:'Provider authorization failed. Start Reconnect again.'},409);}
-   const saved=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:'api_key',p_secret:JSON.stringify({version:1,app,token}),p_version:c.updated_at});check(saved.error);
+   let token;try{token=await exchange(config,body.code,typeof body.verifier==='string'?body.verifier:undefined);}catch{return json({error:'Provider authorization failed. Start Reconnect again.'},409);}
+   const saved=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:'api_key',p_secret:JSON.stringify({version:1,token}),p_version:c.updated_at});check(saved.error);
    await log('oauth_authorized');return json({ok:true});
   }
   if(action==='disable'||action==='enable'){
    const {error}=await admin.from('integration_connections').update({status:action==='disable'?'disabled':'not_connected',updated_at:new Date().toISOString()}).eq('id',c.id);check(error);await log(action==='disable'?'connection_disabled':'connection_enabled');return json({ok:true});
   }
   if(action==='credential'||action==='revoke'){
-   if(action==='credential'&&!['stripe','calendly'].includes(c.connector_id))return json({error:'Provider authorization adapter is not configured.'},409);
+   if(action==='credential'&&c.connector_id!=='stripe')return json({error:'Use Connect to sign in to this provider.'},409);
    const kind=String(body.kind??'api_key'),secret=action==='revoke'?'':String(body.secret??'').trim();
    if(action==='credential'&&(!['api_key','webhook_secret'].includes(kind)||secret.length<20||secret.length>8000||/[\r\n]/.test(secret)))return json({error:'Invalid credential format.'},400);
    if(c.connector_id==='stripe'&&action==='credential'&&!(kind==='webhook_secret'?/^whsec_/.test(secret):/^(sk|rk)_(test|live)_/.test(secret)))return json({error:'Enter a Stripe secret/restricted API key or webhook signing secret.'},400);
+   // Disconnect: revoke Skyline's access at the provider first (best effort), then delete the stored token.
+   let revokeCode='';
+   if(action==='revoke'&&oauthProviders.includes(c.connector_id)){
+    try{
+     const {token:t}=await readOAuthCredential(c.id,(name,args)=>admin.rpc(name,args));
+     if(t)revokeCode=await revokeAtProvider(oauthConfig(c.connector_id,n=>Deno.env.get(n)),t);
+    }catch{revokeCode='revoke_failed';}
+   }
    if(c.connector_id==='calendly'){
-    if(kind!=='api_key')return json({error:'Unsupported credential type.'},400);
-    const r=await caller.rpc('cms_integration_secret_set',{p_provider:'calendly',p_tenant:tenant,p_secret:secret});check(r.error);
-    const r2=await admin.from('integration_connections').update({credential_configured:secret!=='',status:c.status==='disabled'?'disabled':'not_connected',updated_at:new Date().toISOString()}).eq('id',c.id);check(r2.error);
+    const r=await caller.rpc('cms_integration_secret_set',{p_provider:'calendly',p_tenant:tenant,p_secret:''});check(r.error);
+    const cleared=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:'api_key',p_secret:''});check(cleared.error);
    }else{for(const k of action==='revoke'?['api_key','webhook_secret']:[kind]){const {error}=await admin.rpc('integration_credential_write',{p_connection:c.id,p_kind:k,p_secret:secret});check(error);}}
-   await log(action==='revoke'?'credentials_revoked':'credential_rotated');return json({ok:true});
+   if(action==='revoke'){
+    const r2=await admin.from('integration_connections').update({credential_configured:false,status:c.status==='disabled'?'disabled':'not_connected',updated_at:new Date().toISOString()}).eq('id',c.id);check(r2.error);
+    if(revokeCode)await log(revokeCode,revokeCode==='revoke_failed'?'warn':'info');
+   }
+   await log(action==='revoke'?'credentials_revoked':'credential_rotated');
+   if(action==='revoke'&&revokeCode==='revoke_not_supported')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline. This provider has no revoke API: remove Skyline from the account\'s connected apps there if required.'});
+   if(action==='revoke'&&revokeCode==='revoke_failed')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline, but the provider did not confirm revocation. Remove Skyline from the account\'s connected apps there.'});
+   return json({ok:true,...(action==='revoke'?{providerRevoked:revokeCode==='revoked'}:{})});
   }
   if(action==='test'||action==='retry'){
    if(c.status==='disabled')return json({error:'Enable this connection before testing.'},409);
    const {data:settings,error:se}=await caller.from('integration_settings').select('*').maybeSingle();check(se);
    let secret='';
    let docusignProduction=false;
-   if(c.connector_id==='calendly'){
+   let stripeAccount:string|undefined;
+   const calendlyOAuth=c.connector_id==='calendly' ? await readOAuthCredential(c.id,(name,args)=>admin.rpc(name,args)) : undefined;
+   if(c.connector_id==='calendly'&&!calendlyOAuth?.token){
     let q=admin.from('cms_integration_secrets').select('secret').eq('provider','calendly');q=tenant?q.eq('tenant_id',tenant):q.is('tenant_id',null);const r=await q.maybeSingle();check(r.error);secret=r.data?.secret??'';
    }else{
-    try{const credential=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));secret=credential.token;c.updated_at=credential.version;docusignProduction=credential.docusignProduction??false;}
+    try{const credential=await accessToken(c,(name,args)=>admin.rpc(name,args),n=>Deno.env.get(n));secret=credential.token;c.updated_at=credential.version;docusignProduction=credential.docusignProduction??false;stripeAccount=credential.stripeAccount;}
     catch(e){const code=e instanceof Error?e.message:'';await log('credential_refresh_failed','error');return json({error:code==='oauth_reconnect_required'?'Provider authorization expired or was revoked. Use Reconnect.':code==='oauth_refresh_busy'?'Another authorization refresh is running. Retry shortly.':'Authorization could not be renewed. Check OAuth app settings or reconnect.'},409);}
    }
    const {data:job,error:je}=await admin.from('integration_sync_jobs').insert({connection_id:c.id,operation:'connection_test',status:'running',correlation_id:correlation}).select('id').single();check(je);
-   const result=await testProvider(c.connector_id,secret,settings?.timeout_seconds??10,settings?.max_retries??1,fetch,docusignProduction);
+   const result=await testProvider(c.connector_id,secret,settings?.timeout_seconds??10,settings?.max_retries??1,fetch,docusignProduction,stripeAccount);
    const now=new Date().toISOString();
    const jr=await admin.from('integration_sync_jobs').update({status:result.ok?'succeeded':'failed',completed_at:now,attempts:result.attempts}).eq('id',job!.id);check(jr.error);
    // Fence stale results against credential rotation / disable / concurrent edits.
    const cr=await admin.from('integration_connections').update({status:result.ok?'connected':secret?'error':'not_connected',...(result.ok?{last_success_at:now}:{}),updated_at:now}).eq('id',c.id).eq('updated_at',c.updated_at).neq('status','disabled');check(cr.error);
    await log(result.code,result.ok?'info':'error');
-   const messages:Record<string,string>={credentials_missing:'No credential configured. Save a credential first.',credentials_rejected:'Provider rejected the credential. Check its permissions or rotate it.',adapter_not_available:'This provider requires its approved authorization adapter before testing.',provider_unavailable:'Provider is temporarily unavailable. Retry later.',provider_unreachable:'Provider could not be reached within the timeout.'};
+   const messages:Record<string,string>={credentials_missing:'Not connected yet. Click Connect to sign in.',credentials_rejected:'Provider rejected the authorization. Use Reconnect.',adapter_not_available:'This provider requires its approved authorization adapter before testing.',provider_unavailable:'Provider is temporarily unavailable. Retry later.',provider_unreachable:'Provider could not be reached within the timeout.'};
    return result.ok?json({ok:true}):json({error:messages[result.code]??'Connection test failed.',correlationId:correlation},409);
   }
   return json({error:'Unknown action.'},400);

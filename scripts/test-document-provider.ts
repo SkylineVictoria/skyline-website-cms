@@ -84,7 +84,9 @@ test("empty OCR is a successful no_fields outcome", async () => {
 
 test("unknown select options survive provider output but are not offered to the wizard", async () => {
   const envelope = buildExtractionEnvelope(createMockProvider(), await success("unknown-options", "Passport"), "t");
-  assert.deepEqual(envelope.extracted, { nationality: "Atlantis", gender: "X" });
+  // Production v34: values that match no form option are kept verbatim in source.unmatched for the agent, never as candidates.
+  assert.deepEqual(envelope.extracted, {});
+  assert.deepEqual(envelope.source.unmatched, { nationality: "Atlantis", gender: "X" });
   assert.deepEqual(formatExtractionCandidates(envelope.extracted), {});
 });
 

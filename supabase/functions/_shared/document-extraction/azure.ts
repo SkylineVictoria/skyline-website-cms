@@ -118,7 +118,13 @@ function mapIdDocument(doc: Json, category: ExtractionCategory): { mapped: Mappe
   if (category === "Passport") {
     put(m, "passport_number", scalar(f.DocumentNumber), "DocumentNumber", f.DocumentNumber);
     put(m, "passport_expiry", scalar(f.DateOfExpiration), "DateOfExpiration", f.DateOfExpiration);
-    if (scalar(f.Nationality) || scalar(f.CountryRegion) || scalar(f.Country)) m.warnings.push("Country codes were not converted to application country names; enter them manually.");
+    put(m, "place_of_birth", scalar(f.PlaceOfBirth), "PlaceOfBirth", f.PlaceOfBirth);
+    // Azure returns ISO 3166 alpha-3 codes (valueCountryRegion). They are passed on as printed: buildExtractionEnvelope runs the shared country
+    // normaliser on every provider, maps them to the form's exact options and keeps any code it cannot match in source.unmatched. A passport proves
+    // nationality; the application's citizenship is filled from it. Azure has no country-of-birth field; only the place of birth is read.
+    put(m, "nationality", scalar(f.Nationality), "Nationality", f.Nationality);
+    put(m, "citizenship", scalar(f.Nationality), "Nationality", f.Nationality);
+    put(m, "issuing_country", scalar(f.CountryRegion) ?? scalar(f.Country), scalar(f.CountryRegion) ? "CountryRegion" : "Country", f.CountryRegion ?? f.Country);
   } else if (isObject(f.Address)) {
     const address = isObject(f.Address.valueAddress) ? f.Address.valueAddress : null;
     if (address) {

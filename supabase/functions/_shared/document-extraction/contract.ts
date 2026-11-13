@@ -3,13 +3,16 @@
 // A provider only turns document bytes into candidate fields. It never writes
 // application values; the leased worker persists the result through fenced SQL.
 
+import { normaliseCountryFields } from "../validation/countries.ts";
+import { normaliseAuState, normaliseFormFields } from "../validation/extraction-fields.ts";
+
 export const EXTRACTION_PARSER = "document-extraction-v1";
-export const EXTRACTION_CATEGORIES = ["Passport", "Driving Licence", "Visa", "English Test", "Academic"] as const;
+export const EXTRACTION_CATEGORIES = ["Passport", "Driving Licence", "Visa", "English Test", "Academic", "Health Insurance"] as const;
 export type ExtractionCategory = typeof EXTRACTION_CATEGORIES[number];
 
 // Application field identifiers, not a generic document schema: aligned with the
 // wizard so candidates can be merged into genuinely empty fields and then reviewed.
-export const EXTRACTION_FIELD_NAMES = ["first_name","middle_name","last_name","dob","gender","nationality","citizenship","issuing_country","birth_country","passport_number","passport_expiry","address_type","au_street","au_line2","au_suburb","au_state","au_zip","au_country","ov_street","ov_line2","ov_suburb","ov_state","ov_zip","ov_country","holds_visa","visa_subclass","visa_grant_date","visa_stay_until","visa_grant_number","english_type","english_score","english_components","english_date","english_reference","academic_institution","academic_qualification","academic_program","academic_year","academic_result"] as const;
+export const EXTRACTION_FIELD_NAMES = ["first_name","middle_name","last_name","dob","gender","nationality","citizenship","issuing_country","birth_country","place_of_birth","passport_number","passport_expiry","address_type","au_street","au_line2","au_suburb","au_state","au_zip","au_country","ov_street","ov_line2","ov_suburb","ov_state","ov_zip","ov_country","holds_visa","visa_subclass","visa_grant_date","visa_stay_until","visa_grant_number","english_type","english_score","english_components","english_date","english_reference","academic_institution","academic_qualification","academic_program","academic_year","academic_result","oshc_provider","oshc_policy_number","oshc_cover_start","oshc_expiry","oshc_cover_type"] as const;
 
 export type ProviderErrorCode = "network" | "rate_limit" | "provider" | "timeout" | "schema" | "validation" | "cancelled";
 
@@ -65,6 +68,8 @@ export interface ExtractionEnvelope {
     engine: string; parser: string; model: string; extractedAt: string; documentType: string; categoryMismatch: boolean;
     rawFields: Record<string, string>; evidence: ExtractionEvidence[];
     confidence?: Record<string, number>; warnings?: string[];
+    /** Values that were read but match no option or format of the form (countries, gender, dates, state), kept verbatim for the agent. */
+    unmatched?: Record<string, string>;
   };
 }
 
@@ -72,11 +77,22 @@ export const failure = (code: ProviderErrorCode, message: string, retryable: boo
 
 /** Allowed upload: PDF/PNG/JPEG whose declared MIME, extension and magic bytes agree. */
 export function isSupportedDocument(bytes: Uint8Array, mime: string, name: string): boolean {
-  const pdf = bytes.length > 5 && new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-";
+  // The PDF spec allows leading bytes: "%PDF-" anywhere in the first 1024 bytes, as the guest upload check decides.
+  const pdf = bytes.length > 5 && new TextDecoder().decode(bytes.slice(0, 1024)).includes("%PDF-");
   const png = bytes.length > 8 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71;
   const jpg = bytes.length > 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
   const allowedName = /\.(pdf|png|jpe?g)$/i.test(name);
   return allowedName && ((mime === "application/pdf" && pdf) || (mime === "image/png" && png) || ((mime === "image/jpeg" || mime === "image/jpg") && jpg));
+}
+
+/** The cover types the application form offers, from the wording printed on a certificate of insurance. */
+export function oshcCoverType(raw: string): string | null {
+  const text = raw.toLowerCase();
+  if (/single\s*parent|one\s*parent/.test(text)) return "Single Parent Family";
+  if (/family/.test(text)) return "Family";
+  if (/couple/.test(text)) return "Couple";
+  if (/single|individual|student only/.test(text)) return "Single";
+  return null;
 }
 
 /** Normalise only to fields/options the existing application can represent. */
@@ -88,6 +104,11 @@ export function normaliseCandidates(fields: Record<string, string>): Record<stri
   else if (testType.includes("pte") || testType.includes("pearson")) result.english_type = "PTE Academic";
   else if (testType.includes("toefl")) result.english_type = "TOEFL iBT";
   else if (testType.includes("cambridge")) result.english_type = "Cambridge English";
+  if (result.oshc_cover_type !== undefined) {
+    const cover = oshcCoverType(result.oshc_cover_type);
+    if (cover) result.oshc_cover_type = cover;
+    else delete result.oshc_cover_type; // only the cover types the form offers can be filled
+  }
   if (result.english_components) {
     result.english_score = result.english_score ? `${result.english_score} (Overall) · ${result.english_components}` : result.english_components;
     delete result.english_components;
@@ -147,16 +168,21 @@ export function buildExtractionEnvelope(provider: Pick<DocumentExtractionProvide
   const rawFields = Object.fromEntries(Object.entries(result.fields)
     .filter(([key, value]) => known.has(key) && typeof value === "string" && value.trim())
     .map(([key, value]) => [key, String(value).trim()]));
+  // A full state name ("New South Wales") is the Australian state, not evidence of an overseas address.
+  if (rawFields.au_state && normaliseAuState(rawFields.au_state)) rawFields.au_state = normaliseAuState(rawFields.au_state)!;
   const address = result.categoryMismatch ? { fields: rawFields, warnings: [] as string[] } : normaliseAddress(rawFields);
-  const extracted = result.categoryMismatch ? {} : normaliseCandidates(address.fields);
-  const warnings = [...result.warnings, ...address.warnings];
+  const countries = result.categoryMismatch ? { fields: address.fields, unmatched: {} as Record<string, string>, notes: [] as string[] } : normaliseCountryFields(address.fields);
+  const formFields = result.categoryMismatch ? { fields: countries.fields, unmatched: {} as Record<string, string>, notes: [] as string[] } : normaliseFormFields(countries.fields);
+  const extracted = result.categoryMismatch ? {} : normaliseCandidates(formFields.fields);
+  const unmatched = { ...countries.unmatched, ...formFields.unmatched };
+  const warnings = [...result.warnings, ...address.warnings, ...countries.notes, ...formFields.notes];
   const confidence = validConfidence(result.confidence);
   return {
     extracted, confirmed: {}, status: Object.keys(extracted).length ? "unreviewed" : "no_fields",
     source: {
       engine: provider.id, parser: EXTRACTION_PARSER, model: provider.model, extractedAt, documentType: result.detectedType,
       categoryMismatch: result.categoryMismatch, rawFields, evidence: result.evidence,
-      ...(confidence ? { confidence } : {}), ...(warnings.length ? { warnings } : {}),
+      ...(confidence ? { confidence } : {}), ...(warnings.length ? { warnings } : {}), ...(Object.keys(unmatched).length ? { unmatched } : {}),
     },
   };
 }

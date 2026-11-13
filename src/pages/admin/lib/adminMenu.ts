@@ -32,7 +32,7 @@ const routes = new Set([
   '/admin/settings', '/admin/settings/application-statuses', '/admin/documents', '/admin/knowledge', '/admin/applications', '/admin/agencies', '/admin/notifications',
   '/admin/forms', '/admin/contact', '/admin/seo', '/admin/users', '/admin/institution', '/admin/activity',
   '/agency/all-applications', '/agency/agencies', '/agency/users',
-  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/course-fees', '/admin/intakes', '/admin/classrooms', '/admin/tickets', '/admin/bookings', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
+  '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/course-fees', '/admin/intakes', '/admin/classrooms', '/admin/tickets', '/admin/bookings', '/admin/assessments', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
   STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH, STAFF_LOCATIONS_PATH,
   '/admin/signing', '/admin/signing/templates', '/admin/signing/sent', '/admin/signing/partial', '/admin/signing/signed', '/admin/signing/declined', '/admin/signing/expired', '/admin/signing/void', // Sign child routes
 ]);

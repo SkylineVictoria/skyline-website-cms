@@ -7,6 +7,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
 import StudentPicker, { type StudentsAdded } from "@/pages/admin/components/rto/StudentPicker";
+import BatchAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
 import { Empty, MoreMenu, Section, SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import {
   clashText, monthYear, rto, rtoFlow, shortDate, stepPath, timingLines, type BatchPageData, type BatchScheduleRow, type BatchSession, type BatchStudent,
@@ -171,8 +172,8 @@ export default function BatchPage() {
         )}
       </Section>
 
-      <Section n={5} title="Assessments & Results" helper="Read only.">
-        <p className="rounded-md bg-background-100 px-3 py-4 text-center text-sm text-foreground-600"><i className="ri-file-list-3-line mr-1.5 text-foreground-400" aria-hidden="true" />Assessments and results will appear here from Assessment Management.</p>
+      <Section n={5} title="Assessments & Results" helper="Assigned from Master Data › Assessments; open one for its students and attempts.">
+        <BatchAssessmentsPanel batchId={b.id} />
       </Section>
 
       {timing ? (

@@ -87,7 +87,7 @@ export interface StudyOption { courseId: string; course: string; courseCode: str
 
 /** The guided course flow's own actions (duplicate an intake, batch unit date overrides): public.rto_course_flow. */
 /** The course wizard's steps and their addresses (/admin/courses/:id/:step). */
-export type CourseStep = "details" | "timetable" | "fees" | "intakes" | "website";
+export type CourseStep = "details" | "timetable" | "fees" | "intakes" | "assessments" | "website";
 export const stepPath = (courseId: string, step: CourseStep) => `/admin/courses/${encodeURIComponent(courseId)}/${step}`;
 
 export async function rtoFlow<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {

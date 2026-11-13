@@ -106,6 +106,7 @@ export default function StaffHomePage() {
       <div className="mx-auto max-w-4xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="font-heading text-2xl font-bold text-foreground-950">{preActive ? `Welcome${onboarding?.firstName ? `, ${onboarding.firstName}` : ""}` : "My HR"}</h1>
+          {me?.status === "active" ? <Link to="/staff/assessments" data-testid="my-hr-assessments" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100"><i className="ri-edit-box-line" aria-hidden="true" /> Assessments</Link> : null}
           <Link to="/bookings" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100"><i className="ri-calendar-check-line" aria-hidden="true" /> Bookings</Link>
           <Button type="button" variant="outline" onClick={signOut}>Sign out</Button>
         </div>

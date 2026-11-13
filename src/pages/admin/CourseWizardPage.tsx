@@ -8,6 +8,7 @@ import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { ErrorNote, FeesEditor, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
 import { CourseFacts, UnitsTab, WebsiteTab } from "@/pages/admin/components/rto/CourseSteps";
 import IntakesStep from "@/pages/admin/components/rto/IntakesStep";
+import CourseAssessmentsStep from "@/pages/admin/components/rto/CourseAssessmentsStep";
 import { DEPOSIT_LIMIT_CENTS, money, rto, shortDate, stepPath, todayIso, type CourseDetail, type CourseStep, type RtoCourse } from "@/pages/admin/lib/rto";
 
 const STEPS: { id: CourseStep; short: string; title: string; icon: string; hint: string }[] = [
@@ -15,6 +16,7 @@ const STEPS: { id: CourseStep; short: string; title: string; icon: string; hint:
   { id: "timetable", short: "Units & Timetable", title: "Units & master timetable", icon: "ri-list-check-2", hint: "The units in delivery order with their weeks and hours. Every intake is generated from this." },
   { id: "fees", short: "Fees", title: "Fees", icon: "ri-money-dollar-circle-line", hint: "The fee lines as the offer letter prints them. Every intake uses these unless its fees are changed for that intake." },
   { id: "intakes", short: "Intakes", title: "Intakes and batches", icon: "ri-calendar-event-line", hint: "Each intake is one run of the course with its own dates. Open one for its timeline, batches and students." },
+  { id: "assessments", short: "Assessments", title: "Assessments per unit", icon: "ri-edit-box-line", hint: "The form-built assessments mapped to each unit of competency; versions are published, then assigned to batches." },
   { id: "website", short: "Website", title: "Website", icon: "ri-global-line", hint: "Marketing settings and the publish checklist; facts come from the steps before." },
 ];
 
@@ -29,6 +31,7 @@ function attention(d: CourseDetail): Record<CourseStep, string[]> {
     timetable: [active.length === 0 && "Add the units", active.some((u) => !(u.defaultWeeks >= 0.5)) && "Units missing weeks", noHours > 0 && `${noHours} unit${noHours === 1 ? " has" : "s have"} no hours`].filter(Boolean) as string[],
     fees: [!d.fees.some((f) => f.type === "tuition") && "No tuition fee", deposit > DEPOSIT_LIMIT_CENTS && `Deposit ${money(deposit)} is above $1,500`].filter(Boolean) as string[],
     intakes: [!d.intakes.some((i) => i.status === "open" && i.startDate >= today) && "No open intake"].filter(Boolean) as string[],
+    assessments: [],
     website: [c.status !== "Published" && "Unpublished"].filter(Boolean) as string[],
   };
 }
@@ -107,6 +110,7 @@ export default function CourseWizardPage() {
       {current.id === "timetable" ? <UnitsTab units={detail.units} readOnly={!canEdit} busy={busy} autosave onSave={(units) => void save("units_save", { units })} /> : null}
       {current.id === "fees" ? <Card className="p-5"><FeesEditor items={detail.fees} readOnly={!canEdit} busy={busy} autosave onSave={(items) => void save("fees_save", { items })} /></Card> : null}
       {current.id === "intakes" ? <IntakesStep detail={detail} canEdit={canEdit} canEnrol={role.rtoManager || role.admin} onChanged={() => void load()} /> : null}
+      {current.id === "assessments" ? <CourseAssessmentsStep courseId={c.id} units={detail.units} /> : null}
       {current.id === "website" ? <WebsiteTab detail={detail} busy={busy} autosave onSave={(data) => void save("website_save", data)} /> : null}
 
       <div className="mt-5 flex items-center justify-between border-t border-background-200 pt-4">

@@ -84,6 +84,12 @@ import SigningPage from "@/pages/SigningPage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
+import StaffAssessmentsPage from "@/pages/staff/AssessmentsPage";
+import MarkingPage from "@/pages/staff/MarkingPage";
+import AssessmentsPage from "@/pages/admin/assessments/AssessmentsPage";
+import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage";
+import StudentAssessmentsPage from "@/pages/agency/assessments/page";
+import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
@@ -156,6 +162,9 @@ const routes: RouteObject[] = [
   { path: "/booking", element: <ManageBookingPage /> },
   { path: "/staff/welcome", element: <StaffWelcomePage /> },
   { path: "/staff", element: <StaffHomePage /> },
+  // Assessment Management for trainers / assessors (ASM-01): pending marking, assigned assessments, students, calendar.
+  { path: "/staff/assessments", element: <StaffAssessmentsPage /> },
+  { path: "/staff/assessments/attempts/:id", element: <MarkingPage /> },
   // HRMS: a manager's view of their reports (outside the admin shell).
   { path: "/staff/team/timesheets", element: <TeamTimesheetsPage /> },
   { path: "/staff/team/leave", element: <TeamLeavePage /> },
@@ -176,6 +185,9 @@ const routes: RouteObject[] = [
           { path: "applications/new", element: <NewApplicationPage /> },
           { path: "applications/:id", element: <ApplicationDetailPage /> },
           { path: "documents", element: <PortalDocumentsPage /> },
+          // Assessment Management for students (ASM-01): my assessments, the form, results, calendar.
+          { path: "assessments", element: <StudentAssessmentsPage /> },
+          { path: "assessments/:id", element: <StudentAssessmentPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
           { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <PortalTicketsPage /> },
@@ -261,6 +273,9 @@ const routes: RouteObject[] = [
           { path: "intakes/:id", element: <RequireAdmin><IntakeDetailPage /></RequireAdmin> },
           { path: "classrooms", element: <RequireAdmin><ClassroomsPage /></RequireAdmin> },
           { path: "batches/:id", element: <RequireAdmin><BatchPage /></RequireAdmin> },
+          // Assessment Management (ASM-01): library, builder, mapping, assignments, submissions, outcomes, reports, settings, audit.
+          { path: "assessments", element: <RequireAdmin><AssessmentsPage /></RequireAdmin> },
+          { path: "assessments/:id", element: <RequireAdmin><AssessmentDetailPage /></RequireAdmin> },
           // HRMS (time & attendance, leave, pay schedules, public holidays, Xero export).
           { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
           { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },

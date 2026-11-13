@@ -9,7 +9,7 @@ export type ApplicationStatus = string;
 
 export const ROLE_LABELS: Record<string, string> = {
   slit_admin: "SLIT Admin",
-  agency_admin: "Agency Admin",
+  agency_admin: "Business admin agent",
   agent: "Agent",
   student: "Student",
 };

@@ -46,8 +46,8 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     return (await listAgentsOfBusiness(businessId))
       .filter((a) => a.status === "Active")
-      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "agency admin" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
-      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Agency admin" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
+      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "business admin agent" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
+      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
   }, [businessId]);
 
   const saveNewRecord = (value: AddStudentRecordValue) => {

@@ -139,8 +139,8 @@ export default function NewApplicationPage() {
     return (await listAgentsOfBusiness(businessId))
       // Only active agents can be chosen.
       .filter((a) => a.status === "Active")
-      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "agency admin" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
-      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Agency admin" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
+      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "business admin agent" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
+      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
   }, [businessId]);
 
   const openWizard = (id: string) => {
@@ -423,7 +423,7 @@ export default function NewApplicationPage() {
                 <select id="student-agent" className={selectClass} value={chosenAgentId} disabled={creating || !chosenBusinessId || agentsLoading}
                   onChange={(e) => setChosenAgentId(e.target.value)}>
                   <option value="">{!chosenBusinessId ? "Choose the business first" : agentsLoading ? "Loading agents…" : agentChoices.length ? "Select your agent" : "This business has no active agents"}</option>
-                  {agentChoices.map((a) => <option key={a.id} value={a.id}>{a.name}{a.role === "agency_admin" ? " (agency admin)" : ""}</option>)}
+                  {agentChoices.map((a) => <option key={a.id} value={a.id}>{a.name}{a.role === "agency_admin" ? " (business admin agent)" : ""}</option>)}
                 </select>
                 <p className="mt-1 text-xs text-foreground-500">Your agent is not listed? Ask them to register with SLIT, or choose No for now.</p>
               </div>
@@ -517,7 +517,7 @@ export default function NewApplicationPage() {
                   <div className="flex items-center justify-between gap-3 rounded-md border border-background-300 bg-background-50 px-3 py-2.5">
                     <span className="min-w-0">
                       <span className="flex items-center gap-2"><b className="truncate text-sm text-foreground-900">{agent.name}</b><AgentStatusBadge status={agent.status} /></span>
-                      <span className="block truncate text-xs text-foreground-500">{[agent.email, agent.role === "agency_admin" ? "Agency admin" : "Agent"].filter(Boolean).join(", ")}</span>
+                      <span className="block truncate text-xs text-foreground-500">{[agent.email, agent.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", ")}</span>
                     </span>
                     <button type="button" disabled={creating} onClick={() => setAgent(null)} className="rounded px-2 py-1 text-sm font-medium text-primary-700 hover:bg-background-100 disabled:opacity-60">Change</button>
                   </div>

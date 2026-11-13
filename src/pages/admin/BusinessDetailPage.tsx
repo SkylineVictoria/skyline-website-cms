@@ -106,7 +106,7 @@ export default function BusinessDetailPage() {
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
-        <Summary label="Agents" value={people} note={`${c.agents} agent${c.agents === 1 ? "" : "s"}, ${c.admins} admin${c.admins === 1 ? "" : "s"}${c.inactiveAgents ? `, ${c.inactiveAgents} inactive` : ""}`}
+        <Summary label="Agents" value={people} note={`${c.admins} business admin agent${c.admins === 1 ? "" : "s"}, ${c.agents} other agent${c.agents === 1 ? "" : "s"}${c.inactiveAgents ? `, ${c.inactiveAgents} inactive` : ""}`}
           warn={c.admins === 0} onClick={() => setParams({ tab: "agents" })} />
         <Summary label="Students" value={c.students} onClick={() => setParams({ tab: "students" })} />
         <div className="bg-background-50 px-4 py-3">
@@ -152,7 +152,7 @@ function Summary({ label, value, note, warn = false, onClick }: { label: string;
       <dt className="text-xs text-foreground-500">{label}</dt>
       <dd className="mt-1">
         <button type="button" onClick={onClick} className="font-heading text-xl font-bold tabular-nums text-foreground-950 hover:text-primary-700">{value}</button>
-        {note ? <p className={`mt-0.5 text-xs ${warn ? "font-medium text-amber-700" : "text-foreground-600"}`}>{warn ? `No admin yet. ${note}` : note}</p> : null}
+        {note ? <p className={`mt-0.5 text-xs ${warn ? "font-medium text-amber-700" : "text-foreground-600"}`}>{warn ? `No active business admin agent yet. ${note}` : note}</p> : null}
       </dd>
     </div>
   );
@@ -235,7 +235,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                 <tr key={r.agentId}>
                   <td>
                     <Link to={`/admin/agents/${r.agentId}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link><WhatsAppLink phone={r.phone} name={r.name} />
-                    <p className="mt-0.5 text-xs text-foreground-500">{[r.role === "agency_admin" ? "Agency admin" : "Agent", r.email].filter(Boolean).join(", ")}</p>
+                    <p className="mt-0.5 text-xs text-foreground-500">{[r.role === "agency_admin" ? "Business admin agent" : "Agent", r.email].filter(Boolean).join(", ")}</p>
                     {r.registered === false ? <p className="text-xs font-medium text-amber-700">No longer registered with OMARA</p> : null}
                   </td>
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>

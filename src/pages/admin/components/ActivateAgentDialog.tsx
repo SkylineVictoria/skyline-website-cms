@@ -186,7 +186,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
           <legend className="mb-1.5 text-[13px] font-medium text-foreground-800">Role</legend>
           <div className="flex flex-wrap gap-4 text-sm">
             <label className="flex items-center gap-2"><input type="radio" name="agent-role" checked={role === "agent"} onChange={() => setRole("agent")} /> Agent</label>
-            <label className="flex items-center gap-2"><input type="radio" name="agent-role" checked={role === "agency_admin"} onChange={() => setRole("agency_admin")} /> Agency admin <span className="text-xs text-foreground-500">(manages the business's agents)</span></label>
+            <label className="flex items-center gap-2"><input type="radio" name="agent-role" checked={role === "agency_admin"} onChange={() => setRole("agency_admin")} /> Business admin agent <span className="text-xs text-foreground-500">(manages the business's agents)</span></label>
           </div>
         </fieldset>
 

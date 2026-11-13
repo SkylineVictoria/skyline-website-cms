@@ -91,7 +91,7 @@ export default function AgentDetailPage() {
       <PageHeader
         titleSuffix={<WhatsAppLink phone={agent.phone} name={agent.name} />}
         title={agent.name}
-        description={[agent.marn ? `MARN ${agent.marn}` : null, agent.role === "agency_admin" ? "Agency admin" : "Agent", `with ${agent.business.name}`].filter(Boolean).join(", ")}
+        description={[agent.marn ? `MARN ${agent.marn}` : null, agent.role === "agency_admin" ? "Business admin agent" : "Agent", `with ${agent.business.name}`].filter(Boolean).join(", ")}
         actions={<>
           <AgentStatusBadge status={agent.status} />
           {awaitingPassword(agent) && agent.email

@@ -195,8 +195,8 @@ export default function BusinessesPage() {
                     </td>
                     <td className="text-xs">
                       <p><b className="text-foreground-900">{row.agents}</b> agent{row.agents === 1 ? "" : "s"}</p>
-                      <p><b className="text-foreground-900">{row.admins}</b> admin{row.admins === 1 ? "" : "s"}</p>
-                      {row.admins === 0 ? <p className="mt-0.5 font-medium text-amber-700">No admin yet</p> : null}
+                      <p><b className="text-foreground-900">{row.admins}</b> business admin agent{row.admins === 1 ? "" : "s"}</p>
+                      {row.admins === 0 ? <p className="mt-0.5 font-medium text-amber-700">No business admin agent yet</p> : null}
                     </td>
                     <td><Link to={`/admin/businesses/${row.id}?tab=students`} className="font-bold text-foreground-900 hover:text-primary-700">{row.students}</Link></td>
                     <td>

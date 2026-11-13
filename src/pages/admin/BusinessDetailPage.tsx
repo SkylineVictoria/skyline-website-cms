@@ -7,6 +7,7 @@ import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/compone
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import StudentsTable from "@/pages/admin/components/StudentsTable";
 import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
+import BusinessOnboarding from "@/pages/admin/components/BusinessOnboarding";
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -94,15 +95,14 @@ export default function BusinessDetailPage() {
             <AgencyStatusBadge status={business.status} />
             {business.status === "Active"
               ? <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate business</Button>
-              : <Button disabled={busy} onClick={() => void change("Active")}>{busy ? "Activating…" : "Activate business"}</Button>}
+              : <Button disabled={busy || !business.onboarding?.agreementReady} title={business.onboarding?.agreementReady ? undefined : "Needs the signed agent agreement"}
+                onClick={() => void change("Active")}>{busy ? "Activating…" : "Activate & invite"}</Button>}
           </>
         }
       />
 
       {business.status !== "Active" ? (
-        <p role="status" className="-mt-2 mb-5 rounded-md border border-background-300 bg-background-100 px-4 py-3 text-sm text-foreground-700">
-          This business is inactive. Its administrators and agents cannot sign in until you activate it.
-        </p>
+        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} />
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
@@ -129,6 +129,7 @@ export default function BusinessDetailPage() {
       </nav>
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
+      {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
       {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
@@ -212,11 +213,12 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
         <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students; activating an agent can send their sign-in invitation.</p>
-        <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button>
+        {business.status === "Active" ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button>
+          : <span className="text-xs font-medium text-amber-700">Agents can be added once the business is activated.</span>}
       </div>
       {error ? <ListMessage icon="ri-error-warning-line" title="Agents did not load" text={error} action={<Button size="sm" variant="outline" onClick={() => setReload((n) => n + 1)}>Try again</Button>} />
         : rows === null ? <p className="p-6 text-sm text-foreground-500">Loading agents…</p>
-        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text="Add this business's first agent." action={<Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button>} /> : (
+        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text={business.status === "Active" ? "Add this business's first agent." : "Activate the business first."} action={business.status === "Active" ? <Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button> : undefined} /> : (
           <ResponsiveTable>
             <thead>
               <tr>
@@ -244,7 +246,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
                       {r.status === "Inactive"
-                        ? <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
+                        ? business.status !== "Active" ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
                         : <Button size="sm" variant="ghost" disabled={busyId === r.agentId} onClick={() => setConfirm(r)}>Deactivate</Button>}
                     </div>
                   </td>

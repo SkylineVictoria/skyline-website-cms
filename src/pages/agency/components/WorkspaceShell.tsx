@@ -74,7 +74,7 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
         </span>
         <div className="leading-tight">
           <p className="font-heading text-sm font-bold text-foreground-950">Skyline</p>
-          <p className="font-label text-[11px] uppercase tracking-wide text-foreground-500">{portalLabel}</p>
+          <p className="font-label text-2xs uppercase tracking-wide text-foreground-500">{portalLabel}</p>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -85,7 +85,7 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
             end={item.end}
             onClick={() => setMenuOpen(false)}
             className={({ isActive }) =>
-              `mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors ${
+              `mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-label font-medium transition-colors ${
                 isActive ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"
               }`
             }
@@ -129,7 +129,7 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
                 </button>
                 <div className="min-w-0">
                   <p className="truncate font-heading text-sm font-bold text-foreground-950">{workspaceName}</p>
-                  <p className="flex items-center gap-1.5 text-[11px] text-foreground-500">
+                  <p className="flex items-center gap-1.5 text-2xs text-foreground-500">
                     <i className="ri-shield-user-line text-primary-500" aria-hidden="true" />
                     {roleLabel}
                     {roleSuffix}
@@ -156,12 +156,12 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
                     aria-expanded={userMenu}
                     className="flex cursor-pointer items-center gap-2.5 rounded-md border border-background-200 px-2.5 py-1.5 transition-colors hover:bg-background-100"
                   >
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-100 text-[11px] font-semibold text-accent-900">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-100 text-2xs font-semibold text-accent-900">
                       {initialsOf(displayName)}
                     </span>
                     <span className="hidden text-left leading-tight sm:block">
-                      <span className="block text-[13px] font-medium text-foreground-900">{displayName}</span>
-                      <span className="block text-[11px] text-foreground-500">{roleLabel}</span>
+                      <span className="block text-label font-medium text-foreground-900">{displayName}</span>
+                      <span className="block text-2xs text-foreground-500">{roleLabel}</span>
                     </span>
                     <i className="ri-arrow-down-s-line text-foreground-500" aria-hidden="true" />
                   </button>
@@ -170,7 +170,7 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
                       <div className="border-b border-background-100 px-4 py-2.5">
                         <p className="truncate text-sm font-semibold text-foreground-950">{displayName}</p>
                         <p className="truncate text-xs text-foreground-500">{email}</p>
-                        <p className="mt-1 text-[11px] font-medium text-primary-600">{roleLabel}</p>
+                        <p className="mt-1 text-2xs font-medium text-primary-600">{roleLabel}</p>
                       </div>
                       {profileTo ? (
                         <Link

@@ -207,7 +207,7 @@ export default function PortalDashboardPage() {
                       key={bucket.id}
                       className="flex items-center gap-3 rounded-lg border border-background-200 bg-background-50 px-3 py-2.5"
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-100 text-[11px] font-semibold text-accent-900">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-100 text-2xs font-semibold text-accent-900">
                         {initialsOf(bucket.name)}
                       </span>
                       <div className="min-w-0 flex-1">

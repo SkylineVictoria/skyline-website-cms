@@ -123,7 +123,7 @@ export default function ApplicationStatusesPage() {
                   <td className="cursor-grab px-2 text-foreground-400" title="Drag to reorder"><i className="ri-draggable" aria-hidden="true" /></td>
                   <td className="px-2 py-1.5"><input defaultValue={s.label} aria-label={`Label of ${s.value}`} className={INPUT} data-testid="status-label"
                     onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== s.label) void updateStatus(s.value, { label: v }, `Renamed to “${v}”.`); }} /></td>
-                  <td className="px-2 py-1.5"><code className="text-xs text-foreground-600" title="The key cannot change">{s.value}</code>{s.legacy ? <span className="ml-1 text-[10px] text-foreground-400">legacy</span> : null}</td>
+                  <td className="px-2 py-1.5"><code className="text-xs text-foreground-600" title="The key cannot change">{s.value}</code>{s.legacy ? <span className="ml-1 text-2xs text-foreground-400">legacy</span> : null}</td>
                   <td className="px-2 py-1.5"><input type="color" value={s.color} aria-label={`Colour of ${s.label}`} className="h-8 w-10 cursor-pointer rounded border border-background-300"
                     onChange={(e) => setStatuses((list) => (list ?? []).map((x) => (x.value === s.value ? { ...x, color: e.target.value } : x)))}
                     onBlur={(e) => void updateStatus(s.value, { color: e.target.value.toLowerCase() }, "Colour saved.")} /></td>
@@ -192,7 +192,7 @@ export default function ApplicationStatusesPage() {
             {rows.length ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[900px] text-sm">
-                  <thead className="text-left text-[11px] uppercase tracking-wide text-foreground-500"><tr>
+                  <thead className="text-left text-2xs uppercase tracking-wide text-foreground-500"><tr>
                     <th className="px-2 py-1.5 font-medium">Label</th><th className="px-2 py-1.5 font-medium">Target</th><th className="px-2 py-1.5 font-medium">Icon</th><th className="px-2 py-1.5 font-medium">Primary</th>
                     <th className="px-2 py-1.5 font-medium">Reason</th><th className="px-2 py-1.5 font-medium">Allowed roles</th><th className="px-2 py-1.5 font-medium">Active</th>
                   </tr></thead>
@@ -207,7 +207,7 @@ export default function ApplicationStatusesPage() {
                               <input defaultValue={t.label} aria-label={`Label of ${t.action_key}`} disabled={locked} className={INPUT}
                                 onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== t.label) void updateTransition(t, { label: v }, `Renamed to “${v}”.`); }} />
                             </span>
-                            {locked ? <span className="text-[11px] text-foreground-500">Automatic ({t.kind === "accept_offer" ? "when the offer is accepted" : t.kind === "resubmit" ? "on resubmit" : "by the applicant"})</span> : null}
+                            {locked ? <span className="text-2xs text-foreground-500">Automatic ({t.kind === "accept_offer" ? "when the offer is accepted" : t.kind === "resubmit" ? "on resubmit" : "by the applicant"})</span> : null}
                           </td>
                           <td className="px-2 py-1.5">
                             {t.to_status === null ? <span className="text-xs text-foreground-500">Keeps the status</span> : (
@@ -292,7 +292,7 @@ export default function ApplicationStatusesPage() {
                 <li key={r.id} className={`flex items-center gap-2 px-3 py-1.5 ${r.is_active ? "" : "opacity-60"}`} data-testid="reason-row">
                   <input defaultValue={r.label} aria-label={`Reason ${r.label}`} className={INPUT}
                     onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== r.label) void updateReason(r.id, { label: v }, `Renamed to “${v}”.`); }} />
-                  {r.is_other ? <span className="shrink-0 text-[11px] text-foreground-500" title="Always last, with a text field">pinned last</span> : <>
+                  {r.is_other ? <span className="shrink-0 text-2xs text-foreground-500" title="Always last, with a text field">pinned last</span> : <>
                     <button type="button" disabled={i === 0} onClick={() => void moveReason(s.value, r.id, -1)} aria-label={`Move ${r.label} up`} className="rounded p-1 text-foreground-500 hover:bg-background-100 disabled:opacity-30"><i className="ri-arrow-up-s-line" aria-hidden="true" /></button>
                     <button type="button" disabled={i >= list.filter((x) => !x.is_other).length - 1} onClick={() => void moveReason(s.value, r.id, 1)} aria-label={`Move ${r.label} down`} className="rounded p-1 text-foreground-500 hover:bg-background-100 disabled:opacity-30"><i className="ri-arrow-down-s-line" aria-hidden="true" /></button>
                   </>}

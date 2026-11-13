@@ -79,7 +79,7 @@ export default function BatchPage() {
   return (
     <div className="mx-auto w-full max-w-4xl min-w-0 space-y-4 pb-10">
       <div>
-        <Link to={back} className="inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />{i.courseCode} · {monthYear(i.startDate)} intake</Link>
+        <Link to={back} className="inline-flex items-center gap-1 text-label font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />{i.courseCode} · {monthYear(i.startDate)} intake</Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="font-heading text-3xl font-bold text-foreground-950">{b.name}</h1>
           {b.isActive ? <Badge tone="primary">Active</Badge> : <Badge>Inactive</Badge>}

@@ -135,7 +135,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
       </>}>
       <div className="space-y-4">
         <div>
-          <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Business <span className="text-primary-600">*</span></p>
+          <p className="mb-1.5 text-label font-medium text-foreground-800">Business <span className="text-primary-600">*</span></p>
           {picked ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-background-300 px-3 py-2.5">
               <span className="text-sm"><b className="text-foreground-900">{picked.name}</b>{picked.status && picked.status !== "Active" ? <span className="ml-2 text-xs text-foreground-500">Inactive</span> : null}</span>
@@ -174,7 +174,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
           </Field>
           <div className="sm:col-span-2">
             {/* The shared phone control: country code plus number, checked the same way as every other phone field. */}
-            <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Phone</p>
+            <p className="mb-1.5 text-label font-medium text-foreground-800">Phone</p>
             <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "agent_phone") setPhone(target.value); }}>
               <PhoneInput key={open ? agent?.agentId ?? "new" : "closed"} id="add-agent-phone" name="agent_phone" value={phone} locked={busy} placeholder="041 234 5678" />
             </div>
@@ -183,7 +183,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
         </div>
 
         <fieldset>
-          <legend className="mb-1.5 text-[13px] font-medium text-foreground-800">Role</legend>
+          <legend className="mb-1.5 text-label font-medium text-foreground-800">Role</legend>
           <div className="flex flex-wrap gap-4 text-sm">
             <label className="flex items-center gap-2"><input type="radio" name="agent-role" checked={role === "agent"} onChange={() => setRole("agent")} /> Agent</label>
             <label className="flex items-center gap-2"><input type="radio" name="agent-role" checked={role === "agency_admin"} onChange={() => setRole("agency_admin")} /> Business admin agent <span className="text-xs text-foreground-500">(manages the business's agents)</span></label>

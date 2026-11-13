@@ -113,7 +113,7 @@ function LocationRows({ name, rooms, days, cell, clashing, canEdit, onOpen, onEm
   if (!rooms.length) return null;
   return (
     <>
-      <tr><td colSpan={1 + days.length * 3} className="sticky left-0 border-b border-background-200 bg-background-100 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground-600">{name}</td></tr>
+      <tr><td colSpan={1 + days.length * 3} className="sticky left-0 border-b border-background-200 bg-background-100 px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-foreground-600">{name}</td></tr>
       {rooms.map((r) => (
         <tr key={r.id}>
           <th scope="row" className="sticky left-0 z-10 border-b border-r border-background-200 bg-background-50 px-3 py-1.5 text-left font-medium text-foreground-900">{r.name}</th>
@@ -127,7 +127,7 @@ function LocationRows({ name, rooms, days, cell, clashing, canEdit, onOpen, onEm
                     {list.map((c) => (
                       <button key={c.id} type="button" onClick={() => onOpen(c)} title={`${c.courseCode} ${c.batch} · ${c.intakeName} · ${timeRange(c.startTime, c.endTime)}${c.trainers.length ? ` · ${c.trainers.join(", ")}` : ""}`}
                         className={`block w-full truncate rounded px-1.5 py-1 text-left font-medium transition-colors duration-150 ${clashing.has(c.id) ? "border border-red-300 bg-red-100 text-red-900 hover:bg-red-200" : c.type === "practical" ? "bg-accent-100 text-accent-900 hover:bg-accent-200" : c.type === "assessment" ? "bg-secondary-100 text-secondary-900 hover:bg-secondary-200" : "bg-primary-50 text-primary-900 hover:bg-primary-100"}`}>
-                        {c.courseCode} {c.batch}<span className="block text-[10px] font-normal opacity-80">{timeRange(c.startTime, c.endTime)}</span>
+                        {c.courseCode} {c.batch}<span className="block text-2xs font-normal opacity-80">{timeRange(c.startTime, c.endTime)}</span>
                       </button>
                     ))}
                   </div>

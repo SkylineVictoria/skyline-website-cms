@@ -154,15 +154,15 @@ export default function LegacySigningPage() {
         <div className="grid gap-3 lg:grid-cols-[1fr_250px]">
           <Field label="Document text" required hint="Plain text with {{variables}}. Use blank lines between paragraphs."><textarea ref={bodyRef} className={TEXTAREA} value={template.body} maxLength={40000} onChange={(e) => setTemplate({ ...template, body: e.target.value })} data-testid="signing-template-body" /></Field>
           <aside className="rounded-md border border-background-200 bg-background-100 p-3" aria-label="Variables">
-            <p className="text-[13px] font-semibold text-foreground-900">Variables</p>
+            <p className="text-label font-semibold text-foreground-900">Variables</p>
             <p className="mb-2 text-xs text-foreground-600">Click one to insert it at the cursor. These are filled from the staff record; anything else you type as {"{{my_variable}}"} is asked for per request.</p>
             <div className="max-h-[40vh] space-y-3 overflow-y-auto pr-1">
               {(["Person", "Job and pay", "Company"] as const).map((group) => <div key={group}>
-                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
+                <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">{group}</p>
                 <ul className="space-y-1">{RECORD_VARIABLES.filter((p) => p.group === group).map((p) => <li key={p.key}>
                   <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertVariable(p.key)} data-testid={`signing-variable-${p.key}`} title={`Example: ${p.sample}`}
                     className="w-full cursor-pointer rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
-                    <span className="block font-medium text-foreground-900">{p.label}</span><code className="text-[11px] text-foreground-600">{`{{${p.key}}}`}</code></button></li>)}</ul>
+                    <span className="block font-medium text-foreground-900">{p.label}</span><code className="text-2xs text-foreground-600">{`{{${p.key}}}`}</code></button></li>)}</ul>
               </div>)}
               <CustomVariable onInsert={insertVariable} />
             </div>
@@ -205,7 +205,7 @@ export default function LegacySigningPage() {
           <Field label="Or upload a ready-made PDF" hint="Up to 7 MB. Variables are filled in templates; an uploaded PDF is sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} /></Field>
           {file ? <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field> : selected ? <>
             {variables.length ? <div className="rounded-md border border-background-200 p-3">
-              <p className="mb-2 text-[13px] font-semibold text-foreground-900">Variables in “{selected.name}”</p>
+              <p className="mb-2 text-label font-semibold text-foreground-900">Variables in “{selected.name}”</p>
               <div className="grid gap-3 md:grid-cols-2" data-testid="signing-variables">{variables.map((key) => {
                 const fromRecord = recipientKind === "staff" && RECORD_KEYS.has(key);
                 const value = filled[key];
@@ -251,9 +251,9 @@ function CustomVariable({ onInsert }: { onInsert: (key: string) => void }) {
   const [key, setKey] = useState("");
   const clean = key.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").replace(/^[0-9]+/, "");
   return <div>
-    <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-foreground-500">Custom</p>
+    <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">Custom</p>
     <div className="flex gap-1"><TextInput value={key} placeholder="course_name" onChange={(e) => setKey(e.target.value)} data-testid="signing-custom-variable" />
       <Button size="sm" variant="outline" disabled={!clean} onMouseDown={(e) => e.preventDefault()} onClick={() => { onInsert(clean); setKey(""); }}>Insert</Button></div>
-    <p className="mt-1 text-[11px] text-foreground-600">Lowercase letters, numbers and underscores. Its value is typed when a request is made.</p>
+    <p className="mt-1 text-2xs text-foreground-600">Lowercase letters, numbers and underscores. Its value is typed when a request is made.</p>
   </div>;
 }

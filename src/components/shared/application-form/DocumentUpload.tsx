@@ -67,7 +67,7 @@ export function DocumentRow({ filename, pill, actions, children, testId }: {
       <div className="flex h-10 items-center gap-2 rounded-lg border border-background-300 bg-background-50 pl-3 pr-1">
         <i className="ri-file-text-line shrink-0 text-base leading-none text-foreground-500" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-sm text-foreground-900" title={filename}>{filename}</span>
-        <span className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${PILL_TONE[pill.tone]}`} title={pill.title}>
+        <span className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-2xs font-medium ${PILL_TONE[pill.tone]}`} title={pill.title}>
           {pill.spin ? <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> : null}
           {pill.text}
         </span>

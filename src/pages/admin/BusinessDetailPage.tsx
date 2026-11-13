@@ -123,7 +123,7 @@ export default function BusinessDetailPage() {
           <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} onClick={() => setParams(item.id === "details" ? {} : { tab: item.id })}
             className={`-mb-px cursor-pointer border-b-2 px-4 py-2.5 text-sm font-medium ${tab === item.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>
             {item.label}
-            {item.count !== undefined ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 py-0.5 text-[11px] tabular-nums text-foreground-700">{item.count}</span> : null}
+            {item.count !== undefined ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 py-0.5 text-2xs tabular-nums text-foreground-700">{item.count}</span> : null}
           </button>
         ))}
       </nav>
@@ -241,7 +241,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
-                  <td><AgentStatusBadge status={r.status} />{r.status === "Active" && !r.profileId ? <p className="mt-1 text-[11px] font-medium text-amber-700">Hasn't set a password yet</p> : null}</td>
+                  <td><AgentStatusBadge status={r.status} />{r.status === "Active" && !r.profileId ? <p className="mt-1 text-2xs font-medium text-amber-700">Hasn't set a password yet</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}

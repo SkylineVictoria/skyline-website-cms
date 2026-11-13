@@ -48,7 +48,7 @@ export default function MyTimesheet({ refreshKey = 0 }: { refreshKey?: number } 
                   {s.shifts.map((sh) => (
                     <li key={sh.startedAt} className="py-1.5 text-foreground-800">
                       {fmtDate(sh.workDate)}: {fmtTime(sh.startedAt, tz)} – {sh.endedAt ? fmtTime(sh.endedAt, tz) : "open"} {tzAbbrev(sh.startedAt, tz)} · {minutesToHm(sh.workedMinutes)}{sh.breakMinutes ? `, ${minutesToHm(sh.breakMinutes)} break` : ""}
-                      {sh.flags.map((f) => <span key={f} className="ml-2 rounded-full bg-primary-50 px-2 py-0.5 text-[11px] text-primary-900">{FLAG_LABEL[f] ?? f}</span>)}
+                      {sh.flags.map((f) => <span key={f} className="ml-2 rounded-full bg-primary-50 px-2 py-0.5 text-2xs text-primary-900">{FLAG_LABEL[f] ?? f}</span>)}
                     </li>
                   ))}
                 </ul>

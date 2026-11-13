@@ -48,7 +48,7 @@ export default function TemplatePreviewDialog({ template, onClose }: { template:
         </div>
         {error ? <p role="alert" className={ALERT}>{error}</p> : null}
         {gaps.length ? <p role="alert" className={ALERT} data-testid="template-preview-missing">{person ? "This person has no value for" : "No value for"} <strong>{placeholderLabels(gaps)}</strong>. Sending is refused until every placeholder used has a value.</p> : null}
-        <p className="text-[13px] font-medium text-foreground-800">{kind === "letter" ? "Title" : "Subject"}: <span className="font-normal" data-testid="template-preview-subject">{rendered.subject}</span></p>
+        <p className="text-label font-medium text-foreground-800">{kind === "letter" ? "Title" : "Subject"}: <span className="font-normal" data-testid="template-preview-subject">{rendered.subject}</span></p>
         <div className="max-h-[52vh] overflow-y-auto rounded-md border border-background-300 bg-white px-6 py-5 shadow-sm">
           {/* Sanitised by renderMessage (allow-list rebuild); every value is escaped. */}
           <div className={TEMPLATE_PROSE} data-testid="template-preview-body" dangerouslySetInnerHTML={{ __html: rendered.html }} />

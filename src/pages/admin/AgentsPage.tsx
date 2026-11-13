@@ -193,7 +193,7 @@ export default function AgentsPage() {
                           </option>
                         ))}
                       </select>
-                      {r.status === "Active" && !r.profileId ? <p className="mt-1 text-[11px] font-medium text-amber-700">Hasn't set a password yet</p> : null}
+                      {r.status === "Active" && !r.profileId ? <p className="mt-1 text-2xs font-medium text-amber-700">Hasn't set a password yet</p> : null}
                       {awaitingPassword(r) && r.email ? (
                         <button type="button" disabled={busyKey === r.key} onClick={() => void resend(r)}
                           className="mt-1.5 flex cursor-pointer items-center gap-1 text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">

@@ -32,7 +32,7 @@ export default function CareerDetailPage() {
             {job === null && !error ? <p className="mt-4 text-sm text-foreground-700">This job post does not exist or has been removed.</p> : null}
             {job ? (
               <article className="mt-4">
-                <h2 className="font-heading text-xl font-bold text-[#102b46]">About the role</h2>
+                <h2 className="font-heading text-xl font-bold text-ink">About the role</h2>
                 <div className="mt-3 whitespace-pre-line text-sm leading-relaxed text-foreground-700 md:text-base">{job.description}</div>
               </article>
             ) : null}

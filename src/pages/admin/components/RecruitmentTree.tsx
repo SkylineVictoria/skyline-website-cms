@@ -41,7 +41,7 @@ export default function RecruitmentTree({ jobs, byJob, byDepartment, search = ""
 
   const fold = (key: string, count: number, label: string, byDefault = true) => (count && !searching ? (
     <button type="button" onClick={() => toggle(key, byDefault)} aria-expanded={isOpen(key, byDefault)} aria-label={`${isOpen(key, byDefault) ? "Hide" : "Show"} ${label}`}
-      className="flex h-6 cursor-pointer items-center gap-1 rounded-full border border-background-300 bg-background-50 px-2 text-[11px] font-medium text-foreground-700 hover:bg-background-100">
+      className="flex h-6 cursor-pointer items-center gap-1 rounded-full border border-background-300 bg-background-50 px-2 text-2xs font-medium text-foreground-700 hover:bg-background-100">
       <i className={isOpen(key, byDefault) ? "ri-subtract-line" : "ri-add-line"} aria-hidden="true" />{count}
     </button>
   ) : null);
@@ -56,7 +56,7 @@ export default function RecruitmentTree({ jobs, byJob, byDepartment, search = ""
         <span className="min-w-0 flex-1">
           <Link to={staffCandidatePath(c.id)} className="block truncate text-sm font-semibold text-foreground-950 hover:text-primary-700 hover:underline">{hrName(c)}</Link>
           <span className="block truncate text-xs text-foreground-600">{c.email}</span>
-          <span className="block text-[11px] text-foreground-500">{c.source === "manual" ? "Manual" : "Careers"} · applied {hrDate(c.appliedAt)}</span>
+          <span className="block text-2xs text-foreground-500">{c.source === "manual" ? "Manual" : "Careers"} · applied {hrDate(c.appliedAt)}</span>
         </span>
       </>, `tree-candidate-${c.id}`)}
     </li>
@@ -90,7 +90,7 @@ export default function RecruitmentTree({ jobs, byJob, byDepartment, search = ""
               <span className="block truncate text-xs text-foreground-600">{EMPLOYMENT_TYPE_LABEL[j.employmentType]}{j.location ? ` · ${j.location}` : ""}</span>
               <span className="mt-1 flex flex-wrap items-center gap-1.5">
                 <Badge tone={j.status === "open" ? "success" : "muted"}>{jobStatusLabel[j.status]}</Badge>
-                <span className="text-[11px] text-foreground-500">{b.total} {b.total === 1 ? "candidate" : "candidates"} · {b.inProgress} in progress · {j.vacancies ?? 1} {(j.vacancies ?? 1) === 1 ? "vacancy" : "vacancies"}</span>
+                <span className="text-2xs text-foreground-500">{b.total} {b.total === 1 ? "candidate" : "candidates"} · {b.inProgress} in progress · {j.vacancies ?? 1} {(j.vacancies ?? 1) === 1 ? "vacancy" : "vacancies"}</span>
               </span>
             </span>
           </>, `tree-job-${j.id}`)}

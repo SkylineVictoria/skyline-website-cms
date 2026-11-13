@@ -28,7 +28,7 @@ export default function EnrollPage() {
             <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary-100 text-xl text-primary-700">
               <i className="ri-user-3-line" aria-hidden="true" />
             </span>
-            <h2 className="mt-4 font-heading text-xl font-bold text-[#102b46]">I&rsquo;m a student</h2>
+            <h2 className="mt-4 font-heading text-xl font-bold text-ink">I&rsquo;m a student</h2>
             <p className="mt-2 flex-1 text-sm leading-relaxed text-foreground-600">
               Create your student account in a few minutes, then complete the international student application yourself,
               upload your documents and track your enrolment in your own student portal.
@@ -55,7 +55,7 @@ export default function EnrollPage() {
             <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-accent-100 text-xl text-accent-900">
               <i className="ri-briefcase-4-line" aria-hidden="true" />
             </span>
-            <h2 className="mt-4 font-heading text-xl font-bold text-[#102b46]">I&rsquo;m an education agent</h2>
+            <h2 className="mt-4 font-heading text-xl font-bold text-ink">I&rsquo;m an education agent</h2>
             <p className="mt-2 flex-1 text-sm leading-relaxed text-foreground-600">
               Submit and manage international student applications on behalf of students, upload supporting documents,
               and track admissions progress in the Agency Portal.

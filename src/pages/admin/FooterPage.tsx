@@ -93,7 +93,7 @@ export default function FooterPage() {
                 <div className="flex gap-2" key={i}>
                   <div className="flex-1">
                     <TextInput aria-label={`${title} label ${i + 1}`} value={link.label} maxLength={FOOTER_LIMITS.maxLabelLength} placeholder="Label" onChange={(e) => setLinks(key, list.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
-                    <span className="mt-0.5 block text-right text-[11px] text-foreground-400">{link.label.length}/{FOOTER_LIMITS.maxLabelLength}</span>
+                    <span className="mt-0.5 block text-right text-2xs text-foreground-400">{link.label.length}/{FOOTER_LIMITS.maxLabelLength}</span>
                   </div>
                   <div className="flex-1">
                     <TextInput aria-label={`${title} destination ${i + 1}`} value={link.to} placeholder="/page" onChange={(e) => setLinks(key, list.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))} />

@@ -28,8 +28,8 @@ export default function StudentLoginCell({ login, email, busy, disabled = false,
       <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${BADGE[status] ?? BADGE.none}`} title={studentLoginLabel(login)}>
         {SHORT[status] ?? SHORT.none}
       </span>
-      {status === "invited" && login?.expiresAt ? <span className="text-[11px] text-foreground-500">Expires {formatDate(login.expiresAt)}</span> : null}
-      {!email && status === "none" ? <span className="text-[11px] text-foreground-500">Add an email to invite</span> : null}
+      {status === "invited" && login?.expiresAt ? <span className="text-2xs text-foreground-500">Expires {formatDate(login.expiresAt)}</span> : null}
+      {!email && status === "none" ? <span className="text-2xs text-foreground-500">Add an email to invite</span> : null}
       {canAct ? (
         <button type="button" disabled={busy} onClick={onInvite}
           className="flex cursor-pointer items-center gap-1 whitespace-nowrap text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">

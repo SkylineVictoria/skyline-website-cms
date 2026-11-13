@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 /** The plain controls a wizard screen is made of: the same label, input and error line for students and staff. */
 
 export const WIZARD_INPUT = "w-full rounded-md border border-background-300 bg-background-50 px-3.5 py-2.5 text-sm text-foreground-950 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
-export const WIZARD_LABEL = "mb-1.5 block text-[13px] font-medium text-foreground-800";
+export const WIZARD_LABEL = "mb-1.5 block text-label font-medium text-foreground-800";
 
 export function WizardLabel({ htmlFor, children, required = true }: { htmlFor: string; children: ReactNode; required?: boolean }) {
   return required

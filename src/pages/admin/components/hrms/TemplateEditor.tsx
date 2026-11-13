@@ -73,19 +73,19 @@ export default function TemplateEditor({ value, onChange, placeholders, minHeigh
           className={`overflow-y-auto bg-white px-5 py-4 outline-none ${TEMPLATE_PROSE}`} style={{ minHeight, maxHeight: "52vh" }} />
       </div>
       {placeholders.length ? <aside className="rounded-md border border-background-200 bg-background-100 p-3" aria-label="Placeholders">
-        <p className="text-[13px] font-semibold text-foreground-900">Placeholders</p>
+        <p className="text-label font-semibold text-foreground-900">Placeholders</p>
         <p className="mb-2 text-xs text-foreground-600">Click one to insert it where the cursor is. It is replaced with the person's details when the template is used.</p>
         <div className="max-h-[46vh] space-y-3 overflow-y-auto pr-1">
           {groups.map((group) => (
             <div key={group}>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
+              <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">{group}</p>
               <ul className="space-y-1">
                 {placeholders.filter((p) => p.group === group).map((p) => (
                   <li key={p.key}>
                     <button type="button" onMouseDown={keep} onClick={() => insert(p.key)} data-testid={`template-placeholder-${p.key}`} title={`Example: ${p.sample}`}
                       className="w-full cursor-pointer rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
                       <span className="block font-medium text-foreground-900">{p.label}</span>
-                      <code className="text-[11px] text-foreground-600">{`{{${p.key}}}`}</code>
+                      <code className="text-2xs text-foreground-600">{`{{${p.key}}}`}</code>
                     </button>
                   </li>
                 ))}

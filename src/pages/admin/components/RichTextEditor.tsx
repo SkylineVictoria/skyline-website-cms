@@ -846,7 +846,7 @@ export default function RichTextEditor({
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-background-200 pt-2">
-            <span className="mr-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-foreground-500">
+            <span className="mr-1 flex items-center gap-1 text-2xs font-medium uppercase tracking-wide text-foreground-500">
               <i className="ri-table-2" aria-hidden="true" />
               {hasTable ? "Edit table" : "No table yet"}
             </span>
@@ -858,7 +858,7 @@ export default function RichTextEditor({
             <button type="button" disabled={!hasTable} onMouseDown={stop} onClick={deleteColumn} className="rounded border border-background-300 bg-background-50 px-2 py-1 text-xs text-foreground-700 hover:bg-background-200 disabled:cursor-not-allowed disabled:opacity-40">Delete column</button>
             <button type="button" disabled={!hasTable} onMouseDown={stop} onClick={deleteTable} className="rounded border border-background-300 bg-background-50 px-2 py-1 text-xs text-primary-700 hover:bg-background-200 disabled:cursor-not-allowed disabled:opacity-40">Delete table</button>
             {doc ? <button type="button" disabled={!hasTable} onMouseDown={stop} onClick={toggleBorders} className="rounded border border-background-300 bg-background-50 px-2 py-1 text-xs text-foreground-700 hover:bg-background-200 disabled:cursor-not-allowed disabled:opacity-40">Borders on / off</button> : null}
-            <span className="ml-1 text-[11px] text-foreground-400">Tip: click a cell first to target that row/column.</span>
+            <span className="ml-1 text-2xs text-foreground-400">Tip: click a cell first to target that row/column.</span>
           </div>
         </div>
       ) : null}
@@ -914,8 +914,8 @@ export default function RichTextEditor({
         </div>
         {letter ? (
           <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Insert variable" data-testid={testId ? `${testId}-variables` : undefined}>
-            <p className="text-[13px] font-semibold text-foreground-900">Insert variable</p>
-            <p className="mb-1.5 text-[11px] text-foreground-600">Click to insert at the cursor. Saved as {"{{group.key}}"}; add |upper or |raw in the source view.</p>
+            <p className="text-label font-semibold text-foreground-900">Insert variable</p>
+            <p className="mb-1.5 text-2xs text-foreground-600">Click to insert at the cursor. Saved as {"{{group.key}}"}; add |upper or |raw in the source view.</p>
             <button type="button" onMouseDown={stop} data-testid="letter-course-block"
               onClick={() => { const range = savedRange.current; insertAt("<p>{{#each courses}}</p><p>{{course.code_and_name}}: {{fees.total}}</p><p>{{/each}}</p>", range); }}
               title="Everything between the two markers is printed once per course of the application (packaged offers); course and fee variables are that course's"
@@ -931,7 +931,7 @@ export default function RichTextEditor({
                 if (!list.length) return null;
                 return (
                   <div key={group}>
-                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
+                    <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">{group}</p>
                     <ul className="space-y-1">
                       {list.map((v) => (
                         <li key={v.key}>
@@ -939,7 +939,7 @@ export default function RichTextEditor({
                             data-testid={`letter-var-${v.key}`}
                             className="flex w-full items-center justify-between gap-1 rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
                             <span className="truncate text-foreground-900">{v.label}</span>
-                            {v.required ? <span className="shrink-0 text-[10px] text-foreground-500">required</span> : null}
+                            {v.required ? <span className="shrink-0 text-2xs text-foreground-500">required</span> : null}
                           </button>
                         </li>
                       ))}
@@ -951,18 +951,18 @@ export default function RichTextEditor({
           </aside>
         ) : doc && variables?.length ? (
           <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Variables">
-            <p className="text-[13px] font-semibold text-foreground-900">Variables</p>
-            <p className="mb-2 text-[11px] text-foreground-600">Click to insert at the cursor. Any other [text in square brackets] is filled in by the signer.</p>
+            <p className="text-label font-semibold text-foreground-900">Variables</p>
+            <p className="mb-2 text-2xs text-foreground-600">Click to insert at the cursor. Any other [text in square brackets] is filled in by the signer.</p>
             <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
               {groups.map((group) => (
                 <div key={group}>
-                  <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-foreground-500">{group}</p>
+                  <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">{group}</p>
                   <ul className="space-y-1">
                     {variables.filter((v) => v.group === group).map((v) => (
                       <li key={v.name}>
                         <button type="button" onMouseDown={stop} onClick={() => insertText(`[${v.name}]`)} title={`${v.description}. Example: ${v.sample}`} data-testid={`variable-${v.name.replace(/\s+/g, "-").toLowerCase()}`}
                           className="w-full rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
-                          <code className="text-[11px] text-foreground-900">[{v.name}]</code>
+                          <code className="text-2xs text-foreground-900">[{v.name}]</code>
                         </button>
                       </li>
                     ))}

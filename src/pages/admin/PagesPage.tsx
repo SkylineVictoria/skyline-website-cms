@@ -300,7 +300,7 @@ export default function PagesPage() {
                * freshly added row. A plain group keeps every editor action explicit.
                */
               <div className="block" role="group" aria-label="Registered agents table">
-                <span className="mb-1.5 block text-[13px] font-medium text-foreground-800">
+                <span className="mb-1.5 block text-label font-medium text-foreground-800">
                   Registered agents table
                 </span>
                 <TableEditor

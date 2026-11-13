@@ -27,7 +27,7 @@ export default function CareersPage() {
           {jobs === null ? <p className="text-sm text-foreground-600" role="status">Loading jobs…</p> : null}
           {jobs && jobs.length === 0 && !error ? (
             <div className="rounded-sm border border-background-200 bg-background-100 p-8 text-center">
-              <p className="font-heading text-lg font-bold text-[#102b46]">No openings right now</p>
+              <p className="font-heading text-lg font-bold text-ink">No openings right now</p>
               <p className="mt-2 text-sm text-foreground-600">Check back soon, or <Link to="/contact" className="font-semibold text-primary-700 hover:underline">contact us</Link> to register your interest.</p>
             </div>
           ) : null}
@@ -39,7 +39,7 @@ export default function CareersPage() {
                     <span className="rounded-full bg-primary-50 px-2.5 py-0.5 text-xs font-semibold text-primary-800">{EMPLOYMENT_TYPE_LABEL[job.employmentType]}</span>
                     <span className="text-xs text-foreground-500">Posted {new Date(job.postedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}</span>
                   </div>
-                  <h2 className="mt-3 font-heading text-xl font-bold text-[#102b46]"><Link to={jobPath(job.id)} className="hover:text-primary-700">{job.title}</Link></h2>
+                  <h2 className="mt-3 font-heading text-xl font-bold text-ink"><Link to={jobPath(job.id)} className="hover:text-primary-700">{job.title}</Link></h2>
                   <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-foreground-700">
                     <div className="flex items-center gap-1.5"><i className="ri-map-pin-line text-primary-600" aria-hidden="true" /><dt className="sr-only">Location</dt><dd>{job.location}</dd></div>
                     {job.salary ? <div className="flex items-center gap-1.5"><i className="ri-money-dollar-circle-line text-primary-600" aria-hidden="true" /><dt className="sr-only">Salary</dt><dd>{job.salary}</dd></div> : null}

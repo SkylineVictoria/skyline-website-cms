@@ -217,7 +217,7 @@ export default function CoursesPage() {
                   <tr key={c.id} className="align-middle hover:bg-background-50">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <span className="w-5 text-center text-[13px] font-semibold text-foreground-700">
+                        <span className="w-5 text-center text-label font-semibold text-foreground-700">
                           {c.displayOrder}
                         </span>
                         <div className="flex flex-col">
@@ -250,7 +250,7 @@ export default function CoursesPage() {
                           )}
                         </span>
                         <div className="min-w-0">
-                          <p className="truncate text-[13px] font-medium text-foreground-900">{c.name}</p>
+                          <p className="truncate text-label font-medium text-foreground-900">{c.name}</p>
                           <p className="mt-0.5 text-xs text-foreground-500">
                             {c.code || "No code"} {c.cricos ? `· CRICOS ${c.cricos}` : ""}
                           </p>

@@ -187,7 +187,7 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
             <i className="ri-file-pdf-2-line text-base text-foreground-500" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate font-medium text-foreground-900">{letter.fileName}</span>
             <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}{letter.templateName ? <> &middot; {letter.templateName} v{letter.templateVersion}</> : null}</span>
-            <span data-testid="offer-letter-state" className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>
+            <span data-testid="offer-letter-state" className={`rounded-full px-2 py-0.5 text-2xs font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>
               {letter.acceptedAt ? `${letter.acceptedVia === "signing" ? "Signed online" : "Accepted"} ${formatDate(letter.acceptedAt)}` : letter.signing ? signingState(letter.signing) : "Awaiting acceptance"}</span>
             {letter.prepaidMore ? <span className="text-xs text-foreground-500">Pays more than the pre-paid fee: {letter.prepaidMore}</span> : null}
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">View</button>

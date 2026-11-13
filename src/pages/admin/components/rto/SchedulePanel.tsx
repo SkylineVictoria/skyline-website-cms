@@ -171,7 +171,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
             const s = shown(r, idx);
             return (
               <div key={r.id} className="relative flex min-w-0 flex-col justify-center border-t border-background-100 px-4" style={{ height: ROW }}>
-                <p className="line-clamp-2 min-w-0 text-[13px] leading-tight text-foreground-800" title={`${r.code} ${r.name}`}><strong className="font-semibold text-foreground-950">{r.code}</strong> {r.name}</p>
+                <p className="line-clamp-2 min-w-0 text-label leading-tight text-foreground-800" title={`${r.code} ${r.name}`}><strong className="font-semibold text-foreground-950">{r.code}</strong> {r.name}</p>
                 <button type="button" disabled={readOnly} onClick={() => setPopover((p) => (p === idx ? null : idx))}
                   className={`mt-0.5 self-start text-xs tabular-nums ${readOnly ? "text-foreground-500" : "text-primary-700 hover:underline"}`}>
                   {dayMonth(s.start)} – {shortDate(s.end)} · {weeksOf(s.start, s.end)} wks
@@ -181,7 +181,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
                     <p className="mb-2 text-xs font-medium text-foreground-700">{r.code} dates</p>
                     <label className="mb-2 block text-xs text-foreground-600">Starts<TextInput type="date" value={r.startDate} onChange={(e) => setStart(idx, e.target.value)} /></label>
                     <label className="block text-xs text-foreground-600">Ends<TextInput type="date" value={r.endDate} min={r.startDate} onChange={(e) => setEnd(idx, e.target.value)} /></label>
-                    <p className="mt-2 text-[11px] text-foreground-500">Later units move by the same number of days.</p>
+                    <p className="mt-2 text-2xs text-foreground-500">Later units move by the same number of days.</p>
                     <div className="mt-2 flex justify-end"><Button size="sm" variant="outline" onClick={() => setPopover(null)}>Done</Button></div>
                   </div>
                 ) : null}
@@ -193,7 +193,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
         <div ref={box} className="min-w-0 overflow-x-auto">
           <div className="relative" style={{ width }}>
             {/* axis */}
-            <div className="relative border-b border-background-200 text-[11px] text-foreground-500" style={{ height: AXIS }}>
+            <div className="relative border-b border-background-200 text-2xs text-foreground-500" style={{ height: AXIS }}>
               {months.map((m) => <span key={m.iso} className="absolute top-2 whitespace-nowrap pl-1" style={{ left: at(m.iso) }}>{m.label}</span>)}
             </div>
             {/* rows with gridlines, holidays and today */}
@@ -213,7 +213,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
                 return (
                   <div key={r.id} className="absolute left-0 right-0" style={{ top: idx * ROW, height: ROW }}>
                     <div onPointerDown={(e) => startDrag(idx, "move", e)} title={`${r.code}: ${shortDate(s.start)} – ${shortDate(s.end)} (${weeksOf(s.start, s.end)} weeks)`}
-                      className={`absolute top-4 flex h-6 items-center overflow-hidden rounded text-[11px] font-medium text-background-50 ${r.unitType === "elective" ? "bg-secondary-500" : "bg-primary-500"} ${readOnly ? "" : "cursor-grab touch-none active:cursor-grabbing"}`}
+                      className={`absolute top-4 flex h-6 items-center overflow-hidden rounded text-2xs font-medium text-background-50 ${r.unitType === "elective" ? "bg-secondary-500" : "bg-primary-500"} ${readOnly ? "" : "cursor-grab touch-none active:cursor-grabbing"}`}
                       style={{ left, width: w }}>
                       <span className="truncate px-1.5">{w > 48 ? r.code : ""}</span>
                       {readOnly ? null : <span onPointerDown={(e) => startDrag(idx, "resize", e)} className="absolute bottom-0 right-0 top-0 w-2 cursor-ew-resize bg-foreground-950/20" aria-label={`Change the length of ${r.code}`} />}

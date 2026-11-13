@@ -60,6 +60,10 @@ export default {
           900: "oklch(var(--secondary-900) / <alpha-value>)",
           950: "oklch(var(--secondary-950) / <alpha-value>)",
         },
+        ink: {
+          DEFAULT: "oklch(var(--ink) / <alpha-value>)",
+          soft: "oklch(var(--ink-soft) / <alpha-value>)",
+        },
         foreground: {
           50: "oklch(var(--foreground-50) / <alpha-value>)",
           100: "oklch(var(--foreground-100) / <alpha-value>)",
@@ -81,11 +85,62 @@ export default {
         display: ["var(--font-heading)", "ui-sans-serif", "system-ui", "sans-serif"],
         label: ["var(--font-label)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
+      // Tokens from src/index.css (:root). Text sizes: fixed for running text, fluid for headings.
+      fontSize: {
+        "2xs": ["var(--text-2xs)", { lineHeight: "1rem" }],
+        xs: ["var(--text-xs)", { lineHeight: "1rem" }],
+        label: ["var(--text-label)", { lineHeight: "1.25rem" }],
+        sm: ["var(--text-sm)", { lineHeight: "1.25rem" }],
+        base: ["var(--text-base)", { lineHeight: "1.5rem" }],
+        lg: ["var(--text-lg)", { lineHeight: "1.6" }],
+        xl: ["var(--text-xl)", { lineHeight: "1.5" }],
+        "2xl": ["var(--text-2xl)", { lineHeight: "1.35" }],
+        "3xl": ["var(--text-3xl)", { lineHeight: "1.25" }],
+        "4xl": ["var(--text-4xl)", { lineHeight: "1.15" }],
+        "5xl": ["var(--text-5xl)", { lineHeight: "1.1" }],
+        "6xl": ["var(--text-6xl)", { lineHeight: "1.05" }],
+        "7xl": ["var(--text-7xl)", { lineHeight: "1.05" }],
+      },
+      spacing: {
+        gutter: "var(--gutter)",
+        section: "var(--section-y)",
+        "section-sm": "var(--section-y-sm)",
+      },
       maxWidth: {
-        content: "1240px",
+        content: "var(--container)",
       },
       borderRadius: {
-        card: "14px",
+        sm: "var(--radius-xs)",
+        DEFAULT: "var(--radius-sm)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
+        "2xl": "var(--radius-2xl)",
+        card: "var(--radius-card)",
+      },
+      boxShadow: {
+        xs: "var(--shadow-xs)",
+        sm: "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
+        xl: "var(--shadow-xl)",
+        "2xl": "var(--shadow-2xl)",
+      },
+      borderColor: {
+        DEFAULT: "oklch(var(--border-subtle) / <alpha-value>)",
+      },
+      ringColor: {
+        DEFAULT: "oklch(var(--focus-ring-color) / <alpha-value>)",
+      },
+      transitionDuration: {
+        DEFAULT: "var(--dur)",
+        fast: "var(--dur-fast)",
+        slow: "var(--dur-slow)",
+      },
+      transitionTimingFunction: {
+        DEFAULT: "var(--ease-out)",
+        out: "var(--ease-out)",
       },
       keyframes: {
         "fade-up": {

@@ -68,7 +68,7 @@ export default function CompleteAgentProfile({ user, onDone }: { user: User; onD
 
   return (
     <form onSubmit={(e) => void submit(e)} noValidate>
-      <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900" role="status">
+      <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-label text-amber-900" role="status">
         <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" /><span>Agent accounts are reviewed by our team before you can sign in.</span>
       </div>
       <div className="mt-5 space-y-4">
@@ -85,11 +85,11 @@ export default function CompleteAgentProfile({ user, onDone }: { user: User; onD
         </dl>
         {googleName ? null : <Field label="Your name" required><TextInput value={contact} onChange={(e) => setContact(e.target.value)} autoComplete="name" />{problem("contact")}</Field>}
         <div>
-          <label htmlFor="agent-phone" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Phone <span className="text-primary-600">*</span></label>
+          <label htmlFor="agent-phone" className="mb-1.5 block text-label font-medium text-foreground-800">Phone <span className="text-primary-600">*</span></label>
           <PhoneInput id="agent-phone" name="phone" required placeholder="041 234 5678" />
           {problem("phone")}
         </div>
-        {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">{errors.form}</div> : null}
+        {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">{errors.form}</div> : null}
         <Button type="submit" className="w-full" disabled={busy}>{busy ? "Submitting…" : "Submit application"}</Button>
         <p className="text-center text-xs text-foreground-500">
           By submitting you agree to the <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">terms</a> and <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">privacy policy</a>.

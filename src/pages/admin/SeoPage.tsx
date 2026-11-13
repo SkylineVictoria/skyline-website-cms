@@ -141,7 +141,7 @@ export default function SeoPage() {
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Search preview</p>
               <p className="text-[15px] font-medium text-primary-700">{draft.title || "Page title"}</p>
               <p className="text-xs text-foreground-500">slit.edu.au{draft.path}</p>
-              <p className="mt-0.5 text-[13px] text-foreground-700">{draft.description || "Meta description preview."}</p>
+              <p className="mt-0.5 text-label text-foreground-700">{draft.description || "Meta description preview."}</p>
             </div>
           </div>
         ) : null}

@@ -60,7 +60,7 @@ function buildCrumbs(pathname: string): { label: string; to?: string }[] {
   return crumbs;
 }
 
-const FOOTER_LINK = "flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-foreground-700 transition-colors hover:bg-background-100";
+const FOOTER_LINK = "flex items-center gap-2.5 rounded-md px-3 py-2 text-label font-medium text-foreground-700 transition-colors hover:bg-background-100";
 
 export default function PortalLayout() {
   const { authUser, role, profile, agency, signOut, scopeEpoch, selectedScope } = usePortalAuth();

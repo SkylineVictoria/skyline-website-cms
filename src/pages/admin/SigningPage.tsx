@@ -76,7 +76,7 @@ function EnvelopeSigningPage() {
 
     {tab === "requests" && <>
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Status">{["all", ...Object.keys(SIGNING_STATUS)].map((key) => <button key={key} type="button" role="tab" aria-selected={status === key} data-testid={`status-${key}`} onClick={() => setStatus(key)}
-        className={`rounded-full border px-3 py-1.5 text-[13px] font-medium ${status === key ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
+        className={`rounded-full border px-3 py-1.5 text-label font-medium ${status === key ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
         {key === "all" ? "All" : SIGNING_STATUS[key].label} ({counts[key] ?? 0})</button>)}</div>
       <div className="grid gap-3 md:grid-cols-[1fr_220px_180px]">
         <Field label="Search"><TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Document, reference, recipient name or email" data-testid="request-search" /></Field>

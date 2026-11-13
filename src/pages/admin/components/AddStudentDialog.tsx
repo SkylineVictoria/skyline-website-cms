@@ -113,7 +113,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
 
         {/* Business */}
         <div>
-          <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Business</p>
+          <p className="mb-1.5 text-label font-medium text-foreground-800">Business</p>
           {business ? chip(business.name, business.status === "Active" ? "Active business" : "Inactive, activated when you add the student", () => { setBusiness(null); setAgent(null); }) : (
             <SearchPick label="Business" addNoun="business" autoFocus searchWhenEmpty placeholder="Search business name, ABN or agent"
               search={searchBusinesses}
@@ -125,7 +125,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
         {/* Agent */}
         {business ? (
           <div>
-            <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Agent</p>
+            <p className="mb-1.5 text-label font-medium text-foreground-800">Agent</p>
             {agent ? (
               <>
                 {chip(agent.name, agent.email || "No email on record", () => setAgent(null), <AgentStatusBadge status={agent.status} />)}

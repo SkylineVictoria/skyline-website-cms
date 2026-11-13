@@ -72,7 +72,7 @@ export default function StudentPicker({ courseId, batches, batchId, rtoManager, 
           <i className="ri-search-line text-lg text-foreground-400" aria-hidden="true" />
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search students by name or email" aria-label="Search students"
             className="min-w-0 flex-1 bg-transparent py-3.5 text-[15px] text-foreground-900 outline-none placeholder:text-foreground-400" />
-          <kbd className="hidden rounded border border-background-300 px-1.5 text-[11px] text-foreground-500 sm:inline">Esc</kbd>
+          <kbd className="hidden rounded border border-background-300 px-1.5 text-2xs text-foreground-500 sm:inline">Esc</kbd>
         </div>
         {picked.size ? (
           <div className="flex flex-wrap gap-1.5 border-b border-background-200 px-4 py-2">

@@ -115,7 +115,7 @@ export default function AdminSetPasswordPage() {
             </Field>
 
             {error ? (
-              <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900">
+              <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900">
                 <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" />
                 <span>{error}</span>
               </div>

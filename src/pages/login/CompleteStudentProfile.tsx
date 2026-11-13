@@ -93,12 +93,12 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
         )}
         {phoneVerified ? null : (
           <div>
-            <label htmlFor="complete-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+            <label htmlFor="complete-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
             <PhoneInput id="complete-mobile" name="mobile" required placeholder="041 234 5678" />
             {problem("mobile")}
           </div>
         )}
-        {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">{errors.form}</div> : null}
+        {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">{errors.form}</div> : null}
         <Button type="submit" className="w-full" disabled={busy || emailBlocking}>{busy ? "Creating your account…" : "Create student account"}</Button>
         <p className="text-center text-xs text-foreground-500">
           By creating an account you agree to the <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">terms</a> and <a href="/forms-policies" target="_blank" rel="noopener" className="font-medium text-primary-700 hover:underline">privacy policy</a>.

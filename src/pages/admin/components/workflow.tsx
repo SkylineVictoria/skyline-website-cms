@@ -20,7 +20,7 @@ function SnapshotView({ snapshot }: { snapshot: unknown }) {
   return (
     <dl className="divide-y divide-background-200 overflow-hidden rounded-md border border-background-200">
       {entries.slice(0, 14).map(([k, v]) => (
-        <div key={k} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2 text-[13px]">
+        <div key={k} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2 text-label">
           <dt className="font-medium text-foreground-500">{k}</dt>
           <dd className="break-words text-foreground-900">{String(v)}</dd>
         </div>
@@ -86,7 +86,7 @@ export function VersionHistoryModal({
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[13px] font-medium text-foreground-900">{r.action}</span>
+                    <span className="text-label font-medium text-foreground-900">{r.action}</span>
                     <StatusBadge status={r.status} />
                     {i === 0 ? <Badge tone="secondary">Latest</Badge> : null}
                   </div>

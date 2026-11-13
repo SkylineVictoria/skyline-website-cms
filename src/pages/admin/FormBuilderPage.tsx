@@ -53,11 +53,11 @@ function OptionsEditor({
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[13px] font-medium text-foreground-800">{label}</span>
+        <span className="text-label font-medium text-foreground-800">{label}</span>
         <button
           type="button"
           onClick={add}
-          className="inline-flex cursor-pointer items-center gap-1 text-[13px] font-medium text-primary-600 hover:underline"
+          className="inline-flex cursor-pointer items-center gap-1 text-label font-medium text-primary-600 hover:underline"
         >
           <i className="ri-add-line" aria-hidden="true" />
           Add option
@@ -222,7 +222,7 @@ export default function FormBuilderPage() {
     <div>
       <div className="mb-5 flex flex-col gap-3 border-b border-background-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <Link to="/admin/forms" className="mb-1 inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600">
+          <Link to="/admin/forms" className="mb-1 inline-flex items-center gap-1 text-label font-medium text-foreground-500 hover:text-primary-600">
             <i className="ri-arrow-left-line" aria-hidden="true" />
             Forms
           </Link>
@@ -272,7 +272,7 @@ export default function FormBuilderPage() {
                   </div>
                   <i className="ri-drag-move-2-line text-foreground-300" aria-hidden="true" />
                   <button type="button" onClick={() => setActiveField(f.id)} className="flex-1 cursor-pointer text-left">
-                    <span className="text-[13px] font-medium text-foreground-900">{f.label}</span>
+                    <span className="text-label font-medium text-foreground-900">{f.label}</span>
                     <span className="ml-2 text-xs text-foreground-500">{f.type}</span>
                     {f.required ? <span className="ml-2 text-xs text-primary-600">required</span> : null}
                   </button>

@@ -55,7 +55,7 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900 }: 
       return <div key={page.number} data-pdf-page={page.number} className="relative mx-auto mb-4 border border-background-300 bg-white shadow-sm" style={size}>
         <PageCanvas doc={doc} number={page.number} width={size.width} height={size.height} />
         {overlay && <div className="absolute inset-0">{overlay(page.number, size)}</div>}
-        <span className="pointer-events-none absolute bottom-1 right-2 rounded bg-white/80 px-1 text-[10px] text-foreground-500">Page {page.number} of {pages.length}</span>
+        <span className="pointer-events-none absolute bottom-1 right-2 rounded bg-white/80 px-1 text-2xs text-foreground-500">Page {page.number} of {pages.length}</span>
       </div>;
     })}
   </div>;

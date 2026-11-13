@@ -85,7 +85,7 @@ export default function CourseWizardPage() {
       <div className="sticky top-0 z-10 mb-4 rounded-b-xl border border-t-0 border-background-200 bg-background-50/95 backdrop-blur">
         <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-2 pt-3">
           <div className="min-w-0">
-            <Link to="/admin/course-fees" className="inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />Courses</Link>
+            <Link to="/admin/course-fees" className="inline-flex items-center gap-1 text-label font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />Courses</Link>
             <div className="flex flex-wrap items-center gap-2"><h1 className="font-heading text-xl font-bold text-foreground-950">{c.label}</h1><StatusBadge status={c.status} />{c.isActive ? null : <Badge>Inactive</Badge>}</div>
             <p className="text-xs text-foreground-500">{[c.cricos && `CRICOS ${c.cricos}`, c.duration, `${c.activeUnits} units`, c.totalCents ? `Total ${money(c.totalCents)}` : null, c.nextIntake ? `Next intake ${shortDate(c.nextIntake)}` : null].filter(Boolean).join(" · ")}</p>
           </div>

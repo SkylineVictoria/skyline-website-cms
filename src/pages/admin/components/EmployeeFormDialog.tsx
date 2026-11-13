@@ -114,7 +114,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
       <form id="employee-form" noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
         {!id ? (
           <fieldset className="grid gap-2 sm:grid-cols-2" data-testid="employee-mode">
-            <legend className="mb-1.5 text-[13px] font-medium text-foreground-800">How do you want to add them?</legend>
+            <legend className="mb-1.5 text-label font-medium text-foreground-800">How do you want to add them?</legend>
             {option("onboard", "Start onboarding", "Email a private link to add their details and documents. Then send the offer letter to sign, and activate them.")}
             {option("active", "Add as Active now", "No emails. They are Active straight away and you upload their documents yourself.")}
           </fieldset>
@@ -146,13 +146,13 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
         </div>
         {/* The same phone field as the student and agent forms: country code + number, formatted and checked as you type. */}
         <div data-testid="employee-phone" onInput={(e) => { const t = e.target as HTMLInputElement; if (t.name === "employee_phone") patch({ phone: t.value }); }}>
-          <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
+          <p className="mb-1.5 text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
           <PhoneInput id="employee-phone-input" name="employee_phone" value={initial?.phone ?? ""} required locked={busy} placeholder="041 234 5678" />
           {/* A wrong number is already shown under the field by PhoneInput (after leaving it); only the empty case is ours. */}
           {problems.phone === "Enter the mobile number." ? <p role="alert" className="mt-1 text-xs text-primary-700">{problems.phone}</p> : null}
         </div>
         <fieldset className="rounded-md border border-background-200 p-3" data-testid="employee-bank">
-          <legend className="px-1 text-[13px] font-semibold text-foreground-900">Bank details (for pay) <span className="font-normal text-foreground-500">optional</span></legend>
+          <legend className="px-1 text-label font-semibold text-foreground-900">Bank details (for pay) <span className="font-normal text-foreground-500">optional</span></legend>
           {id ? <p className="text-sm text-foreground-700" data-testid="employee-bank-elsewhere">Saved bank details are shown masked on the employee's page. Change them there with “Edit” on the Bank details card.</p> : (
             <BankDetailsFields value={bank} problems={bankIssues} disabled={busy}
               onChange={(next) => { setBank(next); if (touched) setBankIssues(bankProblems(next)); }} />

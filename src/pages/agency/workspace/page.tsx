@@ -306,14 +306,14 @@ export default function AgencyWorkspacePage() {
                           <span className="truncate text-sm font-semibold text-foreground-950">{g.name}</span>
                           {g.role ? <span className="shrink-0 text-xs text-foreground-500">{g.role}</span> : null}
                           {g.status && g.status !== "Active" ? (
-                            <span className="shrink-0 rounded-full bg-background-200 px-2 py-0.5 text-[11px] font-semibold text-foreground-600">{g.status}</span>
+                            <span className="shrink-0 rounded-full bg-background-200 px-2 py-0.5 text-2xs font-semibold text-foreground-600">{g.status}</span>
                           ) : null}
                         </span>
                         {g.email ? <span className="block truncate text-xs text-foreground-500">{g.email}</span> : null}
                       </span>
                       <span className="shrink-0 text-right">
                         <span className="block text-sm font-semibold text-foreground-900">{g.candidates.length}</span>
-                        <span className="block text-[11px] text-foreground-500">{g.candidates.length === 1 ? "candidate" : "candidates"}</span>
+                        <span className="block text-2xs text-foreground-500">{g.candidates.length === 1 ? "candidate" : "candidates"}</span>
                       </span>
                       <i className={`ri-arrow-${expanded ? "up" : "down"}-s-line shrink-0 text-lg text-foreground-500`} aria-hidden="true" />
                     </button>

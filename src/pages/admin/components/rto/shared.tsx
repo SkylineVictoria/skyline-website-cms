@@ -120,9 +120,9 @@ export function Avatars({ names, max = 4 }: { names: string[]; max?: number }) {
   return (
     <span className="flex -space-x-2" title={names.join(", ")}>
       {names.slice(0, max).map((n) => (
-        <span key={n} className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background-50 bg-secondary-100 text-[11px] font-semibold text-secondary-900">{initials(n)}</span>
+        <span key={n} className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background-50 bg-secondary-100 text-2xs font-semibold text-secondary-900">{initials(n)}</span>
       ))}
-      {names.length > max ? <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background-50 bg-background-200 text-[11px] text-foreground-600">+{names.length - max}</span> : null}
+      {names.length > max ? <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background-50 bg-background-200 text-2xs text-foreground-600">+{names.length - max}</span> : null}
     </span>
   );
 }

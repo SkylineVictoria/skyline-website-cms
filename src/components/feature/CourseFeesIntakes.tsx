@@ -30,7 +30,7 @@ export default function CourseFeesIntakes({ slug, tenantId }: { slug: string; te
           <ul className="mt-2 space-y-1 text-sm text-foreground-800">
             {items.map((i, n) => <li key={n} className="flex justify-between gap-3"><span>{(i.label || LABEL[i.type] || i.type).replace(/\s*\(non-refundable\)\s*$/i, "")}{i.refundable === false ? " (Non-Refundable)" : ""}</span><span className="tabular-nums">{aud(i.amountCents)}</span></li>)}
           </ul>
-          <p className="mt-2 flex justify-between border-t border-background-300 pt-2 font-semibold text-[#102b46]"><span>Total</span><span className="tabular-nums">AUD {aud(facts.totalCents)}</span></p>
+          <p className="mt-2 flex justify-between border-t border-background-300 pt-2 font-semibold text-ink"><span>Total</span><span className="tabular-nums">AUD {aud(facts.totalCents)}</span></p>
           {facts.gstCents ? <p className="mt-1 flex justify-between text-sm text-foreground-700"><span>GST included</span><span className="tabular-nums">{aud(facts.gstCents)}</span></p> : null}
           {deposit ? <p className="mt-1 flex justify-between text-sm text-foreground-700"><span>Initial deposit (part of total)</span><span className="tabular-nums">{aud(deposit)}</span></p> : null}
           {facts.feeNote ? <p className="mt-2 text-xs text-foreground-600">{facts.feeNote}</p> : null}

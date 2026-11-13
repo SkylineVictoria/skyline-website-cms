@@ -38,7 +38,7 @@ export default function LetterPreview({ input, onBuilt, onMark, testId = "letter
 
   return (
     <div className="relative" data-testid={testId} data-pages={letter?.pages ?? 0} data-missing={letter?.missing.join(",") ?? ""}>
-      {building ? <p className="absolute right-2 top-2 z-10 rounded bg-background-50/90 px-2 py-0.5 text-[11px] text-foreground-600 shadow-sm" role="status"><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Updating…</p> : null}
+      {building ? <p className="absolute right-2 top-2 z-10 rounded bg-background-50/90 px-2 py-0.5 text-2xs text-foreground-600 shadow-sm" role="status"><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Updating…</p> : null}
       {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
       {letter ? (
         <div className="max-h-[70vh] overflow-y-auto rounded-lg border border-background-200 bg-background-100 p-3">
@@ -74,7 +74,7 @@ export function VariableCheck({ html, registry, values, manual = [], testId = "v
             const state = fill?.mode === "letter" ? "Typed for this letter" : fill?.mode === "source" ? "Saved to source" : fill?.mode === "blank" ? "Left blank" : null;
             return (
               <tr key={key} data-testid="variable-check-row" data-key={key} className={!shown && fill?.mode !== "blank" && spec?.sourceKind !== "entered" ? "bg-amber-50/70" : ""}>
-                <td className="px-2 py-1.5 align-top"><span className="font-medium text-foreground-900">{spec?.label ?? key}{courseIndexOf(key) ? ` (course ${courseIndexOf(key) + 1})` : ""}</span><br /><code className="text-[10px] text-foreground-500">{`{{${key}}}`}</code></td>
+                <td className="px-2 py-1.5 align-top"><span className="font-medium text-foreground-900">{spec?.label ?? key}{courseIndexOf(key) ? ` (course ${courseIndexOf(key) + 1})` : ""}</span><br /><code className="text-2xs text-foreground-500">{`{{${key}}}`}</code></td>
                 <td className="whitespace-pre-line px-2 py-1.5 align-top text-foreground-900" data-testid="variable-check-value">{shown || <span className="text-amber-800">{spec?.required ? "Missing (required)" : "Missing"}</span>}</td>
                 <td className="px-2 py-1.5 align-top text-foreground-600">{state ? <span className="font-medium text-foreground-800">{state}</span> : (value?.source ?? spec?.source)}</td>
               </tr>

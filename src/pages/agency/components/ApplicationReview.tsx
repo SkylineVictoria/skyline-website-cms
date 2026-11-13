@@ -172,7 +172,7 @@ function expiryNote(key: string, values: DraftValues) {
   const expiry = getDocumentExpiryStatus(type, { [key]: values[key] });
   if ((expiry.status !== "expired" && expiry.status !== "expiring_soon") || !expiry.date) return null;
   return (
-    <span className={`ml-1.5 text-[10px] font-semibold ${expiryTone(expiry.status)}`} title={expiryTooltip(expiry)}>
+    <span className={`ml-1.5 text-2xs font-semibold ${expiryTone(expiry.status)}`} title={expiryTooltip(expiry)}>
       {expiryLabel(expiry)}
     </span>
   );

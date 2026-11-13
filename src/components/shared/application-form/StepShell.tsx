@@ -1,7 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import StepDrawer, { type NavStage } from "./StepDrawer";
 
-const SMALL_BUTTON = "inline-flex h-8 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-lg px-3 text-[13px] font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50";
+const SMALL_BUTTON = "inline-flex h-8 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-lg px-3 text-label font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50";
 
 export interface FooterPrimary {
   label: string;
@@ -68,12 +68,12 @@ export default function StepShell({ stages, current, percent, status, notice, on
                       type="button"
                       aria-current={active ? "step" : undefined}
                       onClick={() => onSelectStage(index)}
-                      className={`flex h-8 w-full min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors duration-150 ${active ? "bg-background-50 font-medium text-primary-700 shadow-sm ring-1 ring-background-200" : "text-foreground-600 hover:bg-background-50/70 hover:text-foreground-900"}`}
+                      className={`flex h-8 w-full min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2.5 text-label transition-colors duration-150 ${active ? "bg-background-50 font-medium text-primary-700 shadow-sm ring-1 ring-background-200" : "text-foreground-600 hover:bg-background-50/70 hover:text-foreground-900"}`}
                     >
                       {stage.state === "done" && !active ? <i className="ri-check-line text-base leading-none text-emerald-700" aria-label="done" />
                         : stage.state === "issue" && !active ? <i className="ri-error-warning-line text-base leading-none text-amber-600" aria-label="needs details" />
                           : stage.final ? <i className="ri-file-list-3-line text-base leading-none" aria-hidden="true" />
-                            : <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${active ? "bg-primary-500 text-background-50" : "bg-background-200 text-foreground-600"}`} aria-hidden="true">{index + 1}</span>}
+                            : <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-2xs font-semibold ${active ? "bg-primary-500 text-background-50" : "bg-background-200 text-foreground-600"}`} aria-hidden="true">{index + 1}</span>}
                       <span className="truncate">{stage.title}</span>
                     </button>
                   </li>

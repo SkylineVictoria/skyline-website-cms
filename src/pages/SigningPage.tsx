@@ -95,7 +95,7 @@ function CodeCheck({ token, to, onVerified }: { token: string; to: string | null
     {!sent ? <Button type="button" variant="outline" disabled={busy} onClick={() => void send()} data-testid="send-code">{busy ? "Sending…" : "Email me a code"}</Button>
       : <div className="flex flex-wrap items-end gap-2">
         <Field label="6-digit code"><TextInput value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
-          className="!w-36 !text-[16px] tracking-widest" data-testid="code-input" /></Field>
+          className="!w-36 !text-base tracking-widest" data-testid="code-input" /></Field>
         <Button type="button" disabled={busy || code.length !== 6} onClick={() => void verify()} data-testid="verify-code">{busy ? "Checking…" : "Confirm"}</Button>
         <button type="button" className="mb-2 text-sm underline" disabled={busy} onClick={() => void send()}>Send a new code</button>
       </div>}
@@ -197,16 +197,16 @@ export default function SigningPage() {
             const lacking = missing.some((m) => m.id === f.id);
             const frame = `absolute rounded-sm border-2 ${lacking ? "border-red-500 bg-red-50/80" : "border-primary-500 bg-primary-50/80"}`;
             if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
-              onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-[16px] leading-none sm:text-sm`} style={style} />;
+              onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} />;
             if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>
               <input type="checkbox" aria-label={f.label || "Checkbox"} checked={values[f.id] === "true"} onChange={(e) => setValues({ ...values, [f.id]: e.target.checked ? "true" : "false" })} className="h-full w-full cursor-pointer" /></label>;
             if (f.type === "choice") return <div key={f.id} data-field={f.id} role="radiogroup" aria-label={f.label} title={f.label} className={`${frame} flex items-stretch gap-0.5 p-0.5`} style={style}>
               {(["YES", "NO"] as const).map((answer) => <button key={answer} type="button" role="radio" aria-checked={values[f.id] === answer} onClick={() => setChoice(f.id, answer)}
-                className={`flex-1 rounded-sm text-[10px] font-semibold leading-none sm:text-xs ${values[f.id] === answer ? "bg-primary-600 text-white" : "bg-white/90 text-primary-800"}`}>{answer}</button>)}
+                className={`flex-1 rounded-sm text-2xs font-semibold leading-none sm:text-xs ${values[f.id] === answer ? "bg-primary-600 text-white" : "bg-white/90 text-primary-800"}`}>{answer}</button>)}
             </div>;
             const text = f.type === "signature" ? (method === "typed" ? name || "Sign here" : picture ? "" : "Sign here") : f.type === "initials" ? initialsOf(name) || "Initials" : f.type === "name" ? name || "Your name" : "Date when you sign";
             return <button key={f.id} type="button" data-field={f.id} onClick={() => signPanel.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-              className={`absolute flex items-center overflow-hidden rounded-sm border-2 border-dashed border-primary-500 bg-primary-50/70 px-1 text-left text-[11px] font-semibold text-primary-800 sm:text-xs ${f.type === "signature" || f.type === "initials" ? "italic" : ""}`} style={style}>
+              className={`absolute flex items-center overflow-hidden rounded-sm border-2 border-dashed border-primary-500 bg-primary-50/70 px-1 text-left text-2xs font-semibold text-primary-800 sm:text-xs ${f.type === "signature" || f.type === "initials" ? "italic" : ""}`} style={style}>
               {f.type === "signature" && method !== "typed" && picture ? <img src={`data:image/png;base64,${picture}`} alt="Your signature" className="max-h-full max-w-full" /> : <span className="truncate">{text}</span>}</button>;
           }) : null} />
         </div>
@@ -221,7 +221,7 @@ export default function SigningPage() {
             <legend className="px-1 text-sm font-semibold">Details to fill in</legend>
             <p className="text-sm text-foreground-600">These go into the document wherever they appear. Answer each one before you sign.</p>
             {tokenLabels.map((label) => { const name = tokenFieldName(label); const lacking = !answerOf(label).trim(); return <Field key={label} label={name} required>
-              <TextInput value={answerOf(label)} maxLength={500} aria-invalid={lacking} data-testid={`detail-${name.replace(/\s+/g, "-").toLowerCase()}`} className="!text-[16px]"
+              <TextInput value={answerOf(label)} maxLength={500} aria-invalid={lacking} data-testid={`detail-${name.replace(/\s+/g, "-").toLowerCase()}`} className="!text-base"
                 onChange={(e) => { const first = view!.fields.find((f) => f.label === label)!; setText(first, e.target.value); }} /></Field>; })}
           </fieldset>}
           {choices.length > 0 && <fieldset className="space-y-2 rounded-md border border-background-300 p-3" data-testid="offer-choices">
@@ -235,9 +235,9 @@ export default function SigningPage() {
           </fieldset>}
           {missing.length > 0 && <p className="rounded-md border border-red-300 bg-red-50 p-3 text-sm">{missing.length} required field{missing.length === 1 ? "" : "s"} in the document still need{missing.length === 1 ? "s" : ""} an answer.{" "}
             <button type="button" className="font-semibold underline" onClick={() => goTo(missing[0].id)} data-testid="next-field">Go to the next one</button></p>}
-          <Field label="Your full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} required maxLength={150} autoComplete="name" className="!text-[16px]" /></Field>
+          <Field label="Your full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} required maxLength={150} autoComplete="name" className="!text-base" /></Field>
           <div>
-            <p className="mb-2 text-[13px] font-medium text-foreground-800">Your signature</p>
+            <p className="mb-2 text-label font-medium text-foreground-800">Your signature</p>
             <div role="tablist" className="mb-3 flex flex-wrap gap-2">{([["typed", "Type"], ["drawn", "Draw"], ["uploaded", "Upload a picture"]] as const).map(([id, label]) =>
               <button key={id} type="button" role="tab" aria-selected={method === id} onClick={() => { setMethod(id); setPicture(null); }}
                 className={`rounded-full border px-4 py-2 text-sm font-medium ${method === id ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50"}`}>{label}</button>)}</div>
@@ -260,7 +260,7 @@ export default function SigningPage() {
         {declining && <div className="space-y-3 rounded-md border border-background-300 p-4" role="dialog" aria-label="Decline to sign">
           <p className="font-semibold">Decline to sign this document?</p>
           <p className="text-sm text-foreground-600">The sender is told and your link stops working. You can say why (optional).</p>
-          <TextArea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={3} aria-label="Reason for declining" className="!text-[16px]" />
+          <TextArea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={3} aria-label="Reason for declining" className="!text-base" />
           <div className="flex flex-wrap gap-3"><Button type="button" variant="danger" disabled={busy} onClick={() => void decline()}>Yes, decline</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(false)}>Go back</Button></div>
         </div>}
       </> : !error && <p role="status">Opening your document…</p>}

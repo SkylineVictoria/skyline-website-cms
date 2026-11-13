@@ -276,7 +276,7 @@ export default function FieldEditor({ source, owners, fields, onChange }: { sour
   // The pages area is the only scrolling element; the panel scrolls on its own; the modal header and footer stay put.
   return <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row" data-testid="field-editor">
     <aside className="max-h-[38%] shrink-0 space-y-4 overflow-y-auto pr-1 lg:max-h-none lg:w-[260px]" data-testid="field-panel">
-      <label className="block text-[13px] font-medium text-foreground-800">Fields for
+      <label className="block text-label font-medium text-foreground-800">Fields for
         <select value={current?.id ?? ""} onChange={(e) => { setOwner(e.target.value); setArmed(null); }} className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" data-testid="field-owner">
           {owners.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
@@ -308,7 +308,7 @@ export default function FieldEditor({ source, owners, fields, onChange }: { sour
         {fields.filter((f) => f.page === page).map((f) => {
           const colour = colourOf(f.owner), active = f.key === selected;
           return <div key={f.key} data-testid="placed-field" data-field-type={f.type} data-field-key={f.key} onPointerDown={(e) => startMove(e, f)}
-            className="absolute flex cursor-move touch-none select-none items-center overflow-hidden rounded-sm text-[10px] font-medium leading-none"
+            className="absolute flex cursor-move touch-none select-none items-center overflow-hidden rounded-sm text-2xs font-medium leading-none"
             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, border: `${active ? 2 : 1}px ${active ? "solid" : "dashed"} ${colour}`, background: `${colour}22`, color: colour }}>
             <span className="truncate px-1">{f.type === "checkbox" ? "☐" : f.value || f.label || FIELD_KINDS[f.type].label}</span>
             <span onPointerDown={(e) => startResize(e, f)} aria-hidden="true" data-testid="field-resize" className="absolute bottom-0 right-0 h-2.5 w-2.5 cursor-nwse-resize touch-none" style={{ background: colour }} />

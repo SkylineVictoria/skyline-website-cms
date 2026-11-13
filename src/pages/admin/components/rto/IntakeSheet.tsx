@@ -84,7 +84,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             return (
               <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
                 className={`shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150 ${tab === t.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>
-                {t.label}{count ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 text-[11px] text-foreground-700">{count}</span> : null}
+                {t.label}{count ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 text-2xs text-foreground-700">{count}</span> : null}
               </button>
             );
           })}

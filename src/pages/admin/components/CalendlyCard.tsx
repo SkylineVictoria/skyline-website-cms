@@ -91,7 +91,7 @@ export default function CalendlyCard({ url, onUrlChange }: { url: string; onUrlC
 
         {choices.length ? (
           <div>
-            <p className="mb-2 text-[13px] font-medium text-foreground-800">Use one of these as the scheduling link</p>
+            <p className="mb-2 text-label font-medium text-foreground-800">Use one of these as the scheduling link</p>
             <ul className="space-y-1.5">
               {choices.map((choice) => (
                 <li key={choice.schedulingUrl} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-background-200 px-3 py-2">

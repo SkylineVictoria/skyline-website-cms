@@ -52,7 +52,7 @@ export default function OptionalHolidays() {
               <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm" data-testid={`my-optional-${h.date}`}>
                 <span className="text-foreground-800">{fmtDate(h.date)} · {h.name}{h.note ? <span className="block text-xs text-foreground-500">{h.note}</span> : null}</span>
                 <span className="flex items-center gap-2">
-                  {r ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${TONE[r.status]}`} data-testid={`my-optional-status-${h.date}`}>{LEAVE_STATUS_LABEL[r.status]}</span> : null}
+                  {r ? <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${TONE[r.status]}`} data-testid={`my-optional-status-${h.date}`}>{LEAVE_STATUS_LABEL[r.status]}</span> : null}
                   {r ? (r.status === "pending" || (r.status === "approved" && !past) ? <Button size="sm" variant="ghost" disabled={busy === r.id} onClick={() => void cancel(r.id, h.name)} data-testid={`my-optional-cancel-${h.date}`}>Cancel</Button> : null)
                     : past ? <span className="text-xs text-foreground-500">Passed</span>
                     : <Button size="sm" variant="outline" disabled={busy === h.id || !data.allowance || data.remaining === 0} onClick={() => void pick(h.id, h.name)} data-testid={`my-optional-pick-${h.date}`}>Take this day</Button>}

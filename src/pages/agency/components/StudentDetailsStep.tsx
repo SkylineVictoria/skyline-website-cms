@@ -153,19 +153,19 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
         {askName ? (
           <>
             <div>
-              <label htmlFor="student-first-name" className="mb-1.5 block text-[13px] font-medium text-foreground-800">First name <span className="text-primary-600">*</span></label>
+              <label htmlFor="student-first-name" className="mb-1.5 block text-label font-medium text-foreground-800">First name <span className="text-primary-600">*</span></label>
               <input id="student-first-name" name="firstName" required autoFocus autoComplete="off" maxLength={100} defaultValue={start.firstName ?? ""} aria-invalid={Boolean(errors.firstName)} className={INPUT} />
               {errors.firstName ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.firstName}</p> : null}
             </div>
             <div>
-              <label htmlFor="student-last-name" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Last name <span className="text-primary-600">*</span></label>
+              <label htmlFor="student-last-name" className="mb-1.5 block text-label font-medium text-foreground-800">Last name <span className="text-primary-600">*</span></label>
               <input id="student-last-name" name="lastName" required autoComplete="off" maxLength={100} defaultValue={start.lastName ?? ""} aria-invalid={Boolean(errors.lastName)} className={INPUT} />
               {errors.lastName ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.lastName}</p> : null}
             </div>
           </>
         ) : null}
         <div>
-          <label htmlFor="student-email" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Email <span className="text-primary-600">*</span></label>
+          <label htmlFor="student-email" className="mb-1.5 block text-label font-medium text-foreground-800">Email <span className="text-primary-600">*</span></label>
           <EmailField id="student-email" name="email" required autoFocus={!askName} autoComplete="off" maxLength={254} placeholder="student@example.com"
             value={email} onChange={setEmail} kind="student" context={context} savedEmail={initial?.email || null} serverError={emailError}
             checker={checkEmail} onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} inputClassName={INPUT}
@@ -178,7 +178,7 @@ export default function StudentDetailsStep({ initial, busy, error, submitLabel =
           {errors.email ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.email}</p> : null}
         </div>
         <div>
-          <label htmlFor="student-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+          <label htmlFor="student-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="student-mobile" name="mobile" value={start.mobile} required={!reuse} locked={Boolean(reuse)} placeholder="041 234 5678" />
           {reuse ? <p className="mt-1 text-xs text-foreground-500">Not needed: the application uses this student&apos;s record.</p> : null}
           {errors.mobile ? <p className="mt-1 text-xs text-primary-800" role="alert">{errors.mobile}</p> : null}

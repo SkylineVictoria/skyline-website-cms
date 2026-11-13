@@ -59,7 +59,7 @@ export default function DashboardPage() {
               <Link
                 key={a.label}
                 to={a.to}
-                className="flex items-center gap-2.5 rounded-md border border-background-200 px-3 py-2.5 text-[13px] font-medium text-foreground-800 transition-colors hover:border-primary-300 hover:bg-primary-50"
+                className="flex items-center gap-2.5 rounded-md border border-background-200 px-3 py-2.5 text-label font-medium text-foreground-800 transition-colors hover:border-primary-300 hover:bg-primary-50"
               >
                 <i className={`${a.icon} text-lg text-primary-600`} aria-hidden="true" />
                 {a.label}
@@ -72,7 +72,7 @@ export default function DashboardPage() {
         <Card className="p-5 xl:col-span-2">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-heading text-base font-semibold text-foreground-950">Recently modified content</h2>
-            <Link to="/admin/courses" className="text-[13px] font-medium text-primary-600 hover:underline">
+            <Link to="/admin/courses" className="text-label font-medium text-primary-600 hover:underline">
               Manage courses
             </Link>
           </div>
@@ -87,7 +87,7 @@ export default function DashboardPage() {
               recentContent.map((c) => (
                 <div key={c.name} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
-                    <p className="truncate text-[13px] font-medium text-foreground-900">{c.name}</p>
+                    <p className="truncate text-label font-medium text-foreground-900">{c.name}</p>
                     <p className="mt-0.5 text-xs text-foreground-500">
                       {c.area} · updated by {c.by} on {c.at}
                     </p>
@@ -104,7 +104,7 @@ export default function DashboardPage() {
       <Card className="mt-6 p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Recent activity</h2>
-          <Link to="/admin/activity" className="text-[13px] font-medium text-primary-600 hover:underline">
+          <Link to="/admin/activity" className="text-label font-medium text-primary-600 hover:underline">
             View full log
           </Link>
         </div>
@@ -117,7 +117,7 @@ export default function DashboardPage() {
             />
           ) : (
             data.activity.slice(0, 6).map((a) => (
-              <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 text-[13px]">
+              <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 text-label">
                 <Badge tone="secondary">{a.area}</Badge>
                 <span className="font-medium text-foreground-900">{a.user}</span>
                 <span className="text-foreground-600">{a.action}</span>

@@ -33,7 +33,7 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
 
   const field = "mt-1 block w-full rounded-md border border-background-300 px-3 py-2 text-sm";
   return (
-    <form className="space-y-4 rounded-lg border border-background-200 bg-white p-5" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+    <form className="space-y-4 rounded-lg border border-background-200 bg-background-50 p-5" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
       <h2 className="font-heading text-lg font-semibold text-foreground-900">New ticket</h2>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm font-medium text-foreground-800">Category

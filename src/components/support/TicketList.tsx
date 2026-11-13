@@ -29,7 +29,7 @@ export default function TicketList({ linkTo, handler = false, reloadKey = 0 }: {
   useEffect(() => { void load(); }, [load, reloadKey]);
 
   return (
-    <section className="rounded-lg border border-background-200 bg-white">
+    <section className="rounded-lg border border-background-200 bg-background-50">
       <div className="flex flex-wrap items-center gap-2 border-b border-background-200 p-3">
         <div className="flex flex-wrap gap-1" role="group" aria-label="Status">
           {STATUS_FILTERS.map((f) => (

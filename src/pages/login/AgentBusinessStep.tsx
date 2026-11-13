@@ -103,7 +103,7 @@ export default function AgentBusinessStep({ initial, onChosen }: { initial: Chos
       <p className="text-sm text-foreground-600">Enter your ABN and we'll fill in the rest from the Australian Business Register.</p>
       <form onSubmit={(e) => void (manual ? submitManual(e) : search(e))} noValidate className="mt-4 space-y-4">
         {taken ? (
-          <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">
+          <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">
             <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" /><span>{error}</span>
           </div>
         ) : null}

@@ -333,7 +333,7 @@ export function SiteHeaderView({ navigation, settings, preview = false }: { navi
                           {item.columns
                             ? item.columns.map((column) => (
                                 <div key={column.title} className="mt-2">
-                                  <p className="font-label text-[11px] font-semibold uppercase tracking-wider text-primary-600">
+                                  <p className="font-label text-2xs font-semibold uppercase tracking-wider text-primary-600">
                                     {column.title}
                                   </p>
                                   <ul className="mt-1 space-y-1">

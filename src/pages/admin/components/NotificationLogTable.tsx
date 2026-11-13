@@ -121,7 +121,7 @@ export default function NotificationLogTable({ applicationId }: { applicationId?
                       <td className="p-3 text-xs"><Link className="font-semibold text-primary-700 hover:underline" to={`/admin/applications/${row.applicationId}`}>{row.reference || row.applicationId.slice(0, 8)}</Link></td>
                     )}
                     <td className="p-3 text-xs"><span className="break-all">{row.recipient}</span><span className="ml-1 text-foreground-500">({row.role})</span></td>
-                    <td className="p-3"><Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge>{row.status === "blocked" && row.reason ? <div className="mt-1 text-[11px] text-foreground-500">{describe(row.reason)}</div> : null}</td>
+                    <td className="p-3"><Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge>{row.status === "blocked" && row.reason ? <div className="mt-1 text-2xs text-foreground-500">{describe(row.reason)}</div> : null}</td>
                     <td className="p-3 text-xs">{row.attempts}</td>
                     <td className="p-3 text-xs text-foreground-600">{row.status === "failed" ? describe(row.error) || "—" : "—"}</td>
                   </tr>

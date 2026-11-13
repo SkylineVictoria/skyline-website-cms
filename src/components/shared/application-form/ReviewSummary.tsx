@@ -50,7 +50,7 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
           <ul className="mt-1.5 space-y-0.5">
             {issues.map((issue) => (
               <li key={issue.key}>
-                <button type="button" onClick={issue.onJump} className="group inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-left text-[13px] text-amber-950 transition-colors hover:bg-amber-100">
+                <button type="button" onClick={issue.onJump} className="group inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-left text-label text-amber-950 transition-colors hover:bg-amber-100">
                   <span className="truncate"><span className="text-amber-800">{issue.step}:</span> {issue.text}</span>
                   <i className="ri-arrow-right-line text-sm leading-none text-amber-700 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
                 </button>
@@ -95,7 +95,7 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
                       {step.rows.length ? (
                         <dl className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                           {step.rows.map((row) => (
-                            <div key={row.key} className="grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 text-[13px] leading-5">
+                            <div key={row.key} className="grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 text-label leading-5">
                               <dt className="truncate text-foreground-500" title={row.label}>{row.label}{row.note}</dt>
                               <dd className="break-words text-foreground-900">{row.value}</dd>
                             </div>

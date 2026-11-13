@@ -291,7 +291,7 @@ export default function LoginPage() {
               {tab === "enroll" ? (
                 <div className="mt-6">
                   {signedInAs ? (
-                    <div role="status" className="mb-4 rounded-md border border-background-300 bg-background-50 px-3 py-2.5 text-[13px] text-foreground-700">
+                    <div role="status" className="mb-4 rounded-md border border-background-300 bg-background-50 px-3 py-2.5 text-label text-foreground-700">
                       You are signed in{signedInAs.email ? ` as ${signedInAs.email}` : ""}.{" "}
                       <button type="button" className="font-semibold text-primary-700 underline" onClick={() => { const id = signedInAs.id; setSignedInAs(null); setChecking(true); void route(id); }}>Go to my account</button>
                       {" or "}
@@ -309,8 +309,8 @@ export default function LoginPage() {
                     </Field>
                     <div>
                       <div className="mb-1.5 flex items-center justify-between">
-                        <span className="text-[13px] font-medium text-foreground-800">Password <span className="text-primary-600">*</span></span>
-                        <Link to="/forgot-password" className="text-[13px] font-medium text-primary-700 hover:text-primary-800">Forgot password?</Link>
+                        <span className="text-label font-medium text-foreground-800">Password <span className="text-primary-600">*</span></span>
+                        <Link to="/forgot-password" className="text-label font-medium text-primary-700 hover:text-primary-800">Forgot password?</Link>
                       </div>
                       <div className="relative">
                         <TextInput type={show ? "text" : "password"} name="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" className="pr-10" aria-label="Password" />
@@ -321,12 +321,12 @@ export default function LoginPage() {
                     </div>
 
                     {error ? (
-                      <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">
+                      <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">
                         <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" /><span>{error}</span>
                       </div>
                     ) : null}
                     {info ? (
-                      <div className="flex items-start gap-2 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-[13px] text-secondary-900" role="status">
+                      <div className="flex items-start gap-2 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-label text-secondary-900" role="status">
                         <i className="ri-mail-check-line mt-0.5 text-base" aria-hidden="true" /><span>{info}</span>
                       </div>
                     ) : null}

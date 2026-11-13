@@ -97,7 +97,7 @@ function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; o
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="font-heading text-base font-semibold text-foreground-950">{item.title}</span>
-                  {item.note ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.id === "agent" ? "bg-amber-50 text-amber-900" : "bg-background-200 text-foreground-700"}`}>{item.note}</span> : null}
+                  {item.note ? <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${item.id === "agent" ? "bg-amber-50 text-amber-900" : "bg-background-200 text-foreground-700"}`}>{item.note}</span> : null}
                 </span>
                 <span className="mt-0.5 block text-sm text-foreground-600">{item.text}</span>
               </span>
@@ -109,7 +109,7 @@ function KindStep({ kind, onChange, onContinue, onSignIn }: { kind: EnrolKind; o
         })}
       </div>
       {kind === "staff" ? (
-        <div className="mt-5 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-[13px] text-secondary-900" role="status">
+        <div className="mt-5 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2.5 text-label text-secondary-900" role="status">
           Send your resume. An administrator reviews every staff application and, if we continue, emails you a private link for your details and documents.
         </div>
       ) : null}
@@ -158,7 +158,7 @@ function StepHeader({ step, kind, title, onBack }: { step: Step; kind: string; t
 
 function FormError({ text }: { text?: string }) {
   return text ? (
-    <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-[13px] text-primary-900" role="alert">
+    <div className="flex items-start gap-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">
       <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" /><span>{text}</span>
     </div>
   ) : null;
@@ -267,7 +267,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
       <div className="mt-6 space-y-4">
         <Field label="Email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="student" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
         <div>
-          <label htmlFor="enrol-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+          <label htmlFor="enrol-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="enrol-mobile" name="mobile" value={form.mobile} required placeholder="041 234 5678" />
           <Problem text={errors.mobile} />
         </div>
@@ -362,7 +362,7 @@ function AgentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDone:
         </div>
         <button type="button" onClick={() => setBusiness(null)} className="shrink-0 cursor-pointer text-sm font-medium text-primary-700 hover:text-primary-800">Change</button>
       </div>
-      <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900" role="status">
+      <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-label text-amber-900" role="status">
         <i className="ri-error-warning-line mt-0.5 text-base" aria-hidden="true" /><span>Agent accounts are reviewed by our team before you can sign in.</span>
       </div>
       <div className="mt-5">
@@ -376,7 +376,7 @@ function AgentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDone:
         <div className="grid grid-cols-2 gap-3">
           <Field label="Work email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="agent" context="public" serverError={emailError} autoComplete="email" /><Problem text={errors.email} /></Field>
           <div>
-            <label htmlFor="agent-enrol-phone" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Phone <span className="text-primary-600">*</span></label>
+            <label htmlFor="agent-enrol-phone" className="mb-1.5 block text-label font-medium text-foreground-800">Phone <span className="text-primary-600">*</span></label>
             <PhoneInput id="agent-enrol-phone" name="phone" value={form.phone} required placeholder="041 234 5678" />
             <Problem text={errors.phone} />
           </div>
@@ -506,12 +506,12 @@ function StaffStep({ onBack }: { onBack: () => void }) {
         </div>
         <Field label="Email" required><EmailField value={email} onChange={setEmail} kind="hr_staff" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" data-testid="staff-apply-email" /><Problem text={errors.email} /></Field>
         <div>
-          <label htmlFor="staff-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+          <label htmlFor="staff-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="staff-mobile" name="staff-mobile" value={phone} required placeholder="041 234 5678" />
           <Problem text={errors.phone} />
         </div>
         <div>
-          <label htmlFor="staff-resume" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Resume <span className="text-primary-600">*</span></label>
+          <label htmlFor="staff-resume" className="mb-1.5 block text-label font-medium text-foreground-800">Resume <span className="text-primary-600">*</span></label>
           <input id="staff-resume" type="file" accept={RESUME_ACCEPT} data-testid="staff-apply-resume"
             onChange={(e) => setResume(e.target.files?.[0] ?? null)}
             className="block w-full text-sm text-foreground-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-background-200 file:px-3 file:py-2 file:text-sm file:font-semibold" />

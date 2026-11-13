@@ -96,7 +96,7 @@ function PhoneCode({ create, onSignedIn, onCancel }: { create: boolean; onSigned
       {!sent ? (
         <form onSubmit={(e) => void send(e)} className="space-y-3" noValidate>
           <div>
-            <label htmlFor="quick-phone" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile number</label>
+            <label htmlFor="quick-phone" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile number</label>
             <PhoneInput id="quick-phone" name="quick-phone" value={phone} placeholder="041 234 5678" />
           </div>
           {error ? <p className="text-xs text-primary-700" role="alert">{error}</p> : null}
@@ -104,7 +104,7 @@ function PhoneCode({ create, onSignedIn, onCancel }: { create: boolean; onSigned
             <Button type="submit" className="flex-1" disabled={busy}>{busy ? "Sending…" : "Text me a code"}</Button>
             <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
           </div>
-          <p className="text-[11px] text-foreground-500">We send a 6-digit code by SMS. Standard message rates may apply.</p>
+          <p className="text-2xs text-foreground-500">We send a 6-digit code by SMS. Standard message rates may apply.</p>
         </form>
       ) : (
         <form onSubmit={(e) => void verify(e)} className="space-y-3" noValidate>

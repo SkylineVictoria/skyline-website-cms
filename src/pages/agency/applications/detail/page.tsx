@@ -226,7 +226,7 @@ export default function ApplicationDetailPage() {
             </h1>
             <StatusBadge status={application.status} />
             {application.isTest ? (
-              <span className="rounded-full bg-accent-100 px-2.5 py-1 text-[10px] font-semibold uppercase text-accent-900">
+              <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">
                 Test data
               </span>
             ) : null}

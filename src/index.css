@@ -4,10 +4,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ Design tokens (admin and website share them)
+   Colours are oklch triplets (used as oklch(var(--x) / alpha)); .dark swaps them. Sizes are rem so the user's own text size is
+   respected; headings are fluid with clamp() between a 375px and a 1920px wide screen. No zoom or transform scaling anywhere. */
 :root {
-  --font-heading: 'Sora', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-label: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* one font stack; Sora is the display face for headings only */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-body: var(--font-sans);
+  --font-label: var(--font-sans);
+  --font-heading: 'Sora', var(--font-sans);
+
+  /* type scale: fixed for running text, fluid (375px -> 1920px) for headings */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-label: 0.8125rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: clamp(1.0625rem, 1.0473rem + 0.0647vw, 1.125rem);
+  --text-xl: clamp(1.125rem, 1.0947rem + 0.1294vw, 1.25rem);
+  --text-2xl: clamp(1.25rem, 1.1893rem + 0.2589vw, 1.5rem);
+  --text-3xl: clamp(1.5rem, 1.409rem + 0.3883vw, 1.875rem);
+  --text-4xl: clamp(1.75rem, 1.6286rem + 0.5178vw, 2.25rem);
+  --text-5xl: clamp(2.125rem, 1.9126rem + 0.9061vw, 3rem);
+  --text-6xl: clamp(2.5rem, 2.1966rem + 1.2945vw, 3.75rem);
+  --text-7xl: clamp(2.75rem, 2.3252rem + 1.8123vw, 4.5rem);
+
+  /* spacing: Tailwind's 0.25rem steps, plus the page gutter and section rhythm (fluid) */
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem;
+  --gutter: clamp(1rem, 0.7573rem + 1.0356vw, 2rem);
+  --section-y: clamp(3rem, 2.2718rem + 3.1068vw, 6rem);
+  --section-y-sm: clamp(2rem, 1.5146rem + 2.0712vw, 4rem);
+  --container: 1240px;
+
+  /* radius */
+  --radius-xs: 0.125rem; --radius-sm: 0.25rem; --radius-md: 0.375rem; --radius-lg: 0.5rem; --radius-xl: 0.75rem; --radius-2xl: 1rem; --radius-card: 0.875rem;
+
+  /* borders and shadows (soft, neutral) */
+  --border-subtle: var(--background-200);
+  --border-strong: var(--background-300);
+  --shadow-color: 0.2 0.01 250;
+  --shadow-xs: 0 1px 2px oklch(var(--shadow-color) / 0.05);
+  --shadow-sm: 0 1px 2px oklch(var(--shadow-color) / 0.06), 0 1px 3px oklch(var(--shadow-color) / 0.06);
+  --shadow-md: 0 2px 4px -1px oklch(var(--shadow-color) / 0.06), 0 4px 10px -2px oklch(var(--shadow-color) / 0.08);
+  --shadow-lg: 0 4px 8px -2px oklch(var(--shadow-color) / 0.06), 0 12px 24px -6px oklch(var(--shadow-color) / 0.12);
+  --shadow-xl: 0 8px 16px -4px oklch(var(--shadow-color) / 0.08), 0 20px 40px -8px oklch(var(--shadow-color) / 0.16);
+  --shadow-2xl: 0 24px 56px -12px oklch(var(--shadow-color) / 0.28);
+
+  /* motion: 150-250 ms ease-out; switched off for reduced motion (below) */
+  --dur-fast: 150ms; --dur: 200ms; --dur-slow: 250ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* focus ring */
+  --focus-ring-color: var(--primary-500);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* component sizes (comfortable); the CMS's compact density overrides them on [data-density="compact"] */
+  --control-py: 0.5rem;
+  --control-px: 0.75rem;
+  --cell-py: 0.75rem;
+  --cell-px: 0.625rem;
+  --page-pad-y: 1.75rem;
+  --page-head-gap: 1.5rem;
+  --page-title: var(--text-2xl);
+
+  /* ink: the dark navy of the website's course and agent pages */
+  --ink: 0.276 0.058 249;
+  --ink-soft: 0.97 0.003 250;
 
   /* primary — Skyline orange */
   --primary-50: 0.972 0.019 62;
@@ -76,6 +139,9 @@
 }
 
 .dark {
+  --shadow-color: 0 0 0;
+  --ink: 0.88 0.03 249;
+  --ink-soft: 0.27 0.004 250;
   --primary-50: 0.242 0.062 34;
   --primary-100: 0.343 0.094 36;
   --primary-200: 0.412 0.115 38;
@@ -167,26 +233,30 @@
   }
 
   :focus-visible {
-    outline: 2px solid oklch(var(--primary-500));
-    outline-offset: 2px;
+    outline: var(--focus-ring-width) solid oklch(var(--focus-ring-color));
+    outline-offset: var(--focus-ring-offset);
+  }
+}
+
+/* Reduced motion: every transition and animation becomes instant. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
 @layer components {
+  /* One container for every website page: the same width and gutters everywhere. */
   .site-container {
     width: 100%;
-    max-width: 1240px;
+    max-width: calc(var(--container) + 2 * var(--gutter));
     margin-left: auto;
     margin-right: auto;
-    padding-left: 1rem;
-    padding-right: 1rem;
-  }
-
-  @media (min-width: 768px) {
-    .site-container {
-      padding-left: 1.5rem;
-      padding-right: 1.5rem;
-    }
+    padding-left: var(--gutter);
+    padding-right: var(--gutter);
   }
 }
 
@@ -454,7 +524,7 @@
 }
 .data-table > thead { background: oklch(var(--background-100)); color: oklch(var(--foreground-700)); font-size: .75rem; }
 .data-table > :is(thead, tbody, tfoot) > tr > :is(th, td) {
-  min-width: 0; padding: .75rem .625rem; white-space: normal;
+  min-width: 0; padding: var(--cell-py) var(--cell-px); white-space: normal;
   overflow-wrap: anywhere; vertical-align: middle;
 }
 .data-table > thead > tr > th { font-weight: 600; }

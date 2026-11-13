@@ -23,7 +23,7 @@ export default function ContactPage() {
         ]}
       />
       {bookingSrc ? (
-        <section className="bg-white py-8 md:py-12" aria-labelledby="booking-title">
+        <section className="bg-background-50 py-8 md:py-12" aria-labelledby="booking-title">
           <div className="site-container max-w-6xl">
             <div className="text-center">
               <h1 id="booking-title" className="font-heading text-3xl font-bold tracking-tight text-foreground-950 md:text-4xl">Book a call</h1>

@@ -242,7 +242,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                   <span className="inline-flex flex-col items-end gap-0.5">
                                     {/* Shown only; the status is changed on the Applications list or the application itself. */}
                                     <StatusBadge status={application.status} />
-                                    {disabled ? <span className="text-[11px] font-medium text-foreground-500"><i className="ri-lock-line" aria-hidden="true" /> Locked</span> : null}
+                                    {disabled ? <span className="text-2xs font-medium text-foreground-500"><i className="ri-lock-line" aria-hidden="true" /> Locked</span> : null}
                                   </span>
                                 </li>
                               ))}

@@ -44,7 +44,7 @@ export default function StudentMobilePrompt({ onSignOut }: { onSignOut: () => vo
           We need your mobile number to contact you about your application. Choose your country code, then enter the number.
         </p>
         <div className="mt-4">
-          <label htmlFor="student-mobile" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
+          <label htmlFor="student-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
           <PhoneInput id="student-mobile" name="student-mobile" required placeholder="041 234 5678" />
           {error ? <span className="mt-1 block text-xs text-primary-700" role="alert">{error}</span> : null}
         </div>

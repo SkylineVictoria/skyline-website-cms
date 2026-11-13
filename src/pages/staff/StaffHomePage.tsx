@@ -139,7 +139,7 @@ export default function StaffHomePage() {
                         <p className="truncate text-xs text-foreground-600">{d.filename}{d.expiryDate ? ` · expires ${new Date(`${d.expiryDate}T00:00:00`).toLocaleDateString()}` : ""}</p>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${d.status === "approved" ? TONE.ok : d.status === "rejected" ? TONE.expired : TONE.none}`}>{d.status === "approved" ? "Approved" : d.status === "rejected" ? "Rejected" : "In review"}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${d.status === "approved" ? TONE.ok : d.status === "rejected" ? TONE.expired : TONE.none}`}>{d.status === "approved" ? "Approved" : d.status === "rejected" ? "Rejected" : "In review"}</span>
                         <button type="button" onClick={() => void openDocument(d.id)} className="cursor-pointer text-sm font-semibold text-primary-700 hover:text-primary-800">View</button>
                       </div>
                     </li>
@@ -205,7 +205,7 @@ export default function StaffHomePage() {
                           <p className="truncate text-xs text-foreground-600">{d.filename}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${TONE[expiry.tone]}`} data-testid="my-hr-expiry">{expiry.label}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${TONE[expiry.tone]}`} data-testid="my-hr-expiry">{expiry.label}</span>
                           <button type="button" onClick={() => void open(d.storagePath)} className="cursor-pointer text-sm font-semibold text-primary-700 hover:text-primary-800">View</button>
                         </div>
                       </li>

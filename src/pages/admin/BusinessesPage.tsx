@@ -238,7 +238,7 @@ export default function BusinessesPage() {
                     </td>
                     <td>
                       <div className="flex flex-wrap justify-end gap-1.5">
-                        <Link to={`/admin/businesses/${row.id}`} className="inline-flex items-center rounded-md border border-background-300 px-2.5 py-1 text-[13px] font-medium text-foreground-800 hover:bg-background-100">Open</Link>
+                        <Link to={`/admin/businesses/${row.id}`} className="inline-flex items-center rounded-md border border-background-300 px-2.5 py-1 text-label font-medium text-foreground-800 hover:bg-background-100">Open</Link>
                       </div>
                     </td>
                   </tr>

@@ -20,7 +20,7 @@ import { acceptAttribute, type RenderField } from "@/lib/formFields";
 const inputClass =
   "w-full rounded-md border border-background-300 bg-background-50 px-3.5 py-2.5 text-sm text-foreground-950 placeholder:text-foreground-400 transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 
-const labelClass = "mb-1.5 block text-[13px] font-medium text-foreground-800";
+const labelClass = "mb-1.5 block text-label font-medium text-foreground-800";
 
 export default function FormFieldControl({
   field,
@@ -36,7 +36,7 @@ export default function FormFieldControl({
   if (field.type === "Section Heading") {
     return (
       <div className="border-t border-background-200 pt-3 first:border-none first:pt-0">
-        <p className="font-heading text-[13px] font-bold uppercase tracking-wide text-foreground-950">{field.label}</p>
+        <p className="font-heading text-label font-bold uppercase tracking-wide text-foreground-950">{field.label}</p>
         {field.help ? <p className="mt-1 text-xs text-foreground-500">{field.help}</p> : null}
       </div>
     );
@@ -53,7 +53,7 @@ export default function FormFieldControl({
   if (field.type === "Terms") {
     return (
       <div className="rounded-md border border-background-200 bg-background-50 p-4">
-        <p className="text-[13px] font-semibold text-foreground-800">{field.label}</p>
+        <p className="text-label font-semibold text-foreground-800">{field.label}</p>
         <ul className="mt-2 space-y-1.5">
           {(field.options.length ? field.options : ["Term 1"]).map((option, index) => (
             <li key={`${option}-${index}`} className="flex items-start gap-2 text-xs text-foreground-600">

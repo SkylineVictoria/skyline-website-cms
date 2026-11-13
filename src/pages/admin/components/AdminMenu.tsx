@@ -4,7 +4,7 @@ import { supabase } from '@/pages/admin/lib/supabase';
 import { useAuth } from '@/pages/admin/lib/authContext';
 import { menuActive, menuIcon, menuTree, type AdminMenuItem, type MenuNode } from '@/pages/admin/lib/adminMenu';
 
-const linkClass = 'mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors';
+const linkClass = 'mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-label font-medium transition-colors';
 function MenuEntry({ node, close }: { node: MenuNode; close: () => void }) {
   const { pathname } = useLocation();
   const active = menuActive(node, pathname);

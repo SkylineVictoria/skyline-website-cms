@@ -15,7 +15,7 @@ export default function MySigningDocuments({ className = "" }: { className?: str
     try { const { token } = await signingMine<{ token: string }>("token", document.recipient_id); window.location.assign(`/sign#t=${token}`); }
     catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); setBusy(""); }
   };
-  return <section className={`rounded-xl border border-background-300 bg-white p-5 ${className}`} data-testid="my-signing-documents">
+  return <section className={`rounded-xl border border-background-300 bg-background-50 p-5 ${className}`} data-testid="my-signing-documents">
     <h2 className="text-base font-semibold">Documents to sign</h2>
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     <ul className="mt-2 divide-y divide-background-200 text-sm">{documents.map((d) => { const waiting = d.my_state !== "signed" && d.status !== "signed";

@@ -424,14 +424,14 @@ function Wizard({ view, token, onChange, onError }: Props) {
         <div className="space-y-6">
           <StepHeading title={current.title} subtitle={current.subtitle} />
           <div>
-            <p className="mb-2 text-[13px] font-medium text-foreground-800">Are you an Australian citizen? <span className="text-primary-600">*</span></p>
+            <p className="mb-2 text-label font-medium text-foreground-800">Are you an Australian citizen? <span className="text-primary-600">*</span></p>
             <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Australian citizen">
               <Choice selected={citizen === true} onClick={() => edit("is_australian_citizen", true, true)} title="Yes" text="No visa or English test needed." testId="staff-citizen-yes" />
               <Choice selected={citizen === false} onClick={() => edit("is_australian_citizen", false, true)} title="No" text="You will also upload your visa and English test result." testId="staff-citizen-no" />
             </div>
             <FieldError text={errors.is_australian_citizen} />
           </div>
-          <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-[13px] text-foreground-800" role="status" data-testid="staff-required-summary">
+          <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-label text-foreground-800" role="status" data-testid="staff-required-summary">
             {citizen === null ? "Answer the question above: it decides whether a visa and an English test result are needed. " : ""}
             <strong>Required for you:</strong> {requiredKinds.map((k) => k.label).join(", ")} ({uploadedRequired} of {requiredKinds.length} uploaded).
             {kinds.some((k) => !k.required) ? <> <strong>Optional:</strong> {kinds.filter((k) => !k.required).map((k) => k.label).join(", ")}.</> : null}
@@ -448,7 +448,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
       return (
         <div className="space-y-6">
           <StepHeading title={current.title} subtitle={current.subtitle} />
-          {stillReading.length ? <p className="flex items-center gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-[13px] text-foreground-800" role="status"><i className="ri-loader-4-line animate-spin text-primary-600" aria-hidden="true" />Reading {stillReading.length === 1 ? "a document" : `${stillReading.length} documents`}. Details appear here as they are read; you can also type them.</p> : null}
+          {stillReading.length ? <p className="flex items-center gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-label text-foreground-800" role="status"><i className="ri-loader-4-line animate-spin text-primary-600" aria-hidden="true" />Reading {stillReading.length === 1 ? "a document" : `${stillReading.length} documents`}. Details appear here as they are read; you can also type them.</p> : null}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {field("first_name", "First name", { source: true })}
             {field("middle_name", "Middle name", { required: false, source: true })}
@@ -502,7 +502,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
               <FieldError text={errors.phone} />
             </div>
             <div>
-              <p className="mb-1.5 block text-[13px] font-medium text-foreground-800">Email</p>
+              <p className="mb-1.5 block text-label font-medium text-foreground-800">Email</p>
               <p className="rounded-md border border-background-200 bg-background-100 px-3.5 py-2.5 text-sm text-foreground-700" data-testid="staff-email">{view.profile.email}</p>
               <p className="mt-1 text-xs text-foreground-500">To change your email, contact us.</p>
             </div>
@@ -524,7 +524,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
       return (
         <div className="space-y-5">
           <StepHeading title={current.title} subtitle={current.subtitle} />
-          <p className="flex items-start gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-[13px] text-foreground-800">
+          <p className="flex items-start gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-label text-foreground-800">
             <i className="ri-lock-2-line mt-0.5 text-primary-600" aria-hidden="true" />
             Your bank details are stored encrypted. Only you (through this private link) and Skyline administrators can see them, and every time an administrator opens them it is recorded.
           </p>
@@ -571,7 +571,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
       };
       const yesNo = (name: "tax_free_threshold" | "study_loan", label: string, hint: string) => (
         <div>
-          <p className="mb-1 text-[13px] font-medium text-foreground-800">{label} <span className="text-primary-600">*</span></p>
+          <p className="mb-1 text-label font-medium text-foreground-800">{label} <span className="text-primary-600">*</span></p>
           <p className="mb-2 text-xs text-foreground-600">{hint}</p>
           <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={label}>
             <Choice selected={details[name] === "yes"} onClick={() => pick(name, "yes")} title="Yes" testId={`staff-${name}-yes`} />
@@ -585,14 +585,14 @@ function Wizard({ view, token, onChange, onError }: Props) {
       return (
         <div className="space-y-6">
           <StepHeading title={current.title} subtitle={current.subtitle} />
-          <p className="flex items-start gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-[13px] text-foreground-800" data-testid="staff-tax-note">
+          <p className="flex items-start gap-2 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-label text-foreground-800" data-testid="staff-tax-note">
             <i className="ri-shield-check-line mt-0.5 text-primary-600" aria-hidden="true" />
             We do not ask for your tax file number (TFN) here. Xero, our payroll system, will ask you for it securely once you start. The answers below go on your tax and super declarations.
           </p>
           <div className="space-y-5">
             <p className="font-heading text-sm font-semibold text-foreground-950">Tax</p>
             <div>
-              <p className="mb-2 text-[13px] font-medium text-foreground-800">Your residency status for tax purposes <span className="text-primary-600">*</span></p>
+              <p className="mb-2 text-label font-medium text-foreground-800">Your residency status for tax purposes <span className="text-primary-600">*</span></p>
               <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Residency status for tax purposes">
                 {TAX_RESIDENCY.map((value) => <Choice key={value} selected={details.tax_residency === value} onClick={() => pick("tax_residency", value)} title={TAX_RESIDENCY_LABEL[value]} text={RESIDENCY_HINT[value]} testId={`staff-tax_residency-${value}`} />)}
               </div>
@@ -604,7 +604,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
           <div className="space-y-4">
             <p className="font-heading text-sm font-semibold text-foreground-950">Superannuation</p>
             <div>
-              <p className="mb-2 text-[13px] font-medium text-foreground-800">Where should your super go? <span className="text-primary-600">*</span></p>
+              <p className="mb-2 text-label font-medium text-foreground-800">Where should your super go? <span className="text-primary-600">*</span></p>
               <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Super fund">
                 {SUPER_CHOICE.map((value) => <Choice key={value} selected={details.super_choice === value} onClick={() => pickSuper(value)} title={SUPER_CHOICE_LABEL[value]} text={SUPER_HINT[value]} testId={`staff-super_choice-${value}`} />)}
               </div>

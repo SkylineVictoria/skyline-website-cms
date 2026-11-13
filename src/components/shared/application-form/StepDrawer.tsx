@@ -77,7 +77,7 @@ export default function StepDrawer({ stages, current, onSelectStage, onSelectSec
                         <button
                           type="button"
                           onClick={() => { onClose(); onSelectSection(section.index); }}
-                          className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground-700 transition-colors hover:bg-background-100"
+                          className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-label text-foreground-700 transition-colors hover:bg-background-100"
                         >
                           <StepMark state={section.state} small />
                           <span className="min-w-0 flex-1 truncate">{section.title}</span>

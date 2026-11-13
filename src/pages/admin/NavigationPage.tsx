@@ -150,7 +150,7 @@ export default function NavigationPage() {
             <SiteHeaderView preview navigation={previewNavigation(items)} settings={publicLikeSettings(data.settings)} />
           </div>
         </div>
-        <p className="border-t border-background-200 px-5 py-2 text-[11px] text-foreground-500">The desktop menu appears at 1024 px and wider; below that visitors get the mobile menu. Course mega-menus and page links are not followed in the preview.</p>
+        <p className="border-t border-background-200 px-5 py-2 text-2xs text-foreground-500">The desktop menu appears at 1024 px and wider; below that visitors get the mobile menu. Course mega-menus and page links are not followed in the preview.</p>
       </Card>
 
       <Card className="p-5">
@@ -172,7 +172,7 @@ export default function NavigationPage() {
                 </div>
                 <div>
                   <TextInput aria-label={`Menu label ${i + 1}`} value={item.label} maxLength={NAV_LIMITS.maxLabelLength} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Menu label" />
-                  <span className="mt-0.5 block text-right text-[11px] text-foreground-400">{item.label.length}/{NAV_LIMITS.maxLabelLength}</span>
+                  <span className="mt-0.5 block text-right text-2xs text-foreground-400">{item.label.length}/{NAV_LIMITS.maxLabelLength}</span>
                 </div>
                 <div>
                   <TextInput aria-label={`Menu link ${i + 1}`} value={item.to} onChange={(e) => setItem(i, { to: e.target.value })} placeholder="Link (e.g. /about-us)" />
@@ -208,7 +208,7 @@ export default function NavigationPage() {
                 type="button"
                 disabled={item.children.length >= NAV_LIMITS.maxChildren}
                 onClick={() => setItem(i, { children: [...item.children, { id: `child-${Date.now()}`, label: "", to: "", external: false, visible: true }] })}
-                className="mt-3 inline-flex cursor-pointer items-center gap-1 text-[13px] font-medium text-primary-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                className="mt-3 inline-flex cursor-pointer items-center gap-1 text-label font-medium text-primary-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
               >
                 <i className="ri-add-line" aria-hidden="true" />
                 {item.children.length >= NAV_LIMITS.maxChildren ? `Dropdown full (${NAV_LIMITS.maxChildren} items)` : "Add dropdown item"}

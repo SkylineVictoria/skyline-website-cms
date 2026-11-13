@@ -410,7 +410,7 @@ export default function NewApplicationPage() {
           {withAgency ? (
             <div className="mt-5 space-y-4">
               <div>
-                <label htmlFor="student-business" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Business <span className="text-primary-600">*</span></label>
+                <label htmlFor="student-business" className="mb-1.5 block text-label font-medium text-foreground-800">Business <span className="text-primary-600">*</span></label>
                 <select id="student-business" className={selectClass} value={chosenBusinessId} disabled={creating}
                   onChange={(e) => { setChosenBusinessId(e.target.value); setChosenAgentId(""); }}>
                   <option value="">Select your agency</option>
@@ -419,7 +419,7 @@ export default function NewApplicationPage() {
                 {agencyChoices.length === 0 ? <p className="mt-1 text-xs text-foreground-500">No agencies are registered yet. Choose No to apply by yourself.</p> : null}
               </div>
               <div>
-                <label htmlFor="student-agent" className="mb-1.5 block text-[13px] font-medium text-foreground-800">Agent <span className="text-primary-600">*</span></label>
+                <label htmlFor="student-agent" className="mb-1.5 block text-label font-medium text-foreground-800">Agent <span className="text-primary-600">*</span></label>
                 <select id="student-agent" className={selectClass} value={chosenAgentId} disabled={creating || !chosenBusinessId || agentsLoading}
                   onChange={(e) => setChosenAgentId(e.target.value)}>
                   <option value="">{!chosenBusinessId ? "Choose the business first" : agentsLoading ? "Loading agents…" : agentChoices.length ? "Select your agent" : "This business has no active agents"}</option>
@@ -491,7 +491,7 @@ export default function NewApplicationPage() {
             <div>
               {business ? (
                 <>
-                  <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Business</p>
+                  <p className="mb-1.5 text-label font-medium text-foreground-800">Business</p>
                   <div className="flex items-center justify-between gap-3 rounded-md border border-background-300 bg-background-50 px-3 py-2.5">
                     <span className="min-w-0">
                       <b className="block truncate text-sm text-foreground-900">{business.name}</b>
@@ -513,7 +513,7 @@ export default function NewApplicationPage() {
             <div>
               {agent ? (
                 <>
-                  <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Agent</p>
+                  <p className="mb-1.5 text-label font-medium text-foreground-800">Agent</p>
                   <div className="flex items-center justify-between gap-3 rounded-md border border-background-300 bg-background-50 px-3 py-2.5">
                     <span className="min-w-0">
                       <span className="flex items-center gap-2"><b className="truncate text-sm text-foreground-900">{agent.name}</b><AgentStatusBadge status={agent.status} /></span>

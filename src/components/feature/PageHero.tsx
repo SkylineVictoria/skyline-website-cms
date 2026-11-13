@@ -4,7 +4,7 @@ type PageHeroProps = { title: string; breadcrumb?: string; lead?: string };
 
 export default function PageHero({ title, breadcrumb, lead }: PageHeroProps) {
   return (
-    <section className="border-b-4 border-primary-600 bg-[#102b46] text-white">
+    <section className="border-b-4 border-primary-600 bg-ink text-white">
       <div className="site-container py-10 md:py-14">
         <nav aria-label="Breadcrumb" className="mb-5 flex flex-wrap gap-2 text-xs text-white/70">
           <Link to="/" className="hover:text-white hover:underline">Home</Link>

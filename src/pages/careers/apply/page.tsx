@@ -25,7 +25,7 @@ function Card({ children }: { children: ReactNode }) {
 const button = "rounded-md bg-primary-500 px-4 py-2.5 text-center text-sm font-semibold text-background-50 hover:bg-primary-600 disabled:opacity-60";
 const outline = "rounded-md border border-background-300 px-4 py-2.5 text-center text-sm font-semibold text-foreground-800 hover:bg-background-100";
 const input = "w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900 outline-none focus:border-primary-500";
-const label = "mb-1.5 block text-[13px] font-medium text-foreground-800";
+const label = "mb-1.5 block text-label font-medium text-foreground-800";
 const problem = (text?: string) => (text ? <span className="mt-1 block text-xs text-primary-700" role="alert">{text}</span> : null);
 
 export default function CareerApplyPage() {

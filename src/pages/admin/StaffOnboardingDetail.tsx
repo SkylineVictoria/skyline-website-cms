@@ -87,7 +87,7 @@ function ExtractedDetails({ doc }: { doc: StaffDocument }) {
   if (doc.extractionStatus === "done" && entries.length) {
     return (
       <div className="mt-2 rounded-md bg-background-100 px-3 py-2" data-testid={`staff-doc-extracted-${doc.id}`}>
-        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-foreground-500">Read from the document</p>
+        <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-foreground-500">Read from the document</p>
         <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
           {entries.map(([key, value]) => (
             <div key={key} className="flex justify-between gap-3"><dt className="text-foreground-500">{EXTRACTED_LABEL[key] ?? key.replace(/_/g, " ")}</dt><dd className="min-w-0 break-words text-right font-medium text-foreground-900">{String(value)}</dd></div>

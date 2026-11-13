@@ -217,7 +217,7 @@ export default function UsersPage() {
       <DraftResume items={slot.pending.map((d) => ({ id: d.id, label: d.id === "new" ? "New user invitation (not sent yet)" : `User: ${users.find((u) => u.id === d.id)?.name ?? d.id}` }))} onResume={resumeDraft} onDiscard={slot.dropPending} />
 
       {readOnly ? (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-primary-200 bg-primary-50 px-4 py-3 text-[13px] text-primary-900">
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-primary-200 bg-primary-50 px-4 py-3 text-label text-primary-900">
           <i className="ri-lock-line" aria-hidden="true" />
           Only Administrators can manage users. You can view this page in read-only mode.
         </div>

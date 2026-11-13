@@ -42,8 +42,8 @@ export function Button({
   return (
     <button
       type="button"
-      className={`inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-        size === "sm" ? "px-3 py-1.5 text-[13px]" : "px-4 py-2 text-sm"
+      className={`inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-colors duration-fast ease-out disabled:cursor-not-allowed disabled:opacity-50 ${
+        size === "sm" ? "px-3 py-1.5 text-label" : "px-4 py-[var(--control-py)] text-sm"
       } ${variantClass[variant]} ${className}`}
       {...rest}
     >
@@ -80,12 +80,12 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-4 border-b border-background-200 pb-5 lg:flex-row lg:items-end lg:justify-between">
+    <div className="mb-[var(--page-head-gap)] flex flex-col gap-3 border-b border-background-200 pb-[calc(var(--page-head-gap)*0.8)] lg:flex-row lg:items-end lg:justify-between">
       <div>
         {breadcrumb ? (
           <p className="mb-1 text-xs font-medium uppercase tracking-wide text-foreground-500">{breadcrumb}</p>
         ) : null}
-        <h1 className="font-heading text-2xl font-bold text-foreground-950">{title}{titleSuffix}</h1>
+        <h1 className="font-heading text-[length:var(--page-title)] font-bold leading-tight text-foreground-950">{title}{titleSuffix}</h1>
         {description ? <p className="mt-1.5 max-w-2xl text-sm text-foreground-600">{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -137,7 +137,7 @@ export function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-[13px] font-medium text-foreground-800">
+      <span className="mb-1.5 block text-label font-medium text-foreground-800">
         {label}
         {required ? <span className="text-primary-600"> *</span> : null}
       </span>
@@ -148,7 +148,7 @@ export function Field({
 }
 
 const inputBase =
-  "w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900 outline-none transition-colors placeholder:text-foreground-400 focus:border-primary-400 focus:ring-2 focus:ring-primary-100";
+  "w-full rounded-md border border-background-300 bg-background-50 px-[var(--control-px)] py-[var(--control-py)] text-sm text-foreground-900 outline-none transition-colors duration-fast ease-out placeholder:text-foreground-400 focus:border-primary-400 focus:ring-2 focus:ring-primary-100";
 
 export function TextInput({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={`${inputBase} ${className}`} {...rest} />;
@@ -212,7 +212,7 @@ export function MediaUrlInput({
 
   return (
     <div>
-      <span className="mb-1.5 block text-[13px] font-medium text-foreground-800">{label}</span>
+      <span className="mb-1.5 block text-label font-medium text-foreground-800">{label}</span>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <i className="ri-link absolute left-3 top-1/2 -translate-y-1/2 text-foreground-400" aria-hidden="true" />
@@ -314,7 +314,7 @@ export function StatCard({ label, value, icon, hint }: { label: string; value: s
     <Card className="p-4">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-[13px] font-medium text-foreground-500">{label}</p>
+          <p className="text-label font-medium text-foreground-500">{label}</p>
           <p className="mt-1.5 font-heading text-2xl font-bold text-foreground-950">{value}</p>
           {hint ? <p className="mt-1 text-xs text-foreground-500">{hint}</p> : null}
         </div>
@@ -344,7 +344,7 @@ export function SectionTabs({
           key={t.id}
           type="button"
           onClick={() => onChange(t.id)}
-          className={`inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+          className={`inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-label font-medium transition-colors ${
             active === t.id
               ? "border-primary-500 bg-primary-500 text-background-50"
               : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"
@@ -384,7 +384,7 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-foreground-950/40" onClick={onClose} aria-hidden="true" />
-      <div className={`relative w-full ${width} rounded-card border border-background-200 bg-background-50${fill ? " flex h-[92vh] flex-col" : ""}`}>
+      <div className={`modal-in relative w-full ${width} rounded-card border border-background-200 bg-background-50 shadow-xl${fill ? " flex h-[92vh] flex-col" : ""}`}>
         <div className="flex shrink-0 items-center justify-between border-b border-background-200 px-5 py-3.5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">{title}</h2>
           <button
@@ -518,7 +518,7 @@ export function AdminError({ message, onRetry }: { message?: string; onRetry: ()
 
 export function InlineLoader({ label = "Saving…" }: { label?: string }) {
   return (
-    <span className="inline-flex items-center gap-2 text-[13px] text-foreground-500">
+    <span className="inline-flex items-center gap-2 text-label text-foreground-500">
       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
       {label}
     </span>

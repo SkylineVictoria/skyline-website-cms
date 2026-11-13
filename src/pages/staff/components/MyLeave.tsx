@@ -71,7 +71,7 @@ export default function MyLeave() {
                 <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm" data-testid={`my-leave-request-${r.id}`}>
                   <span className="text-foreground-800">{r.leaveTypeName}: {fmtDate(r.startDate)}{r.endDate !== r.startDate ? ` – ${fmtDate(r.endDate)}` : ""} · {hoursLabel(r.hours)}{r.decisionNote ? <span className="block text-xs text-foreground-500">{r.decisionNote}</span> : null}</span>
                   <span className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${TONE[r.status]}`} data-testid={`my-leave-status-${r.id}`}>{LEAVE_STATUS_LABEL[r.status]}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${TONE[r.status]}`} data-testid={`my-leave-status-${r.id}`}>{LEAVE_STATUS_LABEL[r.status]}</span>
                     {r.status === "pending" || (r.status === "approved" && r.startDate > new Date().toISOString().slice(0, 10)) ? <button type="button" className="cursor-pointer text-xs font-semibold text-primary-700 hover:underline" disabled={busy} onClick={() => void cancel(r.id)} data-testid={`my-leave-cancel-${r.id}`}>Cancel</button> : null}
                   </span>
                 </li>

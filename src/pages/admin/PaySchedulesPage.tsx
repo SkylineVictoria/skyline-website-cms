@@ -129,7 +129,7 @@ function SettingsCard({ settings, onSaved }: { settings: HrSettings; onSaved: (s
         <div className="flex items-end pb-2"><Toggle label="Breaks are paid" checked={form.breaksPaid} onChange={(v) => setForm({ ...form, breaksPaid: v })} /></div>
       </div>
       <div className="mt-3">
-        <span className="mb-1.5 block text-[13px] font-medium text-foreground-800">Usual work days</span>
+        <span className="mb-1.5 block text-label font-medium text-foreground-800">Usual work days</span>
         <div className="flex flex-wrap gap-2">{[1, 2, 3, 4, 5, 6, 7].map((d) => <label key={d} className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={form.usualWorkDays.includes(d)} onChange={() => toggleDay(d)} /> {WEEKDAY_SHORT[d]}</label>)}</div>
       </div>
       {error ? <p role="alert" className={`mt-3 ${ALERT}`}>{error}</p> : null}

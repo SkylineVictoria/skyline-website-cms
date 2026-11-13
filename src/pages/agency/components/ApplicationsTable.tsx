@@ -297,7 +297,7 @@ export default function ApplicationsTable({
                           {row.reference || "\u2014"}
                         </Link>
                         {row.isTest ? (
-                          <span className="ml-2 rounded-full bg-accent-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-accent-900">
+                          <span className="ml-2 rounded-full bg-accent-100 px-2 py-0.5 text-2xs font-semibold uppercase text-accent-900">
                             Test
                           </span>
                         ) : null}

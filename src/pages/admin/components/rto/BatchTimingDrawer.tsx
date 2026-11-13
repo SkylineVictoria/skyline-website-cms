@@ -145,7 +145,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
 
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[13px] font-medium text-foreground-800">Days and times</p>
+          <p className="text-label font-medium text-foreground-800">Days and times</p>
           <div className="flex flex-wrap gap-1.5">
             <div className="relative">
               <Button size="sm" variant="outline" icon="ri-calendar-check-line" disabled={!timings.length}

@@ -109,7 +109,7 @@ export default function SearchPick({
 
   return (
     <div ref={boxRef} className="relative">
-      <label htmlFor={id} className="mb-1.5 block text-[13px] font-medium text-foreground-800">{label}</label>
+      <label htmlFor={id} className="mb-1.5 block text-label font-medium text-foreground-800">{label}</label>
       <div className="relative">
         <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-foreground-400" aria-hidden="true" />
         <input

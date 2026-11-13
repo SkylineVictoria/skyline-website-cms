@@ -58,7 +58,7 @@ export default function StaffCaptcha({ onToken, resetKey = 0 }: { onToken: (toke
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
-  if (!SITE_KEY) return <p role="alert" className="text-[13px] text-primary-900">Staff applications are not available right now. Please try again later.</p>;
+  if (!SITE_KEY) return <p role="alert" className="text-label text-primary-900">Staff applications are not available right now. Please try again later.</p>;
   if (SITE_KEY === CAPTCHA_LOCAL_MOCK) {
     return (
       <label className="flex items-center gap-2 rounded-md border border-dashed border-background-400 px-3 py-2 text-sm text-foreground-700">
@@ -71,7 +71,7 @@ export default function StaffCaptcha({ onToken, resetKey = 0 }: { onToken: (toke
   return (
     <div>
       <div ref={box} />
-      {failed ? <p role="alert" className="mt-1 text-[13px] text-primary-900">The security check could not load. Refresh the page and try again.</p> : null}
+      {failed ? <p role="alert" className="mt-1 text-label text-primary-900">The security check could not load. Refresh the page and try again.</p> : null}
     </div>
   );
 }

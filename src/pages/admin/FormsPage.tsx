@@ -49,7 +49,7 @@ export default function FormsPage() {
               <StatusBadge status={f.status} />
             </div>
             <h2 className="mt-3 font-heading text-base font-semibold text-foreground-950">{f.name}</h2>
-            <p className="mt-1 flex-1 text-[13px] text-foreground-600">{f.description}</p>
+            <p className="mt-1 flex-1 text-label text-foreground-600">{f.description}</p>
             <div className="mt-4 flex items-center justify-between border-t border-background-200 pt-3">
               <Badge tone="secondary">
                 <i className="ri-list-check-2" aria-hidden="true" />
@@ -78,7 +78,7 @@ export default function FormsPage() {
                 )}
                 <Link
                   to={`/admin/forms/${f.id}`}
-                  className="inline-flex items-center gap-1 text-[13px] font-medium text-primary-600 hover:underline"
+                  className="inline-flex items-center gap-1 text-label font-medium text-primary-600 hover:underline"
                 >
                   Edit form
                   <i className="ri-arrow-right-line" aria-hidden="true" />

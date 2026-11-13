@@ -87,7 +87,7 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
             onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
         </Field>
         <div>
-          <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
+          <p className="mb-1.5 text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
           <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "student_mobile") setMobile(target.value); }}>
             <PhoneInput key={student?.id ?? "none"} id="edit-student-mobile" name="student_mobile" value={mobile} required locked={busy} placeholder="041 234 5678" />
           </div>

@@ -176,7 +176,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
             {recipient ? (
               <>
                 <p className="mt-1 text-sm text-foreground-900">
-                  <span className="mr-1.5 rounded-full bg-background-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-foreground-700 ring-1 ring-background-200">{recipient.kind === "agent" ? "Agent" : "Student"}</span>
+                  <span className="mr-1.5 rounded-full bg-background-50 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-foreground-700 ring-1 ring-background-200">{recipient.kind === "agent" ? "Agent" : "Student"}</span>
                   {recipient.name || "Unnamed"} <span className="text-foreground-500">&lt;{recipient.email || "no email"}&gt;</span>
                 </p>
                 <p className="mt-0.5 text-xs text-foreground-500">{recipient.reason}.</p>
@@ -251,11 +251,11 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                             <label htmlFor={id} className="text-sm font-medium text-foreground-900">{label}{variable.required ? <span className="text-red-600" aria-hidden="true"> *</span> : <span className="ml-1 text-xs font-normal text-foreground-500">optional</span>}</label>
                             {done ? <i className="ri-check-line text-emerald-700" aria-label="Filled" /> : null}
                           </div>
-                          <p className="mb-1.5 text-[11px] text-foreground-500">From {flat[key]?.source ?? variable.source}</p>
+                          <p className="mb-1.5 text-2xs text-foreground-500">From {flat[key]?.source ?? variable.source}</p>
                           {variable.inputType === "textarea" ? <textarea rows={2} {...inputProps} className={INPUT} />
                             : <input type={variable.inputType === "date" ? "date" : variable.inputType === "email" ? "email" : variable.inputType === "tel" ? "tel" : "text"} inputMode={variable.inputType === "money" ? "decimal" : undefined}
                                 placeholder={variable.inputType === "money" ? "e.g. 14500.00" : variable.sample} {...inputProps} className={INPUT} />}
-                          {entry.input.trim() && entry.mode !== "blank" && variable.format !== "text" ? <p className="mt-1 text-[11px] text-foreground-600">Prints as: {formatTyped(variable, entry.input, dateFormat)}</p> : null}
+                          {entry.input.trim() && entry.mode !== "blank" && variable.format !== "text" ? <p className="mt-1 text-2xs text-foreground-600">Prints as: {formatTyped(variable, entry.input, dateFormat)}</p> : null}
                           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                             <span className="text-foreground-600">{entry.input.trim() && entry.mode === "letter" ? "Used for this letter only (recorded)." : ""}</span>
                             {variable.editableSource ? (
@@ -295,7 +295,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                   </button>
                   {bodyEdit !== null ? (
                     <div className="mt-2">
-                      <p className="mb-1 text-[11px] text-foreground-600">Changes apply to this letter only; the template stays as it is.</p>
+                      <p className="mb-1 text-2xs text-foreground-600">Changes apply to this letter only; the template stays as it is.</p>
                       <RichTextEditor mode="document" value={bodyEdit} onChange={setBodyEdit} letterVariables={registry ?? []} minHeight={200} label="Wording of this letter" testId="offer-wording-editor" />
                     </div>
                   ) : null}

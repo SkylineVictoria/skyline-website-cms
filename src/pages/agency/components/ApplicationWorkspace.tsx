@@ -1450,7 +1450,7 @@ export default function ApplicationWorkspace({
     const source = documentFields.has(name) && !editedFields.has(name) ? attachments.find((document) => document.id === documentFields.get(name))?.filename : undefined;
     return (
       <span
-        className={`text-[10px] font-semibold normal-case ${expiryTone(expiry.status)}`}
+        className={`text-2xs font-semibold normal-case ${expiryTone(expiry.status)}`}
         title={`${expiryTooltip(expiry)}${type === "english" ? " (valid 2 years from the test date)" : ""}${source ? `. Source: ${source}` : ""}`}
       >
         {expiryLabel(expiry)}
@@ -1762,7 +1762,7 @@ export default function ApplicationWorkspace({
             </div>
             <ul className="space-y-0.5">
               {qualifications.map((item, index) => (
-                <li key={`${qualificationTitle(item)}-${index}`} className="truncate text-[13px] text-foreground-700">
+                <li key={`${qualificationTitle(item)}-${index}`} className="truncate text-label text-foreground-700">
                   <span className="font-medium text-foreground-900">{qualificationTitle(item)}</span>
                   {qualificationDetail(item) ? <span> &middot; {qualificationDetail(item)}</span> : null}
                   {item.documentIds.length > 0 ? (

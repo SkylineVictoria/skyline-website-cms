@@ -57,7 +57,7 @@ export default function AdminLayout() {
         </span>
         <div className="leading-tight">
           <p className="font-heading text-sm font-bold text-foreground-950">{tenant ? `${data.settings.shortName || data.settings.name} CMS` : "Skyline CMS"}</p>
-          <p className="text-[11px] text-foreground-500">Website Admin</p>
+          <p className="text-2xs text-foreground-500">Website Admin</p>
         </div>
       </div>
       <AdminMenu close={() => setMenuOpen(false)} />
@@ -102,7 +102,7 @@ export default function AdminLayout() {
               <span role="status" title={connection.label} aria-label={connection.label} className="flex h-5 w-5 items-center justify-center" tabIndex={0}>
                 <span className={`h-2.5 w-2.5 rounded-full ${connection.tone}`} />
               </span>
-              <div className="hidden items-center gap-2 text-[13px] text-foreground-500 sm:flex">
+              <div className="hidden items-center gap-2 text-label text-foreground-500 sm:flex">
                 <i className="ri-shield-check-line text-primary-500" aria-hidden="true" />
                 <span>{data.settings.shortName} content management</span>
               </div>
@@ -114,19 +114,19 @@ export default function AdminLayout() {
                 onClick={() => setUserMenu((v) => !v)}
                 className="flex cursor-pointer items-center gap-2.5 rounded-md border border-background-200 px-2.5 py-1.5 hover:bg-background-100"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-500 text-[11px] font-semibold text-background-50">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-500 text-2xs font-semibold text-background-50">
                   {initials(user.name)}
                 </span>
                 <span className="hidden text-left leading-tight sm:block">
-                  <span className="block text-[13px] font-medium text-foreground-900">{user.name}</span>
-                  <span className="block text-[11px] text-foreground-500">{user.role}</span>
+                  <span className="block text-label font-medium text-foreground-900">{user.name}</span>
+                  <span className="block text-2xs text-foreground-500">{user.role}</span>
                 </span>
                 <i className="ri-arrow-down-s-line text-foreground-500" aria-hidden="true" />
               </button>
               {userMenu ? (
                 <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-md border border-background-200 bg-background-50 py-1.5">
                   <div className="border-b border-background-200 px-3 py-2">
-                    <p className="text-[13px] font-medium text-foreground-900">{user.name}</p>
+                    <p className="text-label font-medium text-foreground-900">{user.name}</p>
                     <p className="truncate text-xs text-foreground-500">{user.email}</p>
                   </div>
                   <button
@@ -135,7 +135,7 @@ export default function AdminLayout() {
                       setUserMenu(false);
                       logout();
                     }}
-                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-[13px] text-foreground-700 hover:bg-background-100"
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-label text-foreground-700 hover:bg-background-100"
                   >
                     <i className="ri-logout-box-r-line text-base" aria-hidden="true" />
                     Sign out
@@ -146,10 +146,10 @@ export default function AdminLayout() {
           </header>
 
           {showBanner ? (
-            <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-900 md:px-6">
+            <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2.5 text-label text-red-900 md:px-6">
               <i className="ri-error-warning-line text-base" aria-hidden="true" />
               <span className="flex-1">{problem}</span>
-              {online ? <button type="button" onClick={reload} className="cursor-pointer rounded border border-red-300 bg-white px-2.5 py-1 font-medium hover:bg-red-100">Retry</button> : null}
+              {online ? <button type="button" onClick={reload} className="cursor-pointer rounded border border-red-300 bg-background-50 px-2.5 py-1 font-medium hover:bg-red-100">Retry</button> : null}
               <button type="button" aria-label="Dismiss" onClick={() => setDismissed(problem)} className="flex h-6 w-6 cursor-pointer items-center justify-center rounded hover:bg-red-100"><i className="ri-close-line" aria-hidden="true" /></button>
             </div>
           ) : null}

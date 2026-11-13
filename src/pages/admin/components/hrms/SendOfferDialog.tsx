@@ -175,7 +175,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
             <p className="text-xs text-foreground-600">This is the PDF that will be sent: the same letterhead, fonts and header as the final letter.</p>
             {pdfUrl ? <iframe title="Offer letter preview" src={pdfUrl} className="h-[60vh] w-full rounded-md border border-background-300 bg-white" /> : null}
             <details className="rounded-md border border-background-200 bg-background-50 px-3 py-2">
-              <summary className="cursor-pointer text-[13px] font-medium text-foreground-800">Text of the letter</summary>
+              <summary className="cursor-pointer text-label font-medium text-foreground-800">Text of the letter</summary>
               <div className={`mt-2 ${TEMPLATE_PROSE}`} data-testid="offer-letter-preview" dangerouslySetInnerHTML={{ __html: preview.html }} />
             </details>
           </div>
@@ -230,7 +230,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
             {mailGaps.length ? <p role="alert" className={ALERT} data-testid="offer-email-missing">The email template needs <strong>{placeholderLabels(mailGaps)}</strong>, which {name} does not have yet. Choose another email template or fix this one.</p> : null}
             {!resend && source === "template" && letter ? (
               <div>
-                <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Letter: {letter.subject}{edited ? " (with your edits)" : ""}</p>
+                <p className="mb-1.5 text-label font-medium text-foreground-800">Letter: {letter.subject}{edited ? " (with your edits)" : ""}</p>
                 <div className="max-h-[36vh] overflow-y-auto rounded-md border border-background-300 bg-white px-6 py-5 shadow-sm" data-testid="offer-letter-preview">
                   {/* Sanitised by renderMessage (allow-list rebuild) and every value is escaped. */}
                   <div className={TEMPLATE_PROSE} dangerouslySetInnerHTML={{ __html: edited ?? letter.html }} />
@@ -240,7 +240,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
             ) : null}
             {mail ? (
               <details className="rounded-md border border-background-200 bg-background-50 px-3 py-2">
-                <summary className="cursor-pointer text-[13px] font-medium text-foreground-800">Email preview: {mail.subject}</summary>
+                <summary className="cursor-pointer text-label font-medium text-foreground-800">Email preview: {mail.subject}</summary>
                 <div className={`mt-2 ${TEMPLATE_PROSE}`} data-testid="offer-email-preview" dangerouslySetInnerHTML={{ __html: mail.html }} />
               </details>
             ) : null}

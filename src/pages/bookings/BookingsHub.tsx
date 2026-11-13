@@ -321,7 +321,7 @@ function PeopleTab() {
           {people.map((p) => (
             <li key={p.handle} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
               <div><p className="font-semibold text-foreground-950">{p.name} {KIND_LABEL[p.kind] ? <Badge tone="muted">{KIND_LABEL[p.kind]}</Badge> : null}</p>{p.headline ? <p className="text-xs text-foreground-600">{p.headline}</p> : null}</div>
-              <Link to={`/book/${p.handle}`} className="inline-flex items-center gap-1.5 rounded-md bg-primary-500 px-3 py-1.5 text-[13px] font-medium text-background-50 hover:bg-primary-600"><i className="ri-calendar-check-line" aria-hidden="true" /> Book a time</Link>
+              <Link to={`/book/${p.handle}`} className="inline-flex items-center gap-1.5 rounded-md bg-primary-500 px-3 py-1.5 text-label font-medium text-background-50 hover:bg-primary-600"><i className="ri-calendar-check-line" aria-hidden="true" /> Book a time</Link>
             </li>
           ))}
         </ul>

@@ -66,7 +66,7 @@ export default function PunchCard({ onChange }: { onChange?: () => void } = {}) 
                 {status.todayShifts.map((s) => (
                   <li key={s.startedAt} className="py-1.5 text-sm text-foreground-800">
                     {fmtTime(s.startedAt, tz)} – {s.endedAt ? fmtTime(s.endedAt, tz) : <em>{working || onBreak ? "now" : "open"}</em>} {tzAbbrev(s.startedAt, tz)} · {minutesToHm(s.workedMinutes)} worked{s.breakMinutes ? `, ${minutesToHm(s.breakMinutes)} break` : ""}
-                    {s.flags.filter((f) => f !== "missing_punch_out" || !s.isOpen).map((f) => <span key={f} className="ml-2 rounded-full bg-primary-50 px-2 py-0.5 text-[11px] text-primary-900">{FLAG_LABEL[f] ?? f}</span>)}
+                    {s.flags.filter((f) => f !== "missing_punch_out" || !s.isOpen).map((f) => <span key={f} className="ml-2 rounded-full bg-primary-50 px-2 py-0.5 text-2xs text-primary-900">{FLAG_LABEL[f] ?? f}</span>)}
                   </li>
                 ))}
               </ul>

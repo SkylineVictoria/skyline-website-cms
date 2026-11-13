@@ -58,7 +58,7 @@ export default function ActivityPage() {
         ) : (
           <ul className="divide-y divide-background-200">
             {filtered.map((a) => (
-              <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3.5 text-[13px]">
+              <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3.5 text-label">
                 <Badge tone="secondary">{a.area}</Badge>
                 <span className="font-medium text-foreground-900">{a.user}</span>
                 <span className="text-foreground-600">{a.action}</span>

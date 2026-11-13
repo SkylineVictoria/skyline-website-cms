@@ -42,7 +42,7 @@ export default function CourseFeesPage() {
       <div className="mb-4 inline-flex rounded-full border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View">
         {([["courses", "Courses"], ["intakes", "Intakes"], ["rooms", "Rooms"]] as const).map(([v, label]) => (
           <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => switchView(v)}
-            className={`rounded-full px-4 py-1.5 text-[13px] font-medium ${view === v ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"}`}>{label}</button>
+            className={`rounded-full px-4 py-1.5 text-label font-medium ${view === v ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"}`}>{label}</button>
         ))}
       </div>
       {view === "rooms" ? <RoomsBoard canEdit={rtoManager} /> : null}

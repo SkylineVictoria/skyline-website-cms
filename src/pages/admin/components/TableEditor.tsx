@@ -114,7 +114,7 @@ function EditableCell({
 
 function MenuLabel({ children }: { children: ReactNode }) {
   return (
-    <p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground-400">
+    <p className="px-3 pb-1 pt-1.5 text-2xs font-semibold uppercase tracking-wide text-foreground-400">
       {children}
     </p>
   );
@@ -136,7 +136,7 @@ function MenuItem({
       type="button"
       role="menuitem"
       onClick={onClick}
-      className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-background-100 ${
+      className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-label hover:bg-background-100 ${
         danger ? "text-primary-700" : "text-foreground-700"
       }`}
     >
@@ -412,7 +412,7 @@ export default function TableEditor({
     <div className="rounded-md border border-background-300 bg-background-50">
       {/* Header / toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-t-md border-b border-background-200 bg-background-100 px-3 py-2">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-foreground-700">
+        <div className="flex items-center gap-2 text-label font-medium text-foreground-700">
           <i className="ri-table-2 text-base text-foreground-500" aria-hidden="true" />
           {title}
           <span className="text-foreground-400">
@@ -421,7 +421,7 @@ export default function TableEditor({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${status.tone}`}>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium ${status.tone}`}>
             <i className={status.icon} aria-hidden="true" />
             {status.label}
           </span>
@@ -657,7 +657,7 @@ export default function TableEditor({
             <i className="ri-insert-column-right" aria-hidden="true" />
             Add Column
           </button>
-          <span className="ml-auto hidden text-[11px] text-foreground-400 sm:block">
+          <span className="ml-auto hidden text-2xs text-foreground-400 sm:block">
             Tip: open the ⋮ menu on a row or column header for insert, move, swap, rename and delete.
           </span>
         </div>

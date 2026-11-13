@@ -820,7 +820,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
           {ready ? (
             <div className="border-t border-background-200 px-5 py-3 text-center md:px-6">
-              <p className="text-[11px] text-foreground-400">
+              <p className="text-2xs text-foreground-400">
                 Nothing is submitted from this wizard. Documents are stored privately against this draft; the student
                 application is submitted only from the full form after review.
               </p>

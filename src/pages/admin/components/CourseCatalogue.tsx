@@ -107,7 +107,7 @@ export function CourseCatalogueAutocomplete({ onSelect, autoFocus = false }: { o
               onMouseEnter={() => setHighlight(i)}
               className={`cursor-pointer px-3 py-2 text-sm ${i === highlight ? "bg-background-100" : ""}`}
             >
-              <span className="font-mono text-[13px] font-semibold text-foreground-900">{c.course_code}</span>{" "}
+              <span className="font-mono text-label font-semibold text-foreground-900">{c.course_code}</span>{" "}
               <span className="text-foreground-800">{c.course_name}</span>
               <span className="block text-xs text-foreground-500">
                 {COURSE_TYPE_LABEL[c.course_type]}
@@ -339,7 +339,7 @@ export function CatalogueBrowser({
               <tbody>
                 {rows.map((c) => (
                   <tr key={c.course_code} className="border-b border-background-200 last:border-0">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[13px] font-semibold text-foreground-900">{c.course_code}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-label font-semibold text-foreground-900">{c.course_code}</td>
                     <td className="px-4 py-3 text-foreground-900">{c.course_name}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-foreground-700">{COURSE_TYPE_LABEL[c.course_type]}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-foreground-700">{c.aqf_level ?? "—"}</td>

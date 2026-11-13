@@ -55,7 +55,7 @@ export default function CoursesPage() {
         breadcrumb="Our Courses"
         lead="Search our published courses by qualification, code or study area."
       />
-      <section className="bg-[#f5f6f7] py-12 md:py-16">
+      <section className="bg-background-100 py-12 md:py-16">
         <div className="site-container">
           <Reveal>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">

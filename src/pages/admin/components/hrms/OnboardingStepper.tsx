@@ -33,8 +33,8 @@ export default function OnboardingStepper({ steps, closed }: { steps: Onboarding
             </span>
             <span className="min-w-0 lg:px-1 lg:text-center">
               <span className={`block text-sm leading-tight lg:text-xs ${step.state === "todo" ? "text-foreground-500" : "font-semibold text-foreground-950"}`}>{step.label}</span>
-              {step.state === "current" ? <span className="mt-1 inline-block rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-800">Current</span> : null}
-              {step.at && step.state !== "todo" ? <time dateTime={step.at} title={full(step.at)} className="mt-0.5 block text-[11px] text-foreground-600">{day(step.at)}</time> : null}
+              {step.state === "current" ? <span className="mt-1 inline-block rounded-full bg-primary-100 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-primary-800">Current</span> : null}
+              {step.at && step.state !== "todo" ? <time dateTime={step.at} title={full(step.at)} className="mt-0.5 block text-2xs text-foreground-600">{day(step.at)}</time> : null}
               <span className="sr-only">{step.state === "done" ? "completed" : step.state === "current" ? "current step" : "not started"}</span>
             </span>
           </li>

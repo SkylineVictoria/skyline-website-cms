@@ -138,7 +138,7 @@ export default function CourseEditorPage() {
     <div>
       <div className="mb-5 flex flex-col gap-3 border-b border-background-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <Link to="/admin/courses" className="mb-1 inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600">
+          <Link to="/admin/courses" className="mb-1 inline-flex items-center gap-1 text-label font-medium text-foreground-500 hover:text-primary-600">
             <i className="ri-arrow-left-line" aria-hidden="true" />
             Courses
           </Link>
@@ -167,7 +167,7 @@ export default function CourseEditorPage() {
       <nav className="sticky top-0 z-10 -mx-1 mb-4 flex flex-wrap gap-2 bg-background-100/95 px-1 py-2 backdrop-blur" aria-label="Sections">
         {SECTIONS.map((s) => (
           <button key={s.id} type="button" onClick={() => document.getElementById(`course-${s.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            className="inline-flex items-center gap-1.5 rounded-full border border-background-300 bg-background-50 px-3.5 py-1.5 text-[13px] font-medium text-foreground-700 hover:bg-background-100">
+            className="inline-flex items-center gap-1.5 rounded-full border border-background-300 bg-background-50 px-3.5 py-1.5 text-label font-medium text-foreground-700 hover:bg-background-100">
             <i className={`${s.icon} text-sm`} aria-hidden="true" />{s.label}
           </button>
         ))}

@@ -41,7 +41,7 @@ export function ApplicationStatusPills({ counts, hrefFor, limit }: { counts: Rec
       {shown.map(([status, count]) => {
         const meta = { label: statusInfo(workflow, status).label, className: TONE_CLASS[statusInfo(workflow, status).tone] };
         const pill = (
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium ${meta.className}`}>
             <span className="tabular-nums font-semibold">{count}</span> {meta.label}
           </span>
         );
@@ -55,7 +55,7 @@ export function ApplicationStatusPills({ counts, hrefFor, limit }: { counts: Rec
           </li>
         );
       })}
-      {hidden > 0 ? <li className="self-center text-[11px] text-foreground-500">+{hidden} more</li> : null}
+      {hidden > 0 ? <li className="self-center text-2xs text-foreground-500">+{hidden} more</li> : null}
     </ul>
   );
 }

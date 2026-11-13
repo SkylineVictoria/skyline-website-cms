@@ -20,14 +20,14 @@ export default function CourseCard({ course }: { course: Course }) {
           </span>
         )}
         {course.duration ? (
-          <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-background-50/95 px-3 py-1 font-label text-[11px] font-semibold text-foreground-800 backdrop-blur">
+          <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-background-50/95 px-3 py-1 font-label text-2xs font-semibold text-foreground-800 backdrop-blur">
             <i className="ri-time-line text-primary-600" aria-hidden="true" />
             {course.duration}
           </span>
         ) : null}
       </Link>
       <div className="flex flex-1 flex-col p-5">
-        <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-secondary-100 px-3 py-1 font-label text-[11px] font-semibold uppercase tracking-wide text-secondary-900">
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-secondary-100 px-3 py-1 font-label text-2xs font-semibold uppercase tracking-wide text-secondary-900">
           {course.category}
         </span>
         <h3 className="mt-3 font-heading text-base font-semibold leading-snug text-foreground-950">

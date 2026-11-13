@@ -85,7 +85,7 @@ export default function PaySetupCard({ profileId, hasEmployment }: { profileId: 
               <Field label="Xero employee id"><TextInput maxLength={80} value={editing.xeroEmployeeId} onChange={(e) => setEditing({ ...editing, xeroEmployeeId: e.target.value })} data-testid="staff-pay-xero" /></Field>
             </div>
             <div>
-              <span className="mb-1.5 block text-[13px] font-medium text-foreground-800">Usual work days</span>
+              <span className="mb-1.5 block text-label font-medium text-foreground-800">Usual work days</span>
               <div className="flex flex-wrap gap-2">{[1, 2, 3, 4, 5, 6, 7].map((d) => <label key={d} className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={editing.usualWorkDays.includes(d)} onChange={() => toggleDay(d)} /> {WEEKDAY_SHORT[d]}</label>)}</div>
             </div>
             {dialogError ? <p role="alert" className={ALERT} data-testid="staff-pay-error">{dialogError}</p> : null}

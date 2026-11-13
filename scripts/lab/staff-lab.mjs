@@ -199,7 +199,17 @@ async function up() {
   for (const [file, sql] of Object.entries(LAB_SHIMS)) fs.writeFileSync(path.join(migrations, file), `-- LAB ONLY (scripts/lab/staff-lab.mjs)\n${sql}`);
   // Hosted applied these after 20261113320000 although their versions sort earlier (they rewrite functions that later files define):
   // the lab replays them in the hosted order, under a lab-only version just after 20261113320000.
-  const HOSTED_LATER = { "20261112144811_main_site_host.sql": "20261113320001_main_site_host.sql" };
+  const HOSTED_LATER = {
+    "20261112144811_main_site_host.sql": "20261113320001_main_site_host.sql",
+    // The two Master Data fee migrations alter course_fee_setups (created by 20261113270000) and application_letter_course
+    // (20261113320000); hosted applied them after those, and course_management (20261113340000) syncs total_fee from them.
+    "20261112172429_course_fees_master_data.sql": "20261113320002_course_fees_master_data.sql",
+    "20261112172731_course_fees_three_columns.sql": "20261113320003_course_fees_three_columns.sql",
+    // Business onboarding and staff signed documents read hr.sign_requests.subject_id, which the envelopes migration
+    // (20261113140000) adds; hosted applied them after it.
+    "20261113025808_business_onboarding.sql": "20261113140001_business_onboarding.sql",
+    "20261113031341_staff_signed_documents.sql": "20261113140002_staff_signed_documents.sql",
+  };
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
     fs.copyFileSync(path.join(REPO, "supabase", "migrations", file), path.join(migrations, HOSTED_LATER[file] ?? file));
   }

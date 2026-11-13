@@ -53,3 +53,29 @@ Each entry: the decision, the alternatives considered, the evidence, and where i
 
 ## D-15 Trainer identification
 - **Decision:** a trainer for an assessment is any active `hr.staff_profiles` row linked to the batch (`batch_trainers`) or named on an assignment; `hr.staff_roles.role = 'trainer'` is shown as a hint in the picker but not required, because `rto_admin('staff_list')` already offers every active profile (AUDIT.md K6) and the owner's staff records may not all carry the role yet.
+
+## D-16 Lab replay order: four hosted-applied files remapped in `scripts/lab/staff-lab.mjs`
+- **Decision:** the lab's `HOSTED_LATER` map (already used for `20261112144811_main_site_host.sql`) now also replays `20261112172429_course_fees_master_data.sql` and `20261112172731_course_fees_three_columns.sql` after `20261113320000` (they alter `course_fee_setups`, created by `20261113270000`, and `application_letter_course`, defined by `20261113320000`), and `20261113025808_business_onboarding.sql` and `20261113031341_staff_signed_documents.sql` after `20261113140000` (they read `hr.sign_requests.subject_id`, which the envelopes migration adds).
+- **Evidence:** the first fresh replay on 2026-11-14 stopped at `20261112172731` with `relation "public.course_fee_setups" does not exist`; after the first remap it stopped at `20261113025808` with `column r.subject_id does not exist` (direct `supabase start` output). A dependency scan over every file dated 2026-11-12 onward found no other forward reference.
+- **Consequence:** no repo migration is renamed (hosted already holds them); only the lab replay order changes. The hosted project applied these files in the working order, so a plain `db push` of the new `20261113430000` / `20261113440000` files is unaffected (they sort after everything).
+
+## D-17 No client write grants on any `asm_*` table; writes only through the three RPCs
+- **Decision:** every `asm_*` table has RLS with SELECT policies only (and `revoke insert, update, delete` from `authenticated`). Even an Admin cannot insert an assessment row directly; the RPCs (`security definer`, owner `postgres`) are the only writers, each with explicit role checks, and the guard triggers (immutable published versions, locked submitted attempts, frozen results of returned attempts, append-only outcomes / feedback / audit) protect against RPC bugs as well.
+- **Alternatives:** per-table write policies (as `batch_enrolments_admin_write` does). Rejected: the assessment rules are stateful (who may change what in which state) and belong in one place.
+- **Evidence:** `supabase/tests/assessment_management.sql` "no client writes anywhere" block (152/152 on the lab, 2026-11-14).
+
+## D-18 Batch membership changes: `follow_batch` (default) voids open drafts and tells joiners; `keep` changes nothing
+- **Decision:** `asm_assignments.reassign_rule`. The trigger `asm_batch_enrolment_change` on `batch_enrolments` voids a leaving student's draft attempts (state `void`, reason "left the batch", history kept) for `follow_batch` assignments and notifies a joining student of every open assignment; submitted attempts are never touched. Eligibility itself is always live (`asm_assignment_eligible`: active enrolments of the batch, minus exclusions, plus manual additions).
+- **Why:** the brief asks for "defined reassignment rules" without naming them; this is the least surprising reading and every effect is audited (`reassign_leave` / `reassign_join`).
+
+## D-19 Policies never join staff-only tables directly
+- **Decision:** a policy that needs `batch_enrolments` / `batch_trainers` calls a `security definer` helper (`asm_trainer_of_student`, `asm_trainer_on_assignment`, `asm_assignment_eligible` through `asm_student_on_assignment`). Those tables are readable only by CMS staff (`cms_is_staff()`), so a trainer's policy subquery on them would silently see no rows.
+- **Evidence:** the first version of `asm_unit_outcomes_read` joined the tables directly and the batch trainer could not read the outcome they had just signed (test "the batch trainer signs the student off as Competent", fixed 2026-11-14).
+
+## D-20 Email through the outbox depends on the existing activation rows
+- **Decision:** `asm_notify` writes `notification_deliveries` rows (event `assessment_<event>`, `assessment_event_id` set; the subject check re-created to allow it). The existing claim (`support_mail_claim`, rewritten by `20261112160438_email_html_all.sql` to every event other than `application_submitted`) only sends when `notification_activation` holds an approved row for the tenant and `EF_NOTIFICATION_EMAIL_ENABLED=true`. Assessment emails therefore go live with the institution's existing email activation and never on their own; in-app rows (`asm_notifications`) are always written.
+- **Consequence for the report:** "assessment emails" is listed as needing the owner's existing notification activation, not a new secret.
+
+## D-21 Observation checklists and third-party reports are validated by the assessor's `required` flag
+- **Decision:** `asm_validate_responses(definition, assessor_responses, 'assessor')` runs at `mark_return`; an assessor-only question blocks the decision only when its definition says `required: true` (then its `responseSchema.requiredKeys` apply). The builder sets `required: true` by default for the observation checklist type.
+- **Why:** a third-party report is often optional (brief 4.3 lists it as a section, not a mandatory record), so the author decides per question.

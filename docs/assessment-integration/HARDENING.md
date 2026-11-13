@@ -55,3 +55,31 @@ Hosted read-only query (project xcpydisstlvtvcsqnjob, system id 7692130048193495
 Migration `20261113470000_assessment_attempt_pattern.sql`: partial unique index `asm_attempts_one_open` (one draft per student per assignment); `asm_attempt_count` (non-void attempts), `asm_max_attempts` (setting + per-assessment override), `asm_next_attempt` as the single gate for every further attempt (assignment open, no draft, under the limit or an audited administrator `overrideLimit`, next number = max + 1 so a voided draft no longer blocks the student: the T2 bug). `mark_return` (NYS -> next attempt due in `reassessment_days`), `assessment_open`, admin `attempt_reopen` and `reassessment_decide` all go through it; new trainer actions `attempt_void` / `attempt_reopen` for assessors with the marking right (never beyond the limit), audited (`attempt_void`, `attempt_reopen`, `attempt_limit_override`). Late rule: `block` refuses after the due date unless `late_until` extends it; `allow` accepts and flags late but never after `late_until`. Row-version conflicts (40001) on draft_save / submit / mark_save / mark_return were already refused when `rowVersion` is sent; the student page now tracks the server row version in a ref and sends it on submit (it sent `rowVersion + 1`, which was wrong whenever no autosave was pending). The admin attempt drawer gained "Allow beyond the attempt limit (audited)". Submitted attempts immutable (guard trigger) and version binding (assignment's version) re-tested. 56 tests "T4 ..." (suite 319/319); type-check and lint clean.
 
 Not changed, by design: `rowVersion` stays optional server-side (the suite and older clients call without it; the client always sends it); a due-date change on the assignment reaches only first-attempt drafts, a per-student due date reaches every draft of that student (reassessment windows are per attempt).
+
+## T5 Submissions feature parity, features only (DONE)
+
+Compared AUDIT.md S1-S14 (S-A §9 classification, S-C §5.4, Part R3 "from Submissions, behaviour only") against what is built.
+
+| Submissions feature | Skyline status |
+|---|---|
+| Admin overview, trainer queue / Grade-me, trainer course units + unit submissions + my students, student dashboard | Built (overview, pending marking, my assignments / students, My assessments) |
+| Student acknowledgment gate (changed outcome must be acknowledged) | **Built now** (`20261113480000`): `asm_attempts.acknowledged_at`, `asm_student('result_acknowledge')` (returned / final only, first time kept, audited), "Results to acknowledge" panel on My assessments, `acknowledgedAt` in every attempt view |
+| Idempotent final submit with request id + submission events | **Built now**: `submit` takes `requestId`, keeps it on the attempt and returns the original receipt (`idempotent: true`) on a retry; the student page sends one id per submission; audit / notifications stay single |
+| Debounced per-question autosave with merge guard | Built (autosave + row version; T4 fixed the client's row-version bookkeeping) |
+| Attempts, reassessment window, late rules, extension (per-student due date), access dates | Built (T4) |
+| Feedback per task / attempt, trainer + student sign-off with names, declaration + hash | Built (feedback thread, task results, declaration with sha-256, signed unit outcomes) |
+| Course / unit / batch links, batch trainers, batch unit dates | Built (assignments on batches, `intake_units`, unit mapping) |
+| In-app notifications, Postmark email | Built (asm_notifications + existing outbox) |
+| Reports (cohort / assessment) with export, audit log | Built (CSV, append-only `asm_audit_log` with viewer / export) |
+| Reasonable Adjustment matrix, Learner Evaluation, 15 policy sections, Results / Summary sheets | Content: converter output in `imports/` (import through Assessments › Import), structure is data |
+
+Deliberately not built (reason):
+- Rollover cron that auto-writes Not Yet Satisfactory on a missed reassessment window: D-08 / brief 8, nothing is decided automatically; the daily sweep notifies overdue students and the assessor decides.
+- Office sign-off checkboxes (`initial_checked` / `updated_checked`) and auto-complete when all are ticked: superseded by the signed unit outcome and the audit log; an admin reviews attempts in the CMS drawer.
+- Completed-attempt PDF queue to SharePoint: needs a PDF worker / Edge Function and a provider; the e-sign PDF pipeline can be reused later (REPORT.md gap).
+- FCM push and the realtime bell: Skyline has no push channel; in-app rows plus email through the existing outbox.
+- XLSX report export: CSV opens in Excel; no spreadsheet dependency added.
+- OTP logins, instance access tokens, public form start page, impersonation and its log, "login as student" batch flag: D-02, Skyline logins and RLS only.
+- Melbourne end-of-day default deadlines: due dates are explicit timestamps chosen by staff (shown in Melbourne time).
+
+17 tests "T5 ..." (suite 337/337); type-check and lint clean.

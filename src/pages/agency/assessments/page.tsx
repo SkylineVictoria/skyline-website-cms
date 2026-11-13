@@ -9,7 +9,7 @@ import { asmStudent, fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/asses
 export interface MyAssessment {
   assignmentId: string; assessmentId: string; title: string; code: string | null; description: string; unitCode: string | null; unitName: string | null; courseName: string; batchName: string;
   availableFrom: string; dueAt: string; lateUntil: string | null; status: string; maxAttempts: number;
-  attempts: { id: string; attemptNo: number; state: string; outcome: string | null; submittedAt: string | null; dueAt: string | null; receiptNo: string | null }[];
+  attempts: { id: string; attemptNo: number; state: string; outcome: string | null; submittedAt: string | null; dueAt: string | null; receiptNo: string | null; acknowledgedAt?: string | null }[];
   events: { kind: string; title: string; startsAt: string; endsAt: string | null; room: string | null }[];
 }
 interface Notification { id: string; event: string; title: string; body: string; attemptId: string | null; assignmentId: string | null; readAt: string | null; createdAt: string }
@@ -38,11 +38,19 @@ export default function StudentAssessmentsPage() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (tab === "progress") void asmStudent<Progress>("progress").then(setProgress).catch(() => setProgress(null)); if (tab === "notifications") void asmStudent<Notification[]>("notifications").then(setNotes).catch(() => setNotes([])); }, [tab]);
   const unread = notes?.filter((n) => !n.readAt).length ?? 0;
+  const toAcknowledge = (rows ?? []).flatMap((a) => a.attempts.filter((t) => (t.state === "returned" || t.state === "final") && !t.acknowledgedAt).map((t) => ({ a, t })));
+  const acknowledge = async (attemptId: string) => { try { await asmStudent("result_acknowledge", { attemptId }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not recorded."); } };
   return (
     <div>
       <PageHeading eyebrow="Assessments" title="My assessments" description="Complete your assessments online, upload evidence, submit with your declaration and read your assessor's feedback." />
       <div className="mt-6"><SectionTabs tabs={TABS.map((t) => (t.id === "notifications" && unread ? { ...t, label: `Notifications (${unread})` } : t))} active={tab} onChange={setTab} /></div>
       {error ? <PortalError message={error} onRetry={() => void load()} /> : null}
+      {tab === "assessments" && toAcknowledge.length ? (
+        <div role="status" className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">Results to acknowledge ({toAcknowledge.length})</p>
+          <ul className="mt-2 space-y-1">{toAcknowledge.map(({ a, t }) => <li key={t.id} className="flex flex-wrap items-center justify-between gap-2"><span>{a.title}: attempt {t.attemptNo} is {t.outcome ? OUTCOME_LABEL[t.outcome as keyof typeof OUTCOME_LABEL] : STATE_LABEL[t.state] ?? t.state}</span><Button size="sm" variant="outline" icon="ri-check-line" onClick={() => void acknowledge(t.id)}>I have read this result</Button></li>)}</ul>
+        </div>
+      ) : null}
       {tab === "assessments" ? (rows === null ? <PortalLoading label="Loading your assessments…" /> : rows.length === 0 ? <PortalEmpty icon="ri-file-list-3-line" title="No assessments yet" message="When your trainer assigns an assessment to your batch it appears here." /> : (
         <ul className="space-y-3">{rows.map((a) => { const s = statusOf(a); return (
           <li key={a.assignmentId} className="rounded-card border border-background-200 bg-background-50 p-4">

@@ -93,6 +93,6 @@ export interface ReassessmentRow { id: string; role: string; reason: string; sta
 export interface Attempt {
   id: string; assignmentId: string; versionId: string; studentId: string; attemptNo: number; state: AttemptState;
   responses: Responses; assessorResponses: Responses; responsesHash: string | null; declaration: Record<string, unknown> | null; receiptNo: string | null;
-  dueAt: string | null; outcome: Outcome | null; overallFeedback: string; startedAt: string; submittedAt: string | null; returnedAt: string | null; finalisedAt: string | null; rowVersion: number;
+  dueAt: string | null; outcome: Outcome | null; overallFeedback: string; startedAt: string; submittedAt: string | null; returnedAt: string | null; finalisedAt: string | null; acknowledgedAt?: string | null; rowVersion: number;
   evidence: EvidenceFile[]; results: ResultRow[]; taskResults: TaskResultRow[]; feedback: FeedbackRow[]; reassessments: ReassessmentRow[];
 }

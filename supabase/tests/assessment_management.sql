@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(319);
+select plan(337);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -615,6 +615,40 @@ select throws_ok(format($$select public.asm_trainer('attempt_reopen', '{"id": "%
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "status": "open"}')$$, pg_temp.v('assignment')), 'T4 fixture: reopened');
 select pg_temp.as_postgres();
+
+-- ---------------------------------------------------------------- hardening T5 (20261113480000): acknowledgment and idempotent submit
+-- Student 3's attempts 2..4 are returned / final; attempt 6 was voided and the assignment is open again.
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((select count(*)::int from jsonb_array_elements(public.asm_student('my_assessments')) a, jsonb_array_elements(a->'attempts') t where t->>'state' in ('returned', 'final') and t->>'acknowledgedAt' is null), 3, 'T5 three results wait for the student''s acknowledgment');
+select is((public.asm_student('result_acknowledge', jsonb_build_object('attemptId', pg_temp.v('s3a'))))->>'ok', 'true', 'T5 the student acknowledges attempt 2');
+select is((select acknowledged_at is not null from public.asm_attempts where id = pg_temp.v('s3a')), true, 'T5 the acknowledgment is stored on the attempt');
+select is((public.asm_student('results', jsonb_build_object('attemptId', pg_temp.v('s3a'))))->>'acknowledgedAt' is not null, true, 'T5 and shown with the result');
+select pg_temp.put('ack1', (select acknowledged_at::text from public.asm_attempts where id = pg_temp.v('s3a')));
+select is(((public.asm_student('result_acknowledge', jsonb_build_object('attemptId', pg_temp.v('s3a'))))->>'acknowledgedAt')::timestamptz, pg_temp.s('ack1')::timestamptz, 'T5 acknowledging again keeps the first time');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select pg_temp.put('s3f', (public.asm_trainer('attempt_reopen', jsonb_build_object('id', pg_temp.v('s3c'), 'reason', 'T5 fixture')))->>'attemptId');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))->'attempt'->>'id', pg_temp.s('s3f'), 'T5 the reopened attempt 7 is the student''s current attempt');
+select throws_ok(format($$select public.asm_student('result_acknowledge', '{"attemptId": "%s"}')$$, pg_temp.v('s3f')), 'P0002', null, 'T5 a draft has no result to acknowledge');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$select public.asm_student('result_acknowledge', '{"attemptId": "%s"}')$$, pg_temp.v('s3b')), 'P0002', null, 'T5 another student cannot acknowledge it');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where action = 'result_acknowledge' and target_id = pg_temp.s('s3a') and actor_role = 'student'), 1, 'T5 the acknowledgment is audited');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('s3a'))))->>'acknowledgedAt' is not null, true, 'T5 the assessor sees when the student acknowledged');
+-- idempotent submit: attempt 7 (s3f) submitted with a request id; the same request again returns the same receipt and sends nothing twice
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select pg_temp.put('sub7', (public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3f'), 'responses', pg_temp.responses(), 'requestId', 'req-7-abc', 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))::text);
+select is(pg_temp.s('sub7')::jsonb->>'ok', 'true', 'T5 attempt 7 submits with a request id');
+select pg_temp.put('sub7b', (public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3f'), 'responses', pg_temp.responses(), 'requestId', 'req-7-abc', 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))::text);
+select is(pg_temp.s('sub7b')::jsonb->>'receiptNo', pg_temp.s('sub7')::jsonb->>'receiptNo', 'T5 the same request again returns the same receipt');
+select is(pg_temp.s('sub7b')::jsonb->>'idempotent', 'true', 'T5 and says so');
+select throws_ok(format($$select public.asm_student('submit', '{"attemptId": "%s", "responses": {}, "requestId": "req-7-other", "declaration": {"signature": "Sid Student", "agreed": true}}')$$, pg_temp.v('s3f')), '42501', null, 'T5 a different request after submission is refused');
+select throws_ok(format($$select public.asm_student('submit', '{"attemptId": "%s", "responses": {}, "declaration": {"signature": "Sid Student", "agreed": true}}')$$, pg_temp.v('s3f')), '42501', null, 'T5 and so is one without a request id');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where action = 'submit' and target_id = pg_temp.s('s3f')), 1, 'T5 one submission is audited');
+select is((select count(*)::int from public.asm_notifications where attempt_id = pg_temp.v('s3f') and event = 'submitted'), 2, 'T5 one receipt to the student and one notice to the batch trainer');
+select is((select submit_request_id from public.asm_attempts where id = pg_temp.v('s3f')), 'req-7-abc', 'T5 the request id is kept with the submission');
 
 select * from finish();
 rollback;

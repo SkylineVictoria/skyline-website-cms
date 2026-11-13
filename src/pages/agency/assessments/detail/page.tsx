@@ -20,6 +20,7 @@ export default function StudentAssessmentPage() {
   const [data, setData] = useState<Opened | null>(null);
   const [responses, setResponses] = useState<Responses>({});
   const [rowVersion, setRowVersion] = useState(1);
+  const submitRequestId = useRef<string | null>(null); // one id per submission; a retry after a lost response returns the same receipt (20261113480000)
   const rowVersionRef = useRef(1); // the server-side row version: every load and save moves it, the submit sends it (20261113470000)
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -67,9 +68,9 @@ export default function StudentAssessmentPage() {
     if (!attempt || !definition) return;
     if (timer.current) { window.clearTimeout(timer.current); await save(responses); }
     try {
-      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string; submittedAt?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current, declaration: { signature, agreed } });
+      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string; submittedAt?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current, declaration: { signature, agreed }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
       if (!out.ok) { setErrors(out.errors ?? []); setSubmitOpen(false); const first = out.errors?.[0]; if (first?.questionId) document.getElementById(`q-${first.questionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
-      setReceipt({ receiptNo: out.receiptNo ?? "", submittedAt: out.submittedAt ?? "" }); setSubmitOpen(false); await load();
+      setReceipt({ receiptNo: out.receiptNo ?? "", submittedAt: out.submittedAt ?? "" }); submitRequestId.current = null; setSubmitOpen(false); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Not submitted."); }
   };
   const requestReassessment = async (a: Attempt) => { try { await asmStudent("reassessment_request", { attemptId: a.id, reason }); setReason(""); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not sent."); } };

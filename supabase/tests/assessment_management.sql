@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(152);
+select plan(224);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -347,6 +347,103 @@ select throws_ok(format($$insert into public.asm_results(attempt_id, question_id
 select throws_ok(format($$update public.asm_notifications set read_at = now() where recipient_auth_user = '%s'$$, 'a5000000-0000-0000-0000-000000000011'), '42501', null, 'notifications are read through the RPC, not written directly');
 select is((public.asm_student('notification_read'))->>'ok', 'true', 'the student marks their notifications read');
 select is((select count(*)::int from public.asm_notifications where recipient_auth_user = 'a5000000-0000-0000-0000-000000000011' and read_at is null), 0, 'and they are read');
+
+-- ---------------------------------------------------------------- hardening T2 (20261113450000): anon, student A vs B, trainer of G2 vs G1, tenant 1 vs 2
+select pg_temp.as_postgres();
+set local role anon;
+select throws_ok($$select public.asm_admin('me')$$, '42501', null, 'T2 anon: asm_admin is not executable');
+select throws_ok($$select public.asm_trainer('me')$$, '42501', null, 'T2 anon: asm_trainer is not executable');
+select throws_ok($$select public.asm_student('me')$$, '42501', null, 'T2 anon: asm_student is not executable');
+select throws_ok($$select public.asm_calendar(current_date, current_date)$$, '42501', null, 'T2 anon: asm_calendar is not executable');
+select throws_ok($$select public.asm_validate_responses('{}', '{}')$$, '42501', null, 'T2 anon: the validators are not executable');
+select throws_ok($$select public.asm_evidence_path_readable('x')$$, '42501', null, 'T2 anon: the storage path helpers are not executable');
+select throws_ok($$select count(*) from public.asm_version_questions$$, '42501', null, 'T2 anon: the question view is not readable');
+select throws_ok($$select count(*) from public.asm_question_keys$$, '42501', null, 'T2 anon: assessor keys are not readable');
+select throws_ok($$select count(*) from public.asm_attempts$$, '42501', null, 'T2 anon: attempts are not readable');
+select pg_temp.as_postgres();
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'asm\_%' and p.proconfig is null), 0, 'T2 every asm_* function pins its search_path');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'asm\_%' and has_function_privilege('anon', p.oid, 'execute')), 0, 'T2 no asm_* function is executable by anon');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'asm\_%' and p.prorettype = 'trigger'::regtype and has_function_privilege('authenticated', p.oid, 'execute')), 0, 'T2 no asm_* trigger function is executable by signed-in users');
+-- a fresh draft of student A (student1) through the admin override, for the ownership checks below
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select pg_temp.put('draftA', (public.asm_admin('attempt_reopen', jsonb_build_object('id', pg_temp.v('attempt2'), 'reason', 'T2 fixture')))->>'attemptId');
+-- student B (student2, batch G2) against student A's work
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId":"%s","responses":{"q_short":"mine"}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot save student A''s draft');
+select throws_ok(format($$select public.asm_student('submit', '{"attemptId":"%s","responses":{},"declaration":{"signature":"Sue","agreed":true}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot submit student A''s draft');
+select throws_ok(format($$select public.asm_student('results', '{"attemptId":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 student B cannot read student A''s results');
+select throws_ok(format($$select public.asm_student('evidence_register', '{"attemptId":"%s","path":"%s/q_file/x.pdf"}')$$, pg_temp.v('draftA'), pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot register evidence on student A''s attempt');
+select throws_ok(format($$select public.asm_student('feedback_post', '{"attemptId":"%s","body":"hi"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 student B cannot post on student A''s thread');
+select throws_ok(format($$select public.asm_student('reassessment_request', '{"attemptId":"%s"}')$$, pg_temp.v('attempt')), '42501', null, 'T2 student B cannot request a reassessment of student A''s attempt');
+select throws_ok(format($$select public.asm_student('assessment_open', '{"assignmentId":"%s"}')$$, pg_temp.v('assignment')), '42501', null, 'T2 student B is not assigned the G1 assessment');
+select is(public.asm_evidence_path_readable(pg_temp.s('attempt2') || '/q_file/x.pdf'), false, 'T2 student B cannot read student A''s evidence path (no signed URL)');
+select is(public.asm_evidence_path_writable(pg_temp.s('draftA') || '/q_file/x.pdf'), false, 'T2 student B cannot upload under student A''s draft');
+select throws_ok(format($$insert into storage.objects(bucket_id, name, owner) values ('assessment-evidence', '%s/q_file/x.pdf', auth.uid())$$, pg_temp.v('draftA')), '42501', null, 'T2 storage refuses student B''s upload under student A''s attempt');
+select is((select count(*)::int from public.asm_attempts where student_id = 'e5000000-0000-0000-0000-000000000011'), 0, 'T2 RLS hides student A''s attempts from student B');
+select is((select count(*)::int from public.asm_question_keys), 0, 'T2 a student never reads assessor keys');
+select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T2 a student cannot use the trainer RPC');
+select throws_ok($$select public.asm_admin('assessment_list')$$, '42501', null, 'T2 a student cannot use the admin RPC');
+-- trainer of G2 (Tom) against G1 work
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T2 the G2 trainer cannot open a G1 attempt');
+select throws_ok(format($$select public.asm_trainer('mark_save', '{"id":"%s","results":[]}')$$, pg_temp.v('attempt')), '42501', null, 'T2 the G2 trainer cannot mark a G1 attempt');
+select throws_ok(format($$select public.asm_trainer('mark_return', '{"id":"%s","outcome":"S"}')$$, pg_temp.v('attempt')), '42501', null, 'T2 the G2 trainer cannot decide a G1 attempt');
+select throws_ok(format($$select public.asm_trainer('assignment_students', '{"id":"%s"}')$$, pg_temp.v('assignment')), '42501', null, 'T2 the G2 trainer cannot list the G1 assignment');
+select throws_ok(format($$select public.asm_trainer('evidence_register', '{"attemptId":"%s","path":"%s/assessor/x.pdf"}')$$, pg_temp.v('attempt'), pg_temp.v('attempt')), '42501', null, 'T2 the G2 trainer cannot attach assessor files to a G1 attempt');
+select throws_ok($$select public.asm_trainer('student_progress', '{"studentId":"e5000000-0000-0000-0000-000000000011"}')$$, '42501', null, 'T2 the G2 trainer cannot read a G1 student''s progress');
+select is(public.asm_trainer_on_assignment(pg_temp.v('assignment'), 'b5000000-0000-0000-0000-000000000003'), false, 'T2 the scope helper does not answer for another trainer''s profile');
+select is(public.asm_trainer_on_assignment(pg_temp.v('assignment')), false, 'T2 the G2 trainer is not on the G1 assignment');
+select is((select count(*)::int from public.asm_attempts where assignment_id = pg_temp.v('assignment')), 0, 'T2 RLS hides G1 attempts from the G2 trainer');
+select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 0, 'T2 keys of a version not assigned to the trainer are hidden');
+select is(public.asm_evidence_path_readable(pg_temp.s('attempt2') || '/q_file/x.pdf'), false, 'T2 the G2 trainer cannot read G1 evidence');
+select is(public.asm_evidence_path_writable(pg_temp.s('attempt') || '/assessor/x.pdf'), false, 'T2 the G2 trainer cannot upload assessor files on G1');
+-- tenant 2 (Other Institute, its own domain) with the same CMS admin login
+select pg_temp.as_postgres();
+insert into public.tenant_domains(hostname, tenant_id, verified_at, verification_evidence) values ('other.asm.example.test', '15000000-0000-0000-0000-000000000002', now(), 'test');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select set_config('request.headers', '{"x-tenant-domain":"other.asm.example.test"}', true);
+select is(public.tenant_scope('15000000-0000-0000-0000-000000000002'), true, 'T2 the admin acts inside tenant 2 under its domain');
+select throws_ok(format($$select public.asm_admin('assessment_get', '{"id":"%s"}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot read a tenant 1 assessment by id');
+select throws_ok(format($$select public.asm_admin('assessment_update', '{"id":"%s","title":"Taken over"}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot edit a tenant 1 assessment');
+select throws_ok(format($$select public.asm_admin('draft_save', '{"assessmentId":"%s","definition":{"tasks":[]}}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot write a tenant 1 draft');
+select throws_ok(format($$select public.asm_admin('version_get', '{"versionId":"%s"}')$$, pg_temp.v('v1')), 'P0002', null, 'T2 tenant 2 admin cannot read a tenant 1 version (and its keys)');
+select throws_ok(format($$select public.asm_admin('assessment_export', '{"id":"%s"}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot export a tenant 1 assessment');
+select throws_ok(format($$select public.asm_admin('assignment_get', '{"id":"%s"}')$$, pg_temp.v('assignment')), 'P0002', null, 'T2 tenant 2 admin cannot read a tenant 1 assignment');
+select throws_ok(format($$select public.asm_admin('assignment_update', '{"id":"%s","status":"closed"}')$$, pg_temp.v('assignment')), 'P0002', null, 'T2 tenant 2 admin cannot change a tenant 1 assignment');
+select throws_ok(format($$select public.asm_admin('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 tenant 2 admin cannot read a tenant 1 attempt');
+select throws_ok(format($$select public.asm_admin('attempt_void', '{"id":"%s"}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 tenant 2 admin cannot void a tenant 1 attempt');
+select throws_ok(format($$select public.asm_admin('attempt_reopen', '{"id":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 tenant 2 admin cannot reopen a tenant 1 attempt');
+select throws_ok(format($$select public.asm_admin('assignment_create', '{"assessmentId":"%s","dueAt":"2030-01-01T00:00:00Z","batchIds":["f5000000-0000-0000-0000-000000000012"]}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot assign a tenant 1 assessment');
+select throws_ok($$select public.asm_admin('assessment_create', '{"courseId":"course-asm-test","title":"Cross"}')$$, 'P0002', null, 'T2 tenant 2 admin cannot create on a tenant 1 course');
+select throws_ok(format($$select public.asm_admin('assessment_create', '{"courseId":"course-asm-other","title":"Clone","fromAssessmentId":"%s"}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot clone a tenant 1 assessment');
+select throws_ok($$select public.asm_admin('unit_elements_list', '{"unitId":"unit-asm-1"}')$$, 'P0002', null, 'T2 tenant 2 admin cannot read tenant 1 unit elements');
+select throws_ok($$select public.asm_admin('unit_outcome_record', '{"studentId":"e5000000-0000-0000-0000-000000000011","unitId":"unit-asm-1","outcome":"C","signOff":true}')$$, 'P0002', null, 'T2 tenant 2 admin cannot sign off a tenant 1 unit');
+select is(jsonb_array_length(public.asm_admin('assessment_list')), 1, 'T2 the assessment list shows only tenant 2''s own row (inserted above), nothing of tenant 1');
+select is(jsonb_array_length(public.asm_admin('assignment_list')), 0, 'T2 the assignment list shows nothing of tenant 1');
+select is(jsonb_array_length(public.asm_admin('outcomes_list')), 0, 'T2 the outcomes list shows nothing of tenant 1');
+select is(jsonb_array_length(public.asm_admin('audit_list')), 0, 'T2 the audit list shows nothing of tenant 1');
+select is(jsonb_array_length(public.asm_admin('batch_list')), 0, 'T2 the batch list shows nothing of tenant 1');
+select is(jsonb_array_length(public.asm_admin('bank_list')), 0, 'T2 the question bank shows nothing of tenant 1');
+select is((public.asm_admin('overview'))->>'assignments', '0', 'T2 the overview counts nothing of tenant 1');
+select is(jsonb_array_length(public.asm_calendar(date '2026-01-01', date '2026-12-31')), 0, 'T2 the calendar shows nothing of tenant 1');
+select pg_temp.put('other_as', (public.asm_admin('assessment_create', '{"courseId":"course-asm-other","title":"Other tenant assessment"}'))->>'id');
+select is((select tenant_id from public.asm_assessments where id = pg_temp.v('other_as')), '15000000-0000-0000-0000-000000000002', 'T2 tenant 2 admin creates inside tenant 2');
+select is(jsonb_array_length(public.asm_admin('assessment_list')), 2, 'T2 and sees only tenant 2 assessments');
+select set_config('request.headers', '', true);
+select throws_ok(format($$select public.asm_admin('assessment_get', '{"id":"%s"}')$$, pg_temp.v('other_as')), 'P0002', null, 'T2 the tenant 1 admin cannot read tenant 2''s assessment by id');
+select throws_ok(format($$select public.asm_admin('draft_save', '{"assessmentId":"%s","definition":{"tasks":[]}}')$$, pg_temp.v('other_as')), 'P0002', null, 'T2 nor edit it');
+select throws_ok($$select public.asm_admin('assessment_create', '{"courseId":"course-asm-other","title":"Cross"}')$$, 'P0002', null, 'T2 nor create on tenant 2''s course');
+select is((select count(*)::int from jsonb_array_elements(public.asm_admin('assessment_list')) x where x->>'id' = pg_temp.s('other_as')), 0, 'T2 the tenant 1 list omits tenant 2');
+-- a tenant 1 student and trainer under tenant 2's domain see nothing
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select set_config('request.headers', '{"x-tenant-domain":"other.asm.example.test"}', true);
+select is(jsonb_array_length(public.asm_student('my_assessments')), 0, 'T2 a tenant 1 student under tenant 2''s domain has no assessments');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId":"%s","responses":{}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 and cannot reach their own draft from there');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is(jsonb_array_length(public.asm_trainer('my_assignments')), 0, 'T2 a tenant 1 trainer under tenant 2''s domain has no assignments');
+select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T2 and cannot open their own batch''s attempt from there');
+select set_config('request.headers', '', true);
+select pg_temp.as_postgres();
 
 select * from finish();
 rollback;

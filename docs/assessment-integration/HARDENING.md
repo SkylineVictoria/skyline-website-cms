@@ -23,3 +23,23 @@ Test-only changes (product behaviour intended, nothing in product code):
 - assessment_management: notification / outcome / pending counts are scoped to the suite's own assignment and assessment so a lab that already ran the Playwright journey still passes.
 
 Possible product bugs noticed (not changed): none. Lab gap (not a product bug): the letter seeds do not run on a lab because no CMS admin exists at migration time; the offer-letter e2e paths that rely on the seeded SLIT letter cannot run on a lab until `staff-lab.mjs up` re-seeds them.
+
+## T2 RPC and RLS security review (DONE)
+
+Migration `20261113450000_assessment_security_hardening.sql`; 72 new pgTAP tests in `supabase/tests/assessment_management.sql` (224/224); all 15 suites PASS on the lab.
+
+Reviewed: `asm_admin`, `asm_trainer`, `asm_student`, `asm_calendar`, `asm_validate_responses`, `asm_autocheck`, `asm_due_sweep`, every `asm_*` helper, every `asm_*` policy (SELECT-only, permissive role policy AND restrictive `tenant_scope` policy per table, no client write grants), the three storage policies on `assessment-evidence` and the two path helpers.
+
+Sound as built: SECURITY DEFINER + `search_path = public` on every RPC and policy helper; `asm_due_sweep`, `asm_autocheck`, `asm_notify*`, `asm_log`, `asm_open_attempt` revoked from authenticated; assessor keys only via `asm_question_keys` (admin or trainer-on-version) and the student attempt view hides results, assessor responses and suggestions until the attempt is returned; storage paths are bound to an attempt id that the policy resolves to the caller's own draft (student) or an assignment the caller assesses (`<attempt>/assessor/`); signed URLs need the SELECT policy, which needs the same path check.
+
+Gaps found and fixed:
+1. `asm_admin` trusted every client id: an Admin / RTO Manager signed in under another institution's domain could read, edit, export, assign, void and reopen tenant 1 objects by id, and every list action was institution-wide. Fix: `asm_admin_scope_check(action, data)` refuses (P0002) any `id` / `assessmentId` / `fromAssessmentId` / `versionId` / `assignmentId` / `batchId` / `courseId` / `unitId` outside `tenant_scope`; the list / overview / audit / bank / batch / calendar queries are filtered by `tenant_scope`.
+2. `asm_trainer_on_assignment(assignment, profile)` accepted any profile from any signed-in user (membership oracle) and ignored the tenant; it now answers only for the caller's own profile (admins and system jobs excepted) inside the tenant. Every trainer action and trainer policy routes through it.
+3. Student RPC lookups add `tenant_scope` to the owner check (defence in depth).
+4. `asm_evidence_path_readable` requires `tenant_scope` of the attempt and returns false, never null.
+5. `asm_calendar` admin branches filtered by tenant.
+6. 18 pure helpers / trigger functions had no `search_path` and were executable by PUBLIC / anon; trigger functions were executable by authenticated; the view `asm_version_questions` was writable by anon and authenticated. All revoked / pinned (pure validators stay callable by signed-in users: no data access).
+
+Patch mechanism: the RPC bodies are patched in place from `pg_get_functiondef` with single-line anchors that must match an exact count (same technique as `20261112160438_email_html_all.sql`); the migration is not re-runnable by design.
+
+Product bug found (fixed in T4, not here): after a draft is voided (student left and rejoined the batch, exclusion, cancelled assignment), `asm_student('assessment_open')` tries attempt number 1 again and fails on the unique key (`asm_attempts_assignment_id_student_id_attempt_no_key`). Reproduced at the end of the suite with student 3.

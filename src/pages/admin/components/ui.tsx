@@ -245,11 +245,11 @@ export function MediaUrlInput({
       </div>
       {error ? <span className="mt-1 block text-xs text-primary-700">{error}</span> : null}
       {value ? (
-        <div className="mt-2 inline-flex items-center gap-3 rounded-md border border-background-200 bg-background-100 px-3 py-2">
+        <div className="mt-2 inline-flex max-w-full items-center gap-3 rounded-md border border-background-200 bg-background-100 px-3 py-2">
           <span className="flex h-10 w-16 items-center justify-center overflow-hidden rounded bg-background-50">
             <img src={value} alt={`${label} preview`} className="max-h-full max-w-full object-contain" />
           </span>
-          <span className="max-w-[240px] truncate text-xs text-foreground-500">{value.startsWith("data:") ? "Uploaded file" : value}</span>
+          <span className="min-w-0 max-w-[240px] truncate text-xs text-foreground-500">{value.startsWith("data:") ? "Uploaded file" : value}</span>
         </div>
       ) : null}
       {hint ? <span className="mt-1 block text-xs text-foreground-500">{hint}</span> : null}

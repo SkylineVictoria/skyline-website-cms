@@ -76,11 +76,11 @@ test("the admin staff invitation still works: invite, mail, sign in", async ({ p
   expect(mail.total).toBeGreaterThan(0);
   // The invitee opens the emailed link, sets a password on the existing reset page, then signs in to the CMS.
   await page.goto(await latestLink(invitee.email));
-  await expect(page.getByRole("heading", { name: "Set a new password" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Set your password" })).toBeVisible();
   await page.locator('input[type="password"]').nth(0).fill(PASSWORD);
   await page.locator('input[type="password"]').nth(1).fill(PASSWORD);
   await page.locator('form button[type="submit"]').click();
-  await expect(page.getByRole("heading", { name: "Password updated" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Password saved" })).toBeVisible();
   sql(`update public.cms_users set must_change_password = false where lower(email) = '${invitee.email}'`);
   await signInThroughTheForm(page, invitee.email);
   await expect(page).toHaveURL(/\/admin/);

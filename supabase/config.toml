@@ -83,3 +83,8 @@ verify_jwt = true
 # Stores access details for USI / VEVO / PRISMS / DataZoo ahead of their connectors (Vault, never returned). The gateway
 # verifies the JWT; integration_can_manage and integration_module_access decide access, as in integrations-admin.
 verify_jwt = true
+
+[functions.portal-invite-activate]
+# The "Activate access" link from an invitation email: the one-time token in the request body is the credential (checked by
+# portal_invitation_link_confirm); it answers with a password-setup link for that invitation's email only.
+verify_jwt = false

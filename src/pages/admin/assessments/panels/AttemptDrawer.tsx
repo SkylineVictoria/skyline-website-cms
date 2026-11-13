@@ -13,7 +13,7 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [definition, setDefinition] = useState<Definition | null>(null);
   const [error, setError] = useState("");
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(""); const [overrideLimit, setOverrideLimit] = useState(false);
   const load = async () => {
     try {
       const a = await asmAdmin<Attempt>("attempt_get", { id: attemptId }); setAttempt(a);
@@ -39,7 +39,8 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-background-200 p-2 text-sm">
               <span className="text-foreground-700">Authorised overrides:</span>
               <TextInput className="min-w-[12rem] flex-1" placeholder="Reason (recorded in the audit log)" value={reason} onChange={(e) => setReason(e.target.value)} />
-              <Button size="sm" variant="outline" disabled={!reason} onClick={() => void act("attempt_reopen", { reason }, "A further attempt was opened.")}>Reopen for the student</Button>
+              <label className="flex items-center gap-1 text-xs text-foreground-700"><input type="checkbox" checked={overrideLimit} onChange={(e) => setOverrideLimit(e.target.checked)} /> Allow beyond the attempt limit (audited)</label>
+              <Button size="sm" variant="outline" disabled={!reason} onClick={() => void act("attempt_reopen", { reason, overrideLimit }, "A further attempt was opened.")}>Reopen for the student</Button>
               <Button size="sm" variant="danger" disabled={!reason} onClick={() => window.confirm("Void this attempt? It stays in the history.") && void act("attempt_void", { reason }, "Attempt voided.")}>Void</Button>
             </div>
           ) : null}

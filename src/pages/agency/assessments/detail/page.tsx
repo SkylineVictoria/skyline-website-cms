@@ -20,6 +20,7 @@ export default function StudentAssessmentPage() {
   const [data, setData] = useState<Opened | null>(null);
   const [responses, setResponses] = useState<Responses>({});
   const [rowVersion, setRowVersion] = useState(1);
+  const rowVersionRef = useRef(1); // the server-side row version: every load and save moves it, the submit sends it (20261113470000)
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -33,7 +34,7 @@ export default function StudentAssessmentPage() {
   const timer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
-    try { const d = await asmStudent<Opened>("assessment_open", { assignmentId: id }); setData(d); setResponses(d.attempt.responses ?? {}); setRowVersion(d.attempt.rowVersion); setError(""); }
+    try { const d = await asmStudent<Opened>("assessment_open", { assignmentId: id }); setData(d); setResponses(d.attempt.responses ?? {}); setRowVersion(d.attempt.rowVersion); rowVersionRef.current = d.attempt.rowVersion; setError(""); }
     catch (e) { setError(e instanceof Error ? e.message : "The assessment did not load."); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -42,7 +43,7 @@ export default function StudentAssessmentPage() {
   const editable = attempt?.state === "draft" && data?.assignment.status === "open";
   const save = useCallback(async (r: Responses) => {
     if (!attempt) return; setSaving(true);
-    try { const out = await asmStudent<{ ok: boolean; rowVersion: number; savedAt: string }>("draft_save", { attemptId: attempt.id, responses: r, rowVersion }); setRowVersion(out.rowVersion); setSavedAt(out.savedAt); setError(""); }
+    try { const out = await asmStudent<{ ok: boolean; rowVersion: number; savedAt: string }>("draft_save", { attemptId: attempt.id, responses: r, rowVersion }); setRowVersion(out.rowVersion); rowVersionRef.current = out.rowVersion; setSavedAt(out.savedAt); setError(""); }
     catch (e) { setError(e instanceof Error ? e.message : "Not saved."); } finally { setSaving(false); }
   }, [attempt, rowVersion]);
   const onChange = (r: Responses) => { setResponses(r); if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void save(r), 1000); };
@@ -66,7 +67,7 @@ export default function StudentAssessmentPage() {
     if (!attempt || !definition) return;
     if (timer.current) { window.clearTimeout(timer.current); await save(responses); }
     try {
-      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string; submittedAt?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersion + 1, declaration: { signature, agreed } });
+      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string; submittedAt?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current, declaration: { signature, agreed } });
       if (!out.ok) { setErrors(out.errors ?? []); setSubmitOpen(false); const first = out.errors?.[0]; if (first?.questionId) document.getElementById(`q-${first.questionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
       setReceipt({ receiptNo: out.receiptNo ?? "", submittedAt: out.submittedAt ?? "" }); setSubmitOpen(false); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Not submitted."); }

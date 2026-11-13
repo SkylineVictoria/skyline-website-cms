@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(263);
+select plan(319);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -512,6 +512,108 @@ select lives_ok($$select public.asm_admin('unit_outcome_record', '{"studentId": 
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.asm_admin('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-1", "outcome": "C", "signOff": true}')$$, '42501', null, 'T3 an Editor cannot sign off');
 select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 nor assess');
+select pg_temp.as_postgres();
+
+-- ---------------------------------------------------------------- hardening T4 (20261113470000): the attempt pattern
+-- Student 3 (Sid, batch G1) had attempt 1 on the G1 assignment voided when they left the batch; they are back in G1.
+select pg_temp.as_postgres();
+select is((select count(*)::int from pg_indexes where indexname = 'asm_attempts_one_open'), 1, 'T4 one open attempt per student per assignment is a unique index');
+select is((select state from public.asm_attempts where id = pg_temp.v('attempt3')), 'void', 'T4 fixture: student 3''s first attempt is void');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select pg_temp.put('s3a', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))->'attempt'->>'id');
+select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3a')), '2|draft', 'T4 after a voided draft the student opens attempt 2 (the void does not block or count)');
+select pg_temp.as_postgres();
+select is(public.asm_attempt_count(pg_temp.v('assignment'), 'e5000000-0000-0000-0000-000000000013'), 1, 'T4 the void attempt is not counted');
+select is((select version_id from public.asm_attempts where id = pg_temp.v('s3a')), pg_temp.v('v1'), 'T4 the new attempt is bound to the assignment''s version');
+select throws_ok(format($$insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no) values ('%s', '%s', 'e5000000-0000-0000-0000-000000000013', 9)$$, pg_temp.v('assignment'), pg_temp.v('v1')), '23505', null, 'T4 a second open attempt is refused by the index');
+-- autosave conflicts and immutability
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', '{"q_short": "a"}'::jsonb, 'rowVersion', 1)))->>'rowVersion', '2', 'T4 a save with the current row version moves it');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"q_short": "b"}, "rowVersion": 1}')$$, pg_temp.v('s3a')), '40001', null, 'T4 a save from a stale window is refused');
+select throws_ok(format($$select public.asm_student('submit', '{"attemptId": "%s", "responses": {}, "rowVersion": 1, "declaration": {"signature": "Sid Student", "agreed": true}}')$$, pg_temp.v('s3a')), '40001', null, 'T4 a submit from a stale window is refused');
+select is((select responses->>'q_short' from public.asm_attempts where id = pg_temp.v('s3a')), 'a', 'T4 the stale writes changed nothing');
+-- late rules: allow + late_until in the past refuses; block refuses after due without late_until; block + late_until ahead accepts and flags
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "availableFrom": "%s", "dueAt": "%s", "lateUntil": "%s"}')$$, pg_temp.v('assignment'), (now() - interval '5 days')::text, (now() - interval '3 days')::text, (now() - interval '1 day')::text), 'T4 fixture: due three days ago, late submissions closed yesterday');
+select lives_ok(format($$select public.asm_admin('assignment_student_set', '{"id": "%s", "studentId": "e5000000-0000-0000-0000-000000000013", "dueAt": "%s"}')$$, pg_temp.v('assignment'), (now() - interval '2 days')::text), 'T4 fixture: student 3''s own due date is two days ago (a due-date change reaches every draft of the student)');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->'errors'->0->>'code', 'late', 'T4 after late_until nothing is accepted, even in allow mode');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "lateUntil": null}')$$, pg_temp.v('assignment')), 'T4 fixture: no late_until');
+select is((public.asm_admin('settings_save', '{"lateSubmission": "block"}'))->>'late_submission', 'block', 'T4 fixture: late submissions blocked');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->'errors'->0->>'code', 'late', 'T4 block mode refuses after the due date');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "lateUntil": "%s"}')$$, pg_temp.v('assignment'), (now() + interval '1 day')::text), 'T4 fixture: late_until extended to tomorrow');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 block mode accepts inside late_until');
+select is((select declaration->>'late' from public.asm_attempts where id = pg_temp.v('s3a')), 'true', 'T4 and the submission is flagged late');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"q_short": "later"}, "rowVersion": 99}')$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is locked for the student');
+select pg_temp.as_postgres();
+select throws_ok(format($$update public.asm_attempts set responses = '{}' where id = '%s'$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is immutable even for the owner role');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.asm_admin('settings_save', '{"lateSubmission": "allow"}')$$, 'T4 fixture: back to allow');
+-- max_attempts: NYS decisions open attempts only under the limit (institution 3, voids not counted); the assessor cannot reopen beyond it, the admin only with overrideLimit
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3a'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 2');
+select pg_temp.put('s3b', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3a'), 'outcome', 'NYS')))->>'nextAttemptId');
+select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3b')), '3|draft', 'T4 NYS opens attempt 3 (one counted so far)');
+select ok((select due_at between now() + interval '4 days 23 hours' and now() + interval '5 days 1 hour' from public.asm_attempts where id = pg_temp.v('s3b')), 'T4 the reassessment window is reassessment_days (5)');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3b'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 attempt 3 submits');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3b'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 3');
+select pg_temp.put('s3c', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3b'), 'outcome', 'NYS')))->>'nextAttemptId');
+select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3c')), '4|draft', 'T4 the second counted NYS opens attempt 4 (the third counted attempt)');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3c'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 attempt 4 submits');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3c'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 4');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3c'), 'outcome', 'NYS')))->>'nextAttemptId', null, 'T4 the third counted NYS finalises: no attempt 5');
+select is((select state || '|' || outcome from public.asm_attempts where id = pg_temp.v('s3c')), 'final|NYS', 'T4 attempt 4 is final NYS');
+select throws_ok(format($$select public.asm_trainer('attempt_reopen', '{"id": "%s"}')$$, pg_temp.v('s3c')), '42501', null, 'T4 the assessor cannot reopen beyond the limit');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select lives_ok(format($$select public.asm_student('reassessment_request', '{"attemptId": "%s", "reason": "please"}')$$, pg_temp.v('s3c')), 'T4 the student asks for a reassessment');
+select pg_temp.put('rr', (select id::text from public.asm_reassessments where attempt_id = pg_temp.v('s3c') and state = 'requested'));
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select throws_ok(format($$select public.asm_admin('reassessment_decide', '{"id": "%s", "approve": true}')$$, pg_temp.v('rr')), '42501', null, 'T4 approving beyond the limit needs the override');
+select throws_ok(format($$select public.asm_admin('attempt_reopen', '{"id": "%s"}')$$, pg_temp.v('s3c')), '42501', null, 'T4 the admin reopen beyond the limit needs the override');
+select pg_temp.put('s3d', (public.asm_admin('reassessment_decide', jsonb_build_object('id', pg_temp.v('rr'), 'approve', true, 'overrideLimit', true)))->>'attemptId');
+select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3d')), '5|draft', 'T4 with overrideLimit the admin approves: attempt 5');
+select is((select state from public.asm_reassessments where id = pg_temp.v('rr')), 'opened', 'T4 the request is recorded as opened');
+select is((select count(*)::int from public.asm_audit_log where action = 'attempt_limit_override' and target_id = pg_temp.s('s3d')), 1, 'T4 the override is audited');
+select throws_ok(format($$select public.asm_admin('attempt_reopen', '{"id": "%s", "overrideLimit": true}')$$, pg_temp.v('s3c')), '23505', null, 'T4 only one open attempt: a reopen beside the draft is refused');
+-- per-assessment override of max_attempts
+select lives_ok(format($$select public.asm_admin('assessment_update', '{"id": "%s", "settingsOverride": {"max_attempts": 6}}')$$, pg_temp.v('assessment')), 'T4 the assessment allows six attempts');
+select pg_temp.as_postgres();
+select is(public.asm_max_attempts(pg_temp.v('assignment')), 6, 'T4 the override is effective for its assignments');
+-- void and reopen by the assessor, audited
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('attempt_void', jsonb_build_object('id', pg_temp.v('s3d'), 'reason', 'opened in error')))->>'ok', 'true', 'T4 the assessor voids the draft');
+select is((select state || '|' || void_reason from public.asm_attempts where id = pg_temp.v('s3d')), 'void|opened in error', 'T4 the void keeps its reason');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where action = 'attempt_void' and target_id = pg_temp.s('s3d') and actor_role = 'trainer'), 1, 'T4 the void is audited');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select pg_temp.put('s3e', (public.asm_trainer('attempt_reopen', jsonb_build_object('id', pg_temp.v('s3c'), 'reason', 'resubmission agreed')))->>'attemptId');
+select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3e')), '6|draft', 'T4 under the raised limit the assessor reopens: attempt 6');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where action = 'attempt_reopen' and target_id = pg_temp.s('s3c') and actor_role = 'trainer'), 1, 'T4 the reopen is audited');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((select count(*)::int from public.asm_reassessments where next_attempt_id = pg_temp.v('s3e') and requested_role = 'trainer' and state = 'opened'), 1, 'T4 and recorded as a reassessment');
+select throws_ok(format($$select public.asm_trainer('attempt_void', '{"id": "%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T4 an assessor cannot void an attempt on a batch they are not on');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select throws_ok(format($$select public.asm_trainer('attempt_void', '{"id": "%s"}')$$, pg_temp.v('s3e')), '42501', null, 'T4 a trainer without the marking right cannot void');
+select throws_ok(format($$select public.asm_trainer('attempt_reopen', '{"id": "%s"}')$$, pg_temp.v('s3c')), '42501', null, 'T4 nor reopen');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
+select throws_ok(format($$select public.asm_trainer('attempt_void', '{"id": "%s"}')$$, pg_temp.v('s3e')), '42501', null, 'T4 a student cannot void');
+-- a closed assignment opens nothing
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "status": "closed"}')$$, pg_temp.v('assignment')), 'T4 fixture: the assignment is closed');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is((public.asm_trainer('attempt_void', jsonb_build_object('id', pg_temp.v('s3e'))))->>'ok', 'true', 'T4 fixture: the draft is voided');
+select throws_ok(format($$select public.asm_trainer('attempt_reopen', '{"id": "%s"}')$$, pg_temp.v('s3c')), '42501', null, 'T4 a closed assignment opens no attempt');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "status": "open"}')$$, pg_temp.v('assignment')), 'T4 fixture: reopened');
 select pg_temp.as_postgres();
 
 select * from finish();

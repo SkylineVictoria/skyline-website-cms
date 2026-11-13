@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import WizardStepper, { type WizardStepperItem } from "@/components/shared/wizard/WizardStepper";
 import { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardNotice } from "@/components/shared/wizard/WizardShell";
 import { Badge, Card, StatusBadge } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -77,28 +76,39 @@ export default function CourseWizardPage() {
   const c = detail.course;
   const canEdit = role.rtoManager;
   const go = (to: number) => { if (to >= 0 && to < steps.length) navigate(stepPath(id, steps[to].id)); };
-  const items: WizardStepperItem[] = steps.map((s) => ({ id: s.id, short: s.short, icon: notes[s.id].length ? "ri-error-warning-line" : s.id === current.id ? "ri-edit-line" : "ri-checkbox-blank-circle-line", done: notes[s.id].length === 0 }));
-  const doneCount = steps.filter((s) => notes[s.id].length === 0).length;
 
   return (
     <div className="w-full min-w-0">
-      <div className="sticky top-0 z-10 mb-4 rounded-b-xl border border-t-0 border-background-200 bg-background-50/95 backdrop-blur">
-        <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-2 pt-3">
+      <div className="mb-5 rounded-xl border border-background-200 bg-background-50">
+        <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
           <div className="min-w-0">
-            <Link to="/admin/course-fees" className="inline-flex items-center gap-1 text-label font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />Courses</Link>
-            <div className="flex flex-wrap items-center gap-2"><h1 className="font-heading text-xl font-bold text-foreground-950">{c.label}</h1><StatusBadge status={c.status} />{c.isActive ? null : <Badge>Inactive</Badge>}</div>
-            <p className="text-xs text-foreground-500">{[c.cricos && `CRICOS ${c.cricos}`, c.duration, `${c.activeUnits} units`, c.totalCents ? `Total ${money(c.totalCents)}` : null, c.nextIntake ? `Next intake ${shortDate(c.nextIntake)}` : null].filter(Boolean).join(" · ")}</p>
+            <Link to="/admin/course-fees" className="inline-flex items-center gap-1 text-sm font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" /> All courses</Link>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <h1 className="font-heading text-xl font-bold text-foreground-950">{c.label}</h1>
+              <StatusBadge status={c.status} />
+              {!c.isActive ? <Badge>Inactive</Badge> : null}
+            </div>
+            <p className="mt-1 text-xs text-foreground-500">{[c.cricos && `CRICOS ${c.cricos}`, c.duration, `${c.activeUnits} units`, c.totalCents ? `Total ${money(c.totalCents)}` : null, c.nextIntake ? `Next intake ${shortDate(c.nextIntake)}` : null].filter(Boolean).join(" · ")}</p>
           </div>
-          <p className="text-xs text-foreground-500">{busy ? "Saving…" : savedAt ? `Saved ${savedAt}` : "Changes save automatically"}</p>
+          <span role="status" className="text-xs text-foreground-500">{busy ? "Saving…" : savedAt ? `Saved ${savedAt}` : "Autosave on"}</span>
         </div>
-        <div className="px-5 pb-1"><div className="h-1.5 overflow-hidden rounded-full bg-background-200" role="progressbar" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneCount} aria-label={`${doneCount} of ${steps.length} steps complete`}>
-          <div className="h-full rounded-full bg-primary-500 transition-all" style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div></div>
-        <WizardStepper items={items} current={index} onSelect={go} />
+        <nav aria-label="Course sections" className="flex gap-1 overflow-x-auto border-t border-background-200 px-3 py-2">
+          {steps.map((section, sectionIndex) => (
+            <Link
+              key={section.id}
+              to={stepPath(id, section.id)}
+              aria-current={sectionIndex === index ? "page" : undefined}
+              className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${sectionIndex === index ? "bg-primary-600 text-white" : "text-foreground-600 hover:bg-background-100 hover:text-foreground-900"}`}
+            >
+              <span>{section.id === "details" ? "Overview" : section.id === "timetable" ? "Curriculum" : section.id === "intakes" ? "Intakes & Batches" : section.short}</span>
+              {notes[section.id].length > 0 ? <span aria-label={`${notes[section.id].length} items need attention`} title={notes[section.id].join(" · ")} className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs ${sectionIndex === index ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"}`}>{notes[section.id].length}</span> : null}
+            </Link>
+          ))}
+        </nav>
       </div>
-
-      <div className="mb-3">
-        <h2 className="font-heading text-lg font-semibold text-foreground-950">{index + 1}. {current.title}</h2>
-        <p className="text-sm text-foreground-600">{current.hint}</p>
+      <div className="mb-4">
+        <h2 className="font-heading text-lg font-semibold text-foreground-950">{current.title}</h2>
+        <p className="mt-1 text-sm text-foreground-600">{current.hint}</p>
       </div>
       {notes[current.id].length ? <div className="mb-3 overflow-hidden rounded-md border border-background-200"><WizardNotice tone="warn">Needs attention: {notes[current.id].join(" · ")}</WizardNotice></div> : null}
       {!canEdit && current.id !== "website" ? <div className="mb-3"><ReadOnlyNote>{role.admin ? "You can view this course and enrol students into existing batches. Only an RTO Manager changes it." : "Read only."}</ReadOnlyNote></div> : null}

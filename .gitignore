@@ -70,3 +70,6 @@ playwright-report/
 # Test artefacts (test:holiday-import once wrote its workbook here)
 /holiday-test.xlsx
 /*.xlsx
+
+# Schema/data dumps taken before a hosted migration (brief 11.2); never committed
+backups/

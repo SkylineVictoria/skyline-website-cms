@@ -13,8 +13,8 @@ import { DEPOSIT_LIMIT_CENTS, money, rto, shortDate, stepPath, todayIso, type Co
 const STEPS: { id: CourseStep; short: string; title: string; icon: string; hint: string }[] = [
   { id: "details", short: "Details", title: "Course details", icon: "ri-information-line", hint: "Name, codes, category, duration and campus." },
   { id: "timetable", short: "Units & Timetable", title: "Units & master timetable", icon: "ri-list-check-2", hint: "The units in delivery order with their weeks and hours. Every intake is generated from this." },
-  { id: "fees", short: "Fees", title: "Fees", icon: "ri-money-dollar-circle-line", hint: "The fee lines as the offer letter prints them. Intakes inherit these unless they override them." },
-  { id: "intakes", short: "Intakes", title: "Intakes and batches", icon: "ri-calendar-event-line", hint: "Dated runs of the timetable. Batches inherit their intake's unit dates." },
+  { id: "fees", short: "Fees", title: "Fees", icon: "ri-money-dollar-circle-line", hint: "The fee lines as the offer letter prints them. Every intake uses these unless its fees are changed for that intake." },
+  { id: "intakes", short: "Intakes", title: "Intakes and batches", icon: "ri-calendar-event-line", hint: "Each intake is one run of the course with its own dates. Open one for its timeline, batches and students." },
   { id: "website", short: "Website", title: "Website", icon: "ri-global-line", hint: "Marketing settings and the publish checklist; facts come from the steps before." },
 ];
 
@@ -26,7 +26,7 @@ function attention(d: CourseDetail): Record<CourseStep, string[]> {
   const deposit = d.fees.filter((f) => f.type === "initial_deposit").reduce((s, f) => s + f.amountCents, 0);
   return {
     details: [!c.name.trim() && "Add a name", !c.code.trim() && "Add the course code", !c.category && "Choose a category"].filter(Boolean) as string[],
-    timetable: [active.length === 0 && "Add the units", active.some((u) => !(u.defaultWeeks >= 1)) && "Units missing weeks", noHours > 0 && `${noHours} unit${noHours === 1 ? " has" : "s have"} no hours`].filter(Boolean) as string[],
+    timetable: [active.length === 0 && "Add the units", active.some((u) => !(u.defaultWeeks >= 0.5)) && "Units missing weeks", noHours > 0 && `${noHours} unit${noHours === 1 ? " has" : "s have"} no hours`].filter(Boolean) as string[],
     fees: [!d.fees.some((f) => f.type === "tuition") && "No tuition fee", deposit > DEPOSIT_LIMIT_CENTS && `Deposit ${money(deposit)} is above $1,500`].filter(Boolean) as string[],
     intakes: [!d.intakes.some((i) => i.status === "open" && i.startDate >= today) && "No open intake"].filter(Boolean) as string[],
     website: [c.status !== "Published" && "Unpublished"].filter(Boolean) as string[],

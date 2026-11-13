@@ -16,9 +16,12 @@ export interface Toast {
   id: number;
   message: string;
   tone: "success" | "error" | "info";
+  /** One button on the toast, e.g. Undo; the toast then stays a little longer. */
+  action?: ToastAction;
 }
+export interface ToastAction { label: string; onClick: () => void }
 
-export const ToastContext = createContext<{ push: (message: string, tone?: Toast["tone"]) => void } | null>(null);
+export const ToastContext = createContext<{ push: (message: string, tone?: Toast["tone"], action?: ToastAction) => void } | null>(null);
 
 export function useToast() {
   const ctx = useContext(ToastContext);

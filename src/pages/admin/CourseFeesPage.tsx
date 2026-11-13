@@ -6,6 +6,9 @@ import { ListMessage, SearchBox } from "@/pages/admin/components/ListControls";
 import { ChipFilter } from "@/pages/admin/components/rto/shared";
 import { money, rto, shortDate, stepPath, type RtoCourse } from "@/pages/admin/lib/rto";
 import IntakesPage from "@/pages/admin/IntakesPage";
+import RoomsBoard from "@/pages/admin/components/rto/RoomsBoard";
+
+type View = "courses" | "intakes" | "rooms";
 
 /** Master Data › Courses: the one course list. A course's facts, units, fees, intakes, batches and website content open from here. */
 export default function CourseFeesPage() {
@@ -15,8 +18,10 @@ export default function CourseFeesPage() {
   const [category, setCategory] = useState("");
   const [active, setActive] = useState<"" | "active" | "inactive">("");
   const [published, setPublished] = useState<"" | "Published" | "Draft">("");
-  const [view, setView] = useState<"courses" | "intakes">(() => (new URLSearchParams(window.location.search).get("view") === "intakes" ? "intakes" : "courses"));
-  const switchView = (v: "courses" | "intakes") => { setView(v); window.history.replaceState(null, "", v === "intakes" ? "?view=intakes" : window.location.pathname); };
+  const [view, setView] = useState<View>(() => { const v = new URLSearchParams(window.location.search).get("view"); return v === "intakes" || v === "rooms" ? v : "courses"; });
+  const switchView = (v: View) => { setView(v); window.history.replaceState(null, "", v === "courses" ? window.location.pathname : `?view=${v}`); };
+  const [rtoManager, setRtoManager] = useState(false);
+  useEffect(() => { rto<{ rtoManager: boolean }>("me").then((m) => setRtoManager(m.rtoManager)).catch(() => undefined); }, []);
 
   const load = useCallback(async () => {
     try { setRows(await rto<RtoCourse[]>("course_list")); setError(""); }
@@ -33,14 +38,15 @@ export default function CourseFeesPage() {
 
   return (
     <div data-testid="course-fees-page">
-      <PageHeader title="Courses" description="One record per course: open a course to set it up step by step (details, units & timetable, fees, intakes, website)." />
+      <PageHeader title="Courses" description={view === "rooms" ? "Which batch is in which room, week by week." : view === "intakes" ? "Every intake of every course. Open one for its timeline, batches and students." : "One record per course: open a course to set it up step by step (details, units & timetable, fees, intakes, website)."} />
       <div className="mb-4 inline-flex rounded-full border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View">
-        {([["courses", "Courses"], ["intakes", "All intakes"]] as const).map(([v, label]) => (
+        {([["courses", "Courses"], ["intakes", "Intakes"], ["rooms", "Rooms"]] as const).map(([v, label]) => (
           <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => switchView(v)}
             className={`rounded-full px-4 py-1.5 text-[13px] font-medium ${view === v ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"}`}>{label}</button>
         ))}
       </div>
-      {view === "intakes" ? <IntakesPage embedded /> : <>
+      {view === "rooms" ? <RoomsBoard canEdit={rtoManager} /> : null}
+      {view === "intakes" ? <IntakesPage embedded /> : view === "rooms" ? null : <>
       <div className="sticky top-0 z-10 -mx-1 mb-4 space-y-3 bg-background-100/95 px-1 py-2 backdrop-blur">
         <SearchBox label="Search courses" value={search} onSearch={setSearch} placeholder="Search code, name, CRICOS or category" />
         <div className="flex flex-wrap gap-x-5 gap-y-2">

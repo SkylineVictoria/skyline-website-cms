@@ -1,30 +1,31 @@
 // An intake's unit schedule: a two-column grid (units on the left, a timeline on the right that fits the width and scrolls on its
 // own when long), month axis with gridlines, today and public holidays, drag a bar to move it (later units follow) or its right
-// edge to change its length, dates in a small popover, a header with the labelled totals, and a sticky Save / Regenerate footer.
+// edge to change its length, dates in a small popover, a header with the labelled totals, term breaks shaded. With `autosave` a change
+// is saved as soon as it is dropped (the parent offers Undo); otherwise a sticky Save / Regenerate footer.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, ConfirmDialog, TextInput } from "@/pages/admin/components/ui";
 import { listHolidays } from "@/lib/hrmsApi";
-import { addDays, daysBetween, parseDay, shortDate, todayIso, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
+import { addDays, daysBetween, listBreaks, parseDay, registeredWeeks, shortDate, todayIso, weeksOf, type AcademicBreak, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
 
 const ROW = 56; // px, the same in both columns
 const AXIS = 32;
 const MIN_PX_PER_DAY = 0.9; // below this the timeline scrolls inside its own box
 
 const dayMonth = (iso: string) => new Date(parseDay(iso)).toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "UTC" });
-const weeksOf = (start: string, end: string) => Math.max(1, Math.round((daysBetween(start, end) + 1) / 7));
-/** "52 Weeks" -> 52 (the course's registered duration), else null. */
-const durationWeeks = (duration: string | null | undefined) => { const m = /(\d+)\s*weeks?/i.exec(duration ?? ""); return m ? Number(m[1]) : null; };
 
-export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, readOnly, busy, onSave, onRegenerate, onDirtyChange }: {
+export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, readOnly, busy, onSave, onRegenerate, onDirtyChange, autosave = false }: {
   detail: IntakeDetail;
   /** The course's duration as registered, e.g. "52 Weeks" (for the CoE length check). */
   courseDuration?: string | null;
   /** Each unit's default weeks (master timetable), to tell whether the schedule was changed by hand. */
   unitWeeks?: Record<string, number>;
   readOnly: boolean; busy: boolean;
-  onSave: (rows: ScheduleRow[]) => void;
+  /** Saves the rows; `previous` (autosave) is what Undo puts back. */
+  onSave: (rows: ScheduleRow[], previous?: ScheduleRow[]) => void;
   onRegenerate: (fitEnd?: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** Save each change when it is dropped (no Save button). */
+  autosave?: boolean;
 }) {
   const [rows, setRows] = useState<ScheduleRow[]>(detail.schedule);
   useEffect(() => { setRows(detail.schedule); }, [detail.schedule]);
@@ -33,6 +34,8 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
   const [confirm, setConfirm] = useState<null | { fitEnd?: string; text: string }>(null);
   const [popover, setPopover] = useState<number | null>(null);
   const [holidays, setHolidays] = useState<{ date: string; name: string }[]>([]);
+  const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
+  useEffect(() => { let live = true; listBreaks().then((b) => { if (live) setBreaks(b); }).catch(() => undefined); return () => { live = false; }; }, []);
 
   // ---- range and scale
   const first = rows.length ? rows.reduce((m, r) => (r.startDate < m ? r.startDate : m), rows[0].startDate) : detail.intake.startDate;
@@ -101,6 +104,16 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
     return { start: addDays(r.startDate, preview.days), end: addDays(r.endDate, preview.days) };
   };
 
+  // ---- autosave: a finished change (no drag in progress, popover closed) is saved once
+  const sentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!autosave || readOnly || !dirty || preview || popover !== null) return;
+    const key = JSON.stringify(rows);
+    if (sentRef.current === key) return;
+    const t = window.setTimeout(() => { sentRef.current = key; onSave(rows, detail.schedule); }, 350);
+    return () => window.clearTimeout(t);
+  }, [autosave, readOnly, dirty, preview, popover, rows, detail.schedule, onSave]);
+
   // ---- popover: closes on outside click
   const popRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -114,7 +127,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
   const label = i.courseName.toUpperCase().startsWith((i.courseCode || "").toUpperCase()) && i.courseCode ? i.courseName : `${i.courseCode} ${i.courseName}`.trim();
   const weeks = rows.length ? weeksOf(first, last) : 0;
   const hours = rows.reduce((s, r) => s + (r.hours ?? 0), 0);
-  const registered = durationWeeks(courseDuration);
+  const registered = registeredWeeks(courseDuration);
   const intakeDiffers = rows.length > 0 && (i.startDate !== first || (i.endDate ?? last) !== last);
   const manual = dirty || rows.some((r) => unitWeeks[r.unitId] !== undefined && weeksOf(r.startDate, r.endDate) !== unitWeeks[r.unitId]);
   const regenerate = (fitEnd?: string) => {
@@ -189,6 +202,10 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
               {holidays.filter((h) => h.date >= first && h.date <= last).map((h) => (
                 <div key={`h${h.date}`} title={`${shortDate(h.date)}: ${h.name}`} className="absolute bottom-0 top-0 bg-amber-200/50" style={{ left: at(h.date), width: Math.max(2, px) }} />
               ))}
+              {breaks.filter((b) => b.endDate >= first && b.startDate <= last).map((b) => {
+                const s0 = b.startDate < first ? first : b.startDate, e0 = b.endDate > last ? last : b.endDate;
+                return <div key={`b${b.startDate}`} title={`${b.label}: ${shortDate(b.startDate)} – ${shortDate(b.endDate)}`} className="absolute bottom-0 top-0 bg-sky-200/40" style={{ left: at(s0), width: Math.max(2, (daysBetween(s0, e0) + 1) * px) }} />;
+              })}
               {today >= first && today <= last ? <div className="absolute bottom-0 top-0 border-l-2 border-red-400" style={{ left: at(today) }} title="Today" aria-hidden="true" /> : null}
               {rows.map((r, idx) => {
                 const s = shown(r, idx);
@@ -214,19 +231,20 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-4 rounded bg-primary-500" />Core unit</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-4 rounded bg-secondary-500" />Elective unit</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2 bg-amber-200" />Public holiday</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 bg-sky-200" />Term break</span>
         <span className="flex items-center gap-1.5"><span className="h-3 border-l-2 border-red-400" />Today</span>
-        {readOnly ? null : <span className="text-foreground-500">Drag a bar to move it, its right edge to change its length; later units follow.</span>}
+        {readOnly ? null : <span className="text-foreground-500">Drag a bar to move it, its right edge to change its length; later units follow.{autosave ? " Changes save when you let go." : ""}</span>}
       </div>
 
       {/* sticky footer */}
       {readOnly ? null : (
         <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-b-card border-t border-background-200 bg-background-50/95 px-4 py-2.5 backdrop-blur">
           <Button variant="outline" size="sm" icon="ri-refresh-line" disabled={busy} onClick={() => regenerate()}>Regenerate</Button>
-          <div className="flex items-center gap-2">
+          {autosave ? <span className="text-xs text-foreground-500">{busy ? "Saving…" : "Changes save automatically"}</span> : <div className="flex items-center gap-2">
             {dirty ? <span className="text-xs font-medium text-amber-800">Unsaved changes</span> : null}
             {dirty ? <Button variant="ghost" size="sm" onClick={() => setRows(detail.schedule)}>Undo</Button> : null}
             <Button size="sm" disabled={busy || !dirty} onClick={() => onSave(rows)}>{busy ? "Saving…" : "Save schedule"}</Button>
-          </div>
+          </div>}
         </div>
       )}
       <ConfirmDialog open={confirm !== null} title={confirm?.fitEnd ? `Fit the schedule to ${registered} weeks?` : "Regenerate the schedule?"} message={confirm?.text ?? ""}

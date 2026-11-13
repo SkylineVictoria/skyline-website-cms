@@ -1,115 +1,93 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Badge, Button, Field, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
+// New intake: one field, the start date, filled in from the calendar (the next term start this course has no intake for). The
+// schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & add batch".
+import { useEffect, useMemo, useState } from "react";
+import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
-import { rto, type CourseDetail, type IntakeDetail, type IntakeStatus, type RtoUnit } from "@/pages/admin/lib/rto";
+import {
+  addDays, listBreaks, mondayOf, rto, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
+} from "@/pages/admin/lib/rto";
 
-type Mode = "durations" | "fit";
+/** The first term start (the Monday after a break) at least a week away that the course has no intake on; else next Monday. */
+function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
+  const soonest = addDays(todayIso(), 7);
+  const starts = breaks.map((b) => addDays(b.endDate, 1)).map((d) => (mondayOf(d) === d ? d : addDays(mondayOf(d), 7))).filter((d) => d >= soonest && !taken.has(d)).sort();
+  if (starts.length) return { date: starts[0], why: "the next term start" };
+  let d = mondayOf(soonest) < soonest ? addDays(mondayOf(soonest), 7) : mondayOf(soonest);
+  while (taken.has(d)) d = addDays(d, 7);
+  return { date: d, why: "the next free Monday" };
+}
 
-/**
- * Pick a course and a start date, then the units: core units are always scheduled, electives are chosen. "Use unit durations" lays
- * each unit out for its default weeks; "Fit to end date" shares the working days up to the end date evenly. Holidays are skipped.
- */
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, stay = false }: {
-  open: boolean; onClose: () => void; courses: { id: string; label: string; campus?: string | null }[]; courseId?: string;
-  /** Stay on the page after creating (the course wizard lists the new intake); otherwise open the intake. */
-  stay?: boolean;
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated }: {
+  open: boolean; onClose: () => void;
+  /** Courses to choose from when the drawer is not opened from a course. */
+  courses: { id: string; label: string }[];
+  courseId?: string;
+  onCreated: (detail: IntakeDetail, addBatch: boolean) => void;
 }) {
-  const navigate = useNavigate();
-  const [form, setForm] = useState({ courseId: courseId ?? "", startDate: "", endDate: "", campus: "", capacity: "", status: "draft" as IntakeStatus, name: "", generate: true, mode: "durations" as Mode });
-  const [units, setUnits] = useState<RtoUnit[] | null>(null);
-  const [electives, setElectives] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  const [chosen, setChosen] = useState(courseId ?? "");
+  const [course, setCourse] = useState<CourseDetail | null>(null);
+  const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
+  const [start, setStart] = useState("");
+  const [touched, setTouched] = useState(false);
+  const [busy, setBusy] = useState<"" | "create" | "batch">("");
   const [error, setError] = useState("");
-  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
-  const chosen = form.courseId || courseId || "";
 
+  useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); } }, [open, courseId]);
+  useEffect(() => { if (open) listBreaks().then(setBreaks).catch(() => undefined); }, [open]);
   useEffect(() => {
-    if (!open || !chosen) { setUnits(null); return; }
+    if (!open || !chosen) { setCourse(null); return; }
     let live = true;
-    setUnits(null); setElectives(new Set());
-    rto<CourseDetail>("course_get", { courseId: chosen }).then((d) => { if (live) setUnits(d.units.filter((u) => u.isActive)); })
-      .catch((e) => { if (live) setError(e instanceof Error ? e.message : "Units did not load."); });
+    rto<CourseDetail>("course_get", { courseId: chosen }).then((d) => { if (live) setCourse(d); })
+      .catch((e) => { if (live) setError(e instanceof Error ? e.message : "The course did not load."); });
     return () => { live = false; };
   }, [open, chosen]);
 
-  const core = (units ?? []).filter((u) => u.unitType === "core");
-  const optional = (units ?? []).filter((u) => u.unitType === "elective");
-  const picked = [...core, ...optional.filter((u) => u.id && electives.has(u.id))];
-  const weeks = picked.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
+  const taken = useMemo(() => new Set((course?.intakes ?? []).map((i) => i.startDate)), [course]);
+  const suggestion = useMemo(() => (course ? suggestStart(breaks, taken) : null), [course, breaks, taken]);
+  useEffect(() => { if (suggestion && !touched) setStart(suggestion.date); }, [suggestion, touched]);
 
-  const save = async () => {
-    if (!chosen || !form.startDate) { setError("Choose a course and a start date."); return; }
-    if (form.generate && form.mode === "fit" && (!form.endDate || form.endDate < form.startDate)) { setError("Choose an end date after the start date."); return; }
-    setBusy(true); setError("");
+  const units = (course?.units ?? []).filter((u) => u.isActive);
+  const weeks = units.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
+  const inBreak = breaks.find((b) => start >= b.startDate && start <= b.endDate);
+  const clash = start && taken.has(start);
+
+  const create = async (addBatch: boolean) => {
+    if (!chosen || !start) { setError("Choose a course and a start date."); return; }
+    setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      const out = await rto<IntakeDetail>("intake_save", {
-        courseId: chosen, startDate: form.startDate, campus: form.campus, capacity: form.capacity, status: form.status, name: form.name, generate: form.generate,
-        unitIds: picked.map((u) => u.id), fitEnd: form.generate && form.mode === "fit" ? form.endDate : "",
-      });
-      onClose();
-      if (!stay) navigate(`/admin/intakes/${out.intake.id}`);
+      const out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "draft", generate: true, campus: course?.course.campus ?? "" });
+      onCreated(out, addBatch);
     } catch (e) { setError(e instanceof Error ? e.message : "The intake was not created."); }
-    finally { setBusy(false); }
+    finally { setBusy(""); }
   };
 
   return (
     <Drawer open={open} title="New intake" onClose={onClose}
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy} onClick={() => void save()}>{busy ? "Creating…" : form.generate ? "Create & generate schedule" : "Create intake"}</Button></>}>
+      footer={<>
+        <Button variant="outline" disabled={!!busy || !chosen || !start || !!clash} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
+        <Button disabled={!!busy || !chosen || !start || !!clash} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
+      </>}>
       <ErrorNote text={error} />
       {courseId ? null : (
         <Field label="Course" required>
-          <Select value={form.courseId} onChange={(e) => set({ courseId: e.target.value, campus: courses.find((c) => c.id === e.target.value)?.campus ?? form.campus })}>
+          <Select value={chosen} onChange={(e) => { setChosen(e.target.value); setTouched(false); }}>
             <option value="">Choose a course</option>
             {courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </Select>
         </Field>
       )}
-      <Field label="Start date" required><TextInput type="date" value={form.startDate} onChange={(e) => set({ startDate: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Campus / delivery location"><TextInput value={form.campus} onChange={(e) => set({ campus: e.target.value })} /></Field>
-        <Field label="Capacity"><TextInput inputMode="numeric" value={form.capacity} onChange={(e) => set({ capacity: e.target.value.replace(/\D/g, "") })} /></Field>
-      </div>
-      <Field label="Status" hint="Only Open intakes are offered on the website and the enrolment form.">
-        <Select value={form.status} onChange={(e) => set({ status: e.target.value as IntakeStatus })}>
-          <option value="draft">Draft</option><option value="open">Open</option><option value="full">Full</option><option value="closed">Closed</option>
-        </Select>
+      <Field label="Start date" required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
+        <TextInput type="date" autoFocus value={start} onChange={(e) => { setStart(e.target.value); setTouched(true); }} />
       </Field>
-      <Field label="Name" hint="Leave blank for the automatic name, e.g. “BSB50120 Feb 2027 – Nov 2027”."><TextInput value={form.name} onChange={(e) => set({ name: e.target.value })} /></Field>
-
-      <div className="space-y-3 rounded-md bg-background-100 p-3">
-        <Toggle checked={form.generate} onChange={(v) => set({ generate: v })} label="Generate schedule" />
-        {form.generate ? (
-          <>
-            <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Schedule mode">
-              {([["durations", "Use unit durations"], ["fit", "Fit to end date"]] as const).map(([id, label]) => (
-                <button key={id} type="button" role="radio" aria-checked={form.mode === id} onClick={() => set({ mode: id })}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium ${form.mode === id ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700"}`}>{label}</button>
-              ))}
-            </div>
-            {form.mode === "fit" ? <Field label="End date" required hint="Working days up to this date are shared evenly between the selected units; public holidays are skipped."><TextInput type="date" value={form.endDate} min={form.startDate} onChange={(e) => set({ endDate: e.target.value })} /></Field>
-              : <p className="text-xs text-foreground-500">Each unit runs for its default weeks of working days ({weeks} weeks in total), skipping confirmed public holidays.</p>}
-            {!chosen ? <p className="text-xs text-foreground-500">Choose a course to see its units.</p> : units === null ? <p className="text-xs text-foreground-500">Loading units…</p> : units.length === 0 ? (
-              <p className="text-xs text-foreground-500">This course has no active units yet. Add them in the course’s Units tab.</p>
-            ) : (
-              <div className="max-h-72 space-y-0.5 overflow-y-auto rounded-md border border-background-200 bg-background-50 p-2">
-                <p className="px-1 pb-1 text-xs font-medium text-foreground-500">{picked.length} of {units.length} units · core units are always included</p>
-                {[...core, ...optional].map((u) => {
-                  const isCore = u.unitType === "core", on = isCore || (u.id ? electives.has(u.id) : false);
-                  return (
-                    <label key={u.id} className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${isCore ? "text-foreground-600" : "cursor-pointer hover:bg-background-100"}`}>
-                      <input type="checkbox" checked={on} disabled={isCore} onChange={() => setElectives((s) => { const next = new Set(s); if (u.id) { if (next.has(u.id)) next.delete(u.id); else next.add(u.id); } return next; })} />
-                      <span className="min-w-0 flex-1 truncate"><span className="font-medium">{u.code}</span> {u.name}</span>
-                      {isCore ? <i className="ri-lock-line text-foreground-400" aria-label="Core unit" /> : <Badge>Elective</Badge>}
-                      <span className="text-xs tabular-nums text-foreground-500">{u.defaultWeeks}w</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        ) : null}
-      </div>
+      {clash ? <p role="alert" className="text-sm text-primary-800">This course already has an intake starting on {shortDate(start)}.</p> : null}
+      {inBreak ? <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(start)} is in the {inBreak.label.toLowerCase()} ({shortDate(inBreak.startDate)} – {shortDate(inBreak.endDate)}); classes start after it.</p> : null}
+      {course ? (
+        <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">
+          {units.length
+            ? <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It starts as a draft; open it when you are ready to take students.</>
+            : <>This course has no units yet, so the intake starts without a timeline. Add the units in the course’s Units &amp; Timetable step.</>}
+        </p>
+      ) : chosen ? <p className="text-sm text-foreground-500">Loading the course…</p> : null}
     </Drawer>
   );
 }

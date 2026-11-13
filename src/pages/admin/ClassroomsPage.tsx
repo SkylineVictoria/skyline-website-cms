@@ -1,73 +1,86 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, EmptyState, PageHeader, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { Button, Card, PageHeader, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ErrorNote, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
-import { rto, type Classroom } from "@/pages/admin/lib/rto";
+import { SkeletonLines } from "@/pages/admin/components/rto/overlay";
+import { rto, rtoFlow, type LocationRooms, type Room } from "@/pages/admin/lib/rto";
 
-type Row = { id?: string; name: string; campus: string; capacity: string; isActive: boolean };
-const toRow = (c: Classroom): Row => ({ id: c.id, name: c.name, campus: c.campus ?? "", capacity: c.capacity ? String(c.capacity) : "", isActive: c.isActive });
-
-/** Master Data › Classrooms (also opened as a drawer from a batch): the rooms batches are taught in. RTO Managers edit; Admins view. */
+/** Master Data › Rooms (also opened from Courses › Rooms): the rooms batches meet in, by location. RTO Managers edit; others view. */
 export default function ClassroomsPage() {
   return (
     <div>
-      <PageHeader title="Classrooms" description="The rooms batches are taught in. A batch picks its classroom in Courses › a course › Intakes." />
-      <ClassroomsManager />
+      <PageHeader title="Rooms" description="The rooms batches meet in, by location. A batch picks its rooms in its class timing." />
+      <RoomsManager />
     </div>
   );
 }
 
-export function ClassroomsManager({ onChanged }: { onChanged?: () => void }) {
+/** Rooms by location: rename, seats and active save when you leave the field; "+ Add room" per location. */
+export function RoomsManager() {
   const { push } = useToast();
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [saved, setSaved] = useState<Row[]>([]);
+  const [locations, setLocations] = useState<LocationRooms[] | null>(null);
   const [canEdit, setCanEdit] = useState(false);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState<number | null>(null);
+  const [adding, setAdding] = useState<{ locationId: string | null; name: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [list, me] = await Promise.all([rto<Classroom[]>("classroom_list"), rto<{ rtoManager: boolean }>("me")]);
-      const r = list.map(toRow); setRows(r); setSaved(r); setCanEdit(me.rtoManager); setError("");
-    } catch (e) { setError(e instanceof Error ? e.message : "Classrooms did not load."); setRows([]); }
+      const [l, me] = await Promise.all([rtoFlow<LocationRooms[]>("locations_rooms"), rto<{ rtoManager: boolean }>("me")]);
+      setLocations(l); setCanEdit(me.rtoManager); setError("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Rooms did not load."); setLocations((x) => x ?? []); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const set = (i: number, patch: Partial<Row>) => setRows((list) => (list ?? []).map((r, x) => (x === i ? { ...r, ...patch } : r)));
-  const save = async (i: number) => {
-    const r = rows?.[i]; if (!r) return;
-    setBusy(i);
-    try {
-      const list = await rto<Classroom[]>("classroom_save", { id: r.id ?? null, name: r.name, campus: r.campus, capacity: r.capacity, isActive: r.isActive });
-      const next = list.map(toRow); setRows(next); setSaved(next); push(`${r.name.trim()} saved.`); onChanged?.();
-    } catch (e) { push(e instanceof Error ? e.message : "Not saved.", "error"); }
-    finally { setBusy(null); }
+  const save = async (room: Room, patch: Partial<{ name: string; capacity: string; isActive: boolean }>, message: string) => {
+    try { setLocations(await rtoFlow<LocationRooms[]>("room_save", { id: room.id, ...patch })); push(message); }
+    catch (e) { push(e instanceof Error ? e.message : "Not saved.", "error"); void load(); }
   };
-  const changed = (i: number) => { const r = rows?.[i]; return !r?.id || JSON.stringify(r) !== JSON.stringify(saved.find((s) => s.id === r.id)); };
+  const add = async () => {
+    if (!adding?.name.trim()) return;
+    try { setLocations(await rtoFlow<LocationRooms[]>("room_save", { name: adding.name, locationId: adding.locationId })); push(`${adding.name.trim()} added.`); setAdding(null); }
+    catch (e) { push(e instanceof Error ? e.message : "Not added.", "error"); }
+  };
 
+  if (!locations) return <SkeletonLines lines={6} />;
   return (
     <div className="space-y-3">
-      {canEdit ? <div className="flex justify-end"><Button icon="ri-add-line" onClick={() => setRows((list) => [...(list ?? []), { name: "", campus: "", capacity: "", isActive: true }])}>Add classroom</Button></div> : null}
       <ErrorNote text={error} />
-      {!canEdit && rows ? <div className="mb-3"><ReadOnlyNote>Only an RTO Manager can add or change classrooms.</ReadOnlyNote></div> : null}
-      {rows === null ? <p className="py-10 text-center text-foreground-500">Loading classrooms…</p> : rows.length === 0 ? (
-        <Card><EmptyState icon="ri-building-line" title="No classrooms yet" description={canEdit ? "Add the first classroom: a name, its campus and how many students it seats." : "An RTO Manager adds classrooms."} /></Card>
-      ) : (
-        <Card className="divide-y divide-background-200">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_7rem_5rem_6rem] gap-2 px-4 py-2 text-xs font-medium text-foreground-500 md:grid">
-            <span>Name</span><span>Campus</span><span>Capacity</span><span>Active</span><span />
+      {!canEdit ? <ReadOnlyNote>Only an RTO Manager can add or change rooms.</ReadOnlyNote> : null}
+      {locations.map((l) => (
+        <Card key={l.id ?? "other"} className="overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-background-200 px-4 py-2.5">
+            <div className="min-w-0"><p className="font-heading font-semibold text-foreground-950">{l.name}</p>{l.address ? <p className="text-xs text-foreground-500">{l.address}</p> : null}</div>
+            {canEdit && l.id ? <Button size="sm" variant="outline" icon="ri-add-line" onClick={() => setAdding({ locationId: l.id, name: "" })}>Add room</Button> : null}
           </div>
-          {rows.map((r, i) => (
-            <div key={r.id ?? `new-${i}`} className={`grid grid-cols-1 items-center gap-2 px-4 py-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_7rem_5rem_6rem] ${r.isActive ? "" : "opacity-60"}`}>
-              <TextInput disabled={!canEdit} value={r.name} placeholder="e.g. Room 2.04" aria-label="Classroom name" onChange={(e) => set(i, { name: e.target.value })} />
-              <TextInput disabled={!canEdit} value={r.campus} placeholder="Campus" aria-label="Campus" onChange={(e) => set(i, { campus: e.target.value })} />
-              <TextInput disabled={!canEdit} value={r.capacity} inputMode="numeric" placeholder="Seats" aria-label="Capacity" onChange={(e) => set(i, { capacity: e.target.value.replace(/\D/g, "") })} />
-              <Toggle disabled={!canEdit} checked={r.isActive} onChange={(v) => set(i, { isActive: v })} />
-              {canEdit ? <Button size="sm" variant={changed(i) ? "primary" : "outline"} disabled={busy !== null || !r.name.trim() || !changed(i)} onClick={() => void save(i)}>{busy === i ? "Saving…" : "Save"}</Button> : <span />}
-            </div>
-          ))}
+          <div className="divide-y divide-background-100">
+            {l.rooms.map((r) => <RoomRow key={r.id} room={r} canEdit={canEdit} onSave={(patch, message) => void save(r, patch, message)} />)}
+            {adding && adding.locationId === l.id ? (
+              <div className="flex flex-wrap items-center gap-2 px-4 py-2">
+                <TextInput autoFocus className="w-56" placeholder="Room name, e.g. Room 8.5" aria-label="New room name" value={adding.name}
+                  onChange={(e) => setAdding({ ...adding, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") void add(); if (e.key === "Escape") setAdding(null); }} />
+                <Button size="sm" disabled={!adding.name.trim()} onClick={() => void add()}>Add</Button>
+                <Button size="sm" variant="ghost" onClick={() => setAdding(null)}>Cancel</Button>
+              </div>
+            ) : null}
+            {l.rooms.length === 0 && !(adding && adding.locationId === l.id) ? <p className="px-4 py-3 text-sm text-foreground-500">No rooms yet.</p> : null}
+          </div>
         </Card>
-      )}
+      ))}
+    </div>
+  );
+}
+
+function RoomRow({ room, canEdit, onSave }: { room: Room; canEdit: boolean; onSave: (patch: Partial<{ name: string; capacity: string; isActive: boolean }>, message: string) => void }) {
+  const [name, setName] = useState(room.name);
+  const [capacity, setCapacity] = useState(room.capacity ? String(room.capacity) : "");
+  useEffect(() => { setName(room.name); setCapacity(room.capacity ? String(room.capacity) : ""); }, [room.name, room.capacity]);
+  return (
+    <div className={`grid grid-cols-[minmax(0,1fr)_6rem_auto] items-center gap-2 px-4 py-2 ${room.isActive ? "" : "opacity-60"}`}>
+      <TextInput disabled={!canEdit} aria-label="Room name" value={name} onChange={(e) => setName(e.target.value)}
+        onBlur={() => { if (name.trim() && name.trim() !== room.name) onSave({ name }, `${room.name} renamed to ${name.trim()}.`); else setName(room.name); }} />
+      <TextInput disabled={!canEdit} aria-label="Seats" inputMode="numeric" placeholder="Seats" value={capacity} onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ""))}
+        onBlur={() => { if (capacity !== (room.capacity ? String(room.capacity) : "")) onSave({ capacity }, `${room.name}: ${capacity || "no"} seats.`); }} />
+      <Toggle disabled={!canEdit} checked={room.isActive} onChange={(v) => onSave({ isActive: v }, `${room.name} ${v ? "in use" : "not in use"}.`)} />
     </div>
   );
 }

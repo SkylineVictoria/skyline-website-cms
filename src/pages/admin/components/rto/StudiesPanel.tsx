@@ -47,7 +47,7 @@ export default function StudiesPanel({ studentId }: { studentId: string }) {
           {rows.map((r) => (
             <div key={r.enrolmentId} className="flex flex-wrap items-center justify-between gap-2 py-2">
               <div className="min-w-0">
-                <Link to={`/admin/intakes/${r.intakeId}?tab=students`} className="font-medium text-foreground-900 hover:text-primary-600">{r.intake}</Link>
+                <Link to={`/admin/batches/${r.batchId}`} className="font-medium text-foreground-900 hover:text-primary-600">{r.intake}</Link>
                 <p className="text-xs text-foreground-500">{r.courseCode} {r.course} · {shortDate(r.startDate)} – {shortDate(r.endDate)}</p>
               </div>
               <div className="flex items-center gap-2"><Badge tone="secondary">{r.batch}</Badge><Badge tone="accent">{r.type}</Badge><Badge tone={r.status === "active" ? "primary" : "muted"}>{r.status}</Badge></div>

@@ -92,6 +92,7 @@ import CourseFeesPage from "@/pages/admin/CourseFeesPage";
 import CourseWizardPage, { CourseWizardRedirect } from "@/pages/admin/CourseWizardPage";
 import IntakesPage from "@/pages/admin/IntakesPage";
 import IntakeDetailPage from "@/pages/admin/IntakeDetailPage";
+import BatchPage from "@/pages/admin/BatchPage";
 import ClassroomsPage from "@/pages/admin/ClassroomsPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
@@ -259,6 +260,7 @@ const routes: RouteObject[] = [
           { path: "intakes", element: <RequireAdmin><IntakesPage /></RequireAdmin> },
           { path: "intakes/:id", element: <RequireAdmin><IntakeDetailPage /></RequireAdmin> },
           { path: "classrooms", element: <RequireAdmin><ClassroomsPage /></RequireAdmin> },
+          { path: "batches/:id", element: <RequireAdmin><BatchPage /></RequireAdmin> },
           // HRMS (time & attendance, leave, pay schedules, public holidays, Xero export).
           { path: "staff/timesheets", element: <RequireAdmin><TimesheetsPage /></RequireAdmin> },
           { path: "staff/leave", element: <RequireAdmin><LeaveAdminPage /></RequireAdmin> },

@@ -1,4 +1,4 @@
-import { Toast, ToastContext, useToast } from "./toastContext";
+import { Toast, ToastAction, ToastContext, useToast } from "./toastContext";
 import {
   createContext,
   useCallback,
@@ -445,11 +445,12 @@ export function ConfirmDialog({
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const push = useCallback((message: string, tone: Toast["tone"] = "success") => {
+  const push = useCallback((message: string, tone: Toast["tone"] = "success", action?: ToastAction) => {
     const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, message, tone }]);
-    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3200);
+    setToasts((prev) => [...prev, { id, message, tone, action }]);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), action ? 7000 : 3200);
   }, []);
+  const dismiss = (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id));
 
   return (
     <ToastContext.Provider value={{ push }}>
@@ -464,7 +465,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               className={`${t.tone === "error" ? "ri-error-warning-line text-primary-600" : t.tone === "info" ? "ri-information-line text-foreground-500" : "ri-checkbox-circle-line text-primary-600"} mt-0.5 text-lg`}
               aria-hidden="true"
             />
-            <span className="text-sm text-foreground-800">{t.message}</span>
+            <span className="min-w-0 flex-1 text-sm text-foreground-800">{t.message}</span>
+            {t.action ? (
+              <button type="button" className="shrink-0 rounded px-1.5 text-sm font-semibold text-primary-600 hover:bg-primary-50 hover:underline"
+                onClick={() => { dismiss(t.id); t.action?.onClick(); }}>{t.action.label}</button>
+            ) : null}
           </div>
         ))}
       </div>

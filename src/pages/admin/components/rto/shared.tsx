@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { mayRefresh, useAutosave } from "@/pages/admin/lib/useAutosave";
 import { Badge, Button, Select, TextInput } from "@/pages/admin/components/ui";
@@ -8,26 +9,34 @@ import {
 } from "@/pages/admin/lib/rto";
 
 /** A panel that slides in from the right; used instead of new pages for create and edit. */
-export function Drawer({ open, title, onClose, children, footer }: { open: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+export function Drawer({ open, title, onClose, children, footer, width = "max-w-lg" }: { open: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    // Esc closes the top-most dialog only (a drawer opened from a sheet or from another drawer).
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const all = [...document.querySelectorAll('[role="dialog"], .z-\\[80\\]')];
+      if (all[all.length - 1] === ref.current) onClose();
+    };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [open, onClose]);
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={title}>
-      <button type="button" aria-label="Close" className="absolute inset-0 cursor-default bg-foreground-950/30" onClick={onClose} />
-      <div className="relative flex h-full w-full max-w-lg flex-col bg-background-50 shadow-xl">
+  // Rendered on <body>, so a drawer opened from a sliding sheet covers the screen, not the sheet.
+  return createPortal(
+    <div ref={ref} className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={title}>
+      <button type="button" aria-label="Close" className="modal-backdrop-in absolute inset-0 cursor-default bg-foreground-950/30" onClick={onClose} />
+      <div className={`drawer-in relative flex h-full w-full ${width} flex-col bg-background-50 shadow-xl`}>
         <div className="flex items-center justify-between border-b border-background-200 px-5 py-4">
           <h2 className="font-heading text-lg font-semibold text-foreground-950">{title}</h2>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-foreground-500 hover:bg-background-100" aria-label="Close"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">{children}</div>
-        {footer ? <div className="flex justify-end gap-2 border-t border-background-200 px-5 py-3">{footer}</div> : null}
+        {footer ? <div className="flex flex-wrap justify-end gap-2 border-t border-background-200 px-5 py-3">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -120,28 +129,6 @@ export function Avatars({ names, max = 4 }: { names: string[]; max?: number }) {
 
 export function IntakeStatusChip({ status }: { status: RtoIntake["status"] }) {
   return <Badge tone={STATUS_TONE[status]}>{status[0].toUpperCase() + status.slice(1)}</Badge>;
-}
-
-/** One compact intake row: course, date range with progress, enrolled / capacity, trainers, status. */
-export function IntakeRow({ intake, showCourse = true }: { intake: RtoIntake; showCourse?: boolean }) {
-  const pct = Math.round(progress(intake) * 100);
-  const when = phase(intake);
-  return (
-    <Link to={`/admin/intakes/${intake.id}`} className="grid grid-cols-1 items-center gap-3 rounded-card border border-background-200 bg-background-50 px-4 py-3 transition-colors hover:border-primary-300 hover:bg-background-100 md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_6rem_7rem_6rem]"
-      data-testid="intake-row">
-      <div className="min-w-0">
-        <p className="truncate font-medium text-foreground-900">{intake.name}</p>
-        {showCourse ? <p className="truncate text-xs text-foreground-500">{intake.courseCode} {intake.courseName}{intake.campus ? ` · ${intake.campus}` : ""}</p> : intake.campus ? <p className="text-xs text-foreground-500">{intake.campus}</p> : null}
-      </div>
-      <div>
-        <div className="flex justify-between text-xs text-foreground-500"><span>{shortDate(intake.startDate)}</span><span>{when === "running" ? `${pct}%` : when}</span><span>{shortDate(intake.endDate)}</span></div>
-        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-background-200"><div className="h-full rounded-full bg-primary-500" style={{ width: `${pct}%` }} /></div>
-      </div>
-      <p className="text-sm tabular-nums text-foreground-700"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{intake.enrolled}{intake.capacity ? ` / ${intake.capacity}` : ""}</p>
-      <Avatars names={intake.trainers} />
-      <span className="md:text-right"><IntakeStatusChip status={intake.status} /></span>
-    </Link>
-  );
 }
 
 export function ChipFilter<T extends string>({ label, value, options, onChange }: { label: string; value: T | ""; options: { id: T; label: string }[]; onChange: (v: T | "") => void }) {

@@ -16,6 +16,7 @@ import { lookupAgencyAbn, validateAbn, normalizeAbn, type AgencyAbnDetails } fro
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import { emailConflictBody } from "../_shared/identity-email.ts";
+import { activationSite, sendActivationEmail } from "../_shared/activation-mail.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -70,14 +71,27 @@ async function findAuthUserByEmail(admin: any, email: string) {
 
 /**
  * Mail the one-time setup link for an invitation. Existing confirmed identities are never sent a credential
- * reset: they simply sign in and the pending invitation is accepted. `inviteLink` is only produced for the
+ * reset: they get the "Activate access" email instead (INV-LINK). `inviteLink` is only produced for the
  * fallback path and is only returned to organization administrators.
  */
-async function deliverInvite(admin: any, anon: any, email: string, name: string, redirectTo?: string) {
+/** 32 random bytes, base64url: the one-time "Activate access" token. Only its SHA-256 is stored. */
+function newLinkToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+async function sha256Hex(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function deliverInvite(admin: any, anon: any, email: string, name: string, redirectTo?: string, activation?: { link: string; agencyName?: string | null; role?: string; expiresAt?: string }) {
   const existing = await findAuthUserByEmail(admin, email);
   if (existing.error) return { error: existing.error };
   if (existing.user) {
-    if (existing.user.email_confirmed_at) return { emailSent: false, existingIdentity: true, inviteLink: null as string | null };
+    if (existing.user.email_confirmed_at) {
+      if (!activation) return { error: "The activation link could not be prepared." };
+      const sent = await sendActivationEmail(Deno.env.toObject(), { to: email, name, ...activation });
+      return "error" in sent ? { error: sent.error } : { emailSent: true, existingIdentity: true, inviteLink: null as string | null };
+    }
     const { error } = await anon.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined);
     return error ? { error: error.message } : { emailSent: true, existingIdentity: false, inviteLink: null as string | null };
   }
@@ -132,7 +146,15 @@ Deno.serve(async (req) => {
     // Auth mail is sent after the database has recorded the invitation, so a mail failure leaves a pending,
     // resendable invitation rather than an orphan or a missing record.
     const respondDelivered = async (invitation: { invitationId: string; email: string; name: string; role?: string }, extra: Record<string, unknown> = {}) => {
-      const delivery = await deliverInvite(admin, anon, invitation.email, invitation.name || invitation.email.split("@")[0], redirectTo);
+      // A fresh one-time link for every send (INV-LINK). Its time is what proves a later email confirmation came from this invitation.
+      const token = newLinkToken();
+      const { data: issued, error: issueErr } = await admin.rpc("portal_invitation_link_issue", { p_invitation: invitation.invitationId, p_token_hash: await sha256Hex(token) });
+      const origin = activationSite(Deno.env.toObject(), redirectTo);
+      if (issueErr || !origin) {
+        return json({ ok: true, ...extra, invitationId: invitation.invitationId, emailSent: false, warning: "The invitation was saved but the email could not be sent. Use Resend to try again." });
+      }
+      const activation = { link: `${origin}/agency/accept-invite#t=${token}`, agencyName: issued?.agencyName ?? null, role: issued?.role ?? invitation.role, expiresAt: issued?.expiresAt };
+      const delivery = await deliverInvite(admin, anon, invitation.email, invitation.name || invitation.email.split("@")[0], redirectTo, activation);
       if (delivery.error) {
         return json({ ok: true, ...extra, invitationId: invitation.invitationId, emailSent: false, warning: "The invitation was saved but the email could not be sent. Use Resend to try again." });
       }

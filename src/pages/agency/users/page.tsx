@@ -86,7 +86,7 @@ function LegacyUsersPage() {
       setNotice("Invitation saved. Share the secure setup link below with the user.");
     } else {
       setNotice("");
-      show(data.existingIdentity ? `Invitation saved. ${email} already has an account and accepts it at next sign-in.` : `Invitation sent to ${email}.`);
+      show(data.existingIdentity ? `Invitation sent to ${email}. They already have a login, so they must click Activate access in the email before they can use the portal.` : `Invitation sent to ${email}.`);
     }
   };
 

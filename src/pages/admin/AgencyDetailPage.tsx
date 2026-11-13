@@ -210,7 +210,7 @@ export function AgentsTab({ agencyId, agencyName, onChanged }: { agencyId: strin
     else if (data.inviteLink) setNotice(`Invitation saved. Share this secure setup link with ${email}: ${String(data.inviteLink)}`);
     else {
       setNotice("");
-      push(data.existingIdentity ? `Invitation saved. ${email} already has an account and accepts it at next sign-in.` : `Invitation sent to ${email}.`);
+      push(data.existingIdentity ? `Invitation sent to ${email}. They already have a login, so they must click Activate access in the email before they can use the portal.` : `Invitation sent to ${email}.`);
     }
   };
 

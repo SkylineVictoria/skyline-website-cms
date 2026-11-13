@@ -13,6 +13,8 @@ const RUN = Date.now().toString(36);
 let admin: { email: string };
 let student: { email: string; student: string };
 let trainer: { email: string; profileId: string };
+let otherTrainer: { email: string; profileId: string };
+let otherBatchId = "";
 let courseId = ""; let unitId = ""; let batchId = "";
 let assessmentUrl = "";
 
@@ -42,6 +44,18 @@ test.beforeAll(async () => {
     alter table hr.staff_profiles enable trigger staff_status_guard;`).split("\n").find((l) => /^[0-9a-f-]{36}$/.test(l)) ?? "";
   trainer = { email: t.email, profileId };
   sql(`insert into public.batch_trainers(batch_id, staff_id) values ('${batchId}', '${profileId}')`);
+  // D-22: marking needs the trainer role on the staff record (require_trainer_role defaults to true)
+  sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${profileId}', 'trainer', '${trainerAuth}')`);
+  // a second batch on the same intake with its own trainer, who must never reach G1's work
+  otherBatchId = sql(`insert into public.batches(intake_id, name) values ('${intakeId}', 'G2') returning id`).split("\n")[0];
+  const o = person("asm-trainer-other");
+  const otherAuth = await createAuthUser(o.email);
+  const otherProfile = sql(`alter table hr.staff_profiles disable trigger staff_status_guard;
+    insert into hr.staff_profiles(auth_user_id, first_name, last_name, email, phone_e164, status) values ('${otherAuth}', 'Tom', 'Trainer', '${o.email}', '${o.phone}', 'active') returning id;
+    alter table hr.staff_profiles enable trigger staff_status_guard;`).split("\n").find((l) => /^[0-9a-f-]{36}$/.test(l)) ?? "";
+  otherTrainer = { email: o.email, profileId: otherProfile };
+  sql(`insert into public.batch_trainers(batch_id, staff_id) values ('${otherBatchId}', '${otherProfile}')`);
+  sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${otherProfile}', 'trainer', '${otherAuth}')`);
 });
 
 test("the admin builds, publishes and assigns an assessment in the browser", async ({ page }) => {
@@ -130,4 +144,84 @@ test("the student sees the result and the admin sees the outcome", async ({ page
   await expect(page.getByText("Version 1")).toBeVisible();
   await page.goto("/admin/assessments?tab=outcomes");
   await expect(page.getByText("Work safely in the lab").first()).toBeVisible({ timeout: 10_000 });
+});
+
+test("the admin publishes version 2 while the student's attempt stays on version 1", async ({ page }) => {
+  await signInAsAdmin(page, admin.email);
+  await page.goto(assessmentUrl);
+  await expect(page.getByText(/Version 1 is published/)).toBeVisible();
+  // the first change to a published version starts draft v2 (D-06)
+  await page.getByRole("button", { name: "Add question" }).first().click();
+  await page.getByRole("button", { name: /Short answer/ }).click();
+  await page.getByLabel("Question *").fill("Version 2 only: describe one hazard you removed.");
+  await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: /^Publish v2/ }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByText(/published v2/)).toBeVisible({ timeout: 10_000 });
+  const versions = sql(`select string_agg(version_no || ':' || status, ',' order by version_no) from public.asm_versions v join public.asm_assessments s on s.id = v.assessment_id where s.course_id = '${courseId}'`);
+  expect(versions).toBe("1:published,2:published");
+  expect(sql(`select v.version_no from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where t.student_id = '${student.student}' order by t.attempt_no desc limit 1`)).toBe("1");
+  expect(sql(`select v.version_no from public.asm_assignments a join public.asm_versions v on v.id = a.version_id join public.asm_assessments s on s.id = a.assessment_id where s.course_id = '${courseId}'`)).toBe("1");
+});
+
+test("a trainer of another batch is refused", async ({ page }) => {
+  const attemptId = sql(`select id from public.asm_attempts where student_id = '${student.student}' order by attempt_no desc limit 1`);
+  await signInStaff(page, otherTrainer.email, "/staff/assessments");
+  await expect(page.getByRole("heading", { name: "Assessments" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark", exact: true })).toHaveCount(0);
+  await page.goto(`/staff/assessments/attempts/${attemptId}`);
+  await expect(page.getByRole("alert")).toContainText(/Not your student/, { timeout: 15_000 });
+  await expect(page.getByText("Model answer")).toHaveCount(0);
+  expect(sql(`select count(*) from public.asm_audit_log where actor = (select id from auth.users where email = '${otherTrainer.email}')`)).toBe("0");
+});
+
+test("reassessment: the admin reopens, the student resubmits, the trainer returns it Not Yet Satisfactory, a further attempt opens and the student acknowledges", async ({ page }) => {
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`${assessmentUrl}?tab=assignments`);
+  await page.getByRole("button", { name: /G1 · / }).first().click();
+  await page.getByRole("button", { name: /^Attempt 1: / }).click();
+  await page.getByPlaceholder("Reason (recorded in the audit log)").fill("Resubmission agreed with the student");
+  await page.getByRole("button", { name: "Reopen for the student" }).click();
+  await expect(page.getByText("A further attempt was opened.")).toBeVisible({ timeout: 15_000 });
+  expect(sql(`select string_agg(attempt_no || ':' || state, ',' order by attempt_no) from public.asm_attempts where student_id = '${student.student}'`)).toBe("1:final,2:draft");
+  expect(sql(`select v.version_no from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where t.student_id = '${student.student}' and t.attempt_no = 2`)).toBe("1");
+
+  // the student answers version 1 (two questions, not the three of version 2) and submits again
+  await signInStaff(page, student.email, "/agency/assessments");
+  await expect(page.getByText(/Attempt 2 in progress/)).toBeVisible();
+  await page.getByRole("button", { name: "Open" }).click();
+  await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
+  await expect(page.locator("[data-question]")).toHaveCount(2);
+  await page.locator("[data-question] textarea").first().fill("Gloves and glasses; resubmitted.");
+  await page.locator("[data-question] input[type=radio]").first().check();
+  await expect(page.getByText("Everything required is answered")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Submit assessment" }).click();
+  await page.getByLabel(/I have read and agree/).check();
+  await page.getByLabel(/Type your full name/).fill("E2E Student");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page.getByText(/Receipt ASM-\d{4}-\d{6}/)).toBeVisible({ timeout: 15_000 });
+
+  // the trainer returns attempt 2 Not Yet Satisfactory: attempt 3 opens inside the reassessment window
+  await signInStaff(page, trainer.email, "/staff/assessments");
+  await page.getByRole("button", { name: "Mark", exact: true }).first().click();
+  await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
+  await expect(page.getByText("Model answer").or(page.getByText("Auto-check suggests"))).toBeVisible();
+  const picks = page.getByRole("button", { name: "Not yet satisfactory", exact: true });
+  const n = await picks.count();
+  for (let i = 0; i < n; i += 1) await picks.nth(i).click();
+  await page.getByRole("button", { name: "Return for reassessment" }).click();
+  await expect(page.getByText(/a reassessment attempt is open for the student/)).toBeVisible({ timeout: 15_000 });
+  expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${student.student}'`)).toBe("1:final:S,2:returned:NYS,3:draft:-");
+  expect(sql(`select (due_at > now() + interval '4 days')::text from public.asm_attempts where student_id = '${student.student}' and attempt_no = 3`)).toBe("true");
+
+  // the student sees the result, acknowledges it and has attempt 3 open
+  await signInStaff(page, student.email, "/agency/assessments");
+  // attempt 1 (Satisfactory) and attempt 2 (Not Yet Satisfactory) both wait for the student
+  await expect(page.getByText(/Results to acknowledge \(2\)/)).toBeVisible();
+  await page.getByRole("button", { name: "I have read this result" }).last().click();
+  await expect(page.getByText(/Results to acknowledge \(1\)/)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "I have read this result" }).click();
+  await expect(page.getByText(/Results to acknowledge/)).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByText(/Attempt 3 in progress/)).toBeVisible();
+  expect(sql(`select (acknowledged_at is not null)::text from public.asm_attempts where student_id = '${student.student}' and attempt_no = 2`)).toBe("true");
 });

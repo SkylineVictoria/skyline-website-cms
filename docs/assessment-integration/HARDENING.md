@@ -83,3 +83,7 @@ Deliberately not built (reason):
 - Melbourne end-of-day default deadlines: due dates are explicit timestamps chosen by staff (shown in Melbourne time).
 
 17 tests "T5 ..." (suite 337/337); type-check and lint clean.
+
+## T6 Playwright on the lab (DONE)
+
+`e2e/assessments.spec.ts` grew from 4 to 7 serial tests (fixtures now give Tara the trainer role, D-22, and add batch G2 with trainer Tom): (5) the admin edits the published assessment, which starts draft v2, and publishes it while the student's attempt and the assignment stay on version 1; (6) a trainer of another batch sees no marking queue, is refused on the attempt URL ("Not your student") and leaves no audit row; (7) reassessment: the admin reopens attempt 1 from the attempt drawer, the student answers the two version-1 questions (not the three of v2) and resubmits, the trainer returns it Not Yet Satisfactory, attempt 3 opens inside the reassessment window, the student acknowledges both results. `node scripts/lab/staff-lab.mjs e2e e2e/assessments.spec.ts`: 7 passed (1.3 min).

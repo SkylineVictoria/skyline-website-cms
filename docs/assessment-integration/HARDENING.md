@@ -87,3 +87,36 @@ Deliberately not built (reason):
 ## T6 Playwright on the lab (DONE)
 
 `e2e/assessments.spec.ts` grew from 4 to 7 serial tests (fixtures now give Tara the trainer role, D-22, and add batch G2 with trainer Tom): (5) the admin edits the published assessment, which starts draft v2, and publishes it while the student's attempt and the assignment stay on version 1; (6) a trainer of another batch sees no marking queue, is refused on the attempt URL ("Not your student") and leaves no audit row; (7) reassessment: the admin reopens attempt 1 from the attempt drawer, the student answers the two version-1 questions (not the three of v2) and resubmits, the trainer returns it Not Yet Satisfactory, attempt 3 opens inside the reassessment window, the student acknowledges both results. `node scripts/lab/staff-lab.mjs e2e e2e/assessments.spec.ts`: 7 passed (1.3 min).
+
+## Final gate and morning hand-over (2026-11-14, branch `feat/assessment-hardening`, 7 commits on top of `live/main` 645d670)
+
+What changed
+- Tests only (T1): `phase4_authorization_positive`, `phase2_authorization_red`, `hr_staff_registration` and the ASM suite follow the product as it is (BIZ-ONB onboarding, closed self-registration, email routing, `main_site_host`, intake labels, lab fixtures).
+- Four new local migrations, number order after hosted `20261113440000`, no new Edge Function: `20261113450000_assessment_security_hardening.sql` (T2), `20261113460000_assessment_trainer_scope.sql` (T3, D-22), `20261113470000_assessment_attempt_pattern.sql` (T4), `20261113480000_assessment_parity.sql` (T5). They patch the RPC bodies in place with exact-count anchors and are not re-runnable.
+- Frontend: Settings "Who may mark and sign off"; marking page notice when the trainer may not mark; admin attempt drawer "Allow beyond the attempt limit (audited)"; student page: correct row version on submit, one request id per submission, "Results to acknowledge" panel.
+- `e2e/assessments.spec.ts`: 7 tests; `docs/assessment-integration/DECISIONS.md` D-22.
+
+Test results (fresh lab `node scripts/lab/staff-lab.mjs up`, 270 migrations applied, highest `20261113480000`)
+- SQL suites: 15 of 15 PASS (assessment_management 337/337; phase4_authorization_positive 536/536; phase2_authorization_red 477/477; hr_staff_registration 697/697; hrms_time_leave 265/265; public_assistant_integration 67/67; document_extraction_integration 25/25; phase2_* 8/8, 8/8, 34/34, 3/3, 8/8, 23/23, 3/3, 6/6).
+- Playwright `e2e/assessments.spec.ts` on the lab: 7 passed (1.3 min).
+- `npm run type-check` PASS, `npm run lint` PASS (0 warnings), `npm run build` PASS, `npm run test:assessment-registry` 51/51.
+- Hosted: read-only queries only (project xcpydisstlvtvcsqnjob, system id 7692130048193495360); no `db push`, nothing pushed to `live/main` or `origin`.
+
+Hosted staff lacking the trainer role: none linked to a batch (1 active staff profile, 0 with the role, 0 batches, 0 batch-trainer links, 0 named assessors). After release, give trainers the Trainer role in HR before linking them to batches, or switch Assessments › Settings › "Who may mark" to any active batch trainer.
+
+Unfinished / not done
+- Not built on purpose: see T5 (rollover auto-NYS, office checkboxes, PDF export, push, XLSX, OTP / tokens / impersonation).
+- `rowVersion` stays optional server-side; the marking page's "attempt N of M" and the "Return for reassessment" label count attempt numbers, not non-void attempts (label only; the server decides).
+- Lab gap recorded in T1: the seeded letters do not exist on a lab (no CMS admin at migration time); two phase4 checks skip there.
+- Hosted browser smoke after release: NOT RUN (local Playwright covers the same screens).
+
+Morning commands (from `C:\Users\goura\Desktop\Skyline-Website`, after `git fetch live`)
+```
+git checkout feat/assessment-hardening
+npx supabase migration list --linked
+npx supabase db push --linked --dry-run        # expect exactly: 20261113450000, 20261113460000, 20261113470000, 20261113480000
+npx supabase db push --linked --yes            # applies the four, in order
+npx supabase migration list --linked           # highest 20261113480000
+git checkout main && git merge --ff-only feat/assessment-hardening && git push live main   # Vercel deploys the frontend
+```
+Verify afterwards (read-only SQL on hosted): `select require_trainer_role from public.asm_settings;` (true), `select indexname from pg_indexes where indexname = 'asm_attempts_one_open';` (one row), `select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'asm\_%' and p.proconfig is null;` (0).

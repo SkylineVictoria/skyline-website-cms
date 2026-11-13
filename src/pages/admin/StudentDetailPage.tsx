@@ -6,6 +6,7 @@ import { Button, Card, PageHeader } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import StudentOffice365Panel from "@/pages/admin/components/StudentOffice365Panel";
+import StudiesPanel from "@/pages/admin/components/rto/StudiesPanel";
 import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import ApplicationsList from "@/pages/admin/components/ApplicationsList";
 import { ListMessage } from "@/pages/admin/components/ListControls";
@@ -97,6 +98,7 @@ export default function StudentDetailPage() {
           </dl>
         </Card>
       </div>
+      <div className="mt-4"><StudiesPanel studentId={id} /></div>
       <div className="mt-4"><StudentOffice365Panel studentId={id} personalEmail={student.email} /></div>
       <div className="mt-4"><SubjectSigningPanel type="student" id={id} name={student.name} /></div>
     </div>

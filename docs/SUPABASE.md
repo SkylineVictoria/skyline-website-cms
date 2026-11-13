@@ -668,6 +668,9 @@ Shared PDF styling. The live notification-delivery function (v15) has drawn the 
 - `rto_batch_json` adds `sessions`, `startDate`, `endDate`; `rto_intake_json` adds `hours`, `courseDuration`, `batchList`. Older batch fields (days, first / last time, classroom) follow the sessions (`rto_batch_sync_legacy`).
 - CMS: Courses › Courses | Intakes | Rooms; intake cards open a sheet (#intake-id: Overview, Timeline, Batches, Students); batch page `/admin/batches/:id`; `/admin/intakes/:id` redirects to the sheet. Assessments & Results on the batch page is a placeholder (Assessment Management is not in this project).
 
+## CMS display preferences (UI-PREFS 2026-11-13; migration 20261113420000; RELEASED)
+- `cms_users.ui_prefs` jsonb; `cms_user_prefs(p_prefs)` (authenticated, own row only): no argument reads, an argument merges `density` (compact / comfortable) and `sidebar` (full / icons); other keys and values are dropped. The CMS also keeps a copy in localStorage for the first paint.
+
 ## 15-minute recovery checkpoint and restore test (2026-11-11 evening; DISABLED 2026-11-12 for pre-release mode, see the note at the top)
 - Recurring checkpoints failed at "history" from 13:40Z: hosted had 20261111131056 (integration_token_refresh_schedule, External Integrations session), missing from the repo and `hosted-refreshed.json`. Both added (previous manifest copy in `C:\Users\goura\Skyline-Backups\checkpoint-manifest-20261111\`); checkpoints 173 (14:05Z) and 174 (14:20Z) PASS. Last PASS before that: 2026-11-09 15:32Z (a gap of about two days).
 - `collect-production-checkpoint.mjs`: schema `integration_private` added (connection id, kind and Vault reference only; public functions reference it, so restore-schema failed with 3F000 without it). Object reads retry up to 3 times on 5xx.

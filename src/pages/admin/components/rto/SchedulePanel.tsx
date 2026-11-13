@@ -69,6 +69,18 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
     return out;
   }, [first, last]);
   const today = todayIso();
+  const axisLabels = useMemo(() => {
+    const out: { iso: string; label: string }[] = [];
+    let lastRight = -Infinity;
+    for (const m of months) {
+      const d = new Date(parseDay(m.iso));
+      const label = d.toLocaleDateString("en-AU", { month: "short", ...(out.length === 0 || d.getUTCMonth() === 0 ? { year: "numeric" } : {}), timeZone: "UTC" });
+      const left = daysBetween(first, m.iso) * px;
+      if (left < lastRight + 6) continue;
+      out.push({ iso: m.iso, label }); lastRight = left + label.length * 6.2 + 6;
+    }
+    return out;
+  }, [months, first, px]);
 
   // ---- edits: move a unit (later units follow) or change its end (later units follow)
   const shift = (index: number, startDays: number, endDays: number) => setRows((list) => list.map((r, x) => {
@@ -164,7 +176,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
       </div>
 
       {/* Units | timeline */}
-      <div className="grid min-w-0 grid-cols-1 min-[900px]:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="grid min-w-0 grid-cols-1 min-[900px]:grid-cols-[clamp(240px,24vw,360px)_minmax(0,1fr)]">
         <div className="min-w-0 border-b border-background-200 min-[900px]:border-b-0 min-[900px]:border-r">
           <div className="flex items-center px-4 text-xs font-medium text-foreground-500" style={{ height: AXIS }}>Unit</div>
           {rows.map((r, idx) => {
@@ -194,7 +206,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
           <div className="relative" style={{ width }}>
             {/* axis */}
             <div className="relative border-b border-background-200 text-2xs text-foreground-500" style={{ height: AXIS }}>
-              {months.map((m) => <span key={m.iso} className="absolute top-2 whitespace-nowrap pl-1" style={{ left: at(m.iso) }}>{m.label}</span>)}
+              {axisLabels.map((m) => <span key={m.iso} className="absolute top-2 whitespace-nowrap pl-1" style={{ left: at(m.iso) }}>{m.label}</span>)}
             </div>
             {/* rows with gridlines, holidays and today */}
             <div className="relative" style={{ height: rows.length * ROW }}>
@@ -210,14 +222,17 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
               {rows.map((r, idx) => {
                 const s = shown(r, idx);
                 const left = at(s.start), w = Math.max(6, (daysBetween(s.start, s.end) + 1) * px);
+                // The code goes inside the bar when it fits, else just after it when there is room, else only in the tooltip.
+                const labelW = r.code.length * 6.4 + 12, inside = w >= labelW, after = !inside && left + w + labelW + 4 <= width;
                 return (
                   <div key={r.id} className="absolute left-0 right-0" style={{ top: idx * ROW, height: ROW }}>
                     <div onPointerDown={(e) => startDrag(idx, "move", e)} title={`${r.code}: ${shortDate(s.start)} – ${shortDate(s.end)} (${weeksOf(s.start, s.end)} weeks)`}
                       className={`absolute top-4 flex h-6 items-center overflow-hidden rounded text-2xs font-medium text-background-50 ${r.unitType === "elective" ? "bg-secondary-500" : "bg-primary-500"} ${readOnly ? "" : "cursor-grab touch-none active:cursor-grabbing"}`}
                       style={{ left, width: w }}>
-                      <span className="truncate px-1.5">{w > 48 ? r.code : ""}</span>
+                      {inside ? <span className="truncate px-1.5">{r.code}</span> : null}
                       {readOnly ? null : <span onPointerDown={(e) => startDrag(idx, "resize", e)} className="absolute bottom-0 right-0 top-0 w-2 cursor-ew-resize bg-foreground-950/20" aria-label={`Change the length of ${r.code}`} />}
                     </div>
+                    {after ? <span className="pointer-events-none absolute top-4 flex h-6 items-center whitespace-nowrap text-2xs font-medium text-foreground-700" style={{ left: left + w + 4 }}>{r.code}</span> : null}
                   </div>
                 );
               })}

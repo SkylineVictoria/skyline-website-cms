@@ -7,6 +7,10 @@ import { DraftProvider } from "@/pages/admin/lib/draft";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
 import AdminMenu from "@/pages/admin/components/AdminMenu";
 import { hadSession, loginUrl } from "@/lib/loginRouting";
+import { useUiPrefs, type Density } from "@/pages/admin/lib/uiPrefs";
+
+/** Form and text pages read better at a set width; tables, timelines and boards use the full width. */
+const NARROW = [/^\/admin\/(settings|institution|set-password|seo|contact|navigation|footer)\/?$/, /^\/admin\/integrations\/(settings|credentials|add)\/?$/];
 
 function initials(name: string) {
   return name
@@ -25,6 +29,8 @@ export default function AdminLayout() {
   const [userMenu, setUserMenu] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  const [prefs, setPrefs] = useUiPrefs(user?.id);
+  const icons = prefs.sidebar === "icons";
   useEffect(() => {
     const up = () => setOnline(true);
     const down = () => setOnline(false);
@@ -49,20 +55,23 @@ export default function AdminLayout() {
   }
 
   const tenant = requestWebsiteDomain();
-  const sidebar = (
-    <nav className="flex h-full flex-col">
-      <div className="flex items-center gap-2.5 border-b border-background-200 px-5 py-4">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-500 text-background-50">
+  const sidebar = (collapsed: boolean) => (
+    <nav className="flex h-full flex-col" aria-label="Admin">
+      <div className={`flex items-center gap-2.5 border-b border-background-200 py-3.5 ${collapsed ? "justify-center px-2" : "px-4"}`}>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-background-50" title={collapsed ? "Skyline CMS" : undefined}>
           <i className="ri-building-2-line text-lg" aria-hidden="true" />
         </span>
-        <div className="leading-tight">
-          <p className="font-heading text-sm font-bold text-foreground-950">{tenant ? `${data.settings.shortName || data.settings.name} CMS` : "Skyline CMS"}</p>
-          <p className="text-2xs text-foreground-500">Website Admin</p>
-        </div>
+        {collapsed ? null : (
+          <div className="min-w-0 leading-tight">
+            <p className="truncate font-heading text-sm font-bold text-foreground-950">{tenant ? `${data.settings.shortName || data.settings.name} CMS` : "Skyline CMS"}</p>
+            <p className="text-2xs text-foreground-500">Website Admin</p>
+          </div>
+        )}
       </div>
-      <AdminMenu close={() => setMenuOpen(false)} />
+      <AdminMenu close={() => setMenuOpen(false)} collapsed={collapsed} />
     </nav>
   );
+  const narrow = NARROW.some((r) => r.test(location.pathname));
 
   // Quiet by default: a small status dot. A banner appears only for problems (offline, a failed save), can be dismissed and offers a retry.
   const problem = !online ? "You are offline. Changes you make stay in this browser as a draft until the connection returns." : status === "ready" && error ? `Could not save: ${error}` : null;
@@ -71,26 +80,35 @@ export default function AdminLayout() {
 
   return (
     <DraftProvider>
-    <div className="min-h-screen bg-background-100 text-foreground-900">
+    <div className="min-h-screen bg-background-100 text-sm text-foreground-900" data-density={prefs.density}>
       <div className="flex">
         {/* Desktop sidebar */}
-        <aside className="sticky top-0 hidden h-[calc(100vh-44px)] w-[260px] shrink-0 border-r border-background-200 bg-background-50 lg:block">
-          {sidebar}
+        <aside className={`sticky top-0 hidden h-[calc(100vh-44px)] shrink-0 border-r border-background-200 bg-background-50 transition-[width] duration-slow ease-out lg:block ${icons ? "w-16" : "w-[var(--sidebar-w)]"}`}>
+          {sidebar(icons)}
         </aside>
 
         {/* Mobile drawer */}
         {menuOpen ? (
           <div className="fixed inset-0 z-[70] lg:hidden">
             <div className="absolute inset-0 bg-foreground-950/40" onClick={() => setMenuOpen(false)} aria-hidden="true" />
-            <aside className="absolute left-0 top-0 h-full w-[270px] border-r border-background-200 bg-background-50">
-              {sidebar}
+            <aside className="drawer-in-left absolute left-0 top-0 h-full w-[min(270px,85vw)] border-r border-background-200 bg-background-50">
+              {sidebar(false)}
             </aside>
           </div>
         ) : null}
 
         <div className="min-w-0 flex-1">
-          <header className="sticky top-0 z-40 flex items-center justify-between border-b border-background-200 bg-background-50 px-4 py-3 md:px-6">
+          <header className="sticky top-0 z-40 flex items-center justify-between border-b border-background-200 bg-background-50 px-4 py-2.5 md:px-6">
             <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPrefs({ sidebar: icons ? "full" : "icons" })}
+                aria-label={icons ? "Show the menu with labels" : "Show the menu as icons"}
+                title={icons ? "Show labels" : "Icons only"}
+                className="hidden h-8 w-8 cursor-pointer items-center justify-center rounded-md text-foreground-600 transition-colors duration-fast hover:bg-background-100 lg:flex"
+              >
+                <i className={`${icons ? "ri-menu-unfold-line" : "ri-menu-fold-line"} text-lg`} aria-hidden="true" />
+              </button>
               <button
                 type="button"
                 onClick={() => setMenuOpen(true)}
@@ -129,6 +147,17 @@ export default function AdminLayout() {
                     <p className="text-label font-medium text-foreground-900">{user.name}</p>
                     <p className="truncate text-xs text-foreground-500">{user.email}</p>
                   </div>
+                  <div className="border-b border-background-200 px-3 py-2.5">
+                    <p className="mb-1.5 text-xs font-medium text-foreground-600">Display density</p>
+                    <div className="grid grid-cols-2 gap-0.5 rounded-md border border-background-300 p-0.5" role="radiogroup" aria-label="Display density">
+                      {(["compact", "comfortable"] as Density[]).map((d) => (
+                        <button key={d} type="button" role="radio" aria-checked={prefs.density === d} onClick={() => setPrefs({ density: d })}
+                          className={`rounded px-2 py-1 text-xs font-medium transition-colors duration-fast ${prefs.density === d ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"}`}>
+                          {d === "compact" ? "Compact" : "Comfortable"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -153,7 +182,7 @@ export default function AdminLayout() {
               <button type="button" aria-label="Dismiss" onClick={() => setDismissed(problem)} className="flex h-6 w-6 cursor-pointer items-center justify-center rounded hover:bg-red-100"><i className="ri-close-line" aria-hidden="true" /></button>
             </div>
           ) : null}
-          <main className="min-w-0 overflow-x-clip px-4 py-6 md:px-6 md:py-7">
+          <main className={`min-w-0 overflow-x-clip px-4 py-[var(--page-pad-y)] md:px-6 ${narrow ? "[&>*]:mx-auto [&>*]:max-w-5xl" : ""}`}>
             {status === "loading" ? (
               <AdminLoading />
             ) : status === "error" ? (

@@ -26,7 +26,7 @@ export function Sheet({ open, label, onClose, children }: { open: boolean; label
       <button type="button" aria-label="Close" onClick={onClose}
         className={`absolute inset-0 cursor-default bg-foreground-950/30 transition-opacity duration-200 ease-out motion-reduce:transition-none ${shown ? "opacity-100" : "opacity-0"}`} />
       <div ref={ref} role="dialog" aria-modal="true" aria-label={label}
-        className={`relative flex h-full w-full flex-col bg-background-100 shadow-2xl transition-transform duration-200 ease-out motion-reduce:transition-none md:w-[70%] md:min-w-[640px] md:max-w-[1200px] ${shown ? "translate-x-0" : "translate-x-full"}`}>
+        className={`relative flex h-full w-full flex-col bg-background-100 shadow-2xl transition-transform duration-200 ease-out motion-reduce:transition-none min-[1281px]:w-[85%] min-[1441px]:w-[70%] min-[1281px]:max-w-[1400px] ${shown ? "translate-x-0" : "translate-x-full"}`}>
         {children}
       </div>
     </div>,

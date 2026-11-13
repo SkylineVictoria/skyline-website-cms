@@ -642,6 +642,21 @@
 .drawer-backdrop { animation: fade-in 250ms ease-out both; }
 .drawer-panel { animation: drawer-in-up 250ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 @media (min-width: 640px) { .drawer-panel { animation-name: drawer-in-right; } }
+/* The CMS: compact density (default) and the sidebar width (narrower at 1366px and below). */
+:root { --sidebar-w: 248px; }
+@media (max-width: 1366px) { :root { --sidebar-w: 216px; } }
+[data-density="compact"] {
+  --control-py: 0.375rem;
+  --control-px: 0.625rem;
+  --cell-py: 0.5rem;
+  --cell-px: 0.5rem;
+  --page-pad-y: 1.25rem;
+  --page-head-gap: 1rem;
+  --page-title: var(--text-xl);
+}
+@keyframes drawer-in-left { from { transform: translateX(-100%); } to { transform: none; } }
+.drawer-in-left { animation: drawer-in-left var(--dur-slow) var(--ease-out) both; }
+
 /* RTO drawers (batch timing, new intake): from the right, 200 ms. */
 .drawer-in { animation: drawer-in-right 200ms ease-out both; }
 @media (prefers-reduced-motion: reduce) { .drawer-in { animation: none; } }

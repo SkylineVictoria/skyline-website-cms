@@ -90,9 +90,10 @@ export default function PublicBookingPage() {
             {chosen.description ? <p className="mt-1 text-sm text-foreground-700">{chosen.description}</p> : null}
             {chosen.requiresLogin && !host.signedIn ? (
               <p className="mt-4 rounded-md bg-background-100 px-3 py-3 text-sm text-foreground-800">Sign in to book this meeting. <Link to={`/login?next=${encodeURIComponent(here)}`} className="font-semibold text-primary-700 underline">Sign in</Link></p>
-            ) : host.isSelf ? null : (
+            ) : (
               <>
-                <div className="mt-4"><SlotPicker handle={host.handle} type={chosen.slug} selected={slot} onPick={setSlot} reload={reload} /></div>
+                {host.isSelf ? <p className="mt-4 rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">Preview of your available booking times. Visitors can select a time and confirm a booking.</p> : null}
+                <div className="mt-4"><SlotPicker handle={host.handle} type={chosen.slug} selected={slot} onPick={host.isSelf ? () => {} : setSlot} reload={reload} /></div>
                 {error ? <p role="alert" className="mt-3 text-sm font-medium text-red-700">{error}</p> : null}
                 {slot ? (
                   <form onSubmit={submit} className="mt-5 space-y-3 border-t border-background-200 pt-4">

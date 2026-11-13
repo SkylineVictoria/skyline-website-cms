@@ -6,7 +6,7 @@ import MarkingView, { type ElementRef, type MarkingPayload } from "@/components/
 import { asmTrainer, evidenceUrl, fmtDateTime, fromLocalInput, OUTCOME_LABEL, STATE_LABEL, uploadEvidence } from "@/lib/assessment/api";
 import type { Attempt, Definition, EvidenceFile, Outcome, Question, QuestionKey } from "@/lib/assessment/types";
 
-type Loaded = Attempt & { definition: Definition; assessmentTitle: string; unitId: string | null; studentName: string; settings: Record<string, unknown>; keys: QuestionKey[]; mappings: ElementRef[] };
+type Loaded = Attempt & { canAssess?: boolean; definition: Definition; assessmentTitle: string; unitId: string | null; studentName: string; settings: Record<string, unknown>; keys: QuestionKey[]; mappings: ElementRef[] };
 
 /** /staff/assessments/attempts/:id: the assessor marks one attempt (per question / criterion / rubric, observation checklist, task outcomes, decision) and can sign the unit off. */
 export default function MarkingPage() {
@@ -51,6 +51,7 @@ export default function MarkingPage() {
         {!data && !error ? <p className="mt-4 text-sm text-foreground-600">Loading…</p> : null}
         {data ? (
           <div className="mt-6 space-y-6">
+            {data.canAssess === false ? <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">You can read this submission but not mark it: marking needs the Trainer role on your staff record, a named-assessor place on the assignment, or an administrator (Assessments › Settings › Who may mark).</p> : null}
             <MarkingView definition={data.definition} attempt={data} keys={data.keys} mappings={data.mappings} busy={busy} openEvidence={(f) => void openEvidence(f)} onSave={save} onReturn={ret} onUploadAssessorEvidence={uploadAssessor}
               maxAttempts={Number(data.settings.max_attempts ?? 3)} reassessmentDays={Number(data.settings.reassessment_days ?? 5)} />
             <div className="rounded-card border border-background-200 bg-background-50 p-4">

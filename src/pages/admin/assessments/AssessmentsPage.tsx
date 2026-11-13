@@ -224,7 +224,7 @@ function SettingsTab() {
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
   if (!s) return <SkeletonLines lines={5} />;
-  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { maxAttempts: s.max_attempts, reassessmentDays: s.reassessment_days, lateSubmission: s.late_submission, rollupRule: s.rollup_rule, dueSoonDays: s.due_soon_days, declarationText: s.declaration_text, instructions: s.instructions, evidenceMaxMb: s.evidence_max_mb, evidenceAllowedTypes: s.evidence_allowed_types })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
+  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { maxAttempts: s.max_attempts, reassessmentDays: s.reassessment_days, lateSubmission: s.late_submission, rollupRule: s.rollup_rule, dueSoonDays: s.due_soon_days, requireTrainerRole: s.require_trainer_role, declarationText: s.declaration_text, instructions: s.instructions, evidenceMaxMb: s.evidence_max_mb, evidenceAllowedTypes: s.evidence_allowed_types })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
   return (
     <div className="max-w-3xl space-y-4">
       <p className="text-sm text-foreground-700">Institution-wide rules; an assessment may override attempts, the reassessment window and the late rule. Attempt counts and windows are configuration, not a compliance ruling: confirm them against the Standards for RTOs.</p>
@@ -234,6 +234,7 @@ function SettingsTab() {
         <Field label="Due-soon reminder (days before)"><TextInput type="number" min={1} max={30} value={s.due_soon_days} onChange={(e) => setS({ ...s, due_soon_days: Number(e.target.value) })} /></Field>
         <Field label="Late submissions"><Select value={s.late_submission} onChange={(e) => setS({ ...s, late_submission: e.target.value as Settings["late_submission"] })}><option value="allow">Allow (flagged as late)</option><option value="block">Block after the late date</option></Select></Field>
         <Field label="Task rollup suggestion"><Select value={s.rollup_rule} onChange={(e) => setS({ ...s, rollup_rule: e.target.value as Settings["rollup_rule"] })}><option value="all_satisfactory">All questions S → task S (suggestion only)</option><option value="assessor_only">No suggestion; the assessor decides</option></Select></Field>
+        <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} onChange={(e) => setS({ ...s, require_trainer_role: e.target.value === "role" })}><option value="role">Batch trainers with the Trainer role, named assessors, admins</option><option value="any">Any active batch trainer, named assessors, admins</option></Select></Field>
         <Field label="Evidence file limit (MB)"><TextInput type="number" min={1} max={200} value={s.evidence_max_mb} onChange={(e) => setS({ ...s, evidence_max_mb: Number(e.target.value) })} /></Field>
       </div>
       <Field label="Student declaration (shown and signed at submission; its hash is kept with every submission)"><TextArea rows={4} value={s.declaration_text} onChange={(e) => setS({ ...s, declaration_text: e.target.value })} /></Field>

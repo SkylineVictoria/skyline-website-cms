@@ -31,7 +31,7 @@ export interface StaffOption { id: string; name: string; email: string; isTraine
 export interface BatchOption { id: string; name: string; intakeId: string; intake: string; courseId: string; courseName: string; students: number; isActive: boolean }
 export interface Settings {
   id: string; tenant_id: string | null; max_attempts: number; reassessment_days: number; late_submission: "allow" | "block"; rollup_rule: "all_satisfactory" | "assessor_only"; due_soon_days: number;
-  declaration_text: string; instructions: string; evidence_max_mb: number; evidence_allowed_types: string[];
+  declaration_text: string; instructions: string; evidence_max_mb: number; evidence_allowed_types: string[]; require_trainer_role: boolean;
 }
 export interface OutcomeRow { id: string; studentId: string; studentName: string; unitId: string; unitCode: string; unitName: string; assessmentId: string | null; batchId: string | null; outcome: "C" | "NYC"; signedName: string; signedRole: string; signedAt: string; notes: string; supersedesId: string | null; current: boolean }
 export interface AuditRow { id: number; actor: string | null; role: string; action: string; targetType: string; targetId: string; detail: Record<string, unknown>; at: string }

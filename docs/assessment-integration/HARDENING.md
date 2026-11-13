@@ -43,3 +43,9 @@ Gaps found and fixed:
 Patch mechanism: the RPC bodies are patched in place from `pg_get_functiondef` with single-line anchors that must match an exact count (same technique as `20261112160438_email_html_all.sql`); the migration is not re-runnable by design.
 
 Product bug found (fixed in T4, not here): after a draft is voided (student left and rejoined the batch, exclusion, cancelled assignment), `asm_student('assessment_open')` tries attempt number 1 again and fails on the unique key (`asm_attempts_assignment_id_student_id_attempt_no_key`). Reproduced at the end of the suite with student 3.
+
+## T3 Trainer scope (DONE, D-22)
+
+Migration `20261113460000_assessment_trainer_scope.sql`: `asm_settings.require_trainer_role` (default true), `asm_can_assess(assignment, profile)` / `asm_can_assess_attempt`, `asm_has_trainer_role`; `mark_save`, `mark_return` and assessor evidence (RPC and storage policy) need the marking right; `asm_record_unit_outcome` rewritten (batch trainer with the role on a batch of the unit's course, or a named assessor on an assignment of that unit the student attempted, or Admin / RTO Manager; `batchId` must be the student's, `assessmentId` must be of the unit; tenant checked). Reading stays open to every batch trainer; `my_assignments` and `attempt_get` carry `canAssess`, the marking page explains a refusal, Settings has "Who may mark and sign off". 39 tests "T3 ..." (suite 263/263); type-check and lint clean.
+
+Hosted read-only query (project xcpydisstlvtvcsqnjob, system id 7692130048193495360, 2026-11-14): active staff 1; with the trainer role 0; batches 0; batch-trainer links 0; **active staff linked to batches who lack the trainer role: none** (nobody is linked yet); named assessors 0; highest hosted migration 20261113440000. Owner action after release: give trainers the Trainer role in HR before linking them to batches, or switch the setting off.

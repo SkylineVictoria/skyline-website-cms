@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(224);
+select plan(263);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -443,6 +443,75 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select is(jsonb_array_length(public.asm_trainer('my_assignments')), 0, 'T2 a tenant 1 trainer under tenant 2''s domain has no assignments');
 select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T2 and cannot open their own batch''s attempt from there');
 select set_config('request.headers', '', true);
+select pg_temp.as_postgres();
+
+-- ---------------------------------------------------------------- hardening T3 (20261113460000, D-22): who may mark and sign off
+-- Tom (trainer B) is on batch G2 but holds no trainer role; Tara (trainer A) holds it. require_trainer_role defaults to true.
+select pg_temp.as_postgres();
+select is((select require_trainer_role from public.asm_settings where tenant_id is null), true, 'T3 require_trainer_role defaults to true');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'), 'batchIds', jsonb_build_array('f5000000-0000-0000-0000-000000000012'), 'dueAt', now() + interval '14 days')))->>'created', '1', 'T3 version 1 is assigned to batch G2');
+select pg_temp.put('assignment2', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and batch_id = 'f5000000-0000-0000-0000-000000000012'));
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select pg_temp.put('attemptB', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment2'))))->'attempt'->>'id');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attemptB'), 'responses', pg_temp.responses() || '{"q_tf": true}'::jsonb, 'declaration', '{"signature": "Sue Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T3 student 2 submits on G2');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is((public.asm_trainer('me'))->>'isTrainer', 'false', 'T3 Tom has no trainer role');
+select is((public.asm_trainer('me'))->>'requireTrainerRole', 'true', 'T3 and the workspace knows the role is required');
+select is((select x->>'canAssess' from jsonb_array_elements(public.asm_trainer('my_assignments')) x where x->>'id' = pg_temp.s('assignment2')), 'false', 'T3 the G2 assignment is listed for Tom as not assessable');
+select is((public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attemptB'))))->>'state', 'submitted', 'T3 a batch trainer without the role still reads the submission');
+select is((public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attemptB'))))->>'canAssess', 'false', 'T3 and is told they cannot mark it');
+select throws_ok(format($$select public.asm_trainer('mark_save', '{"id":"%s","results":[{"questionId":"q_tf","outcome":"S"}]}')$$, pg_temp.v('attemptB')), '42501', null, 'T3 a batch trainer without the trainer role cannot mark');
+select throws_ok(format($$select public.asm_trainer('mark_return', '{"id":"%s","outcome":"S"}')$$, pg_temp.v('attemptB')), '42501', null, 'T3 nor decide');
+select throws_ok(format($$select public.asm_trainer('evidence_register', '{"attemptId":"%s","path":"%s/assessor/notes.pdf"}')$$, pg_temp.v('attemptB'), pg_temp.v('attemptB')), '42501', null, 'T3 nor attach assessor files');
+select is(public.asm_evidence_path_writable(pg_temp.s('attemptB') || '/assessor/notes.pdf'), false, 'T3 nor upload them (storage policy)');
+select throws_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-1", "outcome": "C", "signOff": true}')$$, '42501', null, 'T3 nor sign the unit off');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 asm_can_assess says no for Tom');
+select is(public.asm_can_assess(pg_temp.v('assignment2'), 'b5000000-0000-0000-0000-000000000003'), false, 'T3 and does not answer for another profile');
+-- (b) named assessor: role not required
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id":"%s","trainerStaffIds":["b5000000-0000-0000-0000-000000000004"]}')$$, pg_temp.v('assignment2')), 'T3 the admin names Tom as assessor on the G2 assignment');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 a named assessor may assess without the role');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T3 and marks');
+select is(public.asm_evidence_path_writable(pg_temp.s('attemptB') || '/assessor/notes.pdf'), true, 'T3 and may upload assessor files');
+select pg_temp.put('uoB', (public.asm_trainer('unit_outcome_record', jsonb_build_object('studentId', 'e5000000-0000-0000-0000-000000000012', 'unitId', 'unit-asm-1', 'outcome', 'NYC', 'signOff', true, 'batchId', 'f5000000-0000-0000-0000-000000000012', 'assessmentId', pg_temp.v('assessment'))))->>'id');
+select is((select signed_staff_id::text || '|' || outcome from public.asm_unit_outcomes where id = pg_temp.v('uoB')), 'b5000000-0000-0000-0000-000000000004|NYC', 'T3 a named assessor signs the unit off');
+select throws_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-1", "outcome": "C", "signOff": true, "batchId": "f5000000-0000-0000-0000-000000000011"}')$$, '22023', null, 'T3 a batch the student is not in is refused');
+select throws_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-2", "outcome": "C", "signOff": true}')$$, '42501', null, 'T3 a unit of the course with no assignment and no role is refused');
+select throws_ok(format($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-2", "outcome": "C", "signOff": true, "assessmentId": "%s"}')$$, pg_temp.v('assessment')), '22023', null, 'T3 an assessment of another unit is refused');
+-- back to a plain batch trainer: the role requirement can be switched off per institution
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id":"%s","trainerStaffIds":[]}')$$, pg_temp.v('assignment2')), 'T3 the admin removes the named assessor');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 Tom is a plain batch trainer again and may not assess');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.asm_admin('settings_save', '{"requireTrainerRole": false}'))->>'require_trainer_role', 'false', 'T3 the admin switches the role requirement off');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 with the requirement off every active batch trainer may assess');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"S"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T3 Tom marks as a plain batch trainer');
+select lives_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-2", "outcome": "NYC", "signOff": true}')$$, 'T3 and signs off a unit of the course without an assignment');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.asm_admin('settings_save', '{"requireTrainerRole": true}'))->>'require_trainer_role', 'true', 'T3 the requirement is switched back on');
+-- (a) the role itself
+select pg_temp.as_postgres();
+insert into hr.staff_roles(profile_id, role, granted_by) values ('b5000000-0000-0000-0000-000000000004', 'trainer', 'a5000000-0000-0000-0000-000000000001');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is((public.asm_trainer('me'))->>'isTrainer', 'true', 'T3 Tom now holds the trainer role');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 a batch trainer with the role may assess');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attemptB'), 'outcome', 'S')))->>'outcome', 'S', 'T3 and decides the attempt');
+select is(public.asm_can_assess(pg_temp.v('assignment')), false, 'T3 the role does not reach a batch the trainer is not on');
+select pg_temp.as_postgres();
+update hr.staff_roles set revoked_at = now() where profile_id = 'b5000000-0000-0000-0000-000000000004' and role = 'trainer';
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 a revoked role counts as no role');
+-- (c) Admin / RTO Manager, and nobody else
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 an Admin / RTO Manager may assess');
+select lives_ok($$select public.asm_admin('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-1", "outcome": "C", "signOff": true}')$$, 'T3 the administrator signs the unit off');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.asm_admin('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-1", "outcome": "C", "signOff": true}')$$, '42501', null, 'T3 an Editor cannot sign off');
+select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 nor assess');
 select pg_temp.as_postgres();
 
 select * from finish();

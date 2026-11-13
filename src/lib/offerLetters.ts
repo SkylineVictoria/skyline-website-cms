@@ -1,7 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite } from "@/lib/tenantSite";
 import { isTemplateAsset } from "../../supabase/functions/_shared/rich-html";
-import { expandLetterBlocks, letterKeys, letterResolver, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
+import { expandLetterBlocks, letterKeys, letterResolver, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
 
 /**
  * Offer letters (LOO): the variable registry, an application's values, student offer letter templates, pictures in the template-assets
@@ -28,10 +28,16 @@ export function loadLetterRegistry(): Promise<LetterVariable[]> {
 /** values: every variable (course and fee ones from the first course); courses: the course and fee variables of each course (packaged offers). */
 export interface LetterValues {
   values: Record<string, LetterValue>; courses?: Array<Record<string, LetterValue>>;
-  context: { courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string; courseCount?: number };
+  /** Settings › Other fees and charges, one entry per row ({{#each other_fees}}). */
+  charges?: Array<Record<string, LetterValue>>;
+  context: { courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string; courseCount?: number; gst?: boolean };
 }
-/** The template as printed for these values: {{#each courses}} once per course, {{#if multiple_courses}} for several. */
-export const expandFor = (html: string | null | undefined, courses: LetterValues["courses"]) => expandLetterBlocks(html ?? "", courses?.length ?? 1);
+/**
+ * The template as printed for these values: {{#each courses}} once per course, {{#if multiple_courses}} for several, {{#each other_fees}} once
+ * per row of Settings › Other fees and charges (one sample row when not known), {{#if gst}} when a fee line is taxable.
+ */
+export const expandFor = (html: string | null | undefined, courses: LetterValues["courses"], charges?: LetterValues["charges"], gst = false) =>
+  expandLetterBlocks(html ?? "", courses?.length ?? 1, { charges: charges ? charges.length : 1, gst });
 /** The issue drawer: an application's values (staff reviewers). */
 export const letterValues = (applicationId: string) => rpc<LetterValues>("portal_letter_values", { p_application: applicationId });
 /** Template editor, "Test with application" (CMS admins). */
@@ -138,12 +144,16 @@ export interface LetterPdfInput {
   sample?: boolean;
   /** Packaged offers: the course and fee variables of each course. */
   courses?: LetterValues["courses"];
+  /** Settings › Other fees and charges rows; whether a fee line is taxable ({{#if gst}}). */
+  charges?: LetterValues["charges"];
+  gst?: boolean;
 }
 /** The letter as a PDF (A4, header / footer on every page, page numbers), with where each missing variable printed. */
 export async function buildLetterPdf(input: LetterPdfInput) {
   const { buildDocumentPdf, linkedImages } = await import("../../supabase/functions/_shared/document-pdf");
-  const headerHtml = expandFor(input.template.headerHtml, input.courses), bodyHtml = expandFor(input.template.bodyHtml, input.courses), footerHtml = expandFor(input.template.footerHtml, input.courses);
-  const values = withCourseValues(input.values, input.courses);
+  const expand = (html: string | null | undefined) => expandFor(html, input.courses, input.charges, Boolean(input.gst));
+  const headerHtml = expand(input.template.headerHtml), bodyHtml = expand(input.template.bodyHtml), footerHtml = expand(input.template.footerHtml);
+  const values = withChargeValues(withCourseValues(input.values, input.courses), input.charges);
   const images: Record<string, Uint8Array> = {};
   // Pictures in the HTML (template-assets) and picture variables ({{institute.logo}}: the URL from Settings).
   const used = new Set(letterKeys(`${headerHtml ?? ""}\n${bodyHtml ?? ""}\n${footerHtml ?? ""}`));

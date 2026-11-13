@@ -9,7 +9,7 @@ import {
   expandFor, issueTemplateLetter, letterValues, loadLetterRegistry, loadLetterTemplates, saveLetterValueToSource, toBase64,
   type LetterTemplate, type LetterValues,
 } from "@/lib/offerLetters";
-import { baseKey, blockingDetails, formatTyped, missingDetails, withCourseValues, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
+import { baseKey, blockingDetails, formatTyped, missingDetails, withChargeValues, withCourseValues, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
@@ -81,8 +81,8 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   const template = templates?.find((t) => t.id === templateId) ?? null;
   const used = template ? { title: template.title, headerHtml: template.headerHtml, bodyHtml: bodyEdit ?? template.bodyHtml, footerHtml: template.footerHtml } : null;
   // Packaged offers: the course and fee variables of every course (key#n for the 2nd, 3rd... course).
-  const flat = useMemo(() => (values ? withCourseValues(values.values, values.courses) : {}), [values]);
-  const usedHtml = used ? expandFor(`${used.title}\n${used.headerHtml ?? ""}\n${used.bodyHtml ?? ""}\n${used.footerHtml ?? ""}`, values?.courses) : "";
+  const flat = useMemo(() => (values ? withChargeValues(withCourseValues(values.values, values.courses), values.charges) : {}), [values]);
+  const usedHtml = used ? expandFor(`${used.title}\n${used.headerHtml ?? ""}\n${used.bodyHtml ?? ""}\n${used.footerHtml ?? ""}`, values?.courses, values?.charges, Boolean(values?.context.gst)) : "";
   const dateFormat = values?.context.dateFormat ?? "DD/MM/YYYY";
 
   const missing = useMemo(() => (registry && values ? missingDetails(usedHtml, registry, flat) : []), [registry, values, usedHtml, flat]);
@@ -329,7 +329,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                   </button>
                 </div>
                 {showCheck ? <VariableCheck html={usedHtml} registry={registry} values={flat} manual={manual} /> : null}
-                <LetterPreview input={{ template: used, registry, values: values.values, courses: values.courses, manual, conditions }} onBuilt={(made) => setLetter(made)} onMark={focusInput} testId="offer-letter-preview" />
+                <LetterPreview input={{ template: used, registry, values: values.values, courses: values.courses, charges: values.charges, gst: Boolean(values.context.gst), manual, conditions }} onBuilt={(made) => setLetter(made)} onMark={focusInput} testId="offer-letter-preview" />
               </>
             ) : (
               // A clean A4-shaped placeholder until a template is selected and the letter is made.

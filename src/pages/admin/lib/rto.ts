@@ -2,10 +2,23 @@
 // public.rto_admin, which checks the role (RTO Manager edits; Admin enrols; any CMS user reads and edits website settings).
 import { supabase } from "@/pages/admin/lib/supabase";
 
-export type FeeType = "application" | "enrolment" | "tuition" | "material" | "oshc" | "initial_deposit" | "other";
-export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number; includedInTotal?: boolean }
+export type FeeType = "application" | "registration" | "enrolment" | "material" | "tuition" | "other" | "oshc" | "initial_deposit";
+export type GstTreatment = "gst_free" | "inclusive" | "exclusive";
+export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number; includedInTotal?: boolean; refundable?: boolean; gstTreatment?: GstTreatment }
 /** The default for a new line: every fee counts towards the total; an initial deposit is part of the tuition, so it does not. */
-export const includedByDefault = (type: FeeType) => type !== "initial_deposit";
+export const includedByDefault = (type: FeeType) => type !== "initial_deposit" && type !== "oshc";
+/** Application and registration fees are non-refundable unless a line says otherwise ("(Non-Refundable)" is printed from this flag). */
+export const refundableByDefault = (type: FeeType) => !["application", "registration", "enrolment"].includes(type);
+export const isRefundable = (item: FeeItem) => item.refundable ?? refundableByDefault(item.type);
+/** The offer letter's order: application, registration, material, tuition (then other), total; the deposit after it. */
+export const FEE_RANK: Record<FeeType, number> = { application: 1, enrolment: 1, registration: 2, material: 3, tuition: 4, other: 5, oshc: 6, initial_deposit: 7 };
+/** The amount a new line starts with: application $250, registration $0, initial deposit $1,500. */
+export const DEFAULT_FEE_CENTS: Partial<Record<FeeType, number>> = { application: 25000, registration: 0, initial_deposit: 150000 };
+/** The pre-paid limit the offer letter states; a larger deposit needs the student's election to pay more. */
+export const DEPOSIT_LIMIT_CENTS = 150000;
+/** GST: exclusive adds 10% to the line; inclusive already contains 1/11; GST-free adds nothing (same rule as the database). */
+export const lineTotal = (item: FeeItem) => (item.gstTreatment === "exclusive" ? item.amountCents + Math.round(item.amountCents / 10) : item.amountCents);
+export const lineGst = (item: FeeItem) => (item.gstTreatment === "exclusive" ? Math.round(item.amountCents / 10) : item.gstTreatment === "inclusive" ? Math.round(item.amountCents / 11) : 0);
 export const isIncluded = (item: FeeItem) => item.includedInTotal ?? includedByDefault(item.type);
 export interface RtoCourse {
   id: string; slug: string; code: string; name: string; variantLabel: string | null; label: string; depositCents: number | null; cricos: string; category: string; trainingPackage: string; duration: string; mode: string;
@@ -47,12 +60,14 @@ export async function rto<T>(action: string, data: Record<string, unknown> = {})
   return out as T;
 }
 
+/** The fee lines staff can add, in the letter's order (OSHC is not a fee line; "enrolment" is the application fee). */
 export const FEE_TYPES: { id: FeeType; label: string }[] = [
-  { id: "application", label: "Application" }, { id: "enrolment", label: "Enrolment" }, { id: "tuition", label: "Tuition" },
-  { id: "material", label: "Material / non-tuition" }, { id: "oshc", label: "OSHC" }, { id: "initial_deposit", label: "Initial deposit" }, { id: "other", label: "Other" },
+  { id: "application", label: "Application fee" }, { id: "registration", label: "Registration fee" }, { id: "material", label: "Material fee" },
+  { id: "tuition", label: "Tuition fee" }, { id: "other", label: "Other" }, { id: "initial_deposit", label: "Initial deposit" },
 ];
 /** The one total rule (same as public.course_fee_total_cents): the sum of the items included in the total. */
-export const feeTotal = (items: FeeItem[]) => items.filter(isIncluded).reduce((sum, i) => sum + (Number(i.amountCents) || 0), 0);
+export const feeTotal = (items: FeeItem[]) => items.filter(isIncluded).reduce((sum, i) => sum + (lineTotal(i) || 0), 0);
+export const feeGst = (items: FeeItem[]) => items.filter(isIncluded).reduce((sum, i) => sum + (lineGst(i) || 0), 0);
 export const depositOf = (items: FeeItem[]) => items.filter((i) => i.type === "initial_deposit").reduce((sum, i) => sum + (Number(i.amountCents) || 0), 0);
 export const money = (cents: number | null | undefined) =>
   cents === null || cents === undefined ? "—" : `$${(cents / 100).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

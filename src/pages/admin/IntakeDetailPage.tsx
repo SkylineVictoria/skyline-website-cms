@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, SectionTabs, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ClassroomsManager } from "@/pages/admin/ClassroomsPage";
+import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
 import { Avatars, Drawer, ErrorNote, FeesEditor, IntakeStatusChip, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
 import {
   DAYS, addDays, daysBetween, feeTotal, money, parseDay, rto, shortDate,
@@ -74,9 +75,9 @@ export default function IntakeDetailPage() {
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t }, { replace: true })} />
       {!canEdit ? <div className="mb-3"><ReadOnlyNote>{canEnrol ? "You can add students to existing batches. Only an RTO Manager changes the schedule, batches and fees." : "Read only."}</ReadOnlyNote></div> : null}
 
-      {tab === "schedule" ? <ScheduleTab detail={detail} readOnly={!canEdit} busy={busy}
+      {tab === "schedule" ? <SchedulePanel detail={detail} readOnly={!canEdit} busy={busy}
         onSave={(rows) => void run("schedule_save", { rows }, "Schedule saved.")}
-        onRegenerate={() => void run("intake_save", { id, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}) }, "Schedule generated from the unit durations.")} /> : null}
+        onRegenerate={(fitEnd) => void run("intake_save", { id, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}), ...(fitEnd ? { fitEnd } : {}) }, "Schedule generated from the master timetable.")} /> : null}
 
       {tab === "batches" ? (
         <div className="space-y-2">
@@ -115,105 +116,6 @@ export default function IntakeDetailPage() {
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => { setConfirmDelete(false); void rto("intake_delete", { intakeId: id }).then(() => { push("Intake deleted."); navigate("/admin/intakes"); }).catch((e) => push(e instanceof Error ? e.message : "Not deleted.", "error")); }} />
     </div>
-  );
-}
-
-/** A CSS-grid timeline. Change a unit's dates inline or drag its bar; the units after it move by the same number of days. */
-export function ScheduleTab({ detail, readOnly, busy, onSave, onRegenerate }: {
-  detail: IntakeDetail; readOnly: boolean; busy: boolean; onSave: (rows: ScheduleRow[]) => void; onRegenerate: () => void;
-}) {
-  const [rows, setRows] = useState<ScheduleRow[]>(detail.schedule);
-  const [confirm, setConfirm] = useState(false);
-  const track = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ index: number; x: number; moved: number } | null>(null);
-  const [dragDays, setDragDays] = useState<{ index: number; days: number } | null>(null);
-  useEffect(() => { setRows(detail.schedule); }, [detail.schedule]);
-
-  const first = rows.length ? rows.reduce((m, r) => (r.startDate < m ? r.startDate : m), rows[0].startDate) : detail.intake.startDate;
-  const last = rows.length ? rows.reduce((m, r) => (r.endDate > m ? r.endDate : m), rows[0].endDate) : detail.intake.endDate ?? detail.intake.startDate;
-  const span = Math.max(1, daysBetween(first, last) + 1);
-  const months = useMemo(() => {
-    const out: { label: string; left: number }[] = [];
-    let d = new Date(parseDay(first)); d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-    while (d.getTime() <= parseDay(last)) {
-      const left = Math.max(0, daysBetween(first, d.toISOString().slice(0, 10)) / span);
-      out.push({ label: d.toLocaleDateString("en-AU", { month: "short", year: "2-digit", timeZone: "UTC" }), left });
-      d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
-    }
-    return out;
-  }, [first, last, span]);
-
-  /** Move unit `index` (and every later unit) by `days`; or change only its end and shift the later ones. */
-  const shift = (index: number, startDays: number, endDays: number) => setRows((list) => list.map((r, x) => {
-    if (x < index) return r;
-    if (x === index) return { ...r, startDate: addDays(r.startDate, startDays), endDate: addDays(r.endDate, endDays) };
-    return { ...r, startDate: addDays(r.startDate, endDays), endDate: addDays(r.endDate, endDays) };
-  }));
-  const setStart = (index: number, value: string) => { if (value) { const delta = daysBetween(rows[index].startDate, value); shift(index, delta, delta); } };
-  const setEnd = (index: number, value: string) => { if (value && value >= rows[index].startDate) shift(index, 0, daysBetween(rows[index].endDate, value)); };
-  const pxPerDay = () => (track.current?.clientWidth ?? 600) / span;
-  const onPointerDown = (index: number, e: React.PointerEvent) => {
-    if (readOnly) return;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { index, x: e.clientX, moved: 0 };
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag.current) return;
-    const days = Math.round((e.clientX - drag.current.x) / pxPerDay());
-    if (days !== drag.current.moved) { drag.current.moved = days; setDragDays({ index: drag.current.index, days }); }
-  };
-  const onPointerUp = () => {
-    if (drag.current && drag.current.moved) shift(drag.current.index, drag.current.moved, drag.current.moved);
-    drag.current = null; setDragDays(null);
-  };
-  const dirty = JSON.stringify(rows) !== JSON.stringify(detail.schedule);
-
-  if (!rows.length) {
-    return <Card><EmptyState icon="ri-calendar-schedule-line" title="No schedule yet" description={readOnly ? "An RTO Manager generates the schedule." : "Generate it from the course's active units."} />
-      {readOnly ? null : <div className="flex justify-center pb-6"><Button disabled={busy} onClick={onRegenerate}>Generate schedule</Button></div>}</Card>;
-  }
-  return (
-    <Card className="p-0">
-      <div className="grid grid-cols-[minmax(0,15rem)_minmax(0,1fr)] border-b border-background-200 text-xs text-foreground-500">
-        <div className="px-4 py-2 font-medium">Unit</div>
-        <div ref={track} className="relative h-8">{months.map((m) => <span key={m.label} className="absolute top-2 border-l border-background-300 pl-1" style={{ left: `${m.left * 100}%` }}>{m.label}</span>)}</div>
-      </div>
-      <div onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-        {rows.map((r, index) => {
-          const offset = dragDays && index >= dragDays.index ? dragDays.days : 0;
-          const left = (daysBetween(first, r.startDate) + offset) / span, width = (daysBetween(r.startDate, r.endDate) + 1) / span;
-          return (
-            <div key={r.id} className="grid grid-cols-[minmax(0,15rem)_minmax(0,1fr)] items-center border-b border-background-100 last:border-0">
-              <div className="min-w-0 px-4 py-2">
-                <p className="truncate text-sm font-medium text-foreground-900" title={r.name}>{r.code} <span className="font-normal text-foreground-600">{r.name}</span></p>
-                {readOnly ? <p className="text-xs text-foreground-500">{shortDate(r.startDate)} – {shortDate(r.endDate)}</p> : (
-                  <div className="mt-1 flex items-center gap-1">
-                    <input type="date" aria-label={`${r.code} start`} value={r.startDate} onChange={(e) => setStart(index, e.target.value)} className="w-[8.2rem] rounded border border-background-300 px-1 py-0.5 text-xs" />
-                    <span className="text-xs text-foreground-400">–</span>
-                    <input type="date" aria-label={`${r.code} end`} value={r.endDate} min={r.startDate} onChange={(e) => setEnd(index, e.target.value)} className="w-[8.2rem] rounded border border-background-300 px-1 py-0.5 text-xs" />
-                  </div>
-                )}
-              </div>
-              <div className="relative h-10">
-                <div onPointerDown={(e) => onPointerDown(index, e)} title={`${r.code}: ${shortDate(r.startDate)} – ${shortDate(r.endDate)}`}
-                  className={`absolute top-2 h-6 rounded ${r.unitType === "elective" ? "bg-secondary-300" : "bg-primary-400"} ${readOnly ? "" : "cursor-grab touch-none active:cursor-grabbing"}`}
-                  style={{ left: `${left * 100}%`, width: `${Math.max(width * 100, 0.8)}%` }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {readOnly ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-background-200 px-4 py-3">
-          <Button variant="outline" size="sm" icon="ri-refresh-line" disabled={busy} onClick={() => setConfirm(true)}>Regenerate</Button>
-          <p className="text-xs text-foreground-500">Drag a bar or change a date; later units move with it.</p>
-          <div className="flex gap-2">{dirty ? <Button variant="ghost" size="sm" onClick={() => setRows(detail.schedule)}>Undo</Button> : null}
-            <Button disabled={busy || !dirty} onClick={() => onSave(rows)}>{busy ? "Saving…" : "Save schedule"}</Button></div>
-        </div>
-      )}
-      <ConfirmDialog open={confirm} title="Regenerate the schedule?" message="Every unit date is laid out again from the start date. Your manual changes are replaced." confirmLabel="Regenerate"
-        onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); onRegenerate(); }} />
-    </Card>
   );
 }
 

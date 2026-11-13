@@ -81,8 +81,8 @@ export default function CourseWizardPage() {
   const doneCount = steps.filter((s) => notes[s.id].length === 0).length;
 
   return (
-    <div>
-      <div className="sticky top-0 z-10 -mx-1 mb-4 rounded-b-xl border border-t-0 border-background-200 bg-background-50/95 backdrop-blur">
+    <div className="w-full min-w-0">
+      <div className="sticky top-0 z-10 mb-4 rounded-b-xl border border-t-0 border-background-200 bg-background-50/95 backdrop-blur">
         <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-2 pt-3">
           <div className="min-w-0">
             <Link to="/admin/course-fees" className="inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />Courses</Link>

@@ -3,11 +3,12 @@
 // it), "+ Add batch", and enrolling students. "Duplicate" copies an intake to a new start date (no students).
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, Field, Select, TextInput } from "@/pages/admin/components/ui";
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, Select, TextInput } from "@/pages/admin/components/ui";
+import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote, IntakeStatusChip } from "@/pages/admin/components/rto/shared";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
-import { BatchDrawer, EnrolDrawer, ScheduleTab } from "@/pages/admin/IntakeDetailPage";
+import { BatchDrawer, EnrolDrawer } from "@/pages/admin/IntakeDetailPage";
 import { phase, progress, rto, rtoFlow, shortDate, type CourseDetail, type EnrolmentType, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake } from "@/pages/admin/lib/rto";
 
 export default function IntakesStep({ detail, canEdit, canEnrol, onChanged }: { detail: CourseDetail; canEdit: boolean; canEnrol: boolean; onChanged: () => void }) {
@@ -15,15 +16,16 @@ export default function IntakesStep({ detail, canEdit, canEnrol, onChanged }: { 
   const [creating, setCreating] = useState(false);
   const [duplicating, setDuplicating] = useState<RtoIntake | null>(null);
   const intakes = [...detail.intakes].sort((a, b) => b.startDate.localeCompare(a.startDate));
+  const unitWeeks = Object.fromEntries(detail.units.filter((u) => u.id).map((u) => [u.id as string, u.defaultWeeks]));
   return (
-    <div className="space-y-2">
+    <div className="w-full min-w-0 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-foreground-600">{intakes.length ? `${intakes.length} intake${intakes.length === 1 ? "" : "s"}. Expand one for its schedule, batches and students.` : "No intakes yet."}</p>
         {canEdit ? <Button icon="ri-add-line" onClick={() => setCreating(true)}>New intake</Button> : null}
       </div>
       {intakes.length === 0 ? <Card><EmptyState icon="ri-calendar-event-line" title="No intakes yet" description={canEdit ? "Create one: pick a start date and the schedule is generated from the master timetable." : "An RTO Manager creates intakes."} /></Card> : null}
       {intakes.map((i) => (
-        <IntakeItem key={i.id} intake={i} courseId={detail.course.id} expanded={open === i.id} onToggle={() => setOpen((x) => (x === i.id ? null : i.id))}
+        <IntakeItem key={i.id} intake={i} courseId={detail.course.id} courseDuration={detail.course.duration} unitWeeks={unitWeeks} expanded={open === i.id} onToggle={() => setOpen((x) => (x === i.id ? null : i.id))}
           canEdit={canEdit} canEnrol={canEnrol} onDuplicate={() => setDuplicating(i)} onChanged={onChanged} />
       ))}
       <NewIntakeDrawer open={creating} onClose={() => { setCreating(false); onChanged(); }} courses={[]} courseId={detail.course.id} stay />
@@ -32,9 +34,13 @@ export default function IntakesStep({ detail, canEdit, canEnrol, onChanged }: { 
   );
 }
 
-function IntakeItem({ intake, courseId, expanded, onToggle, canEdit, canEnrol, onDuplicate, onChanged }: {
-  intake: RtoIntake; courseId: string; expanded: boolean; onToggle: () => void; canEdit: boolean; canEnrol: boolean; onDuplicate: () => void; onChanged: () => void;
+function IntakeItem({ intake, courseId, courseDuration, unitWeeks, expanded, onToggle, canEdit, canEnrol, onDuplicate, onChanged }: {
+  intake: RtoIntake; courseId: string; courseDuration: string; unitWeeks: Record<string, number>; expanded: boolean; onToggle: () => void; canEdit: boolean; canEnrol: boolean; onDuplicate: () => void; onChanged: () => void;
 }) {
+  const [dirty, setDirty] = useState(false);
+  const [ask, setAsk] = useState<null | "collapse" | "delete">(null);
+  const [menu, setMenu] = useState(false);
+  const toggle = () => { if (expanded && dirty) setAsk("collapse"); else onToggle(); };
   const { push } = useToast();
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [busy, setBusy] = useState(false);
@@ -53,10 +59,16 @@ function IntakeItem({ intake, courseId, expanded, onToggle, canEdit, canEnrol, o
     finally { setBusy(false); }
   };
   const pct = Math.round(progress(intake) * 100);
+  const remove = async () => {
+    setBusy(true);
+    try { await rto("intake_delete", { intakeId: intake.id }); push(`${intake.name} deleted.`); onChanged(); }
+    catch (e) { push(e instanceof Error ? e.message : "Not deleted.", "error"); }
+    finally { setBusy(false); }
+  };
   return (
-    <Card className="overflow-hidden">
+    <Card className="w-full min-w-0">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-        <button type="button" onClick={onToggle} aria-expanded={expanded} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+        <button type="button" onClick={toggle} aria-expanded={expanded} className="flex min-w-0 flex-1 items-center gap-3 text-left">
           <i className={`${expanded ? "ri-arrow-down-s-line" : "ri-arrow-right-s-line"} text-lg text-foreground-400`} aria-hidden="true" />
           <span className="min-w-0">
             <span className="block truncate font-medium text-foreground-900">{intake.name}</span>
@@ -72,16 +84,30 @@ function IntakeItem({ intake, courseId, expanded, onToggle, canEdit, canEnrol, o
             <option value="draft">Draft</option><option value="open">Open</option><option value="full">Full</option><option value="closed">Closed</option>
           </Select>
         ) : <IntakeStatusChip status={intake.status} />}
-        {canEdit ? <Button variant="ghost" size="sm" icon="ri-file-copy-line" onClick={onDuplicate}>Duplicate</Button> : null}
+        <div className="relative">
+          <Button variant="ghost" size="sm" icon="ri-more-2-fill" aria-label={`More actions for ${intake.name}`} aria-expanded={menu} onClick={() => setMenu((m) => !m)} />
+          {menu ? (
+            <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-md border border-background-200 bg-background-50 py-1 text-sm shadow-lg" onMouseLeave={() => setMenu(false)}>
+              {canEdit ? <button type="button" className="block w-full px-3 py-1.5 text-left hover:bg-background-100" onClick={() => { setMenu(false); onDuplicate(); }}><i className="ri-file-copy-line mr-2" aria-hidden="true" />Duplicate…</button> : null}
+              <Link to={`/admin/intakes/${intake.id}`} className="block px-3 py-1.5 hover:bg-background-100"><i className="ri-external-link-line mr-2" aria-hidden="true" />Open on its own page</Link>
+              {canEdit ? <button type="button" className="block w-full px-3 py-1.5 text-left text-red-700 hover:bg-red-50" onClick={() => { setMenu(false); setAsk("delete"); }}><i className="ri-delete-bin-line mr-2" aria-hidden="true" />Delete intake…</button> : null}
+            </div>
+          ) : null}
+        </div>
       </div>
+      <ConfirmDialog open={ask === "collapse"} title="Discard unsaved schedule changes?" message={`The schedule of ${intake.name} has changes that are not saved.`} confirmLabel="Discard changes"
+        onCancel={() => setAsk(null)} onConfirm={() => { setAsk(null); setDirty(false); onToggle(); }} />
+      <ConfirmDialog open={ask === "delete"} title={`Delete ${intake.name}?`} message="Its schedule and empty batches go too. An intake with students or applications cannot be deleted; close it instead." confirmLabel="Delete intake"
+        onCancel={() => setAsk(null)} onConfirm={() => { setAsk(null); void remove(); }} />
       {expanded ? (
-        <div className="space-y-4 border-t border-background-200 bg-background-100/40 p-4">
+        <div className="min-w-0 space-y-4 border-t border-background-200 bg-background-100/40 p-4">
           <ErrorNote text={error} />
           {!detail ? <p className="text-sm text-foreground-500">Loading…</p> : (
             <>
-              <ScheduleTab detail={detail} readOnly={!canEdit} busy={busy}
+              <SchedulePanel detail={detail} courseDuration={courseDuration} unitWeeks={unitWeeks} readOnly={!canEdit} busy={busy} onDirtyChange={setDirty}
                 onSave={(rows) => void run(() => rto<IntakeDetail>("schedule_save", { intakeId: intake.id, rows }), "Schedule saved.")}
-                onRegenerate={() => void run(() => rto<IntakeDetail>("intake_save", { id: intake.id, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}) }), "Schedule generated from the master timetable.")} />
+                onRegenerate={(fitEnd) => void run(() => rto<IntakeDetail>("intake_save", { id: intake.id, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}), ...(fitEnd ? { fitEnd } : {}) }),
+                  fitEnd ? "Schedule fitted to the course duration." : "Schedule generated from the master timetable.")} />
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h3 className="font-heading text-sm font-semibold text-foreground-950">Batches</h3>
@@ -95,7 +121,6 @@ function IntakeItem({ intake, courseId, expanded, onToggle, canEdit, canEnrol, o
                     onWithdraw={(enrolmentId) => void run(() => rto<IntakeDetail>("unenrol", { enrolmentId }), "Student withdrawn.")} />
                 ))}
               </div>
-              <div className="flex justify-end"><Link to={`/admin/intakes/${intake.id}`} className="text-xs font-medium text-primary-600 hover:underline">Open the intake on its own page</Link></div>
             </>
           )}
           {batchDrawer && detail ? <BatchDrawer batch={batchDrawer === "new" ? null : batchDrawer} existing={detail.batches} busy={busy} onClose={() => setBatchDrawer(null)}

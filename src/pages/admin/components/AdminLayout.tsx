@@ -153,7 +153,7 @@ export default function AdminLayout() {
               <button type="button" aria-label="Dismiss" onClick={() => setDismissed(problem)} className="flex h-6 w-6 cursor-pointer items-center justify-center rounded hover:bg-red-100"><i className="ri-close-line" aria-hidden="true" /></button>
             </div>
           ) : null}
-          <main className="px-4 py-6 md:px-6 md:py-7">
+          <main className="min-w-0 overflow-x-clip px-4 py-6 md:px-6 md:py-7">
             {status === "loading" ? (
               <AdminLoading />
             ) : status === "error" ? (

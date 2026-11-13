@@ -16,11 +16,11 @@ export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
   active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
-/** Same table as hr.staff_transition_allowed() (migration 20261110090000). Resending or revoking a link changes no status. */
+/** Same table as hr.staff_transition_allowed() (migration 20261113031341: documents_submitted > offer_signed = signed documents received). Resending or revoking a link changes no status. */
 const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
   ["applied", "invited"], ["applied", "rejected"],
   ["invited", "documents_submitted"], ["invited", "rejected"],
-  ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
+  ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "offer_signed"], ["documents_submitted", "rejected"],
   ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"],
   ["offer_signed", "active"], ["offer_signed", "rejected"],
   ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"], ["inactive", "applied"],
@@ -51,6 +51,8 @@ export interface EmployeeContext {
   openJobApplication?: boolean;
   /** Onboarding flow: the pay details are complete (the database refuses an offer without them). */
   payComplete?: boolean;
+  /** STAFF-SIGN: the signed documents are in (uploaded, e-signed or the signed offer) and nothing sent for signature is waiting. */
+  signaturesReady?: boolean;
   /** The login that went out with the offer: it exists, and the person has chosen their password. */
   hasLogin?: boolean;
   passwordSet?: boolean;
@@ -65,9 +67,11 @@ export function employeeActions(c: EmployeeContext): EmployeeAction[] {
       // Documents approved > pay details > offer: only the step that is next is offered.
       if (c.allApproved && !c.payComplete) out.push("add_pay_details");
       if (c.allApproved && c.payComplete) out.push("send_offer", "edit_pay_details");
+      // Documents signed outside the offer (uploaded or through Skyline Sign): HR may activate now.
+      if (c.allApproved && c.signaturesReady) out.unshift("activate");
       return [...out, "reject"];
     }
-    case "offer_sent": return ["resend_offer", ...(c.hasLogin && !c.passwordSet ? ["resend_login"] as const : []), "withdraw_offer", "reject"];
+    case "offer_sent": return [...(c.signaturesReady ? ["activate"] as const : []), "resend_offer", ...(c.hasLogin && !c.passwordSet ? ["resend_login"] as const : []), "withdraw_offer", "reject"];
     case "offer_signed": return [c.activationInvited ? "resend_activation" : "activate", ...(c.hasLogin && !c.passwordSet ? ["resend_login"] as const : []), "reject"];
     case "active": return ["deactivate"];
     case "inactive": return ["reactivate"];
@@ -93,7 +97,7 @@ export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
   resend_offer: { label: "Send the offer email again", confirm: "Send it again", explain: "Emails the offer again with a new sign-in link. An earlier link stops working at once." },
   resend_login: { label: "Resend login", confirm: "Send a new link", explain: "Emails a new one-time link to choose a password (valid 7 days). The earlier link stops working at once." },
   withdraw_offer: { label: "Withdraw offer", confirm: "Withdraw the offer", danger: true, note: "required", explain: "The offer link stops working and the application goes back to Documents submitted." },
-  activate: { label: "Activate employee", confirm: "Activate", explain: "Makes them a current employee from the joining date, with the role you choose. They appear under Active and in Timesheets, Leave, Pay Schedules and the Xero export, and are emailed that their staff access is ready." },
+  activate: { label: "Activate employee", confirm: "Activate", explain: "Needs the signed documents (uploaded, e-signed or the signed offer) with nothing still waiting for signature; an unsigned offer is withdrawn. Makes them a current employee from the joining date, with the role you choose. They appear under Active and in Timesheets, Leave, Pay Schedules and the Xero export, and are emailed that their staff access is ready." },
   resend_activation: { label: "Resend activation email", confirm: "Send it again", explain: "Sends a new set-a-password email (for example when the link expired), with the role and joining date already recorded." },
   reject: { label: "Withdraw / reject", confirm: "Withdraw", danger: true, note: "required", explain: "Ends this application at any stage. Any link stops working and an unsigned offer is withdrawn. The reason is for the record; it is not sent." },
   deactivate: { label: "Mark inactive", confirm: "Mark inactive", danger: true, note: "required", explain: "Switches off their admin console access (if any) and marks them Inactive. My HR closes for them." },

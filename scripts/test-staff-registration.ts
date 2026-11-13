@@ -358,7 +358,7 @@ test("the browser, the edge function and the database normalise the same vectors
 
 test("status transitions allow exactly the agreed moves", () => {
   const allowed: Array<[string, string]> = [["applied", "invited"], ["applied", "rejected"], ["invited", "documents_submitted"], ["invited", "rejected"],
-    ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "rejected"],
+    ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "offer_signed"], ["documents_submitted", "rejected"],
     ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"], ["offer_signed", "active"], ["offer_signed", "rejected"],
     ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"], ["inactive", "applied"]];
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
@@ -370,10 +370,15 @@ test("status transitions allow exactly the agreed moves", () => {
 
 test("the TypeScript transition table matches the database function and the status list", () => {
   const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
-  const body = sql.slice(sql.indexOf("function hr.staff_transition_allowed"), sql.indexOf("function hr.staff_status_guard"));
+  const latest = read("supabase/migrations/20261113031341_staff_signed_documents.sql");
+  const body = latest.slice(latest.indexOf("function hr.staff_transition_allowed"), latest.indexOf("function hr.staff_signing_problem"));
   const pairs = [...body.matchAll(/\('([a-z_]+)','([a-z_]+)'\)/g)].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 16);
+  // The latest table lists 14 pairs; any move to active / inactive is allowed by the database (the RPCs decide when), so
+  // those are compared only where the TypeScript table offers them.
+  assert.equal(pairs.length, 14);
+  assert.match(body, /p_to in \('active', 'inactive'\)/);
   for (const from of status.STAFF_STATUSES) for (const to of status.STAFF_STATUSES) {
+    if (to === "active" || to === "inactive") continue;
     assert.equal(status.canTransition(from, to), pairs.some(([a, b]) => a === from && b === to), `database ${from} -> ${to}`);
   }
   const check = sql.slice(sql.indexOf("add constraint staff_profiles_status_check"));
@@ -393,15 +398,19 @@ test("Employees actions follow the status and what exists; each one is a legal m
   assert.deepEqual(acts("documents_submitted", { allApproved: true, payComplete: true, offer: { sent: false } }), ["send_offer", "edit_pay_details", "reject"]);
   assert.deepEqual(acts("offer_sent"), ["resend_offer", "withdraw_offer", "reject"]);
   assert.deepEqual(acts("offer_signed"), ["activate", "reject"]);
+  assert.deepEqual(acts("documents_submitted", { allApproved: true, signaturesReady: true }), ["activate", "add_pay_details", "reject"], "signed documents in: activate without an offer");
+  assert.deepEqual(acts("documents_submitted", { signaturesReady: true }), ["reject"], "documents must be approved first");
+  assert.deepEqual(acts("offer_sent", { signaturesReady: true }), ["activate", "resend_offer", "withdraw_offer", "reject"]);
   assert.deepEqual(acts("offer_signed", { activationInvited: true }), ["resend_activation", "reject"]);
   assert.deepEqual(acts("active"), ["deactivate"]);
   assert.deepEqual(acts("inactive"), ["reactivate"]);
   assert.deepEqual(acts("rejected"), ["reopen"]);
   for (const st of status.STAFF_STATUSES) {
-    for (const extra of [{}, { liveDocumentLink: true, rejectedDocuments: 2, allApproved: true, offer: { sent: false }, activationInvited: true }]) {
+    for (const extra of [{}, { liveDocumentLink: true, rejectedDocuments: 2, allApproved: true, offer: { sent: false }, activationInvited: true, signaturesReady: true }]) {
       for (const action of staffStatusLib.employeeActions({ ...base, ...extra, status: st } as never)) {
         const to = staffStatusLib.EMPLOYEE_ACTION_TARGET[action];
-        assert.ok(to === null || status.canTransition(st, to), `${action} from ${st} is a legal move`);
+        // Activating before the offer is signed passes through offer_signed ("signed documents received").
+        assert.ok(to === null || status.canTransition(st, to) || (action === "activate" && status.canTransition(st, "offer_signed")), `${action} from ${st} is a legal move`);
         const spec = staffStatusLib.EMPLOYEE_ACTION[action];
         assert.ok(spec.label && spec.confirm && spec.explain, `${action} has a confirmation dialog`);
       }

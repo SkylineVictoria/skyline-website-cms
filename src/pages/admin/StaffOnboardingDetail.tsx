@@ -3,13 +3,14 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
 import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  StaffAdminError, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminStaffDetail, staffAdminActions, staffDocumentUrl,
-  type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffOnboarding,
+  StaffAdminError, adminStaffSigning, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminStaffDetail, staffAdminActions, staffDocumentUrl,
+  type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffOnboarding, type StaffSigning,
 } from "@/lib/staffApi";
 import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
 import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
 import EmploymentDialog from "@/pages/admin/components/hrms/EmploymentDialog";
 import SendOfferDialog from "@/pages/admin/components/hrms/SendOfferDialog";
+import StaffSignedDocuments from "@/pages/admin/components/hrms/StaffSignedDocuments";
 import { EXTRACTED_LABEL, SECTION, accountText, timelineText } from "@/pages/admin/lib/onboardingText";
 import { READABLE_CATEGORIES, taxSuperRows } from "@/lib/staffOnboardingWizard";
 import { money } from "@/lib/hrTime";
@@ -107,6 +108,7 @@ export default function StaffOnboardingDetail() {
   const [detail, setDetail] = useState<StaffDetail | null>(null);
   const [flow, setFlow] = useState<StaffOnboarding | null>(null);
   const [extras, setExtras] = useState<OnboardingExtras | null>(null);
+  const [signing, setSigning] = useState<StaffSigning | null>(null);
   const [checkBusy, setCheckBusy] = useState("");
   const [payOpen, setPayOpen] = useState(false);
   const [offerOpen, setOfferOpen] = useState<"send" | "resend" | null>(null);
@@ -132,8 +134,8 @@ export default function StaffOnboardingDetail() {
 
   const load = useCallback(async () => {
     try {
-      const [next, progress, more] = await Promise.all([adminStaffDetail(id), adminOnboarding(id), adminOnboardingExtras(id)]);
-      setDetail(next); setFlow(progress); setExtras(more); setError(""); return next;
+      const [next, progress, more, signed] = await Promise.all([adminStaffDetail(id), adminOnboarding(id), adminOnboardingExtras(id), adminStaffSigning(id).catch(() => null)]);
+      setDetail(next); setFlow(progress); setExtras(more); setSigning(signed); setError(""); return next;
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be loaded."); return null; }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -260,6 +262,7 @@ export default function StaffOnboardingDetail() {
     payComplete: flow?.payComplete ?? false,
     hasLogin: flow?.account?.hasLogin ?? false,
     passwordSet: flow?.account?.passwordSet ?? false,
+    signaturesReady: signing !== null && signing.problem === null,
   });
   const pay = flow?.payDetails ?? null;
   const stageHint = flow && !flow.closed ? ONBOARDING_STAGE_HINT[flow.stage] : null;
@@ -452,6 +455,10 @@ export default function StaffOnboardingDetail() {
             ))}
           </ul>
         </div></Card>
+      ) : null}
+
+      {["documents_submitted", "offer_sent", "offer_signed"].includes(profile.status) ? (
+        <StaffSignedDocuments profileId={profile.id} name={name} signing={signing} onChanged={load} />
       ) : null}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">

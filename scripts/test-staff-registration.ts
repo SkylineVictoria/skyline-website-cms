@@ -112,6 +112,7 @@ test("signed PDF: each completed field is printed inside its box on its page; ot
   const answer = text.find((t) => t.text.includes("Student 4471"))!; assert.ok(answer && answer.page === 1 && inBox(answer, fields[1]), JSON.stringify(answer));
   const sig = text.find((t) => t.text === "Asha Patel")!; assert.ok(sig && sig.page === 2 && inBox(sig, fields[0]), JSON.stringify(sig));
   assert.ok(!text.some((t) => t.text.includes("Hari")), "the second signer's field is empty until they sign");
+  assert.ok(!text.some((t) => /UTC|SLIT-2026-000001/.test(t.text)), "no caption (name, time, reference) under a signature");
   // A signer with no placed signature field gets a signature page.
   const loose = await signingPdf.stampDocument(await original.save(), { reference: "SLIT-2026-000002", title: "Contract", fields: [], recipients: [{ ...recipients[0], signature_kind: "drawn", signature_image: PNG_1PX }] });
   assert.equal((await PdfLib.PDFDocument.load(loose)).getPageCount(), 3);

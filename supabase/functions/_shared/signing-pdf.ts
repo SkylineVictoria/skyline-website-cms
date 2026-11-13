@@ -27,7 +27,7 @@ export function signatureImageBytes(base64: unknown): Uint8Array {
   return bytes;
 }
 
-const INK = rgb(0.05, 0.1, 0.3), GREY = rgb(0.42, 0.45, 0.5);
+const INK = rgb(0.05, 0.1, 0.3);
 
 /**
  * The original with every completed field drawn where it was placed (x, y, w, h are fractions of the page, from its top-left corner) and,
@@ -63,17 +63,15 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
       if (!signer || signer.state !== "signed") continue;
       if (field.type === "signature") placedSignature.add(signer.id);
       const image = field.type === "signature" ? await imageOf(signer) : null;
-      const caption = `${writer.clean(signer.signer_name ?? signer.name)}  ${String(signer.signed_at ?? "").slice(0, 16).replace("T", " ")} UTC  ${input.reference}`;
-      const captionH = field.type === "signature" && box.h > 22 ? 6 : 0;
+      // Only the signature itself is drawn: who signed and when is in the history and on the completion certificate, not under the signature.
       if (image) {
-        const scale = Math.min(box.w / image.width, (box.h - captionH) / image.height);
-        page.drawImage(image, { x: box.x, y: box.y + captionH + (box.h - captionH - image.height * scale) / 2, width: image.width * scale, height: image.height * scale });
+        const scale = Math.min(box.w / image.width, box.h / image.height);
+        page.drawImage(image, { x: box.x, y: box.y + (box.h - image.height * scale) / 2, width: image.width * scale, height: image.height * scale });
       } else {
         const text = writer.clean(field.type === "initials" ? initialsOf(signer.signer_name ?? signer.name) : signer.signer_name ?? signer.name, true);
-        const { font, size } = fit(text, true, box.w - 4, box.h - captionH);
-        page.drawText(text, { x: box.x + 2, y: box.y + captionH + (box.h - captionH - size) / 2 + size * 0.22, size, font, color: INK, ySkew: degrees(12) }); // ySkew slants the letters (italic); xSkew tilted the whole line upwards
+        const { font, size } = fit(text, true, box.w - 4, box.h);
+        page.drawText(text, { x: box.x + 2, y: box.y + (box.h - size) / 2 + size * 0.22, size, font, color: INK, ySkew: degrees(12) }); // ySkew slants the letters (italic); xSkew tilted the whole line upwards
       }
-      if (captionH) page.drawText(caption.slice(0, 120), { x: box.x, y: box.y + 0.5, size: Math.min(4.5, fit(caption, false, box.w, 100, 4.5).size), font: writer.regular, color: GREY });
     } else if (field.type === "checkbox") {
       if (field.value !== "true") continue;
       const s = Math.min(box.w, box.h), cx = box.x + (box.w - s) / 2, cy = box.y + (box.h - s) / 2;

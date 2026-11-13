@@ -98,6 +98,10 @@ import XeroExportPage from "@/pages/admin/XeroExportPage";
 import { TeamLeavePage, TeamTimesheetsPage } from "@/pages/staff/TeamPage";
 import ApplicationsArea from "@/pages/admin/ApplicationsArea";
 import KnowledgePage from "@/pages/admin/KnowledgePage";
+import BookingsPage from "@/pages/bookings/BookingsPage";
+import BookingsHub from "@/pages/bookings/BookingsHub";
+import PublicBookingPage from "@/pages/bookings/PublicBookingPage";
+import ManageBookingPage from "@/pages/bookings/ManageBookingPage";
 
 const routes: RouteObject[] = [
   {
@@ -140,6 +144,11 @@ const routes: RouteObject[] = [
   { path: "/staff/onboard", element: <StaffOnboardingPage /> },
   { path: "/staff/offer", element: <StaffOfferPage /> },
   { path: "/sign", element: <SigningPage /> },
+  // BOOK-01: the booking module. /book/... and /booking work signed out (the emailed token is in the URL fragment).
+  { path: "/bookings", element: <BookingsPage /> },
+  { path: "/book/:handle", element: <PublicBookingPage /> },
+  { path: "/book/:handle/:type", element: <PublicBookingPage /> },
+  { path: "/booking", element: <ManageBookingPage /> },
   { path: "/staff/welcome", element: <StaffWelcomePage /> },
   { path: "/staff", element: <StaffHomePage /> },
   // HRMS: a manager's view of their reports (outside the admin shell).
@@ -163,6 +172,7 @@ const routes: RouteObject[] = [
           { path: "applications/:id", element: <ApplicationDetailPage /> },
           { path: "documents", element: <PortalDocumentsPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
+          { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <PortalTicketsPage /> },
           { path: "tickets/:id", element: <PortalTicketDetailPage /> },
           { path: "agency-profile", element: <AgencyProfilePage /> },
@@ -225,6 +235,7 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
+          { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <RequireAdmin><TicketsPage /></RequireAdmin> },
           { path: "tickets/:id", element: <RequireAdmin><TicketDetailPage /></RequireAdmin> },
           // Staff group (HR-02j): Candidates, Employees, Jobs. The old Agencies > Staff addresses and the Master Data addresses of

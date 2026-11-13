@@ -161,9 +161,9 @@ select pg_temp.as_postgres();
 select is((select array_agg(x order by x) from public.asm_assignment_eligible(pg_temp.v('assignment')) x), array['e5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013']::uuid[], 'eligible students are the active enrolments of the batch');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select pg_temp.as_postgres();
-select is((select count(*)::int from public.asm_notifications where event = 'published' and recipient_role = 'student'), 2, 'both students are told the assessment is published');
-select is((select count(*)::int from public.asm_notifications where event = 'published' and recipient_role = 'trainer'), 1, 'the batch trainer is told too');
-select is((select count(*)::int from public.notification_deliveries where assessment_event_id is not null), 3, 'each notification queued an email through the existing outbox');
+select is((select count(*)::int from public.asm_notifications where event = 'published' and recipient_role = 'student' and assignment_id = pg_temp.v('assignment')), 2, 'both students are told the assessment is published');
+select is((select count(*)::int from public.asm_notifications where event = 'published' and recipient_role = 'trainer' and assignment_id = pg_temp.v('assignment')), 1, 'the batch trainer is told too');
+select is((select count(*)::int from public.notification_deliveries d join public.asm_notifications n on n.id = d.assessment_event_id where n.assignment_id = pg_temp.v('assignment')), 3, 'each notification queued an email through the existing outbox');
 select is((select count(*)::int from public.asm_schedule_events where assignment_id = pg_temp.v('assignment')), 2, 'the due date and the practical session are calendar events');
 
 -- ---------------------------------------------------------------- the student completes it
@@ -219,7 +219,7 @@ select is((select suggested_outcome from public.asm_results where attempt_id = p
 select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_blank'), 'S', 'fill-in-the-blanks accepts alternatives, ignoring case');
 select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_num'), 'S', 'a number inside the key range is suggested Satisfactory');
 select is((select count(*)::int from public.asm_results where attempt_id = pg_temp.v('attempt') and outcome is not null), 0, 'auto-check never writes a confirmed outcome');
-select is((select count(*)::int from public.asm_unit_outcomes), 0, 'nothing is marked Competent automatically');
+select is((select count(*)::int from public.asm_unit_outcomes where assessment_id = pg_temp.v('assessment')), 0, 'nothing is marked Competent automatically');
 
 -- ownership: the classmate and the other trainer see nothing of this attempt
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
@@ -302,7 +302,7 @@ select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId'
 select is((select count(*)::int from public.asm_attempts where version_id = pg_temp.v('v1')), 2, 'the student attempts stay bound to version 1');
 select is((select current_version_id from public.asm_assessments where id = pg_temp.v('assessment')), pg_temp.v('v2'), 'new assignments default to version 2');
 select is((select (public.asm_admin('report', jsonb_build_object('kind', 'cohort', 'batchId', 'f5000000-0000-0000-0000-000000000011'))->0->>'unitOutcome')), 'C', 'the cohort report shows the unit outcome');
-select is(jsonb_array_length(public.asm_admin('overview')->'pendingMarking'), 0, 'nothing is pending after the decisions');
+select is((select count(*)::int from jsonb_array_elements(public.asm_admin('overview')->'pendingMarking') p where p->>'assignmentId' = pg_temp.s('assignment')), 0, 'nothing is pending after the decisions');
 select is((public.asm_admin('assessment_export', jsonb_build_object('id', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'))))->'mappings'->0->>'elementCode', '1.1', 'export carries the mapping by element code');
 select pg_temp.put('imported', (public.asm_admin('assessment_create', jsonb_build_object('courseId', 'course-asm-test', 'unitId', 'unit-asm-2', 'title', 'Imported copy', 'import', public.asm_admin('assessment_export', jsonb_build_object('id', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'))))))::jsonb->>'id');
 select is((select count(*)::int from public.asm_question_keys k join public.asm_versions v on v.id = k.version_id where v.assessment_id = pg_temp.v('imported')), 8, 'import re-creates the keys on the new draft');

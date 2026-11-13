@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(556);
+select plan(536);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -13,6 +13,8 @@ insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status
 insert into auth.users(id,email) values ('33000000-0000-0000-0000-000000000002','positive-admin@example.test');
 insert into public.cms_users(id,name,email,role,status,auth_user_id) values ('phase2-positive-admin','Positive admin','positive-admin@example.test','Admin','Active','33000000-0000-0000-0000-000000000002');
 insert into public.portal_notifications(id,recipient,title) values ('63000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Original');
+-- Website settings: hosted always has the row (saved from CMS > Settings); a fresh lab has none, so the letters below get one here.
+insert into public.cms_settings(id,name,legal_name,abn,address) select 1,'Positive Institute','Positive Institute Pty Ltd','98 765 432 109','1 Head Office Street, Melbourne VIC 3000' where not exists (select 1 from public.cms_settings);
 -- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
 -- Holder-name matching (20261113160000): the receipt names the application's current passport at the time (none before the first one).
@@ -88,11 +90,18 @@ select lives_ok($$select public.portal_invitation_resend('33000000-0000-0000-000
 select throws_ok($$select public.portal_invitation_revoke('33000000-0000-0000-0000-000000000001',(select id from public.agency_invitations where email='new.agent@example.test'))$$,'42501',null,'agent cannot revoke');
 select lives_ok($$select public.portal_invitation_revoke('33000000-0000-0000-0000-000000000010',(select id from public.agency_invitations where email='new.agent@example.test'))$$,'inviting agency admin revokes');
 select throws_ok($$select public.portal_invitation_revoke('33000000-0000-0000-0000-000000000010',(select id from public.agency_invitations where email='new.agent@example.test'))$$,'22023',null,'revoked invitation cannot be revoked again');
-select lives_ok($$select public.portal_agency_create_with_admin('33000000-0000-0000-0000-000000000002','{"name":"Atomic Agency","code":"ATOMIC-1"}'::jsonb,'atomic.admin@example.test','Atomic Admin')$$,'organization admin creates an agency with its first admin');
-select is((select count(*)::int from public.agency_invitations i join public.agencies a on a.id=i.agency_id where a.code='ATOMIC-1' and i.role='agency_admin' and i.status='pending'),1,'agency and admin invitation exist together');
-select throws_ok($$select public.portal_agency_create_with_admin('33000000-0000-0000-0000-000000000002','{"name":"Bad Agency","code":"ATOMIC-BAD"}'::jsonb,'not-an-email','Bad')$$,'22023',null,'invalid admin email fails the whole creation');
-select is((select count(*)::int from public.agencies where code='ATOMIC-BAD'),0,'no agency is left behind without its admin invitation');
-select throws_ok($$select public.portal_agency_create_with_admin('33000000-0000-0000-0000-000000000010','{"name":"Mine","code":"MINE-1"}'::jsonb,'x@example.test','X')$$,'42501',null,'agency admin cannot create agencies');
+-- BIZ-ONB (20261113025808): a business is added Inactive with its point of contact (no invitation, no login); the old one-step
+-- path portal_agency_create_with_admin is closed. admin_business_create reads the actor from auth.uid().
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select lives_ok($$select public.admin_business_create('{"name":"Atomic Agency","code":"ATOMIC-1","registration_number":"12 345 678 901"}'::jsonb,'atomic.admin@example.test','Atomic Admin')$$,'organization admin adds a business with its point of contact');
+select is((select a.status||'|'||g.role||'|'||g.status from public.agencies a join public.agents g on g.business_id=a.id where a.code='ATOMIC-1' and g.email='atomic.admin@example.test'),'Inactive|agency_admin|Inactive','the business starts in onboarding with its contact as an inactive agency admin');
+select throws_ok($$select public.admin_business_create('{"name":"Bad Agency","code":"ATOMIC-BAD","registration_number":"12 345 678 901"}'::jsonb,'not-an-email','Bad')$$,'22023',null,'invalid contact email fails the whole creation');
+select is((select count(*)::int from public.agencies where code='ATOMIC-BAD'),0,'no agency is left behind without its point of contact');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000010';
+select throws_ok($$select public.admin_business_create('{"name":"Mine","code":"MINE-1","registration_number":"12 345 678 901"}'::jsonb,'x@example.test','X')$$,'42501',null,'agency admin cannot create agencies');
+reset role;
+select throws_ok($$select public.portal_agency_create_with_admin('33000000-0000-0000-0000-000000000002','{"name":"Old Path","code":"OLD-1"}'::jsonb,'old@example.test','Old')$$,'22023',null,'the one-step agency-with-admin path is closed');
 select lives_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-000000000002','b.agent@example.test','B Agent','agent')$$,'organization admin adds an agent to any agency');
 select throws_ok($$select public.portal_member_update('33000000-0000-0000-0000-000000000010','23000000-0000-0000-0000-000000000012',null,'Inactive')$$,'42501',null,'agency admin cannot deactivate another agency agent');
 select throws_ok($$select public.portal_member_update('33000000-0000-0000-0000-000000000010','23000000-0000-0000-0000-000000000011',null,'Inactive')$$,'42501',null,'agency admin cannot touch another agency admin');
@@ -465,8 +474,9 @@ select ok((select (v->'values'->'course.campus'->>'value') <> '' and (v->'values
 select ok((select (v->'values'->'institute.legal_name'->>'value') <> '' and (v->'values'->'institute.abn'->>'value') <> '' from pk_v),'the legal name and ABN come from the Website settings');
 select is(cardinality(public.letter_template_unmapped('<p>{{#each courses}}</p><p>{{course.code_and_name}}</p><p>{{/each}}</p><p>{{#if multiple_courses}}</p><p>{{fees.combined_total}}</p><p>{{/if}}</p>')),0,'the block markers are allowed');
 select is(public.letter_template_keys('<p>{{#each courses}}</p><p>{{course.name}}</p><p>{{/each}}</p>'),array['course.name'],'the block markers are not variables');
-select is((select status || '|' || is_default::text from hr.sign_templates where category='student_offer_letter' and name='SLIT Letter of Offer and Written Agreement'),'active|true','the real SLIT letter is the active default');
-select is((select status || '|' || is_default::text || '|' || (header_html = public.letter_standard_header())::text from hr.sign_templates where category='student_offer_letter' and name='Standard Letter of Offer'),'archived|false|true','the starter has the standard letterhead and is an inactive example');
+-- The letter seeds (20261113300000 / 20261113320000) need an active CMS admin at migration time; a lab creates its admins afterwards, so they skip there.
+select case when exists (select 1 from hr.sign_templates where category='student_offer_letter' and name='SLIT Letter of Offer and Written Agreement') then is((select status || '|' || is_default::text from hr.sign_templates where category='student_offer_letter' and name='SLIT Letter of Offer and Written Agreement'),'active|true','the real SLIT letter is the active default') else skip('the SLIT letter seed did not run (no CMS admin at migration time)') end;
+select case when exists (select 1 from hr.sign_templates where category='student_offer_letter' and name='SLIT Letter of Offer and Written Agreement') then is((select status || '|' || is_default::text || '|' || (header_html = public.letter_standard_header())::text from hr.sign_templates where category='student_offer_letter' and name='Standard Letter of Offer'),'archived|false|true','the starter has the standard letterhead and is an inactive example') else skip('the Standard Letter of Offer seed did not run (no CMS admin at migration time)') end;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((public.application_cc_default('43000000-0000-0000-0000-0000000000c0'))->>'email','status-agent@example.test','the agent is copied by default');
@@ -573,7 +583,8 @@ insert into public.admission_event_outbox(application_id,tenant_id,event,payload
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('43000000-0000-0000-0000-000000000051',null,'coe_voe_issued','{"from":"offer_accepted","to":"coe_issued"}');
 select set_config('p0806.d1',(select id::text from public.notification_claim_delivery()),true);
 select set_config('p0806.l1',(select lease_token::text from public.notification_deliveries where id=current_setting('p0806.d1')::uuid),true);
-select set_config('p0806.d2',(select id::text from public.notification_claim_delivery()),true);
+-- 20261112160438_email_html_all: every event other than application_submitted is claimed by support_mail_claim (email-sender).
+select set_config('p0806.d2',(select id::text from public.support_mail_claim()),true);
 select set_config('p0806.l2',(select lease_token::text from public.notification_deliveries where id=current_setting('p0806.d2')::uuid),true);
 set local role service_role;
 select is(public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid)->>'mode','attach','the default is to attach the PDF; the claimed submitted delivery releases its snapshot');
@@ -590,7 +601,8 @@ select lives_ok($$select public.notification_save_attachment_mode(null,'link')$$
 select is(public.notification_attachment_state(null)->>'submissionPdf','link','the option is stored');
 reset role;
 set local role service_role;
-select ok((select (r->>'link') = 'https://slit.edu.au/' || case when r->>'recipientKind' = 'portal' then 'agency' else 'admin' end || '/applications/43000000-0000-0000-0000-000000000050' and (r->'snapshot') = 'null'::jsonb
+-- 20261112144811_main_site_host: the host of the sign-in link is main_site_host(), not a fixed domain.
+select ok((select (r->>'link') = 'https://' || public.main_site_host() || '/' || case when r->>'recipientKind' = 'portal' then 'agency' else 'admin' end || '/applications/43000000-0000-0000-0000-000000000050' and (r->'snapshot') = 'null'::jsonb
   from public.notification_delivery_submission(current_setting('p0806.d1')::uuid,current_setting('p0806.l1')::uuid) r),'link mode returns the sign-in-protected link of the recipient''s own site (portal or CMS) and no snapshot');
 reset role;
 update public.notification_deliveries set state='sent' where id=current_setting('p0806.d1')::uuid;
@@ -665,7 +677,7 @@ select throws_ok($$select public.portal_coe_document_upload(current_setting('p08
 reset role;
 select throws_ok($$update public.enrollment_coe_documents set content='\x00' where application_id='43000000-0000-0000-0000-000000000060'$$,'42501',null,'an issued document is immutable');
 select throws_ok($$delete from public.enrollment_coe_documents where application_id='43000000-0000-0000-0000-000000000060'$$,'42501',null,'and is never deleted');
-select set_config('p0807.d1',(select id::text from public.notification_claim_delivery()),true);
+select set_config('p0807.d1',(select id::text from public.support_mail_claim()),true);
 select set_config('p0807.l1',(select lease_token::text from public.notification_deliveries where id=current_setting('p0807.d1')::uuid),true);
 set local role service_role;
 select is(convert_from(decode(public.notification_delivery_coe_document(current_setting('p0807.d1')::uuid,current_setting('p0807.l1')::uuid)->>'contentBase64','base64'),'LATIN1'),E'%PDF-1.4\nsecond\n%%EOF\n','the worker gets the issued document for a claimed coe_voe_issued delivery');
@@ -762,35 +774,10 @@ select is((select agency_id from public.enrollment_students where email='ref.err
 select throws_ok($$select public.portal_self_register('student','{"firstName":"No","lastName":"Code","email":"no.code@example.test","phone":"+61412345680","dateOfBirth":"1999-05-06","referralCode":"NOPE"}')$$,'22023',null,'an unknown referral code is refused');
 select throws_ok($$select public.portal_self_register('student','{"firstName":"Dup","lastName":"Mobile","email":"dup.mobile@example.test","phone":"+61 412 345 678","dateOfBirth":"1999-05-06"}')$$,'23505',null,'a mobile already on record is refused');
 select throws_ok($$select public.portal_self_register('student','{"firstName":"Staff","lastName":"Mail","email":"positive-admin@example.test","phone":"+61412345681","dateOfBirth":"1999-05-06"}')$$,'23505',null,'an email that already signs in is refused');
-select lives_ok($$select public.portal_self_register('agent','{"businessName":"Self Reg Agency","abn":"85165345717","contactName":"Reg Istrar","email":"reg.istrar@example.test","phone":"0398765432"}')$$,'an agent registers their business');
-select is((select status||':'||(registration_requested_at is not null)::text||':'||(registration_reviewed_at is null)::text from public.agencies where registration_number='85165345717'),'Inactive:true:true','the business waits inactive and unreviewed');
-select is((select role from public.agency_invitations where email='reg.istrar@example.test'),'agency_admin','the registrant is invited as its administrator');
-select is((select role||':'||status||':'||(profile_id is null)::text from public.agents where email='reg.istrar@example.test'),'agency_admin:Active:true','the registrant is listed as the business''s agent straight away (Invited until they sign in)');
-select throws_ok($$select public.portal_self_register('agent','{"businessName":"Again","abn":"85 165 345 717","contactName":"Some One","email":"some.one@example.test","phone":"0398765432"}')$$,'23505','The ABN you entered already exists in our system. Please contact Skyline to get registered.','the same ABN cannot register twice, and the message says so');
-set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select is((select count(*)::int from jsonb_array_elements(public.admin_registration_list()) r where r->>'abn'='85165345717'),1,'the CMS lists the pending registration');
-reset role;
-insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000090','reg.istrar@example.test',now());
-set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000090';
-select is(public.portal_resolve_access()->>'accepted','true','the registrant accepts their invitation before the review');
-select is(public.portal_resolve_access()->>'state','pending_review','and is told the review is pending');
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select is((public.admin_business_set_status((select id from public.agencies where registration_number='85165345717'),'Active'))->>'reviewed','true','activating the business records the approval');
-select is((select registration_decision from public.agencies where registration_number='85165345717'),'approved','the decision is approved');
-select is((select count(*)::int from jsonb_array_elements(public.admin_registration_list()) r where r->>'abn'='85165345717'),0,'it leaves the pending list');
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000090';
-select is(public.portal_resolve_access()->>'state','active','the registrant can now use the portal');
-select is(public.portal_identity()->>'role','agency_admin','as its administrator');
-reset role;
-select lives_ok($$select public.portal_self_register('agent','{"businessName":"Declined Agency","abn":"51824753556","contactName":"De Clined","email":"de.clined@example.test","phone":"0398765433"}')$$,'a second agent registers');
-set local role authenticated;
-set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select lives_ok($$select public.admin_business_set_status((select id from public.agencies where registration_number='51824753556'),'Inactive')$$,'deactivating a pending business declines it');
-select is((select registration_decision from public.agencies where registration_number='51824753556'),'declined','the decision is declined');
-select is((select status from public.agency_invitations where email='de.clined@example.test'),'revoked','and its invitation is revoked');
-select is((select status from public.agents where email='de.clined@example.test'),'Inactive','and its agent is no longer invited');
+-- 20261112112500_close_agent_self_registration: agency registration is by invitation only (businesses are added in the CMS, BIZ-ONB).
+select throws_ok($$select public.portal_self_register('agent','{"businessName":"Self Reg Agency","abn":"85165345717","contactName":"Reg Istrar","email":"reg.istrar@example.test","phone":"0398765432"}')$$,'22023','Agency registration is by invitation only. Please contact Skyline to become a registered agent.','an agent cannot register a business');
+select is((select count(*)::int from public.agencies where registration_number='85165345717'),0,'no business is created by the refused registration');
+select is((select count(*)::int from public.agency_invitations where email='reg.istrar@example.test')+(select count(*)::int from public.agents where email='reg.istrar@example.test'),0,'and no invitation or agent');
 -- Signing up with Google, Facebook or a phone number: the signed-in account completes its details and becomes a student.
 reset role;
 select is((select count(*)::int from public.agents a join public.portal_profiles p on p.id = a.profile_id where p.auth_user_id = '33000000-0000-0000-0000-000000000077'),0,'a student''s sign-in is never mirrored as an agent');
@@ -814,15 +801,13 @@ select ok(public.abn_checksum_ok('85165345717') and not public.abn_checksum_ok('
 insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000043','google.agent@example.test',now());
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000043';
-select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"85165345718","businessName":"Bad Abn","contactName":"Goo Agent","phone":"0398765400"}')$$,'22023',null,'an invalid ABN is refused');
-select lives_ok($$select public.portal_self_register_agent_complete('{"abn":"53004085616","businessName":"Google Agency","contactName":"Goo Agent","phone":"0398765400"}')$$,'a Google sign-up registers its agency');
--- Read as the owner: an inactive business is not visible to its own pending agent (20261104090000).
+-- 20261112112500: the post-sign-in agency form refuses agents too.
+select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"53004085616","businessName":"Google Agency","contactName":"Goo Agent","phone":"0398765400"}')$$,'42501','Agency registration is by invitation only. Please contact Skyline to become a registered agent.','a signed-in account cannot register a business (invitation only)');
 reset role;
-select is((select status||':'||(registration_requested_at is not null)::text from public.agencies where registration_number='53004085616'),'Inactive:true','the business waits for review');
+select is((select count(*)::int from public.agencies where registration_number='53004085616'),0,'no business is created by the refused form');
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000043';
-select is(public.portal_resolve_access()->>'state','pending_review','the agent is told the review is pending');
-select throws_ok($$select public.portal_self_register_agent_complete('{"abn":"51824753556","businessName":"Second","contactName":"Goo Agent","phone":"0398765400"}')$$,'23505',null,'one business per account');
+select is(public.portal_resolve_access()->>'state','no_access','the account is told it has no access');
 -- A Google student gives only a mobile (migration 20261105100000): no date of birth needed.
 reset role;
 insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-000000000044','mobile.only@example.test',now());
@@ -843,15 +828,9 @@ select is((select r->>'status' from jsonb_array_elements(public.admin_business_a
 select is((select r->>'status' from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-000000000090')) r where r->>'email'='waiting.admin@example.test'),'Invited','an agent of a business waiting for approval is Invited');
 -- Agent sign-up checks (20261105140000): the ABN first, then the email and phone against agents of other companies.
 reset role;
-select is(public.portal_abn_registered('85 165 345 717'),true,'a registered ABN is found, spaces or not');
+select is(public.portal_abn_registered('12 345 678 901'),true,'a registered ABN is found, spaces or not');
 select is(public.portal_abn_registered('33102417032'),false,'a new ABN is not');
-select throws_ok($$select public.portal_self_register('agent','{"businessName":"Clash Email","abn":"33102417032","contactName":"Some One","email":"reg.istrar@example.test","phone":"0390000001"}')$$,'23505',
- 'The email you entered is already linked to another company. Please enter a different email, since this will be the admin account for your company.','an email already used by another company''s agent is refused, naming the email');
-select throws_ok($$select public.portal_self_register('agent','{"businessName":"Clash Phone","abn":"33102417032","contactName":"Some One","email":"fresh.one@example.test","phone":"+61 3 9876 5432"}')$$,'23505',
- 'The phone number you entered is already linked to another company. Please enter a different phone number, since this will be the admin account for your company.','a phone already used by another company''s agent is refused, in any spelling');
-select throws_ok($$select public.portal_self_register('agent','{"businessName":"Clash Both","abn":"33102417032","contactName":"Some One","email":"reg.istrar@example.test","phone":"03 9876 5432"}')$$,'23505',
- 'The email and phone number you entered are already linked to another company. Please enter a different email and phone number, since this will be the admin account for your company.','both matching are named together');
-select lives_ok($$select public.portal_self_register('agent','{"businessName":"Clean Agency","abn":"33102417064","contactName":"Clean Contact","email":"clean.contact@example.test","phone":"0390000002"}')$$,'a new ABN with a new email and phone registers');
+-- The sign-up email / phone clash checks are unreachable while agent self-registration is closed (20261112112500).
 reset role;
 
 -- ---------------------------------------------------------------- INT-01 course intakes (20261113200000, 20261113210000)
@@ -888,8 +867,8 @@ set local role authenticated;
 set local request.jwt.claim.sub = '33000000-0000-0000-0000-0000000000a1';
 select is((select string_agg(x->>'name', ',' order by n) from jsonb_array_elements(public.course_intakes_open('int-course-a')) with ordinality as e(x, n)),
  'Early start,' || to_char(current_date + 60, 'FMMonth YYYY'), 'INT-01: the dropdown lists only active intakes that have not started, earliest first');
-select is(public.course_intakes_open('int-course-a')->1->>'display', to_char(current_date + 60, 'FMMonth YYYY') || ' (starts ' || to_char(current_date + 60, 'FMDD Mon YYYY') || ')', 'INT-01: the label is made by the database');
-select is(public.course_intakes_open('int-course-a')->0->>'display', 'Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')', 'INT-01: a staff label is used');
+select is(public.course_intakes_open('int-course-a')->1->>'display', (select public.course_intake_display(i) from public.course_intakes i where i.id = pg_temp.iv('a60')), 'INT-01: the label is made by the database');
+select is(public.course_intakes_open('int-course-a')->0->>'display', (select public.course_intake_display(i) from public.course_intakes i where i.id = pg_temp.iv('a20')), 'INT-01: the display label comes from course_intake_display (COURSE-MGMT 20261113340000+)');
 select is(jsonb_array_length(public.course_intakes_open('int-course-b')), 1, 'INT-01: each course lists its own intakes');
 select is((select count(*)::int from public.course_intakes where course_id in ('int-course-a', 'int-course-b')), 4, 'INT-01: an applicant reads only active intakes of courses they can see (the inactive one is hidden)');
 select lives_ok(format($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0000000000a1', 0, '{"values":{"preferred_intake":"Next month please"},"courses":[{"courseId":"int-course-a","code":"INTA1","title":"Intake course A","intakeId":"%s"}]}')$$, pg_temp.iv('a20')),
@@ -904,7 +883,7 @@ select throws_ok($$select public.portal_save_draft_v2('43000000-0000-0000-0000-0
  '22023', 'This intake is not open for the chosen course. Choose the course again and pick one of its intakes.', 'INT-01: an unknown intake is refused');
 reset role;
 select is((select a.data#>>'{values,preferred_intake}' || '|' || a.intake || '|' || c.intake_id from public.enrollment_applications a join public.enrollment_application_courses c on c.application_id = a.id where a.id = '43000000-0000-0000-0000-0000000000a1'),
- 'Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')|Early start (starts ' || to_char(current_date + 20, 'FMDD Mon YYYY') || ')|' || pg_temp.iv('a20'), 'INT-01: the application records the intake''s own label, not the text the client sent');
+  (select public.course_intake_display(i) from public.course_intakes i where i.id = pg_temp.iv('a20')) || '|' || (select public.course_intake_display(i) from public.course_intakes i where i.id = pg_temp.iv('a20')) || '|' || pg_temp.iv('a20'), 'INT-01: the application records the intake''s own label, not the text the client sent');
 select is(public.application_intake_problem('43000000-0000-0000-0000-0000000000a1'), null, 'INT-01: submission accepts an open intake of the course');
 select is((hr.sign_subject('student', '73000000-0000-0000-0000-0000000000a1')->'values') - array['current_date', 'student.address', 'student.phone', 'student.date_of_birth', 'student.passport_number', 'student.nationality', 'course.fees', 'course.duration', 'course.cricos', 'student.first_name', 'student.last_name', 'student.email', 'student.full_name', 'agency.name'],
  jsonb_build_object('course.name', 'Intake course A', 'course.code', 'INTA1', 'course.intake', 'Early start', 'course.start_date', to_char(current_date + 20, 'FMDD FMMonth YYYY'), 'course.end_date', to_char(current_date + 400, 'FMDD FMMonth YYYY'),

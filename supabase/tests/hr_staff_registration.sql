@@ -905,7 +905,7 @@ select is((select (detail->>'edited') from hr.staff_audit where profile_id = pg_
 -- ---- Offer sent, with the login
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
-select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('f1'), 'trainer', current_date)$$, '23514', 'Only a person who signed the offer can be activated.', 'blocked: no activation before the offer is signed');
+select throws_ok($$select public.hr_admin_staff_activate_account(pg_temp.v('f1'), 'trainer', current_date)$$, '23514', 'Upload the signed documents, or send them for e-signature, before activating.', 'blocked: no activation before the signed documents are in (20261113031341)');
 select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-00000000f001', null)$$, '22023', 'A sign-in link is needed for this person.', 'a login that was never set up needs a sign-in link');
 select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), 'a0000000-0000-0000-0000-000000000006', pg_temp.h('flow-acct-1'))$$, '42501', 'That login does not belong to this person.', 'someone else''s login is refused');
 select throws_ok($$select public.hr_admin_onboarding_offer_send(pg_temp.v('f1'), null, pg_temp.h('flow-acct-1'))$$, '22023', 'A login is needed before the offer can be sent.', 'the offer does not go out without a login');

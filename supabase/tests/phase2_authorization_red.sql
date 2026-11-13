@@ -398,7 +398,7 @@ select is((select count(*)::int from public.notification_deliveries where applic
 select is((select recipient_email||'|'||subject||'|'||template_source||'|'||state from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'),'notify-admin@example.test|Application 42000000 is now Action required|default|pending','the delivery is rendered from the built-in template and addressed in lower case');
 select is((select count(*)::int from public.notification_deliveries where recipient_user in ('a0000000-0000-0000-0000-00000000000a','a0000000-0000-0000-0000-00000000000b','a0000000-0000-0000-0000-00000000000c')),0,'inactive, other-agency and unassigned profiles receive nothing');
 select is((select count(*)::int from public.portal_notifications where recipient='a0000000-0000-0000-0000-000000000009' and application_id='42000000-0000-0000-0000-0000000000b2' and event='status_change'),1,'the in-app inbox notification is preserved');
-select throws_ok($$insert into public.notification_deliveries(outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body) select outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body from public.notification_deliveries limit 1$$,'23505',null,'a recipient cannot receive the same event twice');
+select throws_ok($$insert into public.notification_deliveries(outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body) select outbox_id,tenant_id,application_id,recipient_user,recipient_email,event,template_source,subject,body from public.notification_deliveries where application_id='42000000-0000-0000-0000-0000000000b2'$$,'23505',null,'a recipient cannot receive the same event twice');
 set local role authenticated;
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000002','notifications','{"templates":{"application_status_changed":{"subject":"x {{password}}","body":"b"}}}',0)$$,'22023',null,'unknown template placeholder rejected');
 select throws_ok($$select public.tenant_config_save_draft('1a000000-0000-0000-0000-000000000002','notifications','{"templates":{"application_status_changed":{"subject":"x","body":"<b>{{reference}}</b>"}}}',0)$$,'22023',null,'HTML in a template rejected');
@@ -856,14 +856,15 @@ select is((select count(*)::int from public.notification_deliveries where applic
 set local request.jwt.claim.sub='';
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('47000000-0000-0000-0000-000000000001',null,'application_status_changed','{"from":"offer_accepted","to":"coe_issued"}');
 set local role service_role;
-select is((select count(*)::int from public.notification_claim_delivery() where tenant_id is null),1,'a delivery created after the activation is claimable');
+-- 20261112160438_email_html_all: notification_claim_delivery keeps application_submitted (PDF); support_mail_claim claims every other event.
+select is((select count(*)::int from public.support_mail_claim() where tenant_id is null),1,'a delivery created after the activation is claimable');
 reset role;
 select is((select count(*)::int from public.notification_deliveries where application_id='47000000-0000-0000-0000-000000000001' and state in ('sending','sent','unknown')),1,'and exactly that one is in flight');
 -- The claim itself refuses anything older than the activation, even if a sweep were missed.
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('47000000-0000-0000-0000-000000000001',null,'application_status_changed','{"from":"coe_issued","to":"enrolled"}');
 update public.notification_deliveries set created_at=(select approved_at from public.notification_activation where tenant_id is null and revoked_at is null)-interval '1 minute' where application_id='47000000-0000-0000-0000-000000000001' and state='pending';
 set local role service_role;
-select is((select count(*)::int from public.notification_claim_delivery() where tenant_id is null),0,'the claim ignores a pending delivery that predates the activation');
+select is((select count(*)::int from public.support_mail_claim() where tenant_id is null),0,'the claim ignores a pending delivery that predates the activation');
 reset role;
 select is((select state from public.notification_deliveries where application_id='47000000-0000-0000-0000-000000000001' and created_at<(select approved_at from public.notification_activation where tenant_id is null and revoked_at is null) and state='pending' limit 1),'pending','which stays pending (never sent) until the next activation suppresses it');
 -- Tenant scope: backlog built up while an institution was active is not released by a pause and resume.

@@ -35,11 +35,11 @@ export async function sendActivationEmail(env: Env, mail: { to: string; name: st
   const where = mail.agencyName ? ` for ${mail.agencyName}` : "";
   const expires = mail.expiresAt ? new Date(mail.expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: "Australia/Melbourne" }) : "";
   const intro = `Hello ${mail.name || "there"},`;
-  const body = `You have been invited to the Skyline portal as ${role}${where}. Open the link below to activate your access, then sign in with your existing Skyline email and password. Until you do, the portal stays locked for this invitation.`;
+  const body = `You have been invited to the Skyline portal as ${role}${where}. Open the link below to activate your access and create your password. Until you do, the portal stays locked for this invitation.`;
   const note = `${expires ? `This link works until ${expires}. ` : ""}If you did not expect this email, you can ignore it; nothing changes unless you open the link.`;
   const subject = "Activate your Skyline portal access";
   const text = `${intro}\n\n${body}\n\nActivate access: ${mail.link}\n\n${note}`;
-  const html = simpleEmailHtml({ brand: from.name, heading: "Activate your portal access", paragraphs: [intro, body], button: { label: "Activate access", url: mail.link }, note });
+  const html = simpleEmailHtml({ brand: from.name, heading: "Activate your portal access", paragraphs: [intro, body], button: { label: "Activate access and create password", url: mail.link }, note });
   const display = from.name.replace(/[\u0000-\u001f\u007f<>"\\]/g, " ").trim().slice(0, 100);
   try {
     const response = await request("https://api.postmarkapp.com/email", {

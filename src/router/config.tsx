@@ -23,6 +23,7 @@ import CareerApplyPage from "@/pages/careers/apply/page";
 import CmsFormPage from "@/pages/form/page";
 import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import AcceptInvitePage from "@/pages/agency/accept-invite/page";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 
 import PortalProviders from "@/pages/agency/components/PortalProviders";
@@ -150,6 +151,7 @@ const routes: RouteObject[] = [
     element: <PortalProviders />,
     children: [
       { path: "login", element: <LoginRedirect /> },
+      { path: "accept-invite", element: <AcceptInvitePage /> },
       {
         element: <RequirePortal />,
         children: [

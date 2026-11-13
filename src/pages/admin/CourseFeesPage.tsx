@@ -24,7 +24,7 @@ export default function CourseFeesPage() {
   const categories = useMemo(() => [...new Set((rows ?? []).map((r) => r.category).filter(Boolean))].sort().map((c) => ({ id: c, label: c })), [rows]);
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (rows ?? []).filter((r) => (!q || `${r.code} ${r.name} ${r.cricos} ${r.category}`.toLowerCase().includes(q))
+    return (rows ?? []).filter((r) => (!q || `${r.label} ${r.cricos} ${r.category}`.toLowerCase().includes(q))
       && (!category || r.category === category) && (!active || (active === "active") === r.isActive) && (!published || r.status === published));
   }, [rows, search, category, active, published]);
 
@@ -59,12 +59,12 @@ export default function CourseFeesPage() {
               {!rows ? <tr><td colSpan={5} className="py-10 text-center text-foreground-500">Loading courses…</td></tr> : shown.map((r) => (
                 <tr key={r.id} className="align-top" data-testid="course-fee-row">
                   <td>
-                    <Link to={`/admin/course-fees/${encodeURIComponent(r.id)}`} className="font-medium text-foreground-900 hover:text-primary-600">{r.code ? `${r.code} ` : ""}{r.name}</Link>
+                    <Link to={`/admin/course-fees/${encodeURIComponent(r.id)}`} className="font-medium text-foreground-900 hover:text-primary-600">{r.label}</Link>
                     <p className="text-xs text-foreground-500">{[r.category, r.cricos && `CRICOS ${r.cricos}`, r.duration].filter(Boolean).join(" · ")}</p>
                   </td>
                   <td className="text-sm tabular-nums text-foreground-700">{r.activeUnits}{r.units !== r.activeUnits ? <span className="text-foreground-400"> / {r.units}</span> : null}</td>
                   <td className="text-sm text-foreground-700">{r.nextIntake ? shortDate(r.nextIntake) : <span className="text-foreground-400">None open</span>}</td>
-                  <td className="whitespace-nowrap text-right font-semibold tabular-nums">{r.totalCents ? money(r.totalCents) : "—"}</td>
+                  <td className="whitespace-nowrap text-right tabular-nums"><span className="font-semibold">{r.totalCents ? money(r.totalCents) : "—"}</span>{r.depositCents ? <span className="block text-xs text-foreground-500">Deposit {money(r.depositCents)}</span> : null}</td>
                   <td className="text-right"><div className="flex flex-col items-end gap-1"><StatusBadge status={r.status} />{r.isActive ? null : <Badge>Inactive</Badge>}</div></td>
                 </tr>
               ))}

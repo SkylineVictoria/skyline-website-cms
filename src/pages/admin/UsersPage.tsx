@@ -6,6 +6,7 @@ import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Button, Card, ConfirmDialog, Field, Modal, PageHeader, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import type { AdminUser, Role } from "@/pages/admin/lib/types";
+import RtoManagerToggle from "@/pages/admin/components/rto/RtoManagerToggle";
 import DraftStatus from "@/pages/admin/components/DraftStatus";
 import DraftResume from "@/pages/admin/components/DraftResume";
 import { useSlotDraft } from "@/pages/admin/lib/useSlotDraft";
@@ -372,6 +373,7 @@ export default function UsersPage() {
                 </Select>
               </Field>
             </div>
+            {editing ? <RtoManagerToggle userId={editing.id} /> : null}
             {!editing ? (
               <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2.5 text-xs leading-relaxed text-foreground-600">
                 <i className="ri-shield-keyhole-line mr-1 text-primary-600" aria-hidden="true" />

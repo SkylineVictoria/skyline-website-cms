@@ -3,7 +3,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 
 interface Facts {
   showFees: boolean; feeNote: string | null; totalCents: number | null;
-  items: { type: string; label: string; amountCents: number }[] | null;
+  items: { type: string; label: string; amountCents: number; includedInTotal: boolean }[] | null;
   intakes: { name: string; startDate: string; endDate: string | null }[];
 }
 const aud = (cents: number) => `$${(cents / 100).toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
@@ -18,7 +18,9 @@ export default function CourseFeesIntakes({ slug, tenantId }: { slug: string; te
     return () => { live = false; };
   }, [slug, tenantId]);
   if (!facts) return null;
-  const items = facts.showFees ? facts.items ?? [] : [];
+  const all = facts.showFees ? facts.items ?? [] : [];
+  const items = all.filter((i) => i.includedInTotal);
+  const deposit = all.filter((i) => i.type === "initial_deposit").reduce((s, i) => s + i.amountCents, 0);
   return (
     <div className="mt-6 space-y-6 border-t border-background-300 pt-6">
       {items.length && facts.totalCents ? (
@@ -28,6 +30,7 @@ export default function CourseFeesIntakes({ slug, tenantId }: { slug: string; te
             {items.map((i, n) => <li key={n} className="flex justify-between gap-3"><span>{i.label || i.type}</span><span className="tabular-nums">{aud(i.amountCents)}</span></li>)}
           </ul>
           <p className="mt-2 flex justify-between border-t border-background-300 pt-2 font-semibold text-[#102b46]"><span>Total</span><span className="tabular-nums">AUD {aud(facts.totalCents)}</span></p>
+          {deposit ? <p className="mt-1 flex justify-between text-sm text-foreground-700"><span>Initial deposit (part of total)</span><span className="tabular-nums">{aud(deposit)}</span></p> : null}
           {facts.feeNote ? <p className="mt-2 text-xs text-foreground-600">{facts.feeNote}</p> : null}
         </div>
       ) : null}

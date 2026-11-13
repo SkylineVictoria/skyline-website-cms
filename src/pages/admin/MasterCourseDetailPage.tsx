@@ -57,7 +57,7 @@ export default function MasterCourseDetailPage() {
       <div className="sticky top-0 z-10 -mx-1 mb-4 border-b border-background-200 bg-background-100/95 px-1 pb-3 pt-1 backdrop-blur">
         <Link to="/admin/course-fees" className="mb-1 inline-flex items-center gap-1 text-[13px] font-medium text-foreground-500 hover:text-primary-600"><i className="ri-arrow-left-line" aria-hidden="true" />Courses</Link>
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="font-heading text-xl font-bold text-foreground-950">{c.code ? `${c.code} ` : ""}{c.name}</h1>
+          <h1 className="font-heading text-xl font-bold text-foreground-950">{c.label}</h1>
           <StatusBadge status={c.status} />{c.isActive ? null : <Badge>Inactive</Badge>}
         </div>
         <p className="mt-1 text-sm text-foreground-500">{[c.cricos && `CRICOS ${c.cricos}`, c.duration, `${c.activeUnits} units`, c.totalCents ? `Total ${money(c.totalCents)}` : null, c.nextIntake ? `Next intake ${shortDate(c.nextIntake)}` : null].filter(Boolean).join(" · ")}</p>
@@ -96,7 +96,7 @@ export default function MasterCourseDetailPage() {
 }
 
 function CourseFacts({ course, readOnly, busy, onSave }: { course: RtoCourse; readOnly: boolean; busy: boolean; onSave: (data: Record<string, unknown>) => void }) {
-  const initial = { name: course.name, code: course.code, cricos: course.cricos, category: course.category, trainingPackage: course.trainingPackage, duration: course.duration,
+  const initial = { name: course.name, variantLabel: course.variantLabel ?? "", code: course.code, cricos: course.cricos, category: course.category, trainingPackage: course.trainingPackage, duration: course.duration,
     mode: course.mode, campus: course.campus ?? "", tgaUrl: course.tgaUrl ?? "", isActive: course.isActive };
   const [form, setForm] = useState(initial);
   useEffect(() => { setForm(initial); }, [course]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -106,6 +106,7 @@ function CourseFacts({ course, readOnly, busy, onSave }: { course: RtoCourse; re
     <Card className="p-5">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div className="md:col-span-2"><Field label="Course name" required><TextInput disabled={readOnly} value={form.name} onChange={(e) => set({ name: e.target.value })} /></Field></div>
+        <Field label="Variant" hint="Optional, e.g. 52 weeks. Shown after the name wherever the course is picked or printed."><TextInput disabled={readOnly} value={form.variantLabel} onChange={(e) => set({ variantLabel: e.target.value })} /></Field>
         <Field label="Course code"><TextInput disabled={readOnly} value={form.code} onChange={(e) => set({ code: e.target.value })} /></Field>
         <Field label="CRICOS code"><TextInput disabled={readOnly} value={form.cricos} onChange={(e) => set({ cricos: e.target.value })} /></Field>
         <Field label="Category">
@@ -130,18 +131,28 @@ function CourseFacts({ course, readOnly, busy, onSave }: { course: RtoCourse; re
 function UnitsTab({ units, readOnly, busy, onSave }: { units: RtoUnit[]; readOnly: boolean; busy: boolean; onSave: (units: RtoUnit[]) => void }) {
   const [rows, setRows] = useState<RtoUnit[]>(units);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
-  useEffect(() => { setRows(units); }, [units]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkWeeks, setBulkWeeks] = useState("");
+  useEffect(() => { setRows(units); setSelected(new Set()); }, [units]);
+  const toggleSel = (i: number) => setSelected((s) => { const next = new Set(s); if (next.has(i)) next.delete(i); else next.add(i); return next; });
+  const applyWeeks = () => { const w = Number(bulkWeeks); if (!(w >= 1 && w <= 104)) return; setRows((list) => list.map((u, x) => (selected.has(x) ? { ...u, defaultWeeks: w } : u))); setSelected(new Set()); setBulkWeeks(""); };
   const set = (i: number, patch: Partial<RtoUnit>) => setRows((list) => list.map((u, x) => (x === i ? { ...u, ...patch } : u)));
   const remove = (i: number) => setRows((list) => (list[i].scheduled ? list.map((u, x) => (x === i ? { ...u, isActive: false } : u)) : list.filter((_, x) => x !== i)));
   const drop = (to: number) => {
     if (dragFrom === null || dragFrom === to) return;
     setRows((list) => { const next = [...list]; const [moved] = next.splice(dragFrom, 1); next.splice(to, 0, moved); return next; });
-    setDragFrom(null);
+    setDragFrom(null); setSelected(new Set());
   };
   const dirty = JSON.stringify(rows) !== JSON.stringify(units);
   const invalid = rows.some((u) => !u.code.trim() || !u.name.trim() || !(u.defaultWeeks >= 1));
   return (
     <Card className="p-0">
+      {readOnly || rows.length === 0 ? null : (
+        <div className="sticky top-0 z-[1] flex flex-wrap items-center gap-2 border-b border-background-200 bg-background-50 px-4 py-2 text-sm">
+          <label className="flex items-center gap-1.5"><input type="checkbox" aria-label="Select all units" checked={selected.size === rows.length} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((_, x) => x)) : new Set())} />{selected.size ? `${selected.size} selected` : "Select"}</label>
+          {selected.size ? (<><span className="text-foreground-500">Set default weeks to</span><TextInput inputMode="numeric" className="w-20" aria-label="Weeks for selected units" value={bulkWeeks} onChange={(e) => setBulkWeeks(e.target.value.replace(/\D/g, ""))} /><Button size="sm" variant="outline" disabled={!(Number(bulkWeeks) >= 1 && Number(bulkWeeks) <= 104)} onClick={applyWeeks}>Apply</Button></>) : null}
+        </div>
+      )}
       {rows.length === 0 ? <EmptyState icon="ri-book-2-line" title="No units yet" description={readOnly ? undefined : "Add the units of competency in delivery order."} /> : (
         <div className="divide-y divide-background-200">
           <div className="hidden grid-cols-[1.5rem_8rem_minmax(0,1fr)_7rem_5rem_5rem_5rem_2.5rem] gap-2 px-4 py-2 text-xs font-medium text-foreground-500 md:grid">
@@ -150,7 +161,7 @@ function UnitsTab({ units, readOnly, busy, onSave }: { units: RtoUnit[]; readOnl
           {rows.map((u, i) => (
             <div key={u.id ?? `new-${i}`} draggable={!readOnly} onDragStart={() => setDragFrom(i)} onDragOver={(e) => e.preventDefault()} onDrop={() => drop(i)}
               className={`grid grid-cols-[1.5rem_8rem_minmax(0,1fr)] items-center gap-2 px-4 py-2 md:grid-cols-[1.5rem_8rem_minmax(0,1fr)_7rem_5rem_5rem_5rem_2.5rem] ${u.isActive ? "" : "opacity-60"}`}>
-              <i className={`ri-draggable text-foreground-400 ${readOnly ? "invisible" : "cursor-grab"}`} aria-hidden="true" />
+              {readOnly ? <span /> : <input type="checkbox" aria-label={`Select ${u.code || "unit"}`} checked={selected.has(i)} onChange={() => toggleSel(i)} className="cursor-pointer" />}
               <TextInput disabled={readOnly} value={u.code} aria-label="Unit code" onChange={(e) => set(i, { code: e.target.value })} />
               <TextInput disabled={readOnly} value={u.name} aria-label="Unit name" onChange={(e) => set(i, { name: e.target.value })} />
               <Select disabled={readOnly} value={u.unitType} aria-label="Core or elective" onChange={(e) => set(i, { unitType: e.target.value as RtoUnit["unitType"] })}>

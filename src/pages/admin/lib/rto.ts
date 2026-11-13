@@ -3,9 +3,12 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 
 export type FeeType = "application" | "enrolment" | "tuition" | "material" | "oshc" | "initial_deposit" | "other";
-export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number }
+export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number; includedInTotal?: boolean }
+/** The default for a new line: every fee counts towards the total; an initial deposit is part of the tuition, so it does not. */
+export const includedByDefault = (type: FeeType) => type !== "initial_deposit";
+export const isIncluded = (item: FeeItem) => item.includedInTotal ?? includedByDefault(item.type);
 export interface RtoCourse {
-  id: string; slug: string; code: string; name: string; cricos: string; category: string; trainingPackage: string; duration: string; mode: string;
+  id: string; slug: string; code: string; name: string; variantLabel: string | null; label: string; depositCents: number | null; cricos: string; category: string; trainingPackage: string; duration: string; mode: string;
   campus: string | null; tgaUrl: string | null; isActive: boolean; status: string; featured: boolean; homepageCarousel: boolean; displayOrder: number;
   showFees: boolean; feeNote: string | null; seoTitle: string | null; seoDescription: string | null; image: string; shortDescription: string;
   totalCents: number; units: number; activeUnits: number; openIntakes: number; nextIntake: string | null;
@@ -31,12 +34,12 @@ export interface CourseDetail { course: RtoCourse; units: RtoUnit[]; fees: FeeIt
 export interface IntakeDetail { intake: RtoIntake; schedule: ScheduleRow[]; batches: RtoBatch[]; fees: FeeItem[]; courseFees: FeeItem[] }
 export interface Classroom { id: string; name: string; campus: string | null; capacity: number | null; isActive: boolean }
 export interface StaffOption { id: string; name: string; email: string }
-export interface StudentOption { id: string; name: string; email: string }
+export interface StudentOption { id: string; name: string; email: string; linked?: boolean }
 export interface StudyRow {
   enrolmentId: string; type: EnrolmentType; status: string; enrolledOn: string; batchId: string; batch: string; intakeId: string; intake: string;
   startDate: string; endDate: string | null; courseId: string; course: string; courseCode: string;
 }
-export interface StudyOption { courseId: string; course: string; courseCode: string; intakes: { id: string; name: string; status: IntakeStatus; batches: { id: string; name: string }[] }[] }
+export interface StudyOption { courseId: string; course: string; courseCode: string; linked?: boolean; intakes: { id: string; name: string; status: IntakeStatus; batches: { id: string; name: string }[] }[] }
 
 export async function rto<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_admin", { p_action: action, p_data: data });
@@ -48,8 +51,9 @@ export const FEE_TYPES: { id: FeeType; label: string }[] = [
   { id: "application", label: "Application" }, { id: "enrolment", label: "Enrolment" }, { id: "tuition", label: "Tuition" },
   { id: "material", label: "Material / non-tuition" }, { id: "oshc", label: "OSHC" }, { id: "initial_deposit", label: "Initial deposit" }, { id: "other", label: "Other" },
 ];
-/** The course cost: every item except the initial deposit (a part payment, not an extra charge). */
-export const feeTotal = (items: FeeItem[]) => items.filter((i) => i.type !== "initial_deposit").reduce((sum, i) => sum + (Number(i.amountCents) || 0), 0);
+/** The one total rule (same as public.course_fee_total_cents): the sum of the items included in the total. */
+export const feeTotal = (items: FeeItem[]) => items.filter(isIncluded).reduce((sum, i) => sum + (Number(i.amountCents) || 0), 0);
+export const depositOf = (items: FeeItem[]) => items.filter((i) => i.type === "initial_deposit").reduce((sum, i) => sum + (Number(i.amountCents) || 0), 0);
 export const money = (cents: number | null | undefined) =>
   cents === null || cents === undefined ? "—" : `$${(cents / 100).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 /** "1234.5" or "$1,234.50" to cents; null when it is not a non-negative amount. */

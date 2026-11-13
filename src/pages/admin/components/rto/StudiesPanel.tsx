@@ -58,7 +58,8 @@ export default function StudiesPanel({ studentId }: { studentId: string }) {
       <Drawer open={open} title="Enrol in a batch" onClose={() => setOpen(false)}
         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button disabled={busy || !form.batchId} onClick={() => void enrol()}>{busy ? "Enrolling…" : "Enrol"}</Button></>}>
         <Field label="Course"><Select value={form.courseId} onChange={(e) => setForm((f) => ({ ...f, courseId: e.target.value, intakeId: "", batchId: "" }))}>
-          {options.map((o) => <option key={o.courseId} value={o.courseId}>{o.courseCode} {o.course}</option>)}</Select></Field>
+          {options.map((o) => <option key={o.courseId} value={o.courseId}>{o.courseCode} {o.course}{o.linked === false ? " — direct enrolment" : ""}</option>)}</Select></Field>
+        {course?.linked === false ? <p className="text-xs text-foreground-500">The student has no application for this course; one is created, marked “direct enrolment”.</p> : null}
         <Field label="Intake"><Select value={form.intakeId} onChange={(e) => setForm((f) => ({ ...f, intakeId: e.target.value, batchId: "" }))}>
           <option value="">{course?.intakes.length ? "Choose an intake" : "No intakes for this course"}</option>
           {course?.intakes.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.status})</option>)}</Select></Field>

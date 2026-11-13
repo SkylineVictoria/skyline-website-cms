@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Button, Select, TextInput } from "@/pages/admin/components/ui";
-import { FEE_TYPES, STATUS_TONE, feeTotal, initials, money, phase, progress, shortDate, toCents, type FeeItem, type FeeType, type RtoIntake } from "@/pages/admin/lib/rto";
+import { FEE_TYPES, STATUS_TONE, depositOf, feeTotal, includedByDefault, initials, isIncluded, money, phase, progress, shortDate, toCents, type FeeItem, type FeeType, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** A panel that slides in from the right; used instead of new pages for create and edit. */
 export function Drawer({ open, title, onClose, children, footer }: { open: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
@@ -39,38 +39,39 @@ export function ReadOnlyNote({ children }: { children: ReactNode }) {
 export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fees" }: {
   items: FeeItem[]; onSave: (items: FeeItem[]) => void; readOnly?: boolean; busy?: boolean; saveLabel?: string;
 }) {
-  const toRows = (list: FeeItem[]) => list.map((i) => ({ type: i.type, label: i.label, amount: (i.amountCents / 100).toFixed(2) }));
+  const toRows = (list: FeeItem[]) => list.map((i) => ({ type: i.type, label: i.label, amount: (i.amountCents / 100).toFixed(2), included: isIncluded(i) }));
   const [rows, setRows] = useState(() => toRows(items));
   useEffect(() => { setRows(toRows(items)); }, [items]);
-  const parsed = rows.map((r) => ({ type: r.type, label: r.label.trim(), amountCents: toCents(r.amount) }));
+  const parsed = rows.map((r) => ({ type: r.type, label: r.label.trim(), amountCents: toCents(r.amount), includedInTotal: r.included }));
   const invalid = parsed.some((r) => r.amountCents === null);
   const total = feeTotal(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
-  const deposit = parsed.filter((r) => r.type === "initial_deposit").reduce((s, r) => s + (r.amountCents ?? 0), 0);
+  const deposit = depositOf(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
   const set = (index: number, patch: Partial<(typeof rows)[number]>) => setRows((list) => list.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   return (
     <div className="space-y-3">
       {rows.length === 0 ? <p className="rounded-md border border-dashed border-background-300 px-4 py-6 text-center text-sm text-foreground-500">No fees yet. Add the first line item.</p> : null}
       {rows.map((r, i) => (
-        <div key={i} className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_8rem_auto] items-center gap-2">
-          <Select value={r.type} disabled={readOnly} onChange={(e) => set(i, { type: e.target.value as FeeType })} aria-label="Fee type">
+        <div key={i} className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_8rem_5.5rem_auto] items-center gap-2">
+          <Select value={r.type} disabled={readOnly} onChange={(e) => set(i, { type: e.target.value as FeeType, included: includedByDefault(e.target.value as FeeType) })} aria-label="Fee type">
             {FEE_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </Select>
           <TextInput value={r.label} disabled={readOnly} placeholder="Label shown on letters" onChange={(e) => set(i, { label: e.target.value })} aria-label="Label" />
           <TextInput value={r.amount} disabled={readOnly} inputMode="decimal" className={`text-right tabular-nums ${toCents(r.amount) === null ? "border-primary-500" : ""}`}
             onChange={(e) => set(i, { amount: e.target.value })} aria-label="Amount (AUD)" />
+          <label className="flex items-center gap-1.5 text-xs text-foreground-600" title="Counted in the total"><input type="checkbox" disabled={readOnly} checked={r.included} onChange={(e) => set(i, { included: e.target.checked })} />In total</label>
           {readOnly ? <span /> : <Button variant="ghost" size="sm" aria-label="Remove fee" icon="ri-delete-bin-line" onClick={() => setRows((list) => list.filter((_, x) => x !== i))} />}
         </div>
       ))}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-background-200 pt-3">
-        {readOnly ? <span /> : <Button variant="outline" size="sm" icon="ri-add-line" onClick={() => setRows((list) => [...list, { type: "tuition", label: "", amount: "0.00" }])}>Add line</Button>}
+        {readOnly ? <span /> : <Button variant="outline" size="sm" icon="ri-add-line" onClick={() => setRows((list) => [...list, { type: "tuition", label: "", amount: "0.00", included: true }])}>Add line</Button>}
         <div className="text-right">
           <p className="font-heading text-lg font-semibold tabular-nums text-foreground-950">Total {money(total)}</p>
-          {deposit ? <p className="text-xs text-foreground-500">Initial deposit {money(deposit)} is part of the total, payable upfront.</p> : null}
+          {deposit ? <p className="text-sm tabular-nums text-foreground-600">Initial deposit (part of total) {money(deposit)}</p> : null}
         </div>
       </div>
       {readOnly ? null : (
         <div className="flex justify-end">
-          <Button disabled={busy || invalid} onClick={() => onSave(parsed.map((r) => ({ type: r.type, label: r.label, amountCents: r.amountCents ?? 0 })))}>{busy ? "Saving…" : saveLabel}</Button>
+          <Button disabled={busy || invalid} onClick={() => onSave(parsed.map((r) => ({ type: r.type, label: r.label, amountCents: r.amountCents ?? 0, includedInTotal: r.includedInTotal })))}>{busy ? "Saving…" : saveLabel}</Button>
         </div>
       )}
     </div>

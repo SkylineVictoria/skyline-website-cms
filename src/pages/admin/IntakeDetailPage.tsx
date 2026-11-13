@@ -75,7 +75,7 @@ export default function IntakeDetailPage() {
 
       {tab === "schedule" ? <ScheduleTab detail={detail} readOnly={!canEdit} busy={busy}
         onSave={(rows) => void run("schedule_save", { rows }, "Schedule saved.")}
-        onRegenerate={() => void run("intake_save", { id, generate: true }, "Schedule generated from the course's active units.")} /> : null}
+        onRegenerate={() => void run("intake_save", { id, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}) }, "Schedule generated from the unit durations.")} /> : null}
 
       {tab === "batches" ? (
         <div className="space-y-2">
@@ -108,7 +108,7 @@ export default function IntakeDetailPage() {
       {batchDrawer ? <BatchDrawer batch={batchDrawer === "new" ? null : batchDrawer} existing={detail.batches} busy={busy} onClose={() => setBatchDrawer(null)}
         onSave={async (data) => { if (await run("batch_save", data, "Batch saved.")) setBatchDrawer(null); }}
         onDelete={async (batchId) => { if (await run("batch_delete", { batchId }, "Batch deleted.")) setBatchDrawer(null); }} /> : null}
-      {enrolDrawer !== null ? <EnrolDrawer courseId={i.courseId} batches={detail.batches.filter((b) => b.isActive)} batchId={enrolDrawer} busy={busy} onClose={() => setEnrolDrawer(null)}
+      {enrolDrawer !== null ? <EnrolDrawer courseId={i.courseId} batches={detail.batches.filter((b) => b.isActive)} batchId={enrolDrawer} busy={busy} rtoManager={role.rtoManager} onClose={() => setEnrolDrawer(null)}
         onEnrol={async (batchId, students) => { if (await run("enrol", { batchId, students }, `${students.length} student${students.length === 1 ? "" : "s"} enrolled.`)) setEnrolDrawer(null); }} /> : null}
       <ConfirmDialog open={confirmDelete} title="Delete this intake?" message="Its schedule and empty batches go too. An intake with students or applications cannot be deleted; close it instead." confirmLabel="Delete intake"
         onCancel={() => setConfirmDelete(false)}
@@ -323,18 +323,19 @@ function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
   );
 }
 
-function EnrolDrawer({ courseId, batches, batchId, busy, onClose, onEnrol }: {
-  courseId: string; batches: RtoBatch[]; batchId: string; busy: boolean; onClose: () => void; onEnrol: (batchId: string, students: { id: string; type: EnrolmentType }[]) => void;
+function EnrolDrawer({ courseId, batches, batchId, busy, rtoManager, onClose, onEnrol }: {
+  courseId: string; batches: RtoBatch[]; batchId: string; busy: boolean; rtoManager: boolean; onClose: () => void; onEnrol: (batchId: string, students: { id: string; type: EnrolmentType }[]) => void;
 }) {
   const [target, setTarget] = useState(batchId || batches[0]?.id || "");
   const [q, setQ] = useState("");
   const [found, setFound] = useState<StudentOption[] | null>(null);
   const [picked, setPicked] = useState<Record<string, EnrolmentType>>({});
   const [error, setError] = useState("");
+  const [all, setAll] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => { void rto<StudentOption[]>("student_search", { courseId, q }).then(setFound).catch((e) => setError(e instanceof Error ? e.message : "Search failed.")); }, 250);
+    const t = setTimeout(() => { void rto<StudentOption[]>("student_search", { courseId, q, all }).then(setFound).catch((e) => setError(e instanceof Error ? e.message : "Search failed.")); }, 250);
     return () => clearTimeout(t);
-  }, [courseId, q]);
+  }, [courseId, q, all]);
   const already = new Set(batches.find((b) => b.id === target)?.students.filter((s) => s.status === "active").map((s) => s.id) ?? []);
   const chosen = Object.entries(picked);
   return (
@@ -345,7 +346,8 @@ function EnrolDrawer({ courseId, batches, batchId, busy, onClose, onEnrol }: {
         <Select value={target} onChange={(e) => setTarget(e.target.value)}>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>
       </Field>
       <TextInput placeholder="Search students on this course by name or email" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search students" />
-      <p className="text-xs text-foreground-500">Only students with an application for this course are listed.</p>
+      {rtoManager ? <Toggle checked={all} onChange={setAll} label="Include students without an application" /> : null}
+      <p className="text-xs text-foreground-500">{all ? "A student without an application for this course gets one automatically, marked “direct enrolment”." : "Only students with an application for this course are listed."}</p>
       {found === null ? <p className="text-sm text-foreground-500">Searching…</p> : found.length === 0 ? <EmptyState icon="ri-user-search-line" title="No students found" description="A student appears once they have an application for this course." /> : (
         <div className="divide-y divide-background-200 rounded-md border border-background-200">
           {found.map((s) => {
@@ -354,7 +356,7 @@ function EnrolDrawer({ courseId, batches, batchId, busy, onClose, onEnrol }: {
               <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2">
                 <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                   <input type="checkbox" disabled={inBatch} checked={on} onChange={() => setPicked((p) => { const next = { ...p }; if (on) delete next[s.id]; else next[s.id] = "CoE"; return next; })} />
-                  <span className="min-w-0"><span className="block truncate text-sm text-foreground-900">{s.name}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></span>
+                  <span className="min-w-0"><span className="block truncate text-sm text-foreground-900">{s.name}{s.linked === false ? <span className="ml-1.5"><Badge tone="warn">Direct enrolment</Badge></span> : null}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></span>
                 </label>
                 {inBatch ? <Badge>In batch</Badge> : on ? (
                   <Select aria-label={`Enrolment type for ${s.name}`} value={picked[s.id]} onChange={(e) => setPicked((p) => ({ ...p, [s.id]: e.target.value as EnrolmentType }))} className="w-28">

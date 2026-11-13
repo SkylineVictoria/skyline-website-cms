@@ -51,7 +51,7 @@ export default function IntakesPage() {
         : !rows ? <p className="py-10 text-center text-foreground-500">Loading intakes…</p>
         : shown.length === 0 ? <Card><EmptyState icon="ri-calendar-event-line" title={rows.length ? "No intakes match" : "No intakes yet"} description={rows.length ? "Clear a filter." : canEdit ? "Create the first intake: pick a course and a start date." : "An RTO Manager creates intakes."} /></Card>
         : <div className="space-y-2">{shown.map((r) => <IntakeRow key={r.id} intake={r} />)}</div>}
-      <NewIntakeDrawer open={drawer} onClose={() => setDrawer(false)} courses={courses.filter((c) => c.isActive).map((c) => ({ id: c.id, label: `${c.code ? `${c.code} ` : ""}${c.name}`, campus: c.campus }))} />
+      <NewIntakeDrawer open={drawer} onClose={() => setDrawer(false)} courses={courses.filter((c) => c.isActive).map((c) => ({ id: c.id, label: c.label, campus: c.campus }))} />
     </div>
   );
 }

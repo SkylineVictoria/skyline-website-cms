@@ -115,6 +115,10 @@ None new. Hosted additions are schema only: bucket `assessment-evidence` (privat
 5. Fix the stale expectations of the three pre-existing suites in their own change (BIZ-ONB, signed documents, email routing).
 6. Later: PDF export of a completed attempt through the signing module, CSV import of unit elements, Playwright coverage of reassessment and version 2 in the browser.
 
-## 12. Final gate outcome
+## 12. Final gate outcome (VERIFIED)
 
-(written last, after the browser journey and the push)
+- Playwright `e2e/assessments.spec.ts` against the lab: **4/4 PASS** (admin builds / publishes / assigns; student submits with declaration and receipt; trainer marks Satisfactory and records the unit outcome as Competent; student sees the result, admin sees the version and the outcome). Earlier runs failed only on test selectors (labels render as "Question *", the "Mark" button vs the "Pending marking" tab, a repeated row from a previous run), never on the product.
+- Gate: type-check PASS, lint PASS (0 warnings), build PASS, registry 51/51, pgTAP 152/152, browser 4/4; the three pre-existing suite failures (section 5) are unchanged from the baseline and documented, so the gate was taken as passed for this work.
+- `main` was fast-forwarded to `feat/assessment-management` and pushed: `live/main` `006d4bb..6d040b4` (SkylineVictoria/skyline-website-cms, the Vercel production branch). The feature branch was pushed to `live` as well. Nothing was pushed to `origin` (unrelated fork history). No force push.
+- The owner's working folder `C:\Users\goura\Desktop\Skyline-Website` is on `main` at `6d040b4`; `npm install` was not needed (no dependency change); the dev server on port 3001 was restarted from it.
+- Hosted: migrations `20261113430000` and `20261113440000` applied and verified (section 2); no Edge Function deployed; no secret or env change.

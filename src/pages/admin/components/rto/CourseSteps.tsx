@@ -74,6 +74,19 @@ export function TimetablePreview({ units }: { units: RtoUnit[] }) {
   );
 }
 
+/** "2", "2.5" -> weeks in half steps (0.5 to 104), else null. */
+const halfWeeks = (text: string) => { const n = Number(text); return Number.isFinite(n) && n >= 0.5 && n <= 104 && Math.round(n * 2) === n * 2 ? n : null; };
+/** Weeks with half weeks: the text is kept while typing ("2.") and the number is passed on when it is a valid length. */
+function WeeksInput({ value, onChange, disabled }: { value: number; onChange: (weeks: number) => void; disabled?: boolean }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { if (halfWeeks(text) !== value) setText(String(value)); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <TextInput disabled={disabled} inputMode="decimal" aria-label="Weeks" value={text} title="Weeks; half weeks allowed (e.g. 1.5)"
+      className={halfWeeks(text) === null ? "border-primary-500" : ""}
+      onChange={(e) => { const t = e.target.value.replace(/[^\d.]/g, ""); setText(t); const w = halfWeeks(t); if (w !== null) onChange(w); }} />
+  );
+}
+
 /** Units & Timetable: the course's master timetable (units with weeks and hours, order, core / elective, active). */
 export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { units: RtoUnit[]; readOnly: boolean; busy: boolean; onSave: (units: RtoUnit[]) => void; autosave?: boolean }) {
   const [rows, setRows] = useState<RtoUnit[]>(units);
@@ -83,7 +96,7 @@ export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkWeeks, setBulkWeeks] = useState("");
   const dirty = JSON.stringify(rows) !== JSON.stringify(units);
-  const invalid = rows.some((u) => !u.code.trim() || !u.name.trim() || !(u.defaultWeeks >= 1));
+  const invalid = rows.some((u) => !u.code.trim() || !u.name.trim() || !(u.defaultWeeks >= 0.5));
   const sent = useAutosave(rows, { enabled: autosave && !readOnly, dirty, valid: !invalid, save: (v) => onSave(v), delay: 1500 });
   useEffect(() => {
     if (mayRefresh(sent, rowsRef.current)) setRows(units);
@@ -96,7 +109,7 @@ export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { 
     setSelected(new Set());
   }, [units]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleSel = (i: number) => setSelected((s) => { const next = new Set(s); if (next.has(i)) next.delete(i); else next.add(i); return next; });
-  const applyWeeks = () => { const w = Number(bulkWeeks); if (!(w >= 1 && w <= 104)) return; setRows((list) => list.map((u, x) => (selected.has(x) ? { ...u, defaultWeeks: w } : u))); setSelected(new Set()); setBulkWeeks(""); };
+  const applyWeeks = () => { const w = halfWeeks(bulkWeeks); if (w === null) return; setRows((list) => list.map((u, x) => (selected.has(x) ? { ...u, defaultWeeks: w } : u))); setSelected(new Set()); setBulkWeeks(""); };
   const set = (i: number, patch: Partial<RtoUnit>) => setRows((list) => list.map((u, x) => (x === i ? { ...u, ...patch } : u)));
   const remove = (i: number) => setRows((list) => (list[i].scheduled ? list.map((u, x) => (x === i ? { ...u, isActive: false } : u)) : list.filter((_, x) => x !== i)));
   const drop = (to: number) => {
@@ -111,7 +124,7 @@ export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { 
         {readOnly || rows.length === 0 ? null : (
           <div className="sticky top-0 z-[1] flex flex-wrap items-center gap-2 border-b border-background-200 bg-background-50 px-4 py-2 text-sm">
             <label className="flex items-center gap-1.5"><input type="checkbox" aria-label="Select all units" checked={selected.size === rows.length} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((_, x) => x)) : new Set())} />{selected.size ? `${selected.size} selected` : "Select"}</label>
-            {selected.size ? (<><span className="text-foreground-500">Set weeks to</span><TextInput inputMode="numeric" className="w-20" aria-label="Weeks for selected units" value={bulkWeeks} onChange={(e) => setBulkWeeks(e.target.value.replace(/\D/g, ""))} /><Button size="sm" variant="outline" disabled={!(Number(bulkWeeks) >= 1 && Number(bulkWeeks) <= 104)} onClick={applyWeeks}>Apply</Button></>) : null}
+            {selected.size ? (<><span className="text-foreground-500">Set weeks to</span><TextInput inputMode="numeric" className="w-20" aria-label="Weeks for selected units" value={bulkWeeks} onChange={(e) => setBulkWeeks(e.target.value.replace(/[^\d.]/g, ""))} /><Button size="sm" variant="outline" disabled={halfWeeks(bulkWeeks) === null} onClick={applyWeeks}>Apply</Button></>) : null}
           </div>
         )}
         {rows.length === 0 ? <EmptyState icon="ri-book-2-line" title="No units yet" description={readOnly ? undefined : "Add the units of competency in delivery order, with their weeks and hours."} /> : (
@@ -128,7 +141,7 @@ export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { 
                 <Select disabled={readOnly} value={u.unitType} aria-label="Core or elective" onChange={(e) => set(i, { unitType: e.target.value as RtoUnit["unitType"] })}>
                   <option value="core">Core</option><option value="elective">Elective</option>
                 </Select>
-                <TextInput disabled={readOnly} inputMode="numeric" value={String(u.defaultWeeks)} aria-label="Weeks" onChange={(e) => set(i, { defaultWeeks: Number(e.target.value.replace(/\D/g, "")) || 0 })} />
+                <WeeksInput disabled={readOnly} value={u.defaultWeeks} onChange={(w) => set(i, { defaultWeeks: w })} />
                 <TextInput disabled={readOnly} inputMode="numeric" value={u.nominalHours === null ? "" : String(u.nominalHours)} aria-label="Hours"
                   onChange={(e) => set(i, { nominalHours: e.target.value === "" ? null : Number(e.target.value.replace(/\D/g, "")) })} />
                 <Toggle disabled={readOnly} checked={u.isActive} onChange={(v) => set(i, { isActive: v })} />
@@ -141,7 +154,7 @@ export function UnitsTab({ units, readOnly, busy, onSave, autosave = false }: { 
         {readOnly ? null : (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-background-200 px-4 py-3">
             <Button variant="outline" size="sm" icon="ri-add-line" onClick={() => setRows((list) => [...list, { code: "", name: "", unitType: "core", defaultWeeks: 4, nominalHours: null, isActive: true }])}>Add unit</Button>
-            <p className="text-xs text-foreground-500">{invalid ? "Each unit needs a code, a name and at least 1 week." : "Drag to reorder. A unit used in a schedule can only be deactivated."}</p>
+            <p className="text-xs text-foreground-500">{invalid ? "Each unit needs a code, a name and at least half a week." : "Drag to reorder. A unit used in a schedule can only be deactivated."}</p>
             <SaveHint autosave={autosave} busy={busy} dirty={dirty} disabled={invalid} label="Save units" onSave={() => onSave(rows)} />
           </div>
         )}

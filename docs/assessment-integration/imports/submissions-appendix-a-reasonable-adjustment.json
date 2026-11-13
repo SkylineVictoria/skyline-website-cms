@@ -1,0 +1,395 @@
+{
+  "format": "skyline-assessment/1",
+  "exportedAt": "2026-11-13T18:14:24.948Z",
+  "source": "Submissions src/lib/appendixAMatrixData.ts (APPENDIX_A_TABLE1/2)",
+  "title": "Appendix A: Reasonable adjustment strategies and declaration",
+  "code": "SUBMISSIONS-APPENDIX-A",
+  "description": "The assessor's record of reasonable adjustment: the issues identified, the strategies applied and the trainer declaration. Assessor-only; students never see it.",
+  "definition": {
+    "instructions": "",
+    "tasks": [
+      {
+        "id": "t_015",
+        "title": "Reasonable adjustment record",
+        "instructions": "Completed by the trainer / assessor when a reasonable adjustment applies.",
+        "sections": [
+          {
+            "id": "s_016",
+            "title": "Adjustment applied",
+            "questions": [
+              {
+                "id": "q_017",
+                "type": "single_choice",
+                "assessorOnly": true,
+                "required": true,
+                "markingMode": "none",
+                "label": "Was a reasonable adjustment applied to this assessment?",
+                "config": {
+                  "options": [
+                    {
+                      "id": "yes",
+                      "label": "Yes"
+                    },
+                    {
+                      "id": "no",
+                      "label": "No"
+                    }
+                  ],
+                  "allowOther": false,
+                  "layout": "list"
+                },
+                "responseSchema": {
+                  "type": "string",
+                  "enum": [
+                    "yes",
+                    "no"
+                  ]
+                }
+              },
+              {
+                "id": "q_018",
+                "type": "long_answer",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Describe the adjustment and the task(s) it applied to",
+                "config": {
+                  "richText": true
+                },
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_019",
+            "title": "Strategies matrix",
+            "questions": [
+              {
+                "id": "q_00z",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "LLN: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_lln_speaking",
+                      "text": "Issue: Speaking"
+                    },
+                    {
+                      "id": "ra_lln_reading",
+                      "text": "Issue: Reading"
+                    },
+                    {
+                      "id": "ra_lln_writing",
+                      "text": "Issue: Writing"
+                    },
+                    {
+                      "id": "ra_lln_confidence",
+                      "text": "Issue: Confidence"
+                    },
+                    {
+                      "id": "ra_lln_verbal_assessment",
+                      "text": "Strategy: Verbal assessment"
+                    },
+                    {
+                      "id": "ra_lln_presentations",
+                      "text": "Strategy: Presentations"
+                    },
+                    {
+                      "id": "ra_lln_demonstration",
+                      "text": "Strategy: Demonstration of a skill"
+                    },
+                    {
+                      "id": "ra_lln_diagrams",
+                      "text": "Strategy: Use of diagrams"
+                    },
+                    {
+                      "id": "ra_lln_wordlists",
+                      "text": "Strategy: Use of supporting documents such as wordlists"
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              },
+              {
+                "id": "q_010",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "Non-English Speaking Background: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_nesb_speaking",
+                      "text": "Issue: Speaking"
+                    },
+                    {
+                      "id": "ra_nesb_reading",
+                      "text": "Issue: Reading"
+                    },
+                    {
+                      "id": "ra_nesb_writing",
+                      "text": "Issue: Writing"
+                    },
+                    {
+                      "id": "ra_nesb_cultural",
+                      "text": "Issue: Cultural background"
+                    },
+                    {
+                      "id": "ra_nesb_confidence",
+                      "text": "Issue: Confidence"
+                    },
+                    {
+                      "id": "ra_nesb_discuss_lln",
+                      "text": "Strategy: Discuss with the student and Supervisor (if applicable) whether language, literacy and numeracy are likely to impact on the assessment process"
+                    },
+                    {
+                      "id": "ra_nesb_methods_no_higher",
+                      "text": "Strategy: Use methods that do not require a higher level of language or literacy than is required to perform the job role"
+                    },
+                    {
+                      "id": "ra_nesb_short_sentences",
+                      "text": "Strategy: Use short sentences that do not contain large amounts of information"
+                    },
+                    {
+                      "id": "ra_nesb_rephrase",
+                      "text": "Strategy: Clarify information by rephrasing, confirm understanding"
+                    },
+                    {
+                      "id": "ra_nesb_read_printed",
+                      "text": "Strategy: Read any printed information to the student"
+                    },
+                    {
+                      "id": "ra_nesb_graphics",
+                      "text": "Strategy: Use graphics, pictures and colour coding instead of, or to support, text"
+                    },
+                    {
+                      "id": "ra_nesb_write_oral",
+                      "text": "Strategy: Offer to write down, or have someone else write, oral responses given by the student"
+                    },
+                    {
+                      "id": "ra_nesb_time_available",
+                      "text": "Strategy: Ensure that the time available to complete the assessment, while meeting enterprise requirements, takes account of the student's needs"
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              },
+              {
+                "id": "q_011",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "Category: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_indigenous_culturally_appropriate",
+                      "text": "Strategy: Culturally appropriate training"
+                    },
+                    {
+                      "id": "ra_indigenous_oral_assessment",
+                      "text": "Strategy: Explore understanding of concepts and practical application through oral assessment"
+                    },
+                    {
+                      "id": "ra_indigenous_flexible_delivery",
+                      "text": "Strategy: Flexible delivery"
+                    },
+                    {
+                      "id": "ra_indigenous_group_assessments",
+                      "text": "Strategy: Using group rather than individual assessments"
+                    },
+                    {
+                      "id": "ra_indigenous_practical_tasks",
+                      "text": "Strategy: Assessment through completion of practical tasks in the field after demonstration of skills and knowledge."
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              },
+              {
+                "id": "q_012",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "Category: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_age_font_size",
+                      "text": "Strategy: Make sure font size is not too small"
+                    },
+                    {
+                      "id": "ra_age_student_experience",
+                      "text": "Strategy: Trainer/Assessor should refer to the student's experience"
+                    },
+                    {
+                      "id": "ra_age_time_assessment",
+                      "text": "Strategy: Ensure that the time available to complete the assessment takes account of the student's needs"
+                    },
+                    {
+                      "id": "ra_age_accessible_format",
+                      "text": "Strategy: Provision of information or course materials in an accessible format."
+                    },
+                    {
+                      "id": "ra_age_fm_microphone",
+                      "text": "Strategy: Changes in teaching practices, e.g. wearing an FM microphone to enable a student to hear lectures"
+                    },
+                    {
+                      "id": "ra_age_note_taker",
+                      "text": "Strategy: Supply of specialised equipment or services, e.g. a note-taker for a student who cannot write"
+                    },
+                    {
+                      "id": "ra_age_venue",
+                      "text": "Strategy: Changes in lecture schedules and arrangements, e.g. relocating classes to an accessible venue"
+                    },
+                    {
+                      "id": "ra_age_substitute_task",
+                      "text": "Strategy: Changes to course design, e.g. substituting an assessment task"
+                    },
+                    {
+                      "id": "ra_age_physical_env",
+                      "text": "Strategy: Modifications to the physical environment, e.g. installing lever taps, building ramps, installing a lift"
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              },
+              {
+                "id": "q_013",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "Category: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_edu_previous_learning",
+                      "text": "Strategy: Discuss with the Student previous learning experience"
+                    },
+                    {
+                      "id": "ra_edu_individual_need",
+                      "text": "Strategy: Ensure learning and assessment methods meet the student's individual need"
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              },
+              {
+                "id": "q_014",
+                "type": "observation_checklist",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "observation",
+                "label": "Category: reasonable adjustment",
+                "helpText": "Tick the issues identified and the strategies applied.",
+                "config": {
+                  "items": [
+                    {
+                      "id": "ra_disability_identify",
+                      "text": "Strategy: Identify the issues"
+                    },
+                    {
+                      "id": "ra_disability_climate",
+                      "text": "Strategy: Create a climate of support"
+                    },
+                    {
+                      "id": "ra_disability_access_support",
+                      "text": "Strategy: Ensure access to support that the student has agreed to"
+                    },
+                    {
+                      "id": "ra_disability_structure",
+                      "text": "Strategy: Appropriately structure the assessment"
+                    },
+                    {
+                      "id": "ra_disability_braille",
+                      "text": "Strategy: Provide information or course materials in an accessible format, e.g. a textbook in braille"
+                    },
+                    {
+                      "id": "ra_disability_fm_microphone",
+                      "text": "Strategy: Changes in teaching practices, e.g. wearing an FM microphone to enable a student to hear lectures"
+                    },
+                    {
+                      "id": "ra_disability_note_taker",
+                      "text": "Strategy: Supply of specialised equipment or services, e.g. a note-taker for a student who cannot write"
+                    },
+                    {
+                      "id": "ra_disability_venue",
+                      "text": "Strategy: Changes in lecture schedules and arrangements, e.g. relocating classes to an accessible venue"
+                    },
+                    {
+                      "id": "ra_disability_substitute_task",
+                      "text": "Strategy: Changes to course design, e.g. substituting an assessment task"
+                    },
+                    {
+                      "id": "ra_disability_physical_env",
+                      "text": "Strategy: Modifications to the physical environment, e.g. installing lever taps, building ramps, installing a lift"
+                    }
+                  ],
+                  "allowNotes": true
+                },
+                "responseSchema": {
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_01a",
+            "title": "Trainer / assessor declaration",
+            "questions": [
+              {
+                "id": "q_01b",
+                "type": "declaration",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Trainer / assessor declaration",
+                "config": {
+                  "text": "I declare that I have attached all relevant evidence to provide reasonable adjustment to the student and that the adjustment maintains the integrity of the assessment."
+                },
+                "responseSchema": {
+                  "type": "object",
+                  "requiredKeys": [
+                    "agreed",
+                    "signature"
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keys": [],
+  "mappings": []
+}

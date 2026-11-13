@@ -1,0 +1,749 @@
+{
+  "format": "skyline-assessment/1",
+  "exportedAt": "2026-11-13T18:14:24.948Z",
+  "source": "Submissions src/data/formDefinition.json (legacy Training Evaluation Form)",
+  "title": "Learner evaluation (training evaluation and feedback)",
+  "code": "SUBMISSIONS-EVALUATION",
+  "description": "The learner evaluation that followed every Student Pack: participant information, the Logistics / Trainer / Learning rating scales, comments and declarations. Not marked.",
+  "definition": {
+    "instructions": "Training Evaluation Form",
+    "tasks": [
+      {
+        "id": "t_02n",
+        "title": "Learner evaluation",
+        "instructions": "Your feedback is not assessed; it helps improve the training.",
+        "sections": [
+          {
+            "id": "s_01c",
+            "title": "Student and trainer details",
+            "questions": [
+              {
+                "id": "q_01d",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": true,
+                "markingMode": "none",
+                "label": "Student Full Name",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01e",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": true,
+                "markingMode": "none",
+                "label": "Student ID",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01f",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": true,
+                "markingMode": "none",
+                "label": "Student Email",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01g",
+                "type": "short_answer",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Trainer Full Name",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_01h",
+            "title": "Qualification and unit of competency",
+            "questions": [
+              {
+                "id": "q_01i",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": false,
+                "markingMode": "none",
+                "label": "Qualification Code",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01j",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": false,
+                "markingMode": "none",
+                "label": "Qualification Name",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01k",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": false,
+                "markingMode": "none",
+                "label": "Unit Code",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_01l",
+                "type": "short_answer",
+                "assessorOnly": false,
+                "required": false,
+                "markingMode": "none",
+                "label": "Unit Name",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_01m",
+            "title": "Logistics and Support Evaluation",
+            "questions": [
+              {
+                "id": "q_01n",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The communication regarding the required attendance and time to study to pass this unit was correct",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01o",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The staff were efficient and helpful.",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01p",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The training equipment and material used was effective and prepared.",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01q",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The training venue was conducive to learning (set-up for convenience of students, comfortable in terms of temperature, etc.)",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_01r",
+            "title": "Additional Comments on Logistics and Support",
+            "questions": [
+              {
+                "id": "q_01s",
+                "type": "long_answer",
+                "required": false,
+                "markingMode": "none",
+                "label": "Additional Comments on Logistics and Support",
+                "config": {
+                  "richText": false
+                },
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_01t",
+            "title": "Learning Evaluation",
+            "questions": [
+              {
+                "id": "q_01u",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The learning materials were clear and well-organized",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01v",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The trainer explained concepts effectively",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01w",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The pace of instruction was appropriate",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01x",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "I had sufficient opportunities to practice",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01y",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The assessment criteria were clear",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_01z",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "I feel confident in applying what I learned",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_020",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "Overall, I am satisfied with the training",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_021",
+            "title": "Additional Comments on Learning Evaluation",
+            "questions": [
+              {
+                "id": "q_022",
+                "type": "long_answer",
+                "required": false,
+                "markingMode": "none",
+                "label": "Additional Comments on Learning Evaluation",
+                "config": {
+                  "richText": false
+                },
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_023",
+            "title": "Trainer/Assessor Evaluation",
+            "questions": [
+              {
+                "id": "q_024",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student demonstrated understanding of key concepts",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_025",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student actively participated in activities",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_026",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student completed assignments on time",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_027",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student showed improvement throughout the course",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_028",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student met the assessment requirements",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_029",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "The student demonstrated practical skills effectively",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              {
+                "id": "q_02a",
+                "type": "likert",
+                "required": false,
+                "markingMode": "none",
+                "label": "Overall, the student performed satisfactorily",
+                "config": {
+                  "min": 1,
+                  "max": 5,
+                  "labels": [
+                    "Strongly Disagree",
+                    "Disagree",
+                    "Neutral",
+                    "Agree",
+                    "Strongly Agree"
+                  ]
+                },
+                "responseSchema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_02b",
+            "title": "Additional Comments on Training",
+            "questions": [
+              {
+                "id": "q_02c",
+                "type": "long_answer",
+                "required": false,
+                "markingMode": "none",
+                "label": "Additional Comments on Training",
+                "config": {
+                  "richText": false
+                },
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_02d",
+            "title": "Final Declarations",
+            "questions": [
+              {
+                "id": "q_02e",
+                "type": "multi_choice",
+                "required": true,
+                "markingMode": "none",
+                "label": "Final Declarations",
+                "config": {
+                  "options": [
+                    {
+                      "id": "declaration.acknowledged",
+                      "label": "I acknowledge that I have read and understood the assessment requirements"
+                    },
+                    {
+                      "id": "declaration.accurate",
+                      "label": "I confirm that the information provided is accurate and complete"
+                    }
+                  ],
+                  "allowOther": false,
+                  "minSelected": 2
+                },
+                "responseSchema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "declaration.acknowledged",
+                      "declaration.accurate"
+                    ]
+                  },
+                  "minItems": 2,
+                  "uniqueItems": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_02f",
+            "title": "Student Signature",
+            "questions": [
+              {
+                "id": "q_02g",
+                "type": "declaration",
+                "assessorOnly": false,
+                "required": true,
+                "markingMode": "none",
+                "label": "Student Signature",
+                "config": {
+                  "text": ""
+                },
+                "responseSchema": {
+                  "type": "object",
+                  "requiredKeys": [
+                    "agreed",
+                    "signature"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_02h",
+            "title": "Trainer/Assessor Signature",
+            "questions": [
+              {
+                "id": "q_02i",
+                "type": "declaration",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Trainer/Assessor Signature",
+                "config": {
+                  "text": ""
+                },
+                "responseSchema": {
+                  "type": "object",
+                  "requiredKeys": [
+                    "agreed",
+                    "signature"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_02j",
+            "title": "Office Use Only",
+            "questions": [
+              {
+                "id": "q_02k",
+                "type": "short_answer",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Approved By",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_02l",
+                "type": "date",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Approval Date",
+                "config": {},
+                "responseSchema": {
+                  "type": "string",
+                  "format": "date"
+                }
+              },
+              {
+                "id": "q_02m",
+                "type": "short_answer",
+                "assessorOnly": true,
+                "required": false,
+                "markingMode": "none",
+                "label": "Office Notes",
+                "config": {},
+                "responseSchema": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keys": [],
+  "mappings": []
+}

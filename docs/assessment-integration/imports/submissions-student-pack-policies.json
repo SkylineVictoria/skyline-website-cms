@@ -1,0 +1,342 @@
+{
+  "format": "skyline-assessment/1",
+  "exportedAt": "2026-11-13T18:14:24.943Z",
+  "source": "Submissions src/lib/defaultFormSteps.ts (DEFAULT_STEPS_5_TO_20)",
+  "title": "Student Pack: information, policies and declaration",
+  "code": "SUBMISSIONS-PACK",
+  "description": "The policy sections, the Reasonable Adjustment record and the student declaration every Submissions Student Pack carried. Use it as a template task in front of the unit's own tasks.",
+  "definition": {
+    "instructions": "Read each section. Where a section asks you a question, answer it before you continue.",
+    "tasks": [
+      {
+        "id": "t_00y",
+        "title": "Student Pack information",
+        "instructions": "",
+        "sections": [
+          {
+            "id": "s_001",
+            "title": "Instructions to complete outcomes",
+            "questions": [
+              {
+                "id": "q_002",
+                "type": "instruction",
+                "label": "Instructions",
+                "markingMode": "none",
+                "config": {
+                  "html": "Fill out assessment outcome records in the Student Pack when:\n• The student has completed all requirements for the assessment tasks for the unit of competency.\n• The student's work has been reviewed and assessed by you.\n• A satisfactory/unsatisfactory result has been recorded for each assessment task.\n• Relevant and detailed feedback has been provided to the student.\n\nEvery assessment has a 'Feedback to Student' section where all information must be filled out appropriately, including: results (Satisfactory or Unsatisfactory), student name/signature/date, assessor name/signature/date, and relevant detailed feedback.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_003",
+            "title": "Unit Requirements",
+            "questions": [
+              {
+                "id": "q_004",
+                "type": "instruction",
+                "label": "Unit Requirements",
+                "markingMode": "none",
+                "config": {
+                  "html": "The student must read and understand all the information in the Unit Requirements before completing the Student Pack.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_005",
+            "title": "Feedback to student",
+            "questions": [
+              {
+                "id": "q_006",
+                "type": "instruction",
+                "label": "Feedback to student",
+                "markingMode": "none",
+                "config": {
+                  "html": "Feedback on student assessment performance is vital for learning. Purpose: to justify how competency was assessed, identify and reward specific qualities, recommend improvements, and guide students on next steps. Feedback should be provided for each Assessment Task, guide students to adapt learning strategies, and guide trainers/assessors to adapt teaching. It should be constructive, timely, and meaningful. Avoid short one-word comments like 'Fantastic' or 'Great work!'",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_007",
+            "title": "Plagiarism",
+            "questions": [
+              {
+                "id": "q_008",
+                "type": "instruction",
+                "label": "Plagiarism",
+                "markingMode": "none",
+                "config": {
+                  "html": "Plagiarism is presenting another person's work as your own. It is a serious act. Activities include copying, not acknowledging sources, and submitting work done by others. Consult your trainer/assessor if you have doubts. If plagiarism is identified, a meeting will be organized and further action taken. For more information, refer to the Training Organisation's Student Handbook.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_009",
+            "title": "Collusion",
+            "questions": [
+              {
+                "id": "q_00a",
+                "type": "instruction",
+                "label": "Collusion",
+                "markingMode": "none",
+                "config": {
+                  "html": "Collusion is unauthorized collaboration. Both parties are subject to disciplinary action and will result in a \"0\" grade and \"NYC\" (Not Yet Competent). Assessments must be typed (e.g. MS Office). Handwritten assessments will not be accepted unless prior written confirmation is provided by the trainer/assessor.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00b",
+            "title": "Competency outcome",
+            "questions": [
+              {
+                "id": "q_00c",
+                "type": "instruction",
+                "label": "Competency outcome",
+                "markingMode": "none",
+                "config": {
+                  "html": "Assessment outcomes: S (Satisfactory) and NS (Not Satisfactory). Learners who complete tasks satisfactorily are awarded Competent (C) or Not Yet Competent (NYC). If deemed NYC, feedback will be provided by the assessor and a chance to resubmit given. If still NYC, re-enrolment in the unit is required.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00d",
+            "title": "Additional evidence",
+            "questions": [
+              {
+                "id": "q_00e",
+                "type": "instruction",
+                "label": "Additional evidence",
+                "markingMode": "none",
+                "config": {
+                  "html": "The organisation reserves the right to request additional information or evidence to determine competency, subject to privacy and confidentiality requirements.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00f",
+            "title": "Reassessment",
+            "questions": [
+              {
+                "id": "q_00g",
+                "type": "instruction",
+                "label": "Reassessment",
+                "markingMode": "none",
+                "config": {
+                  "html": "Students receiving NS for an assessment can re-submit twice for free. If still unsuccessful after the first re-sit, they must re-sit/resubmit again. If they still don't achieve Competent for the Unit, they must enrol in the entire unit and pay a repeat unit fee.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00h",
+            "title": "Fail to complete by due date",
+            "questions": [
+              {
+                "id": "q_00i",
+                "type": "instruction",
+                "label": "Fail to complete by due date",
+                "markingMode": "none",
+                "config": {
+                  "html": "If an assessment is not completed by the due date, the Assessor will record this and the student will be marked NS. Students must either: (a) notify the trainer and/or assessor in writing (including the reason) 24 hours prior to the assessment to extend the due date, or (b) supply a doctor's certificate within 24 hours after the initial assessment date to avoid an NS mark.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00j",
+            "title": "Reasonable Adjustment",
+            "description": "Adjustments can be made to the way assessments are conducted to enhance fairness and flexibility. In the case that the tool may need adapting to meet specific needs of students, your trainer may provide extra support, allow extra time and/or provide the student with picture cues to aid with assessment.",
+            "questions": [
+              {
+                "id": "q_00k",
+                "label": "Was reasonable adjustment applied to any of these assessment tasks?",
+                "required": false,
+                "type": "single_choice",
+                "assessorOnly": true,
+                "markingMode": "none",
+                "config": {
+                  "options": [
+                    {
+                      "id": "yes",
+                      "label": "Yes"
+                    },
+                    {
+                      "id": "no",
+                      "label": "No"
+                    }
+                  ],
+                  "allowOther": false,
+                  "layout": "list"
+                },
+                "responseSchema": {
+                  "type": "string",
+                  "enum": [
+                    "yes",
+                    "no"
+                  ]
+                }
+              },
+              {
+                "id": "q_00l",
+                "label": "If yes, which assessment task was this applied to?",
+                "required": false,
+                "type": "short_answer",
+                "assessorOnly": true,
+                "markingMode": "none",
+                "config": {
+                  "minWords": null,
+                  "maxWords": 100,
+                  "placeholder": ""
+                },
+                "responseSchema": {
+                  "type": "string",
+                  "maxWords": 100
+                }
+              },
+              {
+                "id": "q_00m",
+                "label": "Provide a description of the adjustment applied and explain reasons.",
+                "required": false,
+                "type": "long_answer",
+                "assessorOnly": true,
+                "markingMode": "none",
+                "config": {
+                  "minWords": null,
+                  "maxWords": null,
+                  "richText": true
+                },
+                "responseSchema": {
+                  "type": "string"
+                }
+              },
+              {
+                "id": "q_00n",
+                "label": "Trainer Signature",
+                "required": false,
+                "type": "declaration",
+                "assessorOnly": true,
+                "markingMode": "none",
+                "config": {
+                  "text": ""
+                },
+                "responseSchema": {
+                  "type": "object",
+                  "requiredKeys": [
+                    "agreed",
+                    "signature"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00o",
+            "title": "Confidentiality",
+            "questions": [
+              {
+                "id": "q_00p",
+                "type": "instruction",
+                "label": "Confidentiality",
+                "markingMode": "none",
+                "config": {
+                  "html": "Information (job, workplace, employer) is treated with strict confidence in accordance with the law. You are responsible for ensuring consent from third parties (employer, colleagues, etc.) before disclosing information and for ensuring privacy rights and confidentiality obligations are not breached.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00q",
+            "title": "Assessment appeals process",
+            "questions": [
+              {
+                "id": "q_00r",
+                "type": "instruction",
+                "label": "Assessment appeals process",
+                "markingMode": "none",
+                "config": {
+                  "html": "You have the right to lodge an appeal if you feel unfairly treated or are unhappy with your assessment outcome. The first step is to discuss the issue with your trainer/assessor. If further action is desired, an appeal must be lodged with the training organisation in writing, outlining the reasons.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00s",
+            "title": "Recognised prior learning",
+            "questions": [
+              {
+                "id": "q_00t",
+                "type": "instruction",
+                "label": "Recognised prior learning",
+                "markingMode": "none",
+                "config": {
+                  "html": "Candidates will be able to have their previous experience or expertise recognised on request.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00u",
+            "title": "Special needs",
+            "questions": [
+              {
+                "id": "q_00v",
+                "type": "instruction",
+                "label": "Special needs",
+                "markingMode": "none",
+                "config": {
+                  "html": "Candidates with special needs should notify their trainer/assessor to request any required adjustments as soon as possible. This will enable the trainer/assessor to address the identified needs immediately.",
+                  "attachments": []
+                }
+              }
+            ]
+          },
+          {
+            "id": "s_00w",
+            "title": "Student declaration",
+            "description": "• I have read and understood the information in the Unit Requirements prior to commencing this Student Pack\n• I certify that the work submitted for this assessment pack is my own. I have clearly referenced any sources used in my submission. I understand that a false declaration is a form of malpractice.\n• I have kept a copy of this Student Pack and all relevant notes, attachments, and reference material that I used in the production of this Student Pack.\n• For the purposes of assessment, I give the trainer/assessor permission to:\n  i. Reproduce this assessment and provide a copy to another member of staff; and\n  ii. Take steps to authenticate the assessment, including communicating a copy of this assessment to a plagiarism checking service (which may retain a copy of the assessment on its database for future plagiarism checking).",
+            "questions": [
+              {
+                "id": "q_00x",
+                "label": "Student signature",
+                "required": true,
+                "type": "declaration",
+                "assessorOnly": false,
+                "markingMode": "none",
+                "config": {
+                  "text": ""
+                },
+                "responseSchema": {
+                  "type": "object",
+                  "requiredKeys": [
+                    "agreed",
+                    "signature"
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keys": [],
+  "mappings": []
+}

@@ -73,7 +73,6 @@ export default function Home() {
             src={src}
             alt="Student looking ahead on an Australian campus"
             loading={index === 0 ? "eager" : "lazy"}
-            fetchPriority={index === 0 ? "high" : "low"}
             decoding="async"
             className={`absolute inset-0 h-full w-full object-cover object-top transition-opacity duration-1000 ${
               index === slide ? "opacity-100" : "opacity-0"

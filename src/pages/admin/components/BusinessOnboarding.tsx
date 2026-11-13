@@ -7,7 +7,7 @@ import { listBusinessDocuments, openBusinessDocument, removeBusinessDocument, up
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
 
 /**
- * The business's agent agreement: upload a signed copy, or send it to the point of contact through Skyline Sign.
+ * The business's agent agreement: upload a signed copy, or send it to the business admin agent through Skyline Sign.
  * While the business is inactive it is shown as the onboarding checklist, ending with Activate & invite.
  */
 export default function BusinessOnboarding({ business, onChanged, onActivate, activating }: {
@@ -58,15 +58,15 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
       {inactive ? (
         <Card className="p-5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding</h2>
-          <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until it is activated. Activating it invites the point of contact.</p>
+          <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until it is activated. Activating it invites the business admin agent.</p>
           <ol className="mt-4 space-y-2 text-sm">
-            <Step done={Boolean(contact)} label="Point of contact" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add an agency admin on the Agents tab."} />
+            <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add a business admin agent on the Agents tab."} />
             <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Upload the signed copy below, or send it for signature through Skyline Sign."} />
             <Step done={false} label="Activate and invite" detail={contact ? `Activates the business and emails ${contact.email} a link to set their password.` : "Needs a point of contact."} />
           </ol>
           {onActivate ? (
             <div className="mt-4">
-              <Button icon="ri-mail-send-line" disabled={!ready || !contact || activating} onClick={onActivate}>{activating ? "Activating…" : "Activate & invite point of contact"}</Button>
+              <Button icon="ri-mail-send-line" disabled={!ready || !contact || activating} onClick={onActivate}>{activating ? "Activating…" : "Activate & invite business admin agent"}</Button>
               {!ready ? <p className="mt-1 text-xs text-foreground-500">Available once the signed agent agreement is in.</p> : null}
             </div>
           ) : null}

@@ -15,7 +15,7 @@ import { deactivationBlock, roleChangeBlock, type UserFormValues } from "../lib/
 
 const ROLES = [
   { value: "agent", label: "Agent" },
-  { value: "agency_admin", label: "Agency Admin" },
+  { value: "agency_admin", label: "Business admin agent" },
 ];
 
 export default function AdminUsersPage() {

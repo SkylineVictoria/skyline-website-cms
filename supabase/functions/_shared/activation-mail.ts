@@ -31,7 +31,7 @@ export async function sendActivationEmail(env: Env, mail: { to: string; name: st
   if (!token) return { error: "EF_POSTMARK_SERVER_TOKEN is not set" };
   const from = activationFrom(env);
   if (!from) return { error: "EF_HR_EMAIL_FROM is not set" };
-  const role = mail.role === "agency_admin" ? "an agency administrator" : mail.role === "student" ? "a student" : "an agent";
+  const role = mail.role === "agency_admin" ? "the business admin agent" : mail.role === "student" ? "a student" : "an agent";
   const where = mail.agencyName ? ` for ${mail.agencyName}` : "";
   const expires = mail.expiresAt ? new Date(mail.expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: "Australia/Melbourne" }) : "";
   const intro = `Hello ${mail.name || "there"},`;

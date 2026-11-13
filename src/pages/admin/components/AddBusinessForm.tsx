@@ -237,12 +237,12 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       </>)}
 
       {ready ? box(<>
-          <h2 className="font-heading text-base font-semibold">Point of contact</h2>
-          <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s administrator and receives the portal invitation.</p>
+          <h2 className="font-heading text-base font-semibold">Business admin agent (point of contact)</h2>
+          <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s first agent, as its business admin agent. The email and mobile below are theirs and are saved on their agent record; their sign-in invitation goes to this email once the business is activated.</p>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {input("primaryContact", "Name", "The person at the business we deal with.", { required: true, autoComplete: "name" })}
+            {input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
             <div>
-              <Field label="Email" hint={errors.businessEmail ? undefined : "Receives the administrator invitation."} required>
+              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: used to sign in, and receives the invitation after activation."} required>
                 <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
                   onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
                   onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
@@ -251,7 +251,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             </div>
             <div>
               {/* The shared phone control (country code + number, formatted as typed); it writes the E.164 value to a hidden input. */}
-              <Field label="Phone" required hint={errors.phone ? undefined : "Choose the country code, then the number, for example 041 234 5678."}>
+              <Field label="Their mobile" required hint={errors.phone ? undefined : "Their own number, saved on their agent record. Choose the country code, then the number, for example 041 234 5678."}>
                 <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "poc_phone") patch({ phone: target.value }); }}>
                   <PhoneInput id="add-business-phone" name="poc_phone" value={form.phone} required locked={saving} placeholder="041 234 5678" />
                 </div>

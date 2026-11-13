@@ -320,3 +320,38 @@ export async function adminSavePayDetails(id: string, form: PayDetailsForm): Pro
   if (error) fail(error, "The pay details could not be saved.");
   return data as StaffOnboarding;
 }
+
+/* ------------------------------------------------------------------ STAFF-SIGN: signed documents before activation */
+
+export interface StaffSignedUpload { id: string; title: string; fileName: string; path: string; size: number; createdAt: string }
+export interface StaffSigning { problem: string | null; uploads: StaffSignedUpload[] }
+const SIGNED_BUCKET = "staff-signed-documents";
+
+/** The signed copies uploaded for this person, and what still stops activation (null = they can be activated). */
+export async function adminStaffSigning(id: string): Promise<StaffSigning> {
+  const { data, error } = await supabase.rpc("hr_admin_staff_signed_uploads", { p_id: id });
+  if (error) fail(error, "The signed documents could not be loaded.");
+  return data as StaffSigning;
+}
+
+/** Uploads a copy signed on paper (PDF, image or Word, 15 MB at most) and records it against the person. */
+export async function adminUploadStaffSigned(id: string, title: string, file: File): Promise<void> {
+  if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
+  const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
+  const path = `${id}/${crypto.randomUUID()}-${safe}`;
+  const up = await supabase.storage.from(SIGNED_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+  if (up.error) throw new Error(up.error.message || "The file could not be uploaded.");
+  const { error } = await supabase.rpc("hr_admin_staff_signed_upload_add", { p_id: id, p_title: title, p_path: path, p_name: file.name, p_size: file.size });
+  if (error) fail(error, "The document could not be saved.");
+}
+
+export async function adminRemoveStaffSigned(uploadId: string): Promise<void> {
+  const { error } = await supabase.rpc("hr_admin_staff_signed_upload_remove", { p_upload: uploadId });
+  if (error) fail(error, "The document could not be removed.");
+}
+
+export async function staffSignedUrl(path: string): Promise<string> {
+  const { data, error } = await supabase.storage.from(SIGNED_BUCKET).createSignedUrl(path, 120);
+  if (error || !data?.signedUrl) throw new Error("The document could not be opened.");
+  return data.signedUrl;
+}

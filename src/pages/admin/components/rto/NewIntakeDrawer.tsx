@@ -10,8 +10,10 @@ type Mode = "durations" | "fit";
  * Pick a course and a start date, then the units: core units are always scheduled, electives are chosen. "Use unit durations" lays
  * each unit out for its default weeks; "Fit to end date" shares the working days up to the end date evenly. Holidays are skipped.
  */
-export default function NewIntakeDrawer({ open, onClose, courses, courseId }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, stay = false }: {
   open: boolean; onClose: () => void; courses: { id: string; label: string; campus?: string | null }[]; courseId?: string;
+  /** Stay on the page after creating (the course wizard lists the new intake); otherwise open the intake. */
+  stay?: boolean;
 }) {
   const navigate = useNavigate();
   const [form, setForm] = useState({ courseId: courseId ?? "", startDate: "", endDate: "", campus: "", capacity: "", status: "draft" as IntakeStatus, name: "", generate: true, mode: "durations" as Mode });
@@ -46,7 +48,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId }: {
         unitIds: picked.map((u) => u.id), fitEnd: form.generate && form.mode === "fit" ? form.endDate : "",
       });
       onClose();
-      navigate(`/admin/intakes/${out.intake.id}`);
+      if (!stay) navigate(`/admin/intakes/${out.intake.id}`);
     } catch (e) { setError(e instanceof Error ? e.message : "The intake was not created."); }
     finally { setBusy(false); }
   };

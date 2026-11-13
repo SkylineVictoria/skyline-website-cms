@@ -53,6 +53,7 @@ export function menuTree(rows: AdminMenuItem[]): MenuNode[] {
   return visit(null, new Set());
 }
 export function menuActive(node: MenuNode, pathname: string): boolean {
+  if (/^\/admin\/courses\/[^/]+\/[a-z]+$/.test(pathname)) pathname = '/admin/course-fees/wizard';
   return Boolean(node.route && (pathname === node.route ||
     (node.route !== '/admin' && node.route !== '/' && pathname.startsWith(node.route + '/')))) ||
     node.children.some(child => menuActive(child, pathname));

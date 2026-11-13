@@ -281,7 +281,7 @@ export default function CoursesPage() {
                           <i className="ri-eye-line" aria-hidden="true" />
                         </Link>
                         <Link
-                          to={`/admin/course-fees/${encodeURIComponent(c.id)}?tab=website`}
+                          to={`/admin/courses/${encodeURIComponent(c.id)}/website`}
                           aria-label="Edit"
                           className="flex h-8 w-8 items-center justify-center rounded-md text-foreground-500 hover:bg-background-100"
                         >

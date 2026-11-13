@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, SectionTabs, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
+import { ClassroomsManager } from "@/pages/admin/ClassroomsPage";
 import { Avatars, Drawer, ErrorNote, FeesEditor, IntakeStatusChip, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
 import {
   DAYS, addDays, daysBetween, feeTotal, money, parseDay, rto, shortDate,
@@ -118,7 +119,7 @@ export default function IntakeDetailPage() {
 }
 
 /** A CSS-grid timeline. Change a unit's dates inline or drag its bar; the units after it move by the same number of days. */
-function ScheduleTab({ detail, readOnly, busy, onSave, onRegenerate }: {
+export function ScheduleTab({ detail, readOnly, busy, onSave, onRegenerate }: {
   detail: IntakeDetail; readOnly: boolean; busy: boolean; onSave: (rows: ScheduleRow[]) => void; onRegenerate: () => void;
 }) {
   const [rows, setRows] = useState<ScheduleRow[]>(detail.schedule);
@@ -254,7 +255,7 @@ function FeesTab({ detail, readOnly, busy, onSave }: { detail: IntakeDetail; rea
   );
 }
 
-function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
+export function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
   batch: RtoBatch | null; existing: RtoBatch[]; busy: boolean; onClose: () => void; onSave: (data: Record<string, unknown>) => void; onDelete: (id: string) => void;
 }) {
   const nextName = () => { let n = 1; while (existing.some((b) => b.name === `B${n}`)) n++; return `B${n}`; };
@@ -263,15 +264,18 @@ function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
   const [rooms, setRooms] = useState<Classroom[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [newRoom, setNewRoom] = useState({ name: "", campus: "", capacity: "" });
+  const [adding, setAdding] = useState(false);
+  const [manage, setManage] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     void Promise.all([rto<Classroom[]>("classroom_list"), rto<StaffOption[]>("staff_list")]).then(([r, s]) => { setRooms(r); setStaff(s); }).catch((e) => setError(e instanceof Error ? e.message : "Lists did not load."));
   }, []);
+  const reloadRooms = () => { void rto<Classroom[]>("classroom_list").then(setRooms).catch(() => undefined); };
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const addRoom = async () => {
     if (!newRoom.name.trim()) return;
-    try { const list = await rto<Classroom[]>("classroom_save", newRoom); setRooms(list); const made = list.find((r) => r.name === newRoom.name.trim()); if (made) set({ classroomId: made.id }); setNewRoom({ name: "", campus: "", capacity: "" }); }
+    try { const list = await rto<Classroom[]>("classroom_save", newRoom); setRooms(list); const made = list.find((r) => r.name === newRoom.name.trim()); if (made) set({ classroomId: made.id }); setNewRoom({ name: "", campus: "", capacity: "" }); setAdding(false); }
     catch (e) { setError(e instanceof Error ? e.message : "Classroom not saved."); }
   };
   return (
@@ -283,17 +287,25 @@ function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
         <Field label="Name" required><TextInput value={form.name} onChange={(e) => set({ name: e.target.value })} /></Field>
         <Field label="Capacity"><TextInput inputMode="numeric" value={form.capacity} onChange={(e) => set({ capacity: e.target.value.replace(/\D/g, "") })} /></Field>
       </div>
-      <Field label="Classroom">
-        <Select value={form.classroomId} onChange={(e) => set({ classroomId: e.target.value })}>
-          <option value="">No classroom</option>
-          {rooms.filter((r) => r.isActive || r.id === form.classroomId).map((r) => <option key={r.id} value={r.id}>{r.name}{r.campus ? ` · ${r.campus}` : ""}{r.capacity ? ` (${r.capacity})` : ""}</option>)}
-        </Select>
-      </Field>
-      <div className="flex items-end gap-2">
-        <TextInput aria-label="New classroom name" placeholder="New classroom" value={newRoom.name} onChange={(e) => setNewRoom((r) => ({ ...r, name: e.target.value }))} />
-        <TextInput aria-label="Campus" placeholder="Campus" value={newRoom.campus} onChange={(e) => setNewRoom((r) => ({ ...r, campus: e.target.value }))} />
-        <Button variant="outline" size="sm" disabled={!newRoom.name.trim()} onClick={() => void addRoom()}>Add</Button>
+      <div>
+        <Field label="Classroom">
+          <Select value={adding ? "__new__" : form.classroomId} onChange={(e) => { if (e.target.value === "__new__") setAdding(true); else { setAdding(false); set({ classroomId: e.target.value }); } }}>
+            <option value="">No classroom</option>
+            {rooms.filter((r) => r.isActive || r.id === form.classroomId).map((r) => <option key={r.id} value={r.id}>{r.name}{r.campus ? ` · ${r.campus}` : ""}{r.capacity ? ` (${r.capacity})` : ""}</option>)}
+            <option value="__new__">+ New classroom</option>
+          </Select>
+        </Field>
+        {adding ? (
+          <div className="mt-2 flex items-end gap-2 rounded-md bg-background-100 p-2">
+            <TextInput autoFocus aria-label="New classroom name" placeholder="Classroom name" value={newRoom.name} onChange={(e) => setNewRoom((r) => ({ ...r, name: e.target.value }))} />
+            <TextInput aria-label="Campus (optional)" placeholder="Campus (optional)" value={newRoom.campus} onChange={(e) => setNewRoom((r) => ({ ...r, campus: e.target.value }))} />
+            <Button size="sm" disabled={!newRoom.name.trim()} onClick={() => void addRoom()}>Create</Button>
+            <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
+          </div>
+        ) : null}
+        <button type="button" onClick={() => setManage(true)} className="mt-1 text-xs font-medium text-primary-600 hover:underline">Manage classrooms</button>
       </div>
+      {manage ? <Drawer open title="Classrooms" onClose={() => { setManage(false); reloadRooms(); }}><ClassroomsManager onChanged={reloadRooms} /></Drawer> : null}
       <div>
         <p className="mb-1.5 text-[13px] font-medium text-foreground-800">Class days</p>
         <div className="flex flex-wrap gap-1.5">{DAYS.map((d) => (
@@ -323,7 +335,7 @@ function BatchDrawer({ batch, existing, busy, onClose, onSave, onDelete }: {
   );
 }
 
-function EnrolDrawer({ courseId, batches, batchId, busy, rtoManager, onClose, onEnrol }: {
+export function EnrolDrawer({ courseId, batches, batchId, busy, rtoManager, onClose, onEnrol }: {
   courseId: string; batches: RtoBatch[]; batchId: string; busy: boolean; rtoManager: boolean; onClose: () => void; onEnrol: (batchId: string, students: { id: string; type: EnrolmentType }[]) => void;
 }) {
   const [target, setTarget] = useState(batchId || batches[0]?.id || "");

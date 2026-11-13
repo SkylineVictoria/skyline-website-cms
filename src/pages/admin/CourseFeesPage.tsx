@@ -4,7 +4,8 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { Badge, Button, Card, PageHeader, StatusBadge } from "@/pages/admin/components/ui";
 import { ListMessage, SearchBox } from "@/pages/admin/components/ListControls";
 import { ChipFilter } from "@/pages/admin/components/rto/shared";
-import { money, rto, shortDate, type RtoCourse } from "@/pages/admin/lib/rto";
+import { money, rto, shortDate, stepPath, type RtoCourse } from "@/pages/admin/lib/rto";
+import IntakesPage from "@/pages/admin/IntakesPage";
 
 /** Master Data › Courses: the one course list. A course's facts, units, fees, intakes, batches and website content open from here. */
 export default function CourseFeesPage() {
@@ -14,6 +15,8 @@ export default function CourseFeesPage() {
   const [category, setCategory] = useState("");
   const [active, setActive] = useState<"" | "active" | "inactive">("");
   const [published, setPublished] = useState<"" | "Published" | "Draft">("");
+  const [view, setView] = useState<"courses" | "intakes">(() => (new URLSearchParams(window.location.search).get("view") === "intakes" ? "intakes" : "courses"));
+  const switchView = (v: "courses" | "intakes") => { setView(v); window.history.replaceState(null, "", v === "intakes" ? "?view=intakes" : window.location.pathname); };
 
   const load = useCallback(async () => {
     try { setRows(await rto<RtoCourse[]>("course_list")); setError(""); }
@@ -30,7 +33,14 @@ export default function CourseFeesPage() {
 
   return (
     <div data-testid="course-fees-page">
-      <PageHeader title="Courses" description="One record per course: facts, units, fees, intakes, batches and website content. Offer letters and the enrolment form use these fees and intakes." />
+      <PageHeader title="Courses" description="One record per course: open a course to set it up step by step (details, units & timetable, fees, intakes, website)." />
+      <div className="mb-4 inline-flex rounded-full border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View">
+        {([["courses", "Courses"], ["intakes", "All intakes"]] as const).map(([v, label]) => (
+          <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => switchView(v)}
+            className={`rounded-full px-4 py-1.5 text-[13px] font-medium ${view === v ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100"}`}>{label}</button>
+        ))}
+      </div>
+      {view === "intakes" ? <IntakesPage embedded /> : <>
       <div className="sticky top-0 z-10 -mx-1 mb-4 space-y-3 bg-background-100/95 px-1 py-2 backdrop-blur">
         <SearchBox label="Search courses" value={search} onSearch={setSearch} placeholder="Search code, name, CRICOS or category" />
         <div className="flex flex-wrap gap-x-5 gap-y-2">
@@ -59,7 +69,7 @@ export default function CourseFeesPage() {
               {!rows ? <tr><td colSpan={5} className="py-10 text-center text-foreground-500">Loading courses…</td></tr> : shown.map((r) => (
                 <tr key={r.id} className="align-top" data-testid="course-fee-row">
                   <td>
-                    <Link to={`/admin/course-fees/${encodeURIComponent(r.id)}`} className="font-medium text-foreground-900 hover:text-primary-600">{r.label}</Link>
+                    <Link to={stepPath(r.id, "details")} className="font-medium text-foreground-900 hover:text-primary-600">{r.label}</Link>
                     <p className="text-xs text-foreground-500">{[r.category, r.cricos && `CRICOS ${r.cricos}`, r.duration].filter(Boolean).join(" · ")}</p>
                   </td>
                   <td className="text-sm tabular-nums text-foreground-700">{r.activeUnits}{r.units !== r.activeUnits ? <span className="text-foreground-400"> / {r.units}</span> : null}</td>
@@ -72,6 +82,7 @@ export default function CourseFeesPage() {
           </ResponsiveTable>
         )}
       </Card>
+      </>}
     </div>
   );
 }

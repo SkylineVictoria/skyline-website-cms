@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { mayRefresh, useAutosave } from "@/pages/admin/lib/useAutosave";
 import { Badge, Button, Select, TextInput } from "@/pages/admin/components/ui";
 import {
   DEFAULT_FEE_CENTS, DEPOSIT_LIMIT_CENTS, FEE_RANK, FEE_TYPES, STATUS_TONE, depositOf, feeGst, feeTotal, includedByDefault, initials, isIncluded, isRefundable, money, phase, progress,
@@ -39,14 +40,17 @@ export function ReadOnlyNote({ children }: { children: ReactNode }) {
 }
 
 /** Line-item fee editor with a live total. Amounts are typed in dollars and kept in cents. */
-export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fees" }: {
-  items: FeeItem[]; onSave: (items: FeeItem[]) => void; readOnly?: boolean; busy?: boolean; saveLabel?: string;
+export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fees", autosave = false }: {
+  items: FeeItem[]; onSave: (items: FeeItem[]) => void; readOnly?: boolean; busy?: boolean; saveLabel?: string; autosave?: boolean;
 }) {
   const toRows = (list: FeeItem[]) => [...list].sort((a, b) => (FEE_RANK[a.type] ?? 9) - (FEE_RANK[b.type] ?? 9)).map((i) => ({
     type: i.type, label: i.label, amount: (i.amountCents / 100).toFixed(2), included: isIncluded(i), refundable: isRefundable(i), gst: (i.gstTreatment ?? "gst_free") as GstTreatment,
   }));
   const [rows, setRows] = useState(() => toRows(items));
-  useEffect(() => { setRows(toRows(items)); }, [items]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (mayRefresh(autoSent, rowsRef.current)) setRows(toRows(items)); autoSent.current = null; }, [items]);
   const parsed = rows.map((r) => ({ type: r.type, label: r.label.trim(), amountCents: toCents(r.amount), includedInTotal: r.included, refundable: r.refundable, gstTreatment: r.gst }));
   const invalid = parsed.some((r) => r.amountCents === null);
   const total = feeTotal(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
@@ -59,6 +63,8 @@ export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fe
     return { type, label: "", amount: ((DEFAULT_FEE_CENTS[type] ?? 0) / 100).toFixed(2), included: includedByDefault(type), refundable: refundableByDefault(type), gst: "gst_free" as GstTreatment };
   };
   const set = (index: number, patch: Partial<(typeof rows)[number]>) => setRows((list) => list.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  const toItems = (list: typeof rows) => list.map((r) => ({ type: r.type, label: r.label.trim(), amountCents: toCents(r.amount) ?? 0, includedInTotal: r.included, refundable: r.refundable, gstTreatment: r.gst }));
+  const autoSent = useAutosave(rows, { enabled: autosave && !readOnly, dirty: JSON.stringify(rows) !== JSON.stringify(toRows(items)), valid: !invalid, save: (v) => onSave(toItems(v)) });
   return (
     <div className="space-y-3">
       {rows.length === 0 ? <p className="rounded-md border border-dashed border-background-300 px-4 py-6 text-center text-sm text-foreground-500">No fees yet. Add the first line item.</p> : null}

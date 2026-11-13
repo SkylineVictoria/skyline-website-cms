@@ -41,7 +41,10 @@ export interface RtoBatch {
   id: string; intakeId: string; intakeName?: string; name: string; classroomId: string | null; classroom: string | null; classDays: string[];
   startTime: string | null; endTime: string | null; capacity: number | null; isActive: boolean;
   trainers: { id: string; name: string }[]; students: BatchStudent[];
+  /** The intake's unit dates, or the batch's own where staff changed them (overridden). */
+  schedule?: BatchScheduleRow[];
 }
+export interface BatchScheduleRow { intakeUnitId: string; code: string; name: string; startDate: string; endDate: string; intakeStartDate: string; intakeEndDate: string; overridden: boolean }
 export interface ScheduleRow { id: string; unitId: string; code: string; name: string; unitType: string; startDate: string; endDate: string; hours: number | null }
 export interface CourseDetail { course: RtoCourse; units: RtoUnit[]; fees: FeeItem[]; intakes: RtoIntake[]; batches: RtoBatch[] }
 export interface IntakeDetail { intake: RtoIntake; schedule: ScheduleRow[]; batches: RtoBatch[]; fees: FeeItem[]; courseFees: FeeItem[] }
@@ -53,6 +56,17 @@ export interface StudyRow {
   startDate: string; endDate: string | null; courseId: string; course: string; courseCode: string;
 }
 export interface StudyOption { courseId: string; course: string; courseCode: string; linked?: boolean; intakes: { id: string; name: string; status: IntakeStatus; batches: { id: string; name: string }[] }[] }
+
+/** The guided course flow's own actions (duplicate an intake, batch unit date overrides): public.rto_course_flow. */
+/** The course wizard's steps and their addresses (/admin/courses/:id/:step). */
+export type CourseStep = "details" | "timetable" | "fees" | "intakes" | "website";
+export const stepPath = (courseId: string, step: CourseStep) => `/admin/courses/${encodeURIComponent(courseId)}/${step}`;
+
+export async function rtoFlow<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
+  const { data: out, error } = await supabase.rpc("rto_course_flow", { p_action: action, p_data: data });
+  if (error) throw new Error(error.message);
+  return out as T;
+}
 
 export async function rto<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_admin", { p_action: action, p_data: data });

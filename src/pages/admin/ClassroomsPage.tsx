@@ -7,8 +7,17 @@ import { rto, type Classroom } from "@/pages/admin/lib/rto";
 type Row = { id?: string; name: string; campus: string; capacity: string; isActive: boolean };
 const toRow = (c: Classroom): Row => ({ id: c.id, name: c.name, campus: c.campus ?? "", capacity: c.capacity ? String(c.capacity) : "", isActive: c.isActive });
 
-/** Master Data › Classrooms: the rooms batches are taught in. RTO Managers edit; Admins view. */
+/** Master Data › Classrooms (also opened as a drawer from a batch): the rooms batches are taught in. RTO Managers edit; Admins view. */
 export default function ClassroomsPage() {
+  return (
+    <div>
+      <PageHeader title="Classrooms" description="The rooms batches are taught in. A batch picks its classroom in Courses › a course › Intakes." />
+      <ClassroomsManager />
+    </div>
+  );
+}
+
+export function ClassroomsManager({ onChanged }: { onChanged?: () => void }) {
   const { push } = useToast();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [saved, setSaved] = useState<Row[]>([]);
@@ -30,16 +39,15 @@ export default function ClassroomsPage() {
     setBusy(i);
     try {
       const list = await rto<Classroom[]>("classroom_save", { id: r.id ?? null, name: r.name, campus: r.campus, capacity: r.capacity, isActive: r.isActive });
-      const next = list.map(toRow); setRows(next); setSaved(next); push(`${r.name.trim()} saved.`);
+      const next = list.map(toRow); setRows(next); setSaved(next); push(`${r.name.trim()} saved.`); onChanged?.();
     } catch (e) { push(e instanceof Error ? e.message : "Not saved.", "error"); }
     finally { setBusy(null); }
   };
   const changed = (i: number) => { const r = rows?.[i]; return !r?.id || JSON.stringify(r) !== JSON.stringify(saved.find((s) => s.id === r.id)); };
 
   return (
-    <div>
-      <PageHeader title="Classrooms" description="The rooms batches are taught in. A batch picks its classroom in Intakes › an intake › Batches."
-        actions={canEdit ? <Button icon="ri-add-line" onClick={() => setRows((list) => [...(list ?? []), { name: "", campus: "", capacity: "", isActive: true }])}>Add classroom</Button> : null} />
+    <div className="space-y-3">
+      {canEdit ? <div className="flex justify-end"><Button icon="ri-add-line" onClick={() => setRows((list) => [...(list ?? []), { name: "", campus: "", capacity: "", isActive: true }])}>Add classroom</Button></div> : null}
       <ErrorNote text={error} />
       {!canEdit && rows ? <div className="mb-3"><ReadOnlyNote>Only an RTO Manager can add or change classrooms.</ReadOnlyNote></div> : null}
       {rows === null ? <p className="py-10 text-center text-foreground-500">Loading classrooms…</p> : rows.length === 0 ? (

@@ -6,7 +6,7 @@ import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import { phase, rto, type IntakeStatus, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** Intakes & Batches: every intake (the master timetable of a course run) with its progress, enrolments and trainers. */
-export default function IntakesPage() {
+export default function IntakesPage({ embedded = false }: { embedded?: boolean }) {
   const [rows, setRows] = useState<RtoIntake[] | null>(null);
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [canEdit, setCanEdit] = useState(false);
@@ -36,8 +36,8 @@ export default function IntakesPage() {
 
   return (
     <div>
-      <PageHeader title="Intakes" description="Each intake is a course run with its unit schedule, batches, trainers and students."
-        actions={canEdit ? <Button icon="ri-add-line" onClick={() => setDrawer(true)}>New intake</Button> : null} />
+      {embedded ? (canEdit ? <div className="mb-3 flex justify-end"><Button icon="ri-add-line" onClick={() => setDrawer(true)}>New intake</Button></div> : null) : <PageHeader title="Intakes" description="Each intake is a course run with its unit schedule, batches, trainers and students."
+        actions={canEdit ? <Button icon="ri-add-line" onClick={() => setDrawer(true)}>New intake</Button> : null} />}
       <div className="sticky top-0 z-10 -mx-1 mb-4 space-y-3 bg-background-100/95 px-1 py-2 backdrop-blur">
         <SearchBox label="Search intakes" value={search} onSearch={setSearch} placeholder="Search intake or course" />
         <div className="flex flex-wrap gap-x-5 gap-y-2">

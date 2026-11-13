@@ -72,7 +72,15 @@ export interface BusinessDetail {
   };
   counts: { admins: number; agents: number; inactiveAgents: number; students: number; applications: number };
   statusCounts: StatusCounts;
+  /** Onboarding: a business is activated only once its agent agreement is signed (uploaded or through Skyline Sign). */
+  onboarding?: {
+    completedAt: string | null;
+    agreementReady: boolean;
+    contact: { agentId: string; name: string; email: string; hasLogin: boolean } | null;
+  };
 }
+
+export interface BusinessDocument { id: string; kind: "agent_agreement" | "other"; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string }
 
 export interface ApplicationRow {
   id: string;
@@ -180,6 +188,33 @@ export const listBusinesses = (f: { search?: string; status?: string; limit: num
   }, "We could not load businesses. Please try again.");
 
 export const getBusiness = (id: string) => call<BusinessDetail | null>("admin_business_detail", { p_business: id }, "We could not load this business.");
+
+/** Add business: the business starts inactive (onboarding) with its point of contact; nothing is sent. */
+export const createBusiness = (agency: Record<string, string>, contactEmail: string, contactName: string) =>
+  call<{ agencyId: string; businessId: string; agencyName: string; contactAgentId: string }>("admin_business_create",
+    { p_agency: agency, p_contact_email: contactEmail, p_contact_name: contactName }, "We could not create this business.");
+
+export const listBusinessDocuments = (id: string) => call<BusinessDocument[]>("admin_business_documents", { p_business: id }, "We could not load this business’s documents.");
+
+const DOCUMENT_BUCKET = "business-documents";
+
+/** Uploads a signed agreement (or other document) to the private bucket and records it against the business. */
+export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement") {
+  if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
+  const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
+  const path = `${businessId}/${crypto.randomUUID()}-${safe}`;
+  const { error } = await supabase.storage.from(DOCUMENT_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+  if (error) throw new Error(error.message || "We could not upload this file.");
+  await call<{ id: string }>("admin_business_document_add", { p_business: businessId, p_kind: kind, p_path: path, p_name: file.name, p_size: file.size }, "We could not save this document.");
+}
+
+export const removeBusinessDocument = (id: string) => call<{ ok: boolean }>("admin_business_document_remove", { p_id: id }, "We could not remove this document.");
+
+export async function openBusinessDocument(path: string) {
+  const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(path, 120);
+  if (error || !data?.signedUrl) throw new Error("We could not open this document.");
+  window.open(data.signedUrl, "_blank", "noopener");
+}
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");
 

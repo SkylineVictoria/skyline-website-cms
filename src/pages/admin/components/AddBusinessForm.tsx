@@ -5,10 +5,9 @@ import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { Button, Card, Field, TextInput } from "@/pages/admin/components/ui";
 import { EMPTY_AGENCY_FORM, suggestAgencyCode, validateAgencyForm, type AgencyFormErrors, type AgencyFormState } from "@/pages/admin/lib/agencyForm";
-import { setBusinessStatus } from "@/pages/admin/lib/businessData";
+import { createBusiness } from "@/pages/admin/lib/businessData";
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
-import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import EmailField from "@/components/identity/EmailField";
 import { isEmailTakenError } from "@/lib/identity/email";
 
@@ -32,8 +31,8 @@ function formatAbnInput(value: string): string {
 /**
  * The one Add business form, used on Businesses > Add business and wherever a business is added on the way (new
  * application, add student). The administrator enters only the ABN; the government register fills and locks the
- * business details (Edit unlocks them). The point of contact becomes the business's first administrator, and the
- * business is created Active.
+ * business details (Edit unlocks them). The business starts inactive with its point of contact recorded; it is activated
+ * (and the contact invited) from the business screen once the signed agent agreement is in.
  */
 export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDialog = false }: {
   onCreated: (created: CreatedBusiness) => void;
@@ -132,26 +131,15 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     }
     setSaving(true);
     try {
-      // One transaction: the Active agency and its first administrator's invitation exist together or not at all.
+      // One transaction: the business (inactive until its agent agreement is signed) and its point of contact. Nothing is emailed yet.
       const email = form.businessEmail.trim().toLowerCase();
-      const data = await invokePortalUsers({
-        action: "create_agency",
-        agency: {
-          name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
-          phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: form.primaryContact.trim(),
-        },
-        adminEmail: email,
-        adminName: form.primaryContact.trim(),
-        redirectTo: portalPasswordResetUrl(),
-      });
+      const data = await createBusiness({
+        name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
+        phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: form.primaryContact.trim(),
+      }, email, form.primaryContact.trim());
       const id = String(data.agencyId ?? "");
       if (!id) throw new Error("The business was created but could not be opened. Find it in Businesses.");
-      let message = data.warning ? String(data.warning) : `Business created and active. An admin invitation was ${data.emailSent ? "emailed" : "saved"} for ${email}.`;
-      try {
-        await setBusinessStatus(id, "Active");
-      } catch {
-        message += " It could not be marked active; activate it in Businesses.";
-      }
+      const message = `Business added and waiting for onboarding. Upload or send the agent agreement for signature, then activate it to invite ${email}.`;
       onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }

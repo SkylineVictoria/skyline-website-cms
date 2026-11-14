@@ -92,7 +92,7 @@ export default function LmsBatchAllocationPage() {
       .catch(e => { if (active) setAssessmentError(e instanceof Error ? e.message : "Unable to load course units"); });
     return () => { active = false; };
   }, [courseId]);
-  const publishedAssessments = assessmentOptions.filter(a => a.courseId === courseId && a.currentVersionStatus === "published" && !a.archivedAt);
+  const publishedAssessments = assessmentOptions.filter(a => a.courseId === courseId && a.unitId === newAssessmentUnit && a.currentVersionStatus === "published" && !a.archivedAt);
   const refreshAssessments = () => {
     setAssessmentError("");
     setAssessmentRefresh(value => value + 1);
@@ -241,6 +241,9 @@ export default function LmsBatchAllocationPage() {
           </> : <div className="space-y-4">
             <div className="rounded-lg border border-background-200 p-3">
               <h3 className="mb-3 break-words font-semibold">Assign assessments to {current.name}</h3>
+              <label className="mb-4 block text-sm font-medium">1. Course unit<select className={inputClass + " mt-1"} value={newAssessmentUnit} disabled={busy} onChange={e => { setNewAssessmentUnit(e.target.value); setAssessmentId(""); setAssessmentError(""); }}><option value="">Select unit</option>{courseUnits.filter(u => u.id).map(u => <option key={u.id} value={u.id}>{u.code} — {u.name}</option>)}</select></label>
+              {!newAssessmentUnit ? <p className="text-sm text-foreground-600">Select a unit to upload or assign an assessment.</p> : <>
+              <p className="mb-2 text-sm font-medium">2. Assessment source</p>
               <div className="mb-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))] gap-2" role="group" aria-label="Assessment source">
                 <button type="button" aria-pressed={assessmentMode === "create"} className={assessmentSourceClass(assessmentMode === "create")} onClick={() => setAssessmentMode("create")}>
                   <i className="ri-upload-2-line mr-2" aria-hidden="true" />Upload New Assessment
@@ -252,7 +255,6 @@ export default function LmsBatchAllocationPage() {
               {assessmentError && <p role="alert" className="mb-3 break-words rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-800">{assessmentError}</p>}
               {assessmentMode === "create" ? <div className="space-y-3">
                 <fieldset disabled={busy || !canEdit} className="min-w-0 space-y-3">
-                  <label className="block text-sm font-medium">Course unit<select className={inputClass + " mt-1"} value={newAssessmentUnit} onChange={e => setNewAssessmentUnit(e.target.value)}><option value="">Select unit</option>{courseUnits.filter(u => u.id).map(u => <option key={u.id} value={u.id}>{u.code} — {u.name}</option>)}</select></label>
                   <label className="block text-sm font-medium">Assessment title<input className={inputClass + " mt-1"} value={newAssessmentTitle} onChange={e => setNewAssessmentTitle(e.target.value)} placeholder="e.g. A1 — Project" /></label>
                   <div className="rounded-lg border border-dashed border-background-300 p-3">
                     <label htmlFor="batch-assessment-template" className="block text-sm font-medium">Upload assessment template</label>
@@ -276,12 +278,13 @@ export default function LmsBatchAllocationPage() {
                     {publishedAssessments.map(a => <option key={a.id} value={a.id}>{a.unitCode ? a.unitCode + " — " : ""}{a.title}</option>)}
                   </select>
                 </label>
-                {!assessmentLoading && !assessmentError && !publishedAssessments.length && <p className="mt-2 text-sm text-foreground-600">This course has no published assessments.</p>}
+                {!assessmentLoading && !assessmentError && !publishedAssessments.length && <p className="mt-2 text-sm text-foreground-600">This unit has no published assessments. Use Upload New Assessment instead.</p>}
                 <button type="button" className="mt-2 text-sm font-semibold text-primary-600 underline disabled:opacity-50" disabled={assessmentLoading || busy} onClick={refreshAssessments}>Refresh published assessments</button>
                 <fieldset className="mt-3 min-w-0 space-y-2" disabled={busy}>
                   {dateFields}
                   <button type="button" className={buttonClass} disabled={!canEdit || assessmentLoading || !publishedAssessments.some(a => a.id === assessmentId) || !availableFrom || !dueAt || !current.isActive} onClick={() => void assignAssessment()}>{busy ? "Assigning…" : "Assign assessment"}</button>
                 </fieldset>
+              </>}
               </>}
             </div>
             <div className="rounded-lg border border-background-200 p-3">

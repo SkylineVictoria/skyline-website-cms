@@ -13,12 +13,13 @@ export default function LmsPage() {
   // Retired areas stay in the URL space so old links redirect instead of 404ing.
   const { area } = useParams<{ area?: LmsArea | "assessment-allocation" | "submissions" | "unit-delivery" | "timetable" }>();
   const selected = LMS_MENU.find(x => x.id === area);
+  if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
   if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
-  if (area === "assessment-allocation") return <Navigate to="/admin/lms" replace />;
-  if (area === "submissions") return <Navigate to="/admin/lms" replace />;
+  if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
+  if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
@@ -30,7 +31,7 @@ export default function LmsPage() {
   };
   return <div className="mx-auto max-w-5xl space-y-6 pb-10">
     <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
-      <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">{selected?.label ?? "Dashboard"}</h1>
+      <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">{selected?.label ?? "Learning Management"}</h1>
       <p className="mt-2 text-sm text-foreground-600">{selected ? "Work with the existing academic records without duplicating CRM or HRMS." : "Choose an academic workflow."}</p>
     </div>
     {selected ? <div className="rounded-xl border border-background-200 bg-background-50 p-5">
@@ -40,7 +41,7 @@ export default function LmsPage() {
       </div>)}
     </div> : null}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {(selected ? LMS_MENU.filter(x => x.id !== selected.id) : LMS_MENU.filter(x => x.id !== "dashboard")).map(item =>
+      {(selected ? LMS_MENU.filter(x => x.id !== selected.id) : LMS_MENU).map(item =>
         <Link key={item.id} to={item.route} className="flex items-center gap-3 rounded-xl border border-background-200 bg-background-50 p-4 hover:border-primary-500 hover:bg-background-100">
           <i className={item.icon + " text-xl text-primary-600"} aria-hidden="true" />
           <span className="flex-1 font-semibold text-foreground-900">{item.label}</span><i className="ri-arrow-right-s-line text-foreground-500" aria-hidden="true" />

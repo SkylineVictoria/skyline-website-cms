@@ -2,7 +2,7 @@
  * This file deliberately does not modify Master Data, CRM or HRMS.
  * All references resolve through existing authoritative APIs.
  */
-export type LmsArea = "dashboard" | "courses" | "units" | "intakes" | "batches" | "batch-allocation" | "attendance" | "assessments" | "submissions";
+export type LmsArea = "dashboard" | "courses" | "units" | "intakes" | "batches" | "batch-allocation" | "attendance" | "assessments" | "submissions" | "assessment-allocation";
 export type LmsDependency = "course" | "intake" | "batch" | "unit" | "unitDelivery" | "session";
 export interface LmsMenuEntry {
   id: LmsArea;
@@ -20,6 +20,7 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
   { id: "batch-allocation", label: "Batch Allocation", route: "/admin/lms/batch-allocation", icon: "ri-user-follow-line", dependencies: ["course", "intake", "batch"] },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "batch", "session"], primaryAction: "Mark Attendance" },
+  { id: "assessment-allocation", label: "Assessment Allocation", route: "/admin/lms/assessment-allocation", icon: "ri-calendar-check-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Allocate Assessment" },
   { id: "submissions", label: "Submissions", route: "/admin/lms/submissions", icon: "ri-inbox-line", dependencies: ["course", "intake", "batch", "unit"] },
   { id: "assessments", label: "Assessments", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Assessment" },
 ] as const;

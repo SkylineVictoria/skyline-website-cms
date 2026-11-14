@@ -77,7 +77,7 @@ function Library() {
   );
 }
 
-function CreateDialog({ courses, templates, onClose, onCreated }: { courses: RtoCourse[]; templates: AssessmentRow[]; onClose: () => void; onCreated: (id: string) => void }) {
+export function CreateDialog({ courses, templates, onClose, onCreated }: { courses: RtoCourse[]; templates: AssessmentRow[]; onClose: () => void; onCreated: (id: string) => void }) {
   const [courseId, setCourseId] = useState(courses[0]?.id ?? ""); const [unitId, setUnitId] = useState(""); const [title, setTitle] = useState(""); const [code, setCode] = useState(""); const [description, setDescription] = useState("");
   const [source, setSource] = useState<"blank" | "clone" | "import">("blank"); const [fromId, setFromId] = useState(""); const [importText, setImportText] = useState("");
   const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");

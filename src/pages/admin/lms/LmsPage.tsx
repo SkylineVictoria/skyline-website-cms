@@ -1,17 +1,17 @@
 import { Link, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAcademicPage from "./LmsAcademicPage";
-import IntakesPage from "@/pages/admin/IntakesPage";
-import AssessmentsPage from "@/pages/admin/assessments/AssessmentsPage";
-import CourseFeesPage from "@/pages/admin/CourseFeesPage";
+import LmsIntakesPage from "./LmsIntakesPage";
+import LmsAssessmentsPage from "./LmsAssessmentsPage";
+import LmsCoursesPage from "./LmsCoursesPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   const { area } = useParams<{ area?: LmsArea }>();
   const selected = LMS_MENU.find(x => x.id === area);
-  if (area === "courses") return <CourseFeesPage />;
-  if (area === "intakes") return <IntakesPage />;
-  if (area === "assessments") return <AssessmentsPage />;
+  if (area === "courses") return <LmsCoursesPage />;
+  if (area === "intakes") return <LmsIntakesPage />;
+  if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "batches" || area === "unit-delivery" || area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],

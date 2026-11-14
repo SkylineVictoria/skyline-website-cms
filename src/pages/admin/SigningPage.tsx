@@ -157,14 +157,6 @@ function EnvelopeSigningPage() {
                 className="flex w-full cursor-pointer flex-col items-start gap-1 rounded-lg p-4 text-left hover:bg-primary-50">
                 <i className={`${icon} text-xl text-primary-600`} aria-hidden="true" /><span className="font-semibold text-foreground-950">{label}</span><span className="text-xs text-foreground-600">{hint}</span>
               </button>
-              <details className="border-t border-background-200 px-4 py-2 text-sm">
-                <summary className="cursor-pointer text-primary-700">Choose a document category</summary>
-                <div className="mt-1 flex flex-col items-start">
-                  {Object.entries(SIGN_CATEGORIES).filter(([key, spec]) => spec.audience === audience || key === "other").map(([key, spec]) =>
-                    <button key={key} type="button" className="py-2 text-left text-primary-700 hover:underline"
-                      onClick={() => { setChoosing(false); setEditing({ audience, category: key, lockCategory: true }); }}>{spec.label}</button>)}
-                </div>
-              </details>
             </div>))}
         <button type="button" data-testid="template-audience-unit" onClick={() => { setChoosing(false); setUnitStep({ templateId: null, initial: null }); }}
           className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">

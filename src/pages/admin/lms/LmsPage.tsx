@@ -1,7 +1,6 @@
 import { Link, Navigate, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
-import { Submissions } from "../assessments/AssessmentsPage";
 import LmsBatchWorkspacePage from "./LmsBatchWorkspacePage";
 import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
 import LmsIntakesPage from "./LmsIntakesPage";
@@ -17,7 +16,7 @@ export default function LmsPage() {
   if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
-  if (area === "submissions") return <div className="mx-auto max-w-[1600px] space-y-4 pb-10"><div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold">Submissions</h1></div><Submissions /></div>;
+  if (area === "submissions") return <Navigate to="/admin/lms/assessments?tab=submissions" replace />;
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;

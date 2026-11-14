@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
+import { CourseFacts, UnitsTab } from "@/pages/admin/components/rto/CourseSteps";
 
 type Tab = "units" | "overview";
 type UnitFilter = "all" | "core" | "elective";
@@ -14,20 +15,24 @@ export default function LmsCoursesPage() {
   const [query, setQuery] = useState("");
   const [campus, setCampus] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
-  const [tab, setTab] = useState<Tab>("units");
+  const [tab, setTab] = useState<Tab>("overview");
   const [unitFilter, setUnitFilter] = useState<UnitFilter>("all");
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [cs] = await Promise.all([
+      const [cs, me] = await Promise.all([
         rto<RtoCourse[]>("course_list"),
+        rto<{rtoManager:boolean}>("me"),
       ]);
-      setCourses(cs); setError("");
+      setCourses(cs); setCanEdit(me.rtoManager); setError("");
       setSelectedId(previous => cs.some(c => c.id === previous) ? previous : (cs[0]?.id ?? ""));
     } catch (e) { setError(e instanceof Error ? e.message : "Could not load courses."); }
     finally { setLoading(false); }
@@ -45,6 +50,22 @@ export default function LmsCoursesPage() {
     return () => { current = false; };
   }, [selectedId]);
 
+  const save = useCallback(async (action: "course_save" | "units_save", data: Record<string, unknown>) => {
+    if (!canEdit || !selectedId || saving) return;
+    setSaving(true); setDetailError("");
+    try {
+      const out = await rto<CourseDetail | RtoCourse>(action, { courseId: selectedId, ...data });
+      if ("course" in out) {
+        setDetail(out);
+        setCourses(previous => previous.map(c => c.id === selectedId ? out.course : c));
+      } else {
+        setDetail(previous => previous ? { ...previous, course: out } : previous);
+        setCourses(previous => previous.map(c => c.id === selectedId ? out : c));
+      }
+      setSavedAt(new Date().toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" }));
+    } catch (e) { setDetailError(e instanceof Error ? e.message : "Unable to save course."); }
+    finally { setSaving(false); }
+  }, [canEdit, selectedId, saving]);
   const campuses = useMemo(() => Array.from(new Set(courses.map(c => c.campus).filter((x): x is string => !!x))).sort(), [courses]);
   const visible = useMemo(() => courses.filter(c =>
     (!activeOnly || c.isActive) && (!campus || c.campus === campus) &&
@@ -83,7 +104,7 @@ export default function LmsCoursesPage() {
         <p className="my-4 text-sm font-semibold text-foreground-700">{visible.length} course{visible.length === 1 ? "" : "s"}</p>
         <div className="max-h-[690px] space-y-2 overflow-auto">
           {loading ? <p className="p-3 text-sm text-foreground-500">Loading courses…</p> : visible.length === 0 ? <p className="p-3 text-sm text-foreground-500">No matching courses.</p> : visible.map(c =>
-            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("units"); setUnitFilter("all"); }}
+            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setUnitFilter("all"); setSavedAt(""); }}
               className={"flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors hover:border-primary-500 " + (selectedId === c.id ? "border-primary-400 bg-primary-50" : "border-background-200 bg-background-50")}>
               <span className="rounded-lg bg-background-100 p-2">{icon("ri-graduation-cap-line")}</span>
               <span className="min-w-0 flex-1"><span className="block font-semibold text-foreground-950">{c.code}</span>
@@ -113,13 +134,15 @@ export default function LmsCoursesPage() {
               </div>
             </div>)}
           </div>
-          <div role="tablist" aria-label="Course delivery sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
+          <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
+          <div role="tablist" aria-label="Course sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
             {([{ id: "units", label: "Units", glyph: "ri-list-check-2" }, { id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
               <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
                 className={"flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-600" : "border-transparent text-foreground-600")}>
                 <i className={t.glyph} aria-hidden="true" />{t.label}</button>)}
           </div>
-          {tab === "units" ? <div role="tabpanel" className="pt-5">
+          {tab === "units" && canEdit && detail ? <div role="tabpanel" className="pt-5"><UnitsTab key={selectedId} units={detail.units} readOnly={false} busy={saving} autosave onSave={units => void save("units_save", { units })} /></div> : null}
+          {tab === "units" && !canEdit ? <div role="tabpanel" className="pt-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-heading text-lg font-bold">Course Units ({units.length})</h3>
               <div className="flex flex-wrap gap-2">{(["all", "core", "elective"] as const).map(f =>
                 <button key={f} type="button" aria-pressed={unitFilter === f} onClick={() => setUnitFilter(f)}
@@ -135,7 +158,8 @@ export default function LmsCoursesPage() {
                   <td className="px-4 py-3">{u.nominalHours ?? "—"}</td></tr>)}</tbody></table>
             </div> : <p className="py-8 text-center text-foreground-500">No units match this filter.</p>}
           </div> : null}
-          {tab === "overview" ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
+          {tab === "overview" && canEdit && detail ? <div role="tabpanel" className="pt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
+          {tab === "overview" && !canEdit ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
             {[["Course code", selected.code], ["Course name", selected.name], ["CRICOS", selected.cricos || "—"], ["Duration", selected.duration || "—"], ["Delivery mode", selected.mode || "—"], ["Campus", selected.campus || "—"], ["Training package", selected.trainingPackage || "—"], ["Category", selected.category || "—"]].map(([label, value]) =>
               <div key={label} className="rounded-xl bg-background-100 p-4"><p className="text-xs text-foreground-500">{label}</p><p className="mt-1 font-semibold">{value}</p></div>)}
           </div> : null}

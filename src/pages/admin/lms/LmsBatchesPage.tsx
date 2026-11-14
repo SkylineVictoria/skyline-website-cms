@@ -36,7 +36,7 @@ export default function LmsBatchesPage() {
     if (!courseIntakes.some(i => i.id === intakeId)) setIntakeId(courseIntakes[0]?.id ?? "");
   }, [courseIntakes, intakeId]);
   const selectedIntake = courseIntakes.find(i => i.id === intakeId);
-  const batches = selectedIntake?.batchList ?? [];
+  const batches = detail?.intake.id === intakeId ? detail.batches : selectedIntake?.batchList ?? [];
   useEffect(() => {
     if (!batches.some(b => b.id === batchId)) setBatchId(batches[0]?.id ?? "");
   }, [batches, batchId]);
@@ -71,7 +71,7 @@ export default function LmsBatchesPage() {
       <h1 className="font-heading text-3xl font-bold text-foreground-950">Batch Management</h1>
       <p className="mt-1 text-sm text-foreground-600">Select a course, then an intake. Add or edit batches in the final column.</p></div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => void refresh()}>Retry</button></div>}
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.8fr)_minmax(0,2.2fr)]">
+    <div className="w-full overflow-x-auto pb-3" role="region" aria-label="Batch management columns" tabIndex={0}><div className="grid grid-cols-[minmax(230px,1fr)_minmax(210px,0.85fr)_minmax(190px,0.8fr)_minmax(390px,2.2fr)] gap-3 min-w-[1080px]">
       <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Courses">
         <h2 className="mb-3 font-semibold">Courses</h2>
         <div className="space-y-2">{courses.map(c => <button type="button" key={c.id} className={row(courseId === c.id)} aria-pressed={courseId === c.id} onClick={() => {setCourseId(c.id);setEditor(null);}}>{c.label}</button>)}</div>
@@ -110,6 +110,7 @@ export default function LmsBatchesPage() {
           </>
         )}
       </section>
+    </div>
     </div>
     {loading && <p className="text-sm text-foreground-500">Loading…</p>}
     {editor && detail && canEdit && <BatchTimingDrawer key={`${intakeId}:${editor}:${editor === "edit" ? batchId : "new"}`}

@@ -100,10 +100,10 @@ function EnvelopeSigningPage() {
     {error && <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>}
     {notice && <p role="status" className="rounded border border-green-300 p-3">{notice}</p>}
     <div className="flex flex-wrap gap-3">
-      <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>
-      <Button variant="outline" icon="ri-file-add-line" onClick={() => { setTab("templates"); setChoosing(true); }} data-testid="new-template">New template</Button>
+      {tab === "requests" && <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>}
+      {tab === "templates" && <Button icon="ri-file-add-line" onClick={() => setChoosing(true)} data-testid="new-template">New template</Button>}
       <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh</Button>
-      <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>
+      {tab === "requests" && <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>}
     </div>
     <SectionTabs tabs={[{ id: "requests", label: `Requests (${context.requests.length})`, icon: "ri-quill-pen-line" }, { id: "templates", label: `Templates (${context.templates.length})`, icon: "ri-file-copy-2-line" }]} active={tab} onChange={setTab} />
 

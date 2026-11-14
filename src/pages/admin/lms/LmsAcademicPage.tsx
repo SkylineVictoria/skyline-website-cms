@@ -24,7 +24,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
   }, []);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    setDetail(null); setBatchId(""); setBatch(null);
+    setDetail(null);
     if (!intakeId) return;
     let live = true;
     rto<IntakeDetail>("intake_get", { intakeId }).then(d => { if (live) setDetail(d); }).catch(e => { if (live) setError(e.message); });

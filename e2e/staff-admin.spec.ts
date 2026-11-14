@@ -406,10 +406,12 @@ test("Documents & Signatures: a document template with Header, Body and Footer, 
   await signInAsAdmin(page, admin.email);
   await page.goto("/admin/signing");
   await page.getByTestId("new-template").click();
-  const name = `E2E letter of offer ${Date.now()}`;
-  await page.getByTestId("template-name").fill(name);
-  await page.getByTestId("template-subject").fill("Letter of offer and written agreement");
-  await page.getByTestId("template-category").selectOption("enrolment_agreement");
+  const studentChoice = page.getByTestId("template-audience-student").locator("..");
+  await studentChoice.getByText("Choose a document category").click();
+  await studentChoice.getByRole("button", { name: "Enrolment agreement" }).click();
+  const name = `E2E enrolment agreement ${Date.now()}`;
+  await page.getByRole("combobox", { name: "Template name" }).fill(name);
+  await page.getByRole("option", { name: `+ Add new: ${name}` }).click();
   const sections = page.getByTestId("document-sections");
   await expect(sections.getByRole("tab")).toHaveText(["Header", "Body", "Footer"]);
   // One family, the one the PDF prints: no font choice that would change in the PDF.
@@ -486,7 +488,7 @@ test("Documents & Signatures: a document template with Header, Body and Footer, 
   await expect(check.getByRole("alert")).toContainText("without its pair");
   await shot(page, "tpl02-variable-check");
   await page.getByTestId("template-save-confirm").click();
-  await expect.poll(() => sql(`select (header_html like '%CRICOS 04114B%') || '|' || (footer_html like '%[Student Initial]%') || '|' || bracket_variables || '|' || (body_html like '%<table>%[Materials Fee]%') from hr.sign_templates where name = '${name}'`)).toBe("true|true|true|true");
+  await expect.poll(() => sql(`select (header_html like '%CRICOS 04114B%') || '|' || (footer_html like '%[Student Initial]%') || '|' || bracket_variables || '|' || (body_html like '%<table>%[Materials Fee]%') || '|' || (name = title and category = 'enrolment_agreement') from hr.sign_templates where name = '${name}'`)).toBe("true|true|true|true|true");
 });
 
 /** A small .docx made here: a heading, a token Word split across a bold run, a fee table with a token in a cell. */

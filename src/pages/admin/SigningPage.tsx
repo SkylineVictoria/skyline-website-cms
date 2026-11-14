@@ -67,7 +67,7 @@ function EnvelopeSigningPage() {
   useEffect(() => { setTab(routeTab); setStatus(routeStatus); }, [routeTab, routeStatus]);
   const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [subject, setSubject] = useState("");
   const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string } | null>(null);
+  const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string; lockCategory?: boolean } | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
@@ -79,7 +79,7 @@ function EnvelopeSigningPage() {
   // ?new=student_offer_letter (the offer letter drawer's "Create template"): the editor opens preset to Students › Letter of Offer.
   useEffect(() => {
     const preset = new URLSearchParams(location.search).get("new");
-    if (preset && SIGN_CATEGORIES[preset]) { setTab("templates"); setEditing({ audience: SIGN_CATEGORIES[preset].audience as Audience, category: preset }); }
+    if (preset && SIGN_CATEGORIES[preset]) { setTab("templates"); setEditing({ audience: SIGN_CATEGORIES[preset].audience as Audience, category: preset, lockCategory: true }); }
   }, [location.search]);
   const templates = useMemo(() => context.templates.filter((t) => !forFilter || (forFilter === "unit" ? !!linkOf(t.id) : t.audience === forFilter)), [context.templates, forFilter, linkOf]);
   const load = useCallback(async () => { setContext(await signingAdmin<SigningContext>("list")); setLoaded(true); }, []);
@@ -152,10 +152,20 @@ function EnvelopeSigningPage() {
           ["student", "Students / Applications", "The Letter of Offer sent from an application, and student documents (student, course, fee and institute variables).", LETTER_CATEGORY, "ri-graduation-cap-line"],
           ["agent", AUDIENCE.agent, "Agency agreements, commission agreements and other documents for agents or business representatives.", "agency_agreement", "ri-briefcase-line"]] as const)
           .map(([audience, label, hint, category, icon]) => (
-            <button key={audience} type="button" data-testid={`template-audience-${audience}`} onClick={() => { setChoosing(false); setEditing({ audience, category }); }}
-              className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">
-              <i className={`${icon} text-xl text-primary-600`} aria-hidden="true" /><span className="font-semibold text-foreground-950">{label}</span><span className="text-xs text-foreground-600">{hint}</span>
-            </button>))}
+            <div key={audience} className="min-w-0 rounded-lg border border-background-300">
+              <button type="button" data-testid={`template-audience-${audience}`} onClick={() => { setChoosing(false); setEditing({ audience, category }); }}
+                className="flex w-full cursor-pointer flex-col items-start gap-1 rounded-lg p-4 text-left hover:bg-primary-50">
+                <i className={`${icon} text-xl text-primary-600`} aria-hidden="true" /><span className="font-semibold text-foreground-950">{label}</span><span className="text-xs text-foreground-600">{hint}</span>
+              </button>
+              <details className="border-t border-background-200 px-4 py-2 text-sm">
+                <summary className="cursor-pointer text-primary-700">Choose a document category</summary>
+                <div className="mt-1 flex flex-col items-start">
+                  {Object.entries(SIGN_CATEGORIES).filter(([key, spec]) => spec.audience === audience || key === "other").map(([key, spec]) =>
+                    <button key={key} type="button" className="py-2 text-left text-primary-700 hover:underline"
+                      onClick={() => { setChoosing(false); setEditing({ audience, category: key, lockCategory: true }); }}>{spec.label}</button>)}
+                </div>
+              </details>
+            </div>))}
         <button type="button" data-testid="template-audience-unit" onClick={() => { setChoosing(false); setUnitStep({ templateId: null, initial: null }); }}
           className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">
           <i className="ri-book-open-line text-xl text-primary-600" aria-hidden="true" /><span className="font-semibold text-foreground-950">Units / Assessments</span><span className="text-xs text-foreground-600">Choose a course and unit. Students of that unit's batches sign it, sent from Batch Allocation › Assessments.</span>
@@ -165,10 +175,10 @@ function EnvelopeSigningPage() {
     {unitStep && <UnitPicker title={unitStep.templateId ? "Link template to a unit" : "New unit template: choose course and unit"} initial={unitStep.initial} onClose={() => setUnitStep(null)}
       onPick={(pick) => {
         const step = unitStep; setUnitStep(null);
-        if (!step.templateId) { if (pick) { setPendingUnit(pick); setEditing({ audience: "student", category: "other" }); } return; }
+        if (!step.templateId) { if (pick) { setPendingUnit(pick); setEditing({ audience: "student", category: "other", lockCategory: true }); } return; }
         void act(async () => { await unitDocuments("link_set", { templateId: step.templateId, courseId: pick?.courseId ?? null, unitId: pick?.unitId ?? null }); await loadLinks(); }, pick ? "The template is linked to the unit." : "The unit link was removed.");
       }} />}
-    {editing && <TemplateEditor template={"id" in editing ? editing : null} audience={"id" in editing ? undefined : editing.audience} newCategory={"id" in editing ? undefined : editing.category}
+    {editing && <TemplateEditor savedTemplates={context.templates} lockCategory={!("id" in editing) && editing.lockCategory} template={"id" in editing ? editing : null} audience={"id" in editing ? undefined : editing.audience} newCategory={"id" in editing ? undefined : editing.category}
       onClose={() => { setEditing(null); setPendingUnit(null); }} onSaved={(message, id) => {
         const unit = pendingUnit; setEditing(null); setPendingUnit(null); setNotice(message);
         if (unit && id) void unitDocuments("link_set", { templateId: id, ...unit }).then(loadLinks).then(() => setNotice(`${message} It is linked to the unit; send it from Batch Allocation › Assessments.`)).catch((e: Error) => setError(`${message} Linking it to the unit failed: ${e.message}`));

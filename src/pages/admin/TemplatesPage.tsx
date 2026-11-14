@@ -123,7 +123,7 @@ export default function TemplatesPage() {
         </div>
       ) : null}
 
-      {editing ? <TemplateEditor template={editing.template} newKind={editing.kind} newCategory={editing.category} onClose={() => setEditing(null)}
+      {editing ? <TemplateEditor savedTemplates={templates ?? []} lockCategory separateLetterTitle template={editing.template} newKind={editing.kind} newCategory={editing.category} onClose={() => setEditing(null)}
         onSaved={(message) => { setEditing(null); setNotice(message); setError(""); void load(); }} /> : null}
       {previewing ? <TemplatePreviewDialog template={{ id: previewing.id, type: previewing.category as TemplateType, name: previewing.name, subject: previewing.subject ?? previewing.title, bodyHtml: previewing.body_html?.trim() ? previewing.body_html : textToHtml(previewing.body ?? "") }} onClose={() => setPreviewing(null)} /> : null}
       {pdfPreview ? <Modal open title="Template preview (PDF)" width="max-w-4xl" onClose={() => setPdfPreview(null)}><PdfPages source={pdfPreview} /></Modal> : null}

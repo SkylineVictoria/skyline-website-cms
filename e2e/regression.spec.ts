@@ -983,7 +983,7 @@ test("offer letter: no active student template: the drawer offers Create templat
     await expect(drawer.getByTestId("offer-preview-placeholder")).toBeVisible();
     const [tab] = await Promise.all([page.context().waitForEvent("page"), drawer.getByTestId("offer-create-template").click()]);
     await expect(tab).toHaveURL(/\/admin\/signing\/templates\?new=student_offer_letter/);
-    await expect(tab.getByTestId("template-category")).toHaveValue("student_offer_letter");
+    await expect(tab.getByTestId("letter-preview-sample")).toBeVisible();
     await tab.close();
     await drawer.getByTestId("offer-upload-instead").click();
     await expect(drawer.locator("#offer-upload")).toBeAttached();
@@ -1001,10 +1001,12 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   await page.goto("/admin/signing/templates");
   await page.getByTestId("new-template").click();
   await page.getByTestId("template-audience-student").click();
-  await expect(page.getByTestId("template-category")).toHaveValue("student_offer_letter");
+  await expect(page.getByTestId("letter-preview-sample")).toBeVisible();
   const dialog = page.getByTestId("template-dialog");
   await dialog.getByTestId("template-name").fill(`E2E LOO tpl ${tag}`);
-  await dialog.getByTestId("template-subject").fill("Letter of offer");
+  await dialog.getByRole("option", { name: `+ Add new: E2E LOO tpl ${tag}` }).click();
+  await expect(dialog.getByLabel("Document title")).toHaveCount(0);
+  await expect(dialog.getByLabel("Document type")).toHaveCount(0);
   // Header: the logo through Insert image is uploaded to template-assets (not embedded).
   await dialog.getByTestId("section-tab-header").click();
   const header = dialog.getByTestId("section-editor-header");

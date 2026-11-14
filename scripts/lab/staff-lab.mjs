@@ -2185,9 +2185,11 @@ async function signingBrowser() {
     // A template through the editor (one template system since TPL-01, Header / Body / Footer since TPL-02): a consent form whose body
     // gets a variable from the picker, previewed as PDF, saved after the variable check.
     await page.getByTestId("new-template").click();
+    const studentChoice = page.getByTestId("template-audience-student").locator("..");
+    await studentChoice.getByText("Choose a document category").click();
+    await studentChoice.getByRole("button", { name: "Consent form" }).click();
     await page.getByTestId("template-name").fill(`UI consent ${run}`);
-    await page.getByTestId("template-subject").fill("Consent form for [Student Name]");
-    await page.getByTestId("template-category").selectOption("consent_form");
+    await page.getByRole("option", { name: `+ Add new: UI consent ${run}` }).click();
     const bodyEditor = page.getByTestId("section-editor-body");
     await bodyEditor.click(); await page.keyboard.type("I, ");
     await page.getByTestId("variable-student-name").click();

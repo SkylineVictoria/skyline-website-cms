@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Button, Field, Modal, Select, TextInput } from "../ui";
 import FieldEditor, { type EditorField } from "@/components/signing/FieldEditor";
 import PdfPages from "@/components/signing/PdfPages";
@@ -47,18 +47,86 @@ function recordPlaceholders(audience: SigningTemplate["audience"]): PlaceholderS
   }
   return out;
 }
-/** The categories a kind may have: emails have their own five; letters and documents the signing ones. */
-/** For a new template the audience is chosen first: only its types are offered (students: the Letter of Offer and the student documents). */
-const categoryOptions = (kind: Kind, audience?: SigningTemplate["audience"]): Array<[string, string]> => kind === "email" ? EMAIL_TYPES.map((t) => [t.type, t.label])
-  : Object.entries(SIGN_CATEGORIES).filter(([, c]) => !audience || audience === "any" || c.audience === audience || c.audience === "any").map(([key, c]) => [key, c.label]);
+/** The input is both the search box and the editable name. Only saved templates contribute suggestions. */
+function TemplateNamePicker({ name, names, onChange, onSelect }: {
+  name: string; names: string[]; onChange: (name: string) => void; onSelect: (name: string) => void;
+}) {
+  const id = useId();
+  const focusInput = () => document.getElementById(id)?.focus();
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [highlight, setHighlight] = useState(-1);
+  const query = search.trim().toLowerCase();
+  const newName = name.trim();
+  const matches = names.filter((value) => value.toLowerCase().includes(query));
+  const canAdd = Boolean(newName) && !names.some((value) => value.toLowerCase() === newName.toLowerCase());
+  const choices = [...matches.map((value) => ({ value, label: value })), ...(canAdd ? [{ value: newName, label: `+ Add new: ${newName}` }] : [])];
+
+  const show = () => { setSearch(""); setHighlight(-1); setOpen(true); };
+  const choose = (value: string) => {
+    onSelect(value);
+    focusInput();
+    setOpen(false);
+  };
+
+  return <div className="min-w-0" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+    <label htmlFor={id} className="mb-1.5 block text-label font-medium text-foreground-800">Template name <span aria-hidden="true" className="text-primary-600">*</span></label>
+    <div className="relative">
+      <TextInput id={id} inputMode="search" role="combobox" aria-required="true" aria-expanded={open}
+        aria-controls={open ? `${id}-options` : undefined} aria-autocomplete="list"
+        aria-activedescendant={open && choices[highlight] ? `${id}-option-${highlight}` : undefined}
+        className="pr-11 !text-base md:!text-sm" value={name} maxLength={120} placeholder="Search or add a template name" autoComplete="off"
+        onFocus={show} onClick={() => { if (!open) show(); }}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setSearch(event.target.value);
+          setHighlight(-1);
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) show();
+            else if (choices.length) {
+              const next = event.key === "ArrowDown" ? (highlight + 1) % choices.length : (highlight <= 0 ? choices.length - 1 : highlight - 1);
+              setHighlight(next);
+              document.getElementById(`${id}-option-${next}`)?.scrollIntoView({ block: "nearest" });
+            }
+          }
+          if (event.key === "Enter" && open) {
+            event.preventDefault();
+            if (choices[highlight]) choose(choices[highlight].value);
+            else if (canAdd) choose(newName);
+          }
+        }} data-testid="template-name" />
+      <button type="button" tabIndex={-1} aria-label={open ? "Hide template names" : "Show template names"} className="absolute inset-y-0 right-0 w-11"
+        onMouseDown={(event) => event.preventDefault()} onClick={() => { if (open) setOpen(false); else { focusInput(); show(); } }}>
+        <i className="ri-arrow-down-s-line" aria-hidden="true" />
+      </button>
+    </div>
+    {open && <div className="mt-1 rounded-md border border-background-300 bg-background-50 shadow-sm">
+      <div id={`${id}-options`} role="listbox" aria-label="Template names" className="max-h-48 overflow-y-auto">
+        {choices.map(({ value, label }, index) => <button key={value} id={`${id}-option-${index}`} type="button" role="option" tabIndex={-1}
+          aria-selected={highlight === -1 ? value === name : highlight === index}
+          className={`block min-h-10 w-full break-words px-3 py-2 text-left text-sm hover:bg-background-100 ${highlight === index ? "bg-background-200" : ""}`}
+          onMouseDown={(event) => event.preventDefault()} onClick={() => choose(value)}>{label}</button>)}
+      </div>
+      {!choices.length && <p className="px-3 py-2 text-sm text-foreground-600">Type a name to add a new template.</p>}
+    </div>}
+  </div>;
+}
 
 /**
  * One editor for every template (the one table since 20261113170000): a letter or document to sign (rich text with placeholders, or a
  * ready-made PDF), or an email. Signer roles, placed fields, expiry and reminders apply to documents; a default per kind; versions.
  */
-export default function TemplateEditor({ template, onClose, onSaved, newKind = "text", newCategory, audience }: {
+export default function TemplateEditor({ template, onClose, onSaved, newKind = "text", newCategory, audience, savedTemplates, lockCategory = false, separateLetterTitle = false }: {
   template: SigningTemplate | null; onClose: () => void; onSaved: (message: string, id?: string) => void; newKind?: Kind; newCategory?: string;
-  /** A new template: the audience chosen first (only its types are offered). */ audience?: SigningTemplate["audience"];
+  audience?: SigningTemplate["audience"];
+  savedTemplates: SigningTemplate[];
+  lockCategory?: boolean;
+  separateLetterTitle?: boolean;
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
     ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), is_default: Boolean(template.is_default) }
@@ -90,6 +158,42 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when a new student letter opens
   }, [template, loo]);
   const spec = hrms ? TEMPLATE_TYPES.find((t) => t.type === draft.category) : undefined;
+  const useNameAsTitle = draft.kind !== "email" && !(separateLetterTitle && hrms);
+  const documentNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const item of savedTemplates) {
+      if (item.kind === "email") continue;
+      const name = item.name.trim();
+      if (name && !names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
+    }
+    return [...names.values()];
+  }, [savedTemplates]);
+  const setDocumentName = (name: string) => set({ name, title: name });
+  const chooseDocumentName = (name: string) => {
+    // Existing templates and explicit entry points (unit documents and the offer-letter drawer) keep their category.
+    const categories = new Set(savedTemplates.filter((item) => item.kind !== "email"
+      && item.name.trim().toLowerCase() === name.toLowerCase()
+      && (draft.kind !== "pdf" || item.category !== LETTER_CATEGORY)
+      && (!audience || SIGN_CATEGORIES[item.category]?.audience === audience || item.category === "other"))
+      .map((item) => item.category));
+    const category = !template && !lockCategory && categories.size === 1 ? [...categories][0] : draft.category;
+    set({ name, title: name, category });
+  };
+  const changeKind = (kind: Kind) => {
+    if (kind === draft.kind) return;
+    if (kind === "email") {
+      set({ kind, fields: [], audience: "employee", category: "offer_email" });
+      return;
+    }
+    const presetCategory = newCategory && !EMAIL_TYPES.some((type) => type.type === newCategory) ? newCategory : "offer_letter";
+    const category = draft.kind === "email" || (draft.kind === "pdf" && draft.category === "other" && presetCategory === LETTER_CATEGORY)
+      ? presetCategory : draft.category;
+    set({
+      kind, fields: [], audience: draft.kind === "email" ? audience ?? blank(kind, category).audience : draft.audience,
+      title: separateLetterTitle && isTemplateType(category) ? draft.title : draft.name,
+      category: kind === "pdf" && category === LETTER_CATEGORY ? "other" : category,
+    });
+  };
   const signed = draft.kind !== "email" && !loo;
   // A document template (not an HRMS letter or email, not a PDF) has a header, a body and a footer, and [Variable] tokens.
   const sections = draft.kind === "text" && !hrms;
@@ -191,7 +295,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   if (previewWith && hrms) return <TemplatePreviewDialog template={{ id: draft.id, type: draft.category as TemplateType, name: draft.name, subject: draft.kind === "email" ? draft.subject : draft.title, bodyHtml: html }} onClose={() => setPreviewWith(false)} />;
 
   return <Modal open title={template ? `Edit ${kindLabel} (version ${draft.version})` : `New ${kindLabel}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
-    footer={<>
+    footer={<div className="flex w-full flex-wrap justify-end gap-2">
       {hrms && draft.kind !== "pdf" && <Button variant="outline" disabled={busy} onClick={() => setPreviewWith(true)} data-testid="template-draft-preview">Preview with an employee's details</Button>}
       {loo ? <>
         <Button variant="outline" disabled={busy || !registry} onClick={() => setLetterTest("sample")} data-testid="letter-preview-sample">Preview with sample application</Button>
@@ -199,24 +303,25 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       </> : draft.kind !== "email" && <Button variant="outline" disabled={busy} onClick={() => void run(async () => { check(); const source = await documentSource(); setPreview(typeof source === "string" ? new Uint8Array(await (await fetch(source)).arrayBuffer()) : source); })}>Preview the PDF</Button>}
       <span className="flex-1" />
       <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-      <Button disabled={busy} onClick={() => void save()} data-testid="template-save">{busy ? "Saving…" : "Save template"}</Button></>}>
+      <Button disabled={busy} onClick={() => void save()} data-testid="template-save">{busy ? "Saving…" : "Save template"}</Button></div>}>
     <div className="space-y-5" data-testid="template-dialog">
       {error && <p role="alert" className={ALERT} data-testid="template-error">{error}</p>}
       {!template && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
-        <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => set({ kind: "text", fields: [], category: isTemplateType(draft.category) && draft.category !== "offer_letter" ? "offer_letter" : draft.category })} /> Letter or document to sign (rich text with placeholders)</label>
-        {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => set({ kind: "email", fields: [], audience: "employee", category: EMAIL_TYPES.some((t) => t.type === draft.category) ? draft.category : "offer_email" })} /> Email</label>}
-        <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "pdf"} onChange={() => set({ kind: "pdf", fields: [], category: isTemplateType(draft.category) && draft.category !== "offer_letter" ? "other" : draft.category })} /> A ready-made PDF</label>
+        <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => changeKind("text")} /> Letter or document to sign (rich text with placeholders)</label>
+        {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => changeKind("email")} /> Email</label>}
+        <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "pdf"} onChange={() => changeKind("pdf")} /> A ready-made PDF</label>
       </div>}
       <div className="grid gap-4 md:grid-cols-2">
-        <Field label="Template name" required hint="Only Admins see this."><TextInput value={draft.name} maxLength={120} onChange={(e) => set({ name: e.target.value })} data-testid="template-name" /></Field>
-        {draft.kind === "email"
-          ? <Field label="Email subject" required hint="Placeholders work here too."><TextInput value={draft.subject} maxLength={200} onChange={(e) => set({ subject: e.target.value })} data-testid="template-subject" /></Field>
-          : <Field label={hrms ? "Letter title" : "Document title"} required hint={hrms ? "Placeholders work here too; it is also the PDF's name." : "Shown to signers. Variables are allowed."}><TextInput value={draft.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} data-testid="template-subject" /></Field>}
-        <Field label={draft.kind === "email" ? "Kind of email" : "Document type"}>
-          <Select value={draft.category} disabled={Boolean(template) && hrms} onChange={(e) => set({ category: e.target.value, ...(isTemplateType(e.target.value) ? { audience: "employee" } : {}) })} data-testid="template-category">
-            {categoryOptions(draft.kind, template ? undefined : audience).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </Select>
-        </Field>
+        {useNameAsTitle
+          ? <TemplateNamePicker name={draft.name} names={documentNames} onChange={setDocumentName} onSelect={chooseDocumentName} />
+          : <Field label="Template name" required hint="Only Admins see this."><TextInput value={draft.name} maxLength={120} onChange={(e) => set({ name: e.target.value })} data-testid="template-name" /></Field>}
+        {draft.kind === "email" && <>
+          <Field label="Email subject" required hint="Placeholders work here too."><TextInput value={draft.subject} maxLength={200} onChange={(e) => set({ subject: e.target.value })} data-testid="template-subject" /></Field>
+          <Field label="Kind of email"><Select value={draft.category} disabled={Boolean(template)} onChange={(e) => set({ category: e.target.value, audience: "employee" })} data-testid="template-category">
+            {EMAIL_TYPES.map((type) => <option key={type.type} value={type.type}>{type.label}</option>)}
+          </Select></Field>
+        </>}
+        {separateLetterTitle && draft.kind !== "email" && hrms && <Field label="Letter title" required hint="Placeholders work here too."><TextInput value={draft.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} data-testid="template-subject" /></Field>}
         {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo || audience === "agent"} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents / Businesses</option></Select></Field>}
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}

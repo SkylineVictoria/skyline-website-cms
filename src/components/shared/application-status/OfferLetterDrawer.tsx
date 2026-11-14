@@ -68,13 +68,13 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     void letterValues(application.id).then(setValues, (e: Error) => setError(e.message));
     reloadTemplates();
   }, [application.id]);
-  /** Active student letters, the default first; one is selected by itself (the default, else the first). */
+  /** Keep the selected template if it is still available. */
   function reloadTemplates() {
     setTemplates(null);
     void loadLetterTemplates().then((list) => {
-      const usable = list.filter((t) => t.active).sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+      const usable = list.filter((t) => t.active).sort((a, b) => a.name.localeCompare(b.name));
       setTemplates(usable);
-      setTemplateId((prev) => (prev && usable.some((t) => t.id === prev) ? prev : usable[0]?.id ?? ""));
+      setTemplateId((prev) => (prev && usable.some((t) => t.id === prev) ? prev : ""));
     }, (e: Error) => { setTemplates([]); setError(e.message); });
   }
 
@@ -214,19 +214,13 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                   </div>
                   <button type="button" onClick={() => setMode("upload")} data-testid="offer-upload-instead" className="mt-2 text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Upload letter instead</button>
                 </div>
-              ) : templates && templates.length === 1 ? (
-                <div>
-                  <p className={`${FORM_LABEL} mb-1`}>Template</p>
-                  <p className="flex h-10 items-center gap-2 rounded-lg border border-background-200 bg-background-100/60 px-3 text-sm text-foreground-900" data-testid="offer-template-single">
-                    <i className="ri-file-text-line text-foreground-500" aria-hidden="true" />{templates[0].name} <span className="text-xs text-foreground-500">v{templates[0].version}</span>
-                  </p>
-                </div>
               ) : (
                 <div>
                   <label htmlFor="offer-template" className={`${FORM_LABEL} mb-1 block`}>Template</label>
                   <select id="offer-template" value={templateId} disabled={!templates?.length} onChange={(e) => { setTemplateId(e.target.value); setBodyEdit(null); setLetter(null); }}
                     className="h-10 w-full rounded-lg border border-background-300 bg-background-50 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40">
-                    {templates === null ? <option>Loading templates&hellip;</option> : templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? " (default)" : ""} · v{t.version}</option>)}
+                    <option value="">{templates === null ? "Loading templates…" : "Choose a template"}</option>
+                    {templates?.map((t) => <option key={t.id} value={t.id}>{t.name} · v{t.version}</option>)}
                   </select>
                 </div>
               )}

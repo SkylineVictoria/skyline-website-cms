@@ -21,12 +21,12 @@ import {
 
 type Kind = "text" | "email" | "pdf";
 type Draft = Pick<SigningTemplate, "name" | "title" | "audience" | "category" | "signing_mode" | "expiry_days" | "reminder_days" | "roles" | "fields">
-  & { id: string | null; kind: Kind; body_html: string; header_html: string; footer_html: string; subject: string; is_default: boolean; source_pages: number | null; version: number };
+  & { id: string | null; kind: Kind; body_html: string; header_html: string; footer_html: string; subject: string; source_pages: number | null; version: number };
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const SENDER = "sender";
 const EMAIL_TYPES = TEMPLATE_TYPES.filter((t) => t.kind === "email");
 const blank = (kind: Kind = "text", category = "offer_letter"): Draft => ({
-  id: null, name: "", title: "", body_html: "<p></p>", header_html: "", footer_html: "", subject: "", is_default: false, kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
+  id: null, name: "", title: "", body_html: "<p></p>", header_html: "", footer_html: "", subject: "", kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
   signing_mode: "sequential", expiry_days: 14, reminder_days: 3, roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0,
 });
 const roleKey = (label: string, taken: string[]) => {
@@ -138,7 +138,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   separateLetterTitle?: boolean;
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
-    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), is_default: Boolean(template.is_default) }
+    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : "") }
     : { ...blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")), ...(audience ? { audience } : {}) });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -216,7 +216,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     name: draft.name.trim(), title: (draft.kind === "email" ? draft.subject : draft.title).trim(), subject: draft.kind === "email" ? draft.subject.trim() : null,
     body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : sections ? richPlainText(html).slice(0, 200000) || null : templateText(html), kind: draft.kind,
     ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: !loo } : {}), audience: loo ? "student" : draft.audience, category: draft.category,
-    signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [], is_default: draft.is_default,
+    signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [],
   });
   /** The same checks the database makes (hr.template_problem for letters and emails; the signing variable rules for the rest). */
   const check = () => {
@@ -347,7 +347,6 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
         </div>
       </div> : <Field label={draft.id ? `PDF (${draft.source_pages ?? "?"} pages). Choose a file only to replace it` : "PDF document"} required={!draft.id} hint="Up to 7 MB, not password-protected. Variables are printed with Sender fields placed on the pages.">
         <input type="file" accept="application/pdf" data-testid="template-pdf" onChange={(e) => { setFile(e.target.files?.[0] ?? null); if (e.target.files?.[0]) set({ fields: draft.id ? draft.fields : [] }); }} /></Field>}
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_default} onChange={(e) => set({ is_default: e.target.checked })} data-testid="template-default" /> Default {draft.kind === "email" ? "email of this kind" : `${SIGN_CATEGORIES[draft.category]?.label.toLowerCase() ?? "template"} (proposed first when one is sent)`}</label>
 
       {signed && <>
         <section className="space-y-2"><h3 className="font-semibold">Signers</h3>

@@ -1228,7 +1228,7 @@ async function flow() {
   const jwt = await adminToken(lab);
   const mailsTo = (address) => postmark.messages.filter((m) => m.to === address);
   const stage = (id) => psql(`select hr.onboarding_stage('${id}')->>'stage';`);
-  const letterTemplate = psql("select id from hr.sign_templates where category = 'offer_letter' and is_default and deleted_at is null;");
+  const letterTemplate = psql("select id from hr.sign_templates where category = 'offer_letter' and name = 'Standard offer letter' and deleted_at is null;");
   const seededLetter = psql(`select body_html from hr.sign_templates where id = '${letterTemplate}';`);
   const PASSWORD = "correct horse 42 battery";
   // Calls that are MEANT to be refused as a dead link come from their own address (see onboardCall).
@@ -1240,8 +1240,8 @@ async function flow() {
   const sentDocs = await staffAdminCall(lab, jwt, { action: "send_documents", profileId: person.id });
   const docMail = mailsTo(person.email).at(-1);
   const docToken = tokenIn(docMail?.text);
-  check("send document link: the email is the HRMS template (HTML and text) with the private link; stage Documents requested",
-    sentDocs.status === 200 && sentDocs.body.emailSent === true && docMail?.subject === "Next step: your details and documents" && /<a href=/.test(docMail?.html ?? "") && docToken.length > 20
+  check("send document link: the email uses the built-in text with the private link; stage Documents requested",
+    sentDocs.status === 200 && sentDocs.body.emailSent === true && docMail?.subject === "Next step: your details and documents" && docToken.length > 20
     && stage(person.id) === "documents_requested", `${sentDocs.status} ${JSON.stringify(sentDocs.body)} ${docMail?.subject}`);
 
   // 2. Upload and submit; nothing further is possible before review.
@@ -1284,7 +1284,7 @@ async function flow() {
   const letter = psql(`select o.storage_path || '|' || l.template_name || '|' || (l.body_html !~ '\\{\\{')::text || '|' || (l.body_html like '%Lab Trainer%')::text || '|' || (l.body_html like '%$42.50%')::text
     from hr.staff_offer_letters l join hr.staff_offers o on o.id = l.offer_id where l.profile_id = '${person.id}';`).split("|");
   const letterBytes = await storageBytes(lab, letter[0]);
-  check("offer letter: made from the default template, every placeholder filled with the person's details, stored as a PDF with the rendered copy",
+  check("offer letter: made from the chosen template, every placeholder filled with the person's details, stored as a PDF with the rendered copy",
     made.status === 200 && made.body.pages >= 1 && letter[1] === "Standard offer letter" && letter[2] === "true" && letter[3] === "true" && letter[4] === "true"
     && new TextDecoder().decode(letterBytes.subarray(0, 5)) === "%PDF-", `${made.status} ${JSON.stringify(made.body)} ${letter.join("|")}`);
   psql(`update hr.sign_templates set body_html = '<p>Edited later for {{first_name}}.</p>' where id = '${letterTemplate}';`);
@@ -1393,10 +1393,10 @@ async function flow() {
   const withdrawn = await staffAdminCall(lab, jwt, { action: "reject", profileId: second.id, note: "Took another role", notify: true });
   await waitFor(`select count(*) from hr.staff_emails where profile_id = '${second.id}' and kind = 'rejected' and state = 'sent';`, "1");
   const rejectionMail = mailsTo(second.email).find((m) => m.subject === "Your staff application");
-  check("withdraw at any stage with a reason: closed, links dead, and the rejection email is the HRMS template",
+  check("withdraw at any stage with a reason: closed, links dead, and the rejection email uses the built-in message",
     withdrawn.status === 200 && psql(`select status from hr.staff_profiles where id = '${second.id}';`) === "rejected" && liveLinks(second.id) === "0"
-    && Boolean(rejectionMail?.html) && psql(`select hr.onboarding_stage('${second.id}')->>'closed';`) === "rejected", `${withdrawn.status} ${Boolean(rejectionMail)}`);
-  // Leave the lab's default letter template as it was seeded.
+    && Boolean(rejectionMail) && psql(`select hr.onboarding_stage('${second.id}')->>'closed';`) === "rejected", `${withdrawn.status} ${Boolean(rejectionMail)}`);
+  // Leave the lab's standard letter template as it was seeded.
   psql(`update hr.sign_templates set body_html = '${seededLetter.replace(/'/g, "''")}' where id = '${letterTemplate}';`);
 }
 

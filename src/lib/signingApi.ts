@@ -7,7 +7,7 @@ export interface SigningRole { key: string; label: string; order: number; requir
 export interface TemplateField { type: SignFieldType; role: string; page: number; x: number; y: number; w: number; h: number; required?: boolean; label?: string; value?: string }
 /** One template table (20261113170000): documents to sign (text or PDF) and the HRMS letters and emails (rich `body_html`, `subject`, one default per category). */
 export interface SigningTemplate {
-  id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null; is_default?: boolean;
+  id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null;
   /** TPL-02: header and footer repeated on every page; [Variable] tokens active (templates saved in the sectioned editor). */
   header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
   kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";

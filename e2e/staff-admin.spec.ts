@@ -311,7 +311,7 @@ test("Employees > Onboarding: every person shows the stepper and the buttons of 
   await expect.poll(async () => (await hrMails(added.email)).length).toBe(before + 1);
 });
 
-test("HRMS > Templates: create with placeholders, preview with a real employee, duplicate, default, archive; closed to an Editor", async ({ page, browser }) => {
+test("HRMS > Templates: create with placeholders, preview with a real employee, duplicate, archive, delete; closed to an Editor", async ({ page, browser }) => {
   test.setTimeout(240_000);
   const admin = await createAdmin("tpl-admin");
   const adminClient = await signedInClient(admin.email);
@@ -361,14 +361,11 @@ test("HRMS > Templates: create with placeholders, preview with a real employee, 
   await shot(page, "template-preview-real-employee");
   await page.getByRole("button", { name: "Close" }).last().click();
 
-  // Duplicate, make default (one default per kind), archive and restore.
+  // Duplicate, archive and restore.
   await row.getByTestId("template-duplicate").click();
   await expect(page.getByTestId("templates-notice")).toContainText("copy");
   const copy = page.getByTestId("template-row").filter({ hasText: `${name} (copy)` });
   await expect(copy).toHaveCount(1);
-  await page.getByTestId("template-row").filter({ hasText: name }).filter({ hasNotText: "(copy)" }).getByTestId("template-make-default").click();
-  await expect(page.getByTestId("templates-notice")).toContainText("is now the default");
-  expect(sql("select count(*) from hr.sign_templates where category = 'offer_letter' and is_default and deleted_at is null")).toBe("1");
   page.once("dialog", (d) => { void d.accept(); });
   await copy.getByTestId("template-archive").click();
   await expect(copy).toHaveCount(0);
@@ -376,13 +373,18 @@ test("HRMS > Templates: create with placeholders, preview with a real employee, 
   await expect(copy).toContainText("Archived");
   await copy.getByTestId("template-restore").click();
   await expect(copy).not.toContainText("Archived");
-  // The chosen default is what Send offer letter proposes for this person.
+  // Choose the template explicitly before previewing the letter.
   await page.goto(`/admin/staff/employees/${p.id}`);
   await page.getByTestId("staff-action-send_offer").click();
+  await expect(page.getByTestId("offer-letter-template")).toHaveValue("");
+  await page.getByTestId("offer-letter-template").selectOption({ label: name });
   await expect(page.getByTestId("offer-letter-preview")).toContainText("Dear E2E, you start as Trainer on");
   await page.getByRole("button", { name: "Cancel" }).click();
-  // Put the seeded letter back as the default for the other tests, and remove what this test added.
-  sql(`update hr.sign_templates set is_default = false where category = 'offer_letter'; update hr.sign_templates set is_default = true where name = 'Standard offer letter'; delete from hr.sign_template_versions where template_id in (select id from hr.sign_templates where name like 'E2E letter %'); delete from hr.sign_templates where name like 'E2E letter %'`);
+  await page.goto("/admin/staff/templates");
+  page.once("dialog", (dialog) => { void dialog.accept(); });
+  await copy.getByTestId("template-delete").click();
+  await expect(copy).toHaveCount(0);
+  sql(`delete from hr.sign_template_versions where template_id in (select id from hr.sign_templates where name like 'E2E letter %'); delete from hr.sign_templates where name like 'E2E letter %'`);
 
   // An Editor: no HRMS in the menu, the page is closed, and the database refuses.
   const editor = await createEditor("tpl-editor");

@@ -16,7 +16,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "n
 /**
  * HRMS > Templates (Admin only): every template of the one table: offer letters and the onboarding emails (placeholders such as
  * {{first_name}} filled in for each person), and the documents sent for signature. Create, edit (every save is a new version),
- * duplicate, make default (one per kind), archive, delete and preview. A letter already made for someone keeps its own copy.
+ * duplicate, archive, delete and preview. A letter already made for someone keeps its own copy.
  */
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<SigningTemplate[] | null>(null);
@@ -50,7 +50,6 @@ export default function TemplatesPage() {
     <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5" data-testid="template-row" data-template-id={t.id}>
       <div className="min-w-0 flex-1 basis-56">
         <p className="text-sm font-semibold text-foreground-950">{t.name}
-          {t.is_default ? <span className="ml-2 align-middle"><Badge tone="success">Default</Badge></span> : null}
           {t.status === "archived" ? <span className="ml-2 align-middle"><Badge tone="muted">Archived</Badge></span> : null}</p>
         <p className="truncate text-xs text-foreground-600">
           {hrms ? `${t.kind === "email" ? "Subject" : "Title"}: ${t.subject ?? t.title}` : `${t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : "Text"} · ${AUDIENCE[t.audience]} · ${t.roles.map((r) => r.label).join(" → ")} · ${t.fields.length} field${t.fields.length === 1 ? "" : "s"}`}
@@ -64,12 +63,11 @@ export default function TemplatesPage() {
         ) : <>
           <Button size="sm" variant="outline" onClick={() => setEditing({ template: t })} data-testid="template-edit">Edit</Button>
           <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void act(`copy-${t.id}`, () => signingAction({ action: "template_duplicate", id: t.id }), "A copy was made.")} data-testid="template-duplicate">Duplicate</Button>
-          {t.is_default ? null : <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void act(`default-${t.id}`, () => signingAdmin("template_default", t.id), `“${t.name}” is now the default.`)} data-testid="template-make-default">Make default</Button>}
-          {t.is_default ? null : <Button size="sm" variant="ghost" disabled={Boolean(busy)}
-            onClick={() => { if (window.confirm(`Archive “${t.name}”? It stays on file and can be restored, but is not offered when sending.`)) void act(`archive-${t.id}`, () => signingAdmin("template_archive", t.id), "The template was archived."); }} data-testid="template-archive">Archive</Button>}
+          <Button size="sm" variant="ghost" disabled={Boolean(busy)}
+            onClick={() => { if (window.confirm(`Archive “${t.name}”? It stays on file and can be restored, but is not offered when sending.`)) void act(`archive-${t.id}`, () => signingAdmin("template_archive", t.id), "The template was archived."); }} data-testid="template-archive">Archive</Button>
         </>}
-        {t.is_default ? null : <Button size="sm" variant="ghost" disabled={Boolean(busy)}
-          onClick={() => { if (window.confirm(`Delete “${t.name}”? Letters and requests already made from it keep their own copy.`)) void act(`delete-${t.id}`, () => signingAdmin("template_delete", t.id), "The template was deleted."); }} data-testid="template-delete">Delete</Button>}
+        <Button size="sm" variant="ghost" disabled={Boolean(busy)}
+          onClick={() => { if (window.confirm(`Delete “${t.name}”? Letters and requests already made from it keep their own copy.`)) void act(`delete-${t.id}`, () => signingAdmin("template_delete", t.id), "The template was deleted."); }} data-testid="template-delete">Delete</Button>
       </div>
     </li>
   );

@@ -8,7 +8,7 @@ import type { TemplatePerson, TemplateType } from "../../supabase/functions/_sha
  * The placeholder catalogue, sanitising and rendering live in supabase/functions/_shared/hr-template.ts, shared with the Edge Functions.
  */
 export interface HrTemplate {
-  id: string; type: TemplateType; name: string; subject: string; bodyHtml: string; isDefault: boolean;
+  id: string; type: TemplateType; name: string; subject: string; bodyHtml: string;
   archivedAt: string | null; createdAt: string; updatedAt: string;
 }
 

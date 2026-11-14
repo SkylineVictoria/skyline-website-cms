@@ -49,7 +49,7 @@ export const saveLetterValueToSource = (applicationId: string, key: string, valu
   rpc<LetterValues>("portal_letter_save_to_source", { p_application: applicationId, p_key: key, p_value: value });
 
 export interface LetterTemplate {
-  id: string; name: string; title: string; version: number; updatedAt: string; active: boolean; isDefault: boolean;
+  id: string; name: string; title: string; version: number; updatedAt: string; active: boolean;
   headerHtml: string | null; bodyHtml: string | null; footerHtml: string | null; unmapped: string[];
 }
 export const loadLetterTemplates = () => rpc<LetterTemplate[]>("letter_templates");

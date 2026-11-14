@@ -2183,9 +2183,10 @@ test("onboarding pages are wired: stepper, stage actions, templates, set-passwor
   assert.ok(router.includes('path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin>'), "Templates is an Admin-only route");
   // One template system (20261113170000): the HRMS page lists and changes templates through signing_admin, with the one editor.
   const templates = read("src/pages/admin/TemplatesPage.tsx");
-  for (const call of ['signingAdmin<SigningContext>("list")', '"template_duplicate"', '"template_default"', '"template_archive"', '"template_delete"', "<TemplateEditor", "<TemplatePreviewDialog", "TEMPLATE_TYPES.map("]) assert.ok(templates.includes(call), `Templates page: ${call}`);
+  for (const call of ['signingAdmin<SigningContext>("list")', '"template_duplicate"', '"template_archive"', '"template_delete"', "<TemplateEditor", "<TemplatePreviewDialog", "TEMPLATE_TYPES.map("]) assert.ok(templates.includes(call), `Templates page: ${call}`);
   const editor = read("src/pages/admin/components/signing/TemplateEditor.tsx");
-  for (const call of ['"template_save"', "sanitizeTemplateHtml(", "templateText(", "placeholdersFor(", "<RichTextEditor", "is_default", "SUBJECT_VARIABLES"]) assert.ok(editor.includes(call), `the one template editor: ${call}`);
+  for (const call of ['"template_save"', "sanitizeTemplateHtml(", "templateText(", "placeholdersFor(", "<RichTextEditor", "SUBJECT_VARIABLES"]) assert.ok(editor.includes(call), `the one template editor: ${call}`);
+  assert.ok(!templates.includes("template_default") && !editor.includes("is_default"), "template defaults are absent from the list and editor");
   const templatesApi = read("src/lib/hrTemplatesApi.ts");
   assert.ok(templatesApi.includes("templatePerson(") && templatesApi.includes("hr_admin_offer_letter_context") && !/hr_admin_template_(save|duplicate|archive|set_default)/.test(templatesApi), "the HRMS API keeps only the letter context and the person's values; template changes go through signing_admin");
   assert.ok(!read("src/pages/admin/components/hrms/SendOfferDialog.tsx").includes("saveTemplate(") && read("src/pages/admin/components/hrms/SendOfferDialog.tsx").includes('"template_save"'), "Save as new template uses the one table");

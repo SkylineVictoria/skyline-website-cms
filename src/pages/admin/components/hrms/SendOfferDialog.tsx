@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
 import { StaffAdminError, staffAdminActions, type StaffAdminResult } from "@/lib/staffApi";
-import { offerLetterContext, type HrTemplate, type OfferLetterContext } from "@/lib/hrTemplatesApi";
+import { offerLetterContext, type OfferLetterContext } from "@/lib/hrTemplatesApi";
 import { signingAdmin } from "@/lib/signingApi";
 import TemplateEditor from "@/pages/admin/components/hrms/TemplateEditor";
 import { TEMPLATE_PROSE } from "@/pages/admin/lib/onboardingText";
@@ -58,9 +58,8 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
     offerLetterContext(profileId).then((next) => {
       if (!live) return;
       setContext(next);
-      const pick = (type: HrTemplate["type"]) => next.templates.filter((t) => t.type === type);
-      setLetterId((pick("offer_letter").find((t) => t.isDefault) ?? pick("offer_letter")[0])?.id ?? "");
-      setEmailId((pick("offer_email").find((t) => t.isDefault) ?? pick("offer_email")[0])?.id ?? "");
+      setLetterId("");
+      setEmailId("");
     }, (e) => { if (live) setLoadError(e instanceof Error ? e.message : "The offer letter could not be prepared."); });
     return () => { live = false; };
   }, [profileId]);
@@ -102,9 +101,9 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
     if (!letterTemplate || !saveAs.trim() || busy) return;
     setBusy("Saving the template…"); setError("");
     try {
-      // The one template table (20261113170000): a new offer letter version 1, rich HTML with its plain-text copy, not the default.
+      // The one template table (20261113170000): a new offer letter version 1, rich HTML with its plain-text copy.
       const html = sanitizeTemplateHtml(draft);
-      await signingAdmin("template_save", null, { name: saveAs.trim(), title: letterTemplate.subject, body_html: html, body: templateText(html), kind: "text", audience: "employee", category: "offer_letter", is_default: false });
+      await signingAdmin("template_save", null, { name: saveAs.trim(), title: letterTemplate.subject, body_html: html, body: templateText(html), kind: "text", audience: "employee", category: "offer_letter" });
       setSavedAs(saveAs.trim()); setSaveAs("");
     } catch (e) { fail(e, "The template could not be saved."); }
     finally { setBusy(""); }
@@ -198,14 +197,15 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Offer letter">
                   <Select value={source === "upload" ? "__upload" : letterId} onChange={(e) => { setEdited(null); setPreview(null); if (e.target.value === "__upload") setSource("upload"); else { setSource("template"); setLetterId(e.target.value); } }} data-testid="offer-letter-template">
-                    {letters.map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? " (default)" : ""}</option>)}
+                    <option value="">Choose an offer letter template</option>
+                    {letters.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                     <option value="__upload">Use a PDF I upload instead…</option>
                   </Select>
                 </Field>
                 <Field label="Email">
                   <Select value={emailId} onChange={(e) => setEmailId(e.target.value)} data-testid="offer-email-template">
-                    {emails.length === 0 ? <option value="">Built-in offer email</option> : null}
-                    {emails.map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? " (default)" : ""}</option>)}
+                    <option value="">Built-in offer email</option>
+                    {emails.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   </Select>
                 </Field>
               </div>
@@ -213,8 +213,8 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
             {resend ? (
               <Field label="Email">
                 <Select value={emailId} onChange={(e) => setEmailId(e.target.value)} data-testid="offer-email-template">
-                  {emails.length === 0 ? <option value="">Built-in offer email</option> : null}
-                  {emails.map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? " (default)" : ""}</option>)}
+                  <option value="">Built-in offer email</option>
+                  {emails.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </Select>
               </Field>
             ) : null}

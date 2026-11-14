@@ -831,19 +831,19 @@ async function pdfPages(bytes: Uint8Array): Promise<string[]> {
   return pages;
 }
 
-/** The real SLIT letter as the active default (the seeds need an admin, so they run again here; both are idempotent). */
+/** The real SLIT letter as an active template (the seeds need an admin, so they run again here; both are idempotent). */
 function seedSlitLetter(): string {
   sql(readFileSync("supabase/migrations/20261113300000_standard_letter_of_offer.sql", "utf8"));
   sql(readFileSync("supabase/migrations/20261113320000_slit_letter_of_offer.sql", "utf8"));
   // 20261113330000 (online signing) redefines the CC copy that 20261113320000 just put back.
   sql(readFileSync("supabase/migrations/20261113330000_offer_letter_signing.sql", "utf8"));
-  sql(`update hr.sign_templates set is_default = (name = 'SLIT Letter of Offer and Written Agreement') where category = 'student_offer_letter' and deleted_at is null`);
+  sql(`update hr.sign_templates set is_default = false where category = 'student_offer_letter' and is_default`);
   const id = sql(`select id from hr.sign_templates where category = 'student_offer_letter' and name = 'SLIT Letter of Offer and Written Agreement' and deleted_at is null`);
   expect(sql(`select status || '|' || cardinality(public.letter_template_unmapped(concat_ws(' ', title, header_html, body_html, footer_html))) from hr.sign_templates where id = '${id}'`)).toBe("active|0");
   return id;
 }
 
-test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (course by slug, no fees or intake, an agency without agent): auto-selected, letterhead from the Website settings, CC to the agency, sent", async ({ page }) => {
+test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (course by slug, no fees or intake, an agency without agent): choose template, letterhead from the Website settings, CC to the agency, sent", async ({ page }) => {
   const admin = await createAdmin("loo-standard");
   const standard = seedSlitLetter();
   const agency = wfAgency("loo standard");
@@ -862,10 +862,9 @@ test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  // The default (standard) letter is selected by itself; the preview is made.
-  const picked = drawer.getByTestId("offer-template-single").or(drawer.getByLabel("Template"));
-  await expect(picked.first()).toBeVisible();
-  if (await drawer.getByLabel("Template").count()) await expect(drawer.getByLabel("Template")).toHaveValue(standard);
+  const picked = drawer.getByLabel("Template");
+  await expect(picked).toHaveValue("");
+  await picked.selectOption(standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
   // Needs your input: the start date, CRICOS and fees the course setup does not have (the course is found by its slug).
   const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
@@ -910,7 +909,7 @@ test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (
 
 test("offer letter: a packaged application (2 courses): a course row and a fee block per course, the combined total, the deposit once", async ({ page }) => {
   const admin = await createAdmin("loo-packaged");
-  seedSlitLetter();
+  const standard = seedSlitLetter();
   const agency = wfAgency("loo packaged");
   const tag = person("loo-pkg").local.slice(-6);
   const courses = [{ id: `pa-${tag}`, code: `PKA${tag}`, name: `PKA${tag} Certificate III in Packaging`, start: "2027-02-01", end: "2027-12-17", tuition: 14000 },
@@ -934,6 +933,7 @@ test("offer letter: a packaged application (2 courses): a course row and a fee b
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
+  await drawer.getByLabel("Template").selectOption(standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[0-9]+$/, { timeout: 30_000 });
   await expect(drawer.getByTestId("offer-letter-preview")).not.toHaveAttribute("data-pages", "0", { timeout: 30_000 });
   // Both courses have their setup: no course or fee detail is asked for, of either course.
@@ -1189,7 +1189,7 @@ const activateNotifications = () => sql(`insert into public.notification_activat
 test("offer signing: the SLIT letter is emailed to the student with a personal link; viewed and signed without logging in (code, initials, YES / NO); Offer accepted; signed copy and certificate in Documents; the link then says Already signed", async ({ page, browser }) => {
   activateNotifications();
   const admin = await createAdmin("loo-sign");
-  seedSlitLetter();
+  const standard = seedSlitLetter();
   const agency = wfAgency("loo sign");
   sql(`update public.agencies set business_email = 'office.${agency.slice(0, 8)}@example.test' where id = '${agency}'`);
   const tag = person("loo-sign").local.slice(-6);
@@ -1209,6 +1209,7 @@ test("offer signing: the SLIT letter is emailed to the student with a personal l
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
+  await drawer.getByLabel("Template").selectOption(standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
   const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
   const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));

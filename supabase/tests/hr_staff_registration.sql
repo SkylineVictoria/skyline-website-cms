@@ -809,7 +809,7 @@ select is((select e.job_title || '/' || e.employment_type || '/' || (e.joining_d
 select is((select pay_details_by from hr.employment where profile_id = pg_temp.v('f1')), 'a0000000-0000-0000-0000-000000000004'::uuid, '...with who completed them');
 
 -- ---- Templates
-select is((select count(*)::int from hr.sign_templates where is_default and status = 'active' and deleted_at is null and hr.template_kind_of(category) is not null), 6, 'one seeded default template of each kind (moved into hr.sign_templates by 20261113170000)');
+select is((select count(*)::int from hr.sign_templates where is_default and status = 'active' and deleted_at is null and hr.template_kind_of(category) is not null), 0, 'seeded templates have no default flag');
 select is((select count(*)::int from hr.sign_templates t where hr.template_kind_of(t.category) is not null and t.deleted_at is null and hr.template_problem(t.category, coalesce(t.subject, t.title), t.body_html) is not null), 0, 'every seeded template passes its own checks');
 -- The six HRMS templates seeded by 20261111100000 live in the one table (moved by 20261113170000; hr.templates dropped by 20261113180000). The student Letter of Offer (20261113300000) is a document template, not an HRMS one.
 select is((select string_agg(s.name, ',' order by s.name) from hr.sign_templates s where s.name like 'Standard %' and s.category <> 'student_offer_letter' and s.deleted_at is null),
@@ -830,14 +830,14 @@ select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejectio
 select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":" ","subject":"Sorry","bodyHtml":"<p>Hi</p>"}')$$, '22023', 'Give the template a name (up to 120 characters).', 'a template: a name is required');
 select throws_ok($$select public.hr_admin_template_save(null, '{"type":"rejection","name":"Empty","subject":"Sorry","bodyHtml":"<p> &nbsp; </p>"}')$$, '22023', 'The template has no text.', 'a template: an empty body is refused');
 insert into t select 'tpl2', public.hr_admin_template_save(null, '{"type":"offer_letter","name":"Short offer","subject":"Offer: {{position}}","bodyHtml":"<p>Dear {{first_name}}, you start as {{position}} on {{start_date}} at {{pay_rate}} {{pay_basis}}. Manager: {{manager_name}}.</p>"}')->>'id';
-select is((select x->>'isDefault' from jsonb_array_elements(public.hr_admin_templates()) x where x->>'id' = pg_temp.v('tpl2')::text), 'false', 'a new template is not the default while one exists');
+select is((select x->>'isDefault' from jsonb_array_elements(public.hr_admin_templates()) x where x->>'id' = pg_temp.v('tpl2')::text), 'false', 'the legacy save leaves the default flag false');
 select throws_ok($$select public.hr_admin_template_save(null, '{"type":"offer_letter","name":"short OFFER","subject":"Offer","bodyHtml":"<p>Hi</p>"}')$$, '23505', 'Another template of this kind is already called "short OFFER".', 'a template: names are unique within a kind');
 select is(public.hr_admin_template_duplicate(pg_temp.v('tpl2'))->>'name', 'Short offer (copy)', 'a template is duplicated');
-select is(public.hr_admin_template_set_default(pg_temp.v('tpl2'))->>'isDefault', 'true', 'another template becomes the default');
-select is(pg_temp.tpl_defaults('offer_letter'), 1, '...and there is still exactly one default of that kind');
-select throws_ok($$select public.hr_admin_template_archive(pg_temp.v('tpl2'), true)$$, '23514', 'This is the default template. Make another one the default before archiving it.', 'the default template cannot be archived');
+select throws_ok($$select public.hr_admin_template_set_default(pg_temp.v('tpl2'))$$, '0A000', 'Template defaults are no longer supported.', 'the legacy action cannot set a default');
+select is(pg_temp.tpl_defaults('offer_letter'), 0, 'offer letters have no default');
+select ok((public.hr_admin_template_archive(pg_temp.tpl('Standard offer letter'), true)->>'archivedAt') is not null, 'the former default can be archived');
 select ok((public.hr_admin_template_archive(pg_temp.tpl('Short offer (copy)'), true)->>'archivedAt') is not null, 'a template is archived');
-select throws_ok($$select public.hr_admin_template_set_default(pg_temp.tpl('Short offer (copy)'))$$, '23514', 'An archived template cannot be the default.', 'an archived template cannot be the default');
+select is(public.hr_admin_template_archive(pg_temp.tpl('Standard offer letter'), false)->>'archivedAt', null, 'the former default can be restored');
 select throws_ok($$select public.hr_admin_template_save(pg_temp.tpl('Short offer (copy)'), '{"name":"X","subject":"Y","bodyHtml":"<p>Z</p>"}')$$, '23514', 'Restore the template before editing it.', 'an archived template is not edited');
 select is(public.hr_admin_template_archive(pg_temp.tpl('Short offer (copy)'), false)->>'archivedAt', null, 'a template is restored');
 -- placeholders fill from the person's real details
@@ -882,7 +882,7 @@ select is((select l.body_html || '|' || l.edited || '|' || l.template_html from 
 select is((select body_html from hr.sign_templates where id = pg_temp.v('tpl2')), '<p>Completely different text for {{first_name}}.</p>', 'the template itself is not changed by a per-letter edit');
 select is((select version from hr.sign_templates where id = pg_temp.v('tpl2')), 2, 'an HRMS save is a new version of the one template');
 select is((select count(*)::int from hr.sign_template_versions where template_id = pg_temp.v('tpl2')), 2, '...with both versions kept');
--- The signing editor saves the same kinds: a rich letter with its HTML, the HRMS rules, one default per kind, the default protected.
+-- The signing editor saves the same kinds: a rich letter with its HTML, and the HRMS rules.
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select throws_ok($$select public.signing_admin('template_save', null, '{"name":"Bad letter","title":"Offer","body_html":"<p>Dear {{first_name}}, {{signing_link}}</p>","kind":"text","audience":"employee","category":"offer_letter"}')$$,
@@ -892,11 +892,11 @@ select throws_ok($$select public.signing_admin('template_save', null, '{"name":"
 insert into t select 'tpl3', public.signing_admin('template_save', null, '{"name":"Rich offer","title":"Offer of employment: {{job_title}}","body_html":"<h2>Offer</h2><p>Dear {{first_name}}, you start as <strong>{{job_title}}</strong> on {{start_date}} at {{job_location}}.</p>","kind":"text","audience":"employee","category":"offer_letter"}')->>'id';
 select is((select x->>'type' || '/' || (x->>'isDefault') from jsonb_array_elements(public.hr_admin_templates()) x where x->>'id' = pg_temp.v('tpl3')::text), 'offer_letter/false', 'a letter saved by the signing editor is listed by the HRMS page');
 select is((select (x->>'bodyHtml') like '%<strong>{{job_title}}</strong>%' from jsonb_array_elements(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->'templates') x where x->>'id' = pg_temp.v('tpl3')::text), true, '...and offered with its rich HTML when an offer is sent');
-select is(public.signing_admin('template_default', pg_temp.v('tpl3'))->>'is_default', 'true', 'the signing editor makes it the default');
-select is(pg_temp.tpl_defaults('offer_letter'), 1, '...and there is still exactly one default offer letter');
-select throws_ok($$select public.signing_admin('template_archive', pg_temp.v('tpl3'))$$, 'P0001', 'This is the default template. Make another one the default before archiving it.', 'the default cannot be archived from the signing editor either');
-select throws_ok($$select public.signing_admin('template_delete', pg_temp.v('tpl3'))$$, 'P0001', 'This is the default template. Make another one the default before deleting it.', 'nor deleted');
-select is(public.hr_admin_template_set_default(pg_temp.v('tpl2'))->>'isDefault', 'true', 'the HRMS page takes the default back');
+select throws_ok($$select public.signing_admin('template_default', pg_temp.v('tpl3'))$$, '0A000', 'Template defaults are no longer supported.', 'the signing API cannot set a default');
+select is(pg_temp.tpl_defaults('offer_letter'), 0, 'saving in Docs and Signature leaves no default');
+select is(public.signing_admin('template_archive', pg_temp.v('tpl3'))->>'status', 'archived', 'a signing template can be archived');
+select lives_ok($$select public.signing_admin('template_delete', pg_temp.tpl('Standard offer letter'))$$, 'the former default can be deleted');
+select is((select count(*) from jsonb_array_elements(public.hr_admin_offer_letter_context(pg_temp.v('f1'))->'templates') x where x->>'name' = 'Standard offer letter'), 0::bigint, 'the deleted template is gone from the offer template picker');
 select is((select string_agg(x->>'name', ',' order by x->>'name') from jsonb_array_elements(public.signing_admin('list')->'templates') x where x->>'category' = 'offer_letter' and x->>'name' in ('Rich offer', 'Short offer')), 'Rich offer,Short offer', 'the signing list shows the HRMS letters too (one table)');
 reset role;
 select is((select body from hr.sign_templates where id = pg_temp.v('tpl3')) like 'Offer%Dear%job_title%', true, 'a rich template keeps a plain-text copy for the signing tools');
@@ -1267,7 +1267,7 @@ select is(has_function_privilege('authenticated', 'public.record_validated_docum
 reset role;
 -- (Counted against the rows that exist now: a lab that already ran the signing checks holds sectioned templates of its own.)
 create temp table tpl02_before as select count(*)::int as n from hr.sign_templates where header_html is not null or footer_html is not null or bracket_variables;
-select is((select count(*)::int from hr.sign_templates where is_default and category <> 'student_offer_letter' and (header_html is not null or footer_html is not null or bracket_variables)), 0, 'TPL-02: the standard HRMS templates keep their body, with an empty header and footer and no [variables]');
+select is((select count(*)::int from hr.sign_templates where name like 'Standard %' and category <> 'student_offer_letter' and (header_html is not null or footer_html is not null or bracket_variables)), 0, 'TPL-02: the standard HRMS templates keep their body, with an empty header and footer and no [variables]');
 select is(has_function_privilege('authenticated', 'hr.signing_admin_core(text, uuid, jsonb)', 'execute'), false, 'TPL-02: only the wrapper calls the released signing_admin');
 select is(has_function_privilege('authenticated', 'public.signing_admin(text, uuid, jsonb)', 'execute') and not has_function_privilege('anon', 'public.signing_admin(text, uuid, jsonb)', 'execute'), true, 'TPL-02: the wrapper keeps the grants (authenticated, not anon)');
 set local role authenticated;

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { asmAdmin, type AssessmentRow, type AssignmentRow } from "@/pages/admin/lib/assessments";
+import { fromLocalInput, toLocalInput } from "@/lib/assessment/api";
 import StudentPicker from "@/pages/admin/components/rto/StudentPicker";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type StaffOption } from "@/pages/admin/lib/rto";
@@ -19,7 +21,12 @@ export default function LmsBatchAllocationPage() {
   const [intakeSearch, setIntakeSearch] = useState("");
   const [batchSearch, setBatchSearch] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
-  const [tab, setTab] = useState<"students" | "trainers">("students");
+  const [tab, setTab] = useState<"students" | "trainers" | "assessments">("students");
+  const [assessmentOptions, setAssessmentOptions] = useState<AssessmentRow[]>([]);
+  const [assessmentAssignments, setAssessmentAssignments] = useState<AssignmentRow[]>([]);
+  const [assessmentId, setAssessmentId] = useState("");
+  const [availableFrom, setAvailableFrom] = useState(toLocalInput(new Date().toISOString()));
+  const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + 14 * 86400000).toISOString()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -52,6 +59,26 @@ export default function LmsBatchAllocationPage() {
     return () => { active = false; };
   }, [tab, data?.rtoManager]);
 
+  useEffect(() => {
+    if (tab !== "assessments") return;
+    let active = true;
+    Promise.all([asmAdmin<AssessmentRow[]>("assessment_list", {includeArchived:false}), asmAdmin<AssignmentRow[]>("assignment_list", {})])
+      .then(([a, x]) => { if (active) { setAssessmentOptions(a); setAssessmentAssignments(x); } })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load assessments"); });
+    return () => { active = false; };
+  }, [tab, batchId]);
+  const assignAssessment = async () => {
+    if (!assessmentId || !batchId || !dueAt || busy || !data?.rtoManager) return;
+    setBusy(true);
+    try {
+      const result = await asmAdmin<{created:number;errors?:{message:string}[]}>("assignment_create", {assessmentId, batchIds:[batchId], availableFrom:fromLocalInput(availableFrom), dueAt:fromLocalInput(dueAt)});
+      if (result.errors?.length) throw new Error(result.errors.map(e => e.message).join("; "));
+      if (!result.created) throw new Error("No assignment created. Check assessment eligibility.");
+      setAssessmentAssignments(await asmAdmin<AssignmentRow[]>("assignment_list", {}));
+      push("Assessment assigned", "success");
+    } catch(e) { setError(e instanceof Error ? e.message : "Unable to assign assessment"); }
+    finally { setBusy(false); }
+  };
   const save = async (action: string, payload: Record<string, unknown>, success: string) => {
     setBusy(true);
     try { await rtoFlow(action, payload); await load(); push(success, "success"); }
@@ -72,7 +99,7 @@ export default function LmsBatchAllocationPage() {
   return <div className="mx-auto max-w-7xl space-y-5 pb-10">
     <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p>
       <h1 className="font-heading text-3xl font-bold">Batch Allocation</h1>
-      <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Assign students and trainers in the fourth column.</p></div>
+      <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Assign students, trainers and assessments in the fourth column.</p></div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => { setError(""); void load(); }}>Retry</button></div>}
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
       <section aria-label="Course selection" className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4">
@@ -97,7 +124,7 @@ export default function LmsBatchAllocationPage() {
         <h2 className="mb-3 font-semibold">Allocation</h2>
         {loading ? <p className="text-sm text-foreground-500">Loading academic records…</p> : !batchId ? <p className="text-sm text-foreground-500">Select a batch in the Batches column.</p> : !current || data?.batch.id !== batchId ? <p className="text-sm text-foreground-500">Loading allocations…</p> : <>
           <div className="mb-3 flex gap-2" role="tablist" aria-label="Allocation type">
-            {(["students", "trainers"] as const).map(t => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${tab === t ? "bg-primary-500 text-white" : "bg-background-100 text-foreground-700"}`}>{t === "students" ? `Students (${students.length})` : `Trainers (${current.trainers.length})`}</button>)}
+            {(["students", "trainers", "assessments"] as const).map(t => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${tab === t ? "bg-primary-500 text-white" : "bg-background-100 text-foreground-700"}`}>{t === "students" ? `Students (${students.length})` : t === "trainers" ? `Trainers (${current.trainers.length})` : "Assessments"}</button>)}
           </div>
           {tab === "students" ? <>
             <div className="mb-3 rounded-lg border border-background-200 p-3">
@@ -115,7 +142,7 @@ export default function LmsBatchAllocationPage() {
               </li>)}</ul>
               {!students.length && <p className="text-sm text-foreground-500">No students assigned yet.</p>}
             </div>
-          </> : <>
+          </> : tab === "trainers" ? <>
             <div className="rounded-lg border border-background-200 p-3">
               <h3 className="mb-2 font-semibold">Available trainers</h3>
               {canEdit && <select aria-label="Assign trainer" className={inputClass} value="" disabled={busy} onChange={ev => { const id = ev.target.value; if (id) void save("batch_trainers_set", { batchId, trainerIds: [...current.trainers.map(t => t.id), id] }, "Trainer assigned"); }}><option value="">+ Select trainer to assign</option>{staff.filter(t => !current.trainers.some(a => a.id === t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}
@@ -125,7 +152,27 @@ export default function LmsBatchAllocationPage() {
               <ul className="divide-y divide-background-100">{current.trainers.map(t => <li key={t.id} className="flex items-center justify-between gap-2 py-3"><span className="font-medium">{t.name}</span>{canEdit && <button type="button" disabled={busy} className="text-sm font-medium text-red-600 disabled:opacity-50" onClick={() => void save("batch_trainers_set", { batchId, trainerIds: current.trainers.filter(x => x.id !== t.id).map(x => x.id) }, "Trainer removed")}>Remove</button>}</li>)}</ul>
               {!current.trainers.length && <p className="text-sm text-foreground-500">No trainers assigned yet.</p>}
             </div>
-          </>}
+          </> : <div className="space-y-4">
+            <div className="rounded-lg border border-background-200 p-3">
+              <h3 className="mb-3 font-semibold">Assign assessment</h3>
+              <label className="block text-sm font-medium">Published assessment
+                <select className={inputClass + " mt-1"} value={assessmentId} onChange={e => setAssessmentId(e.target.value)}>
+                  <option value="">Select assessment</option>
+                  {assessmentOptions.filter(a => a.courseId === courseId && a.currentVersionStatus === "published" && !a.archivedAt).map(a => <option key={a.id} value={a.id}>{a.unitCode ? a.unitCode + " — " : ""}{a.title}</option>)}
+                </select>
+              </label>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-sm font-medium">Available from<input type="datetime-local" className={inputClass + " mt-1"} value={availableFrom} onChange={e => setAvailableFrom(e.target.value)} /></label>
+                <label className="text-sm font-medium">Due date<input type="datetime-local" className={inputClass + " mt-1"} value={dueAt} onChange={e => setDueAt(e.target.value)} /></label>
+              </div>
+              <button type="button" className={buttonClass + " mt-3"} disabled={!canEdit || busy || !assessmentId || !dueAt || !current.isActive} onClick={() => void assignAssessment()}>{busy ? "Assigning…" : "Assign assessment"}</button>
+            </div>
+            <div className="rounded-lg border border-background-200 p-3">
+              <h3 className="mb-2 font-semibold">Assigned assessments</h3>
+              {assessmentAssignments.filter(a => a.batchId === batchId && a.status !== "cancelled").map(a => <div key={a.id} className="border-b border-background-100 py-3 last:border-0"><p className="font-medium">{a.assessmentTitle}</p><p className="text-xs text-foreground-500">{a.unitCode ?? "Assessment"} · Due {new Date(a.dueAt).toLocaleDateString()} · {a.eligibleCount} students · {a.status}</p></div>)}
+              {!assessmentAssignments.some(a => a.batchId === batchId && a.status !== "cancelled") && <p className="text-sm text-foreground-500">No assessments assigned yet.</p>}
+            </div>
+          </div>}
         </>}
       </section>
     </div>

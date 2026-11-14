@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
-import { CourseFacts, UnitsTab } from "@/pages/admin/components/rto/CourseSteps";
+import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 
-type Tab = "units" | "overview";
-type UnitFilter = "all" | "core" | "elective";
+type Tab = "overview";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
@@ -16,7 +15,7 @@ export default function LmsCoursesPage() {
   const [campus, setCampus] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
-  const [unitFilter, setUnitFilter] = useState<UnitFilter>("all");
+
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -73,15 +72,13 @@ export default function LmsCoursesPage() {
   ), [courses, query, campus, activeOnly]);
   const selected = courses.find(c => c.id === selectedId);
   const units = detail?.units ?? [];
-  const filteredUnits = units.filter(u => unitFilter === "all" || u.unitType === unitFilter);
-  const count = (type: UnitFilter) => type === "all" ? units.length : units.filter(u => u.unitType === type).length;
   const nominalHours = units.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0);
 
   return <div className="mx-auto max-w-[1500px] space-y-6 pb-12">
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-sm font-semibold text-foreground-500">LMS <span className="mx-2">/</span> Courses</p>
         <h1 className="mt-3 font-heading text-3xl font-bold text-foreground-950">Courses</h1>
-        <p className="mt-1 text-sm text-foreground-600">View course information, qualifications and units.</p>
+        <p className="mt-1 text-sm text-foreground-600">View and edit course information and qualification details. Units are managed separately.</p>
       </div>
       <label className="flex items-center gap-2 rounded-xl border border-background-200 bg-background-50 px-3 py-2 text-sm">
         {icon("ri-map-pin-line")}<span className="sr-only">Campus</span>
@@ -104,7 +101,7 @@ export default function LmsCoursesPage() {
         <p className="my-4 text-sm font-semibold text-foreground-700">{visible.length} course{visible.length === 1 ? "" : "s"}</p>
         <div className="max-h-[690px] space-y-2 overflow-auto">
           {loading ? <p className="p-3 text-sm text-foreground-500">Loading courses…</p> : visible.length === 0 ? <p className="p-3 text-sm text-foreground-500">No matching courses.</p> : visible.map(c =>
-            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setUnitFilter("all"); setSavedAt(""); }}
+            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setSavedAt(""); }}
               className={"flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors hover:border-primary-500 " + (selectedId === c.id ? "border-primary-400 bg-primary-50" : "border-background-200 bg-background-50")}>
               <span className="rounded-lg bg-background-100 p-2">{icon("ri-graduation-cap-line")}</span>
               <span className="min-w-0 flex-1"><span className="block font-semibold text-foreground-950">{c.code}</span>
@@ -136,28 +133,11 @@ export default function LmsCoursesPage() {
           </div>
           <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
           <div role="tablist" aria-label="Course sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
-            {([{ id: "units", label: "Units", glyph: "ri-list-check-2" }, { id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
+            {([{ id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
               <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
                 className={"flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-600" : "border-transparent text-foreground-600")}>
                 <i className={t.glyph} aria-hidden="true" />{t.label}</button>)}
           </div>
-          {tab === "units" && canEdit && detail ? <div role="tabpanel" className="pt-5"><UnitsTab key={selectedId} units={detail.units} readOnly={false} busy={saving} autosave onSave={units => void save("units_save", { units })} /></div> : null}
-          {tab === "units" && !canEdit ? <div role="tabpanel" className="pt-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-heading text-lg font-bold">Course Units ({units.length})</h3>
-              <div className="flex flex-wrap gap-2">{(["all", "core", "elective"] as const).map(f =>
-                <button key={f} type="button" aria-pressed={unitFilter === f} onClick={() => setUnitFilter(f)}
-                  className={"rounded-lg border px-3 py-1.5 text-sm " + (unitFilter === f ? "border-primary-600 bg-primary-600 font-semibold text-white" : "border-background-300")}>
-                  {f === "all" ? "All" : f === "core" ? "Core" : "Elective"} ({count(f)})</button>)}</div>
-            </div>
-            {detailError ? <p role="alert" className="text-sm text-red-700">{detailError}</p> : detailLoading ? <p className="py-8 text-center text-foreground-500">Loading units…</p> : !detail ? <p className="py-8 text-center text-foreground-500">Course units unavailable.</p> : filteredUnits.length ? <div className="overflow-x-auto rounded-xl border border-background-200">
-              <table className="w-full min-w-[530px] text-left text-sm"><thead className="bg-background-100 text-foreground-700"><tr>
-                <th className="px-4 py-3 font-semibold">Unit Code</th><th className="px-4 py-3 font-semibold">Unit Name</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Nominal Hours</th>
-              </tr></thead><tbody className="divide-y divide-background-200">{filteredUnits.map((u, i) =>
-                <tr key={u.id ?? u.code + i} className="hover:bg-background-100"><td className="px-4 py-3 font-semibold">{u.code}</td>
-                  <td className="px-4 py-3">{u.name}</td><td className="px-4 py-3"><span className={"rounded-md px-2 py-1 text-xs font-semibold " + (u.unitType === "core" ? "bg-blue-100 text-blue-800" : "bg-violet-100 text-violet-800")}>{u.unitType === "core" ? "Core" : "Elective"}</span></td>
-                  <td className="px-4 py-3">{u.nominalHours ?? "—"}</td></tr>)}</tbody></table>
-            </div> : <p className="py-8 text-center text-foreground-500">No units match this filter.</p>}
-          </div> : null}
           {tab === "overview" && canEdit && detail ? <div role="tabpanel" className="pt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
           {tab === "overview" && !canEdit ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
             {[["Course code", selected.code], ["Course name", selected.name], ["CRICOS", selected.cricos || "—"], ["Duration", selected.duration || "—"], ["Delivery mode", selected.mode || "—"], ["Campus", selected.campus || "—"], ["Training package", selected.trainingPackage || "—"], ["Category", selected.category || "—"]].map(([label, value]) =>

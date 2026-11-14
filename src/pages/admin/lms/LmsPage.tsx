@@ -5,7 +5,7 @@ import LmsBatchWorkspacePage from "./LmsBatchWorkspacePage";
 import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
-import LmsAssessmentAllocationPage from "./LmsAssessmentAllocationPage";
+import LmsAssessmentAllocationV2Page from "./LmsAssessmentAllocationV2Page";
 import LmsSubmissionsPage from "./LmsSubmissionsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
@@ -18,7 +18,7 @@ export default function LmsPage() {
   if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
-  if (area === "assessment-allocation") return <LmsAssessmentAllocationPage />;
+  if (area === "assessment-allocation") return <LmsAssessmentAllocationV2Page />;
   if (area === "submissions") return <LmsSubmissionsPage />;
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;

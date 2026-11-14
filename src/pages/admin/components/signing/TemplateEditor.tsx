@@ -204,7 +204,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       {error && <p role="alert" className={ALERT} data-testid="template-error">{error}</p>}
       {!template && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => set({ kind: "text", fields: [], category: isTemplateType(draft.category) && draft.category !== "offer_letter" ? "offer_letter" : draft.category })} /> Letter or document to sign (rich text with placeholders)</label>
-        <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => set({ kind: "email", fields: [], audience: "employee", category: EMAIL_TYPES.some((t) => t.type === draft.category) ? draft.category : "offer_email" })} /> Email</label>
+        {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => set({ kind: "email", fields: [], audience: "employee", category: EMAIL_TYPES.some((t) => t.type === draft.category) ? draft.category : "offer_email" })} /> Email</label>}
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "pdf"} onChange={() => set({ kind: "pdf", fields: [], category: isTemplateType(draft.category) && draft.category !== "offer_letter" ? "other" : draft.category })} /> A ready-made PDF</label>
       </div>}
       <div className="grid gap-4 md:grid-cols-2">
@@ -217,7 +217,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
             {categoryOptions(draft.kind, template ? undefined : audience).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </Select>
         </Field>
-        {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>}
+        {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo || audience === "agent"} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents / Businesses</option></Select></Field>}
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
       {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}

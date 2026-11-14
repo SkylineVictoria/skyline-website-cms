@@ -38,7 +38,7 @@ function UnitPicker({ title, initial, onClose, onPick }: { title: string; initia
 }
 
 const SUBJECT = { student: "Student", employee: "Employee", agent: "Agent" } as const;
-const AUDIENCE = { any: "Anyone", student: "Students / Applications", employee: "Employees", agent: "Agents" } as const;
+const AUDIENCE = { any: "Anyone", student: "Students / Applications", employee: "Employees", agent: "Agents / Businesses" } as const;
 type Audience = keyof typeof AUDIENCE;
 
 /** Documents & Signatures. Shows the released first-stage page until the hosted database has the second-stage actions. */
@@ -69,7 +69,7 @@ function EnvelopeSigningPage() {
   const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string } | null>(null);
   const [choosing, setChoosing] = useState(false);
-  const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "unit">("");
+  const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
   const [unitStep, setUnitStep] = useState<{ templateId: string | null; initial: { courseId: string; unitId: string } | null } | null>(null);
   const [pendingUnit, setPendingUnit] = useState<{ courseId: string; unitId: string } | null>(null);
@@ -127,7 +127,7 @@ function EnvelopeSigningPage() {
 
     {tab === "templates" && <div className="flex flex-wrap items-end gap-3">
       <Field label="For"><Select value={forFilter} onChange={(e) => setForFilter(e.target.value as typeof forFilter)} data-testid="template-for-filter" className="w-56">
-        <option value="">All</option><option value="employee">Employees</option><option value="student">Students / Applications</option><option value="unit">Units / Assessments</option></Select></Field>
+        <option value="">All</option><option value="employee">{AUDIENCE.employee}</option><option value="student">{AUDIENCE.student}</option><option value="agent">{AUDIENCE.agent}</option><option value="unit">Units / Assessments</option></Select></Field>
     </div>}
     {tab === "templates" && (!templates.length ? <EmptyState icon="ri-file-copy-2-line" title="No templates yet" description="A template holds the text or PDF, its variables, who signs and where." />
       : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="template-table">
@@ -138,7 +138,7 @@ function EnvelopeSigningPage() {
           <td className="px-3 py-2"><div className="flex flex-wrap justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(t)}>Edit</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAction({ action: "template_duplicate", id: t.id }), "Template duplicated.")}>Duplicate</Button>
-            {t.category !== LETTER_CATEGORY && t.audience !== "employee" && <Button size="sm" variant="outline" disabled={busy} data-testid="template-unit" onClick={() => { const l = linkOf(t.id); setUnitStep({ templateId: t.id, initial: l ? { courseId: l.courseId, unitId: l.unitId } : null }); }}>{linkOf(t.id) ? "Change unit" : "Link to unit"}</Button>}
+            {t.category !== LETTER_CATEGORY && t.audience !== "employee" && (t.audience !== "agent" || linkOf(t.id)) && <Button size="sm" variant="outline" disabled={busy} data-testid="template-unit" onClick={() => { const l = linkOf(t.id); setUnitStep({ templateId: t.id, initial: l ? { courseId: l.courseId, unitId: l.unitId } : null }); }}>{linkOf(t.id) ? "Change unit" : "Link to unit"}</Button>}
             {t.category === LETTER_CATEGORY
               ? <Button size="sm" variant="outline" disabled={busy} data-testid="letter-template-toggle" onClick={() => void act(() => setLetterTemplateActive(t.id, t.status !== "active"), t.status === "active" ? "The letter is inactive." : "The letter is active.")}>{t.status === "active" ? "Make inactive" : "Make active"}</Button>
               : <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAdmin("template_archive", t.id), t.status === "active" ? "Template archived." : "Template restored.")}>{t.status === "active" ? "Archive" : "Unarchive"}</Button>}
@@ -147,9 +147,10 @@ function EnvelopeSigningPage() {
 
     {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {choosing && <Modal open title="New template: who is it for?" onClose={() => setChoosing(false)}>
-      <div className="grid gap-3 sm:grid-cols-3" data-testid="template-audience-choice">
+      <div className="grid gap-3 sm:grid-cols-2" data-testid="template-audience-choice">
         {([["employee", "Employees", "Contracts, declarations and other staff documents (employee variables).", "employment_contract", "ri-user-star-line"],
-          ["student", "Students / Applications", "The Letter of Offer sent from an application, and student documents (student, course, fee and institute variables).", LETTER_CATEGORY, "ri-graduation-cap-line"]] as const)
+          ["student", "Students / Applications", "The Letter of Offer sent from an application, and student documents (student, course, fee and institute variables).", LETTER_CATEGORY, "ri-graduation-cap-line"],
+          ["agent", AUDIENCE.agent, "Agency agreements, commission agreements and other documents for agents or business representatives.", "agency_agreement", "ri-briefcase-line"]] as const)
           .map(([audience, label, hint, category, icon]) => (
             <button key={audience} type="button" data-testid={`template-audience-${audience}`} onClick={() => { setChoosing(false); setEditing({ audience, category }); }}
               className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">

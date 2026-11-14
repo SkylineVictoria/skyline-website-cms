@@ -68,8 +68,8 @@ export default function LmsBatchesPage() {
   const row = (selected:boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm transition hover:bg-background-100 ${selected ? "border-primary-500 bg-primary-50 font-semibold" : "border-background-200 bg-background-50"}`;
   return <div className="mx-auto max-w-7xl space-y-5 pb-10">
     <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p>
-      <h1 className="font-heading text-3xl font-bold text-foreground-950">Batch Management</h1>
-      <p className="mt-1 text-sm text-foreground-600">Select a course, then an intake. Add or edit batches in the final column.</p></div>
+      <h1 className="font-heading text-3xl font-bold text-foreground-950">Batches · Unit Allocation</h1>
+      <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Allocate unit dates in the fourth column.</p></div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => void refresh()}>Retry</button></div>}
     <div className="w-full overflow-x-auto pb-3" role="region" aria-label="Batch management columns" tabIndex={0}><div className="grid grid-cols-[minmax(230px,1fr)_minmax(210px,0.85fr)_minmax(190px,0.8fr)_minmax(390px,2.2fr)] gap-3 min-w-[1080px]">
       <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Courses">

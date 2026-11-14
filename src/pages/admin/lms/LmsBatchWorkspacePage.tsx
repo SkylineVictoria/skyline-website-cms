@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
-import { rto, rtoFlow, type RtoCourse, type RtoIntake, type IntakeDetail, type BatchPageData } from "@/pages/admin/lib/rto";
+import { rto, rtoFlow, type RtoCourse, type RtoIntake, type IntakeDetail, type BatchPageData, type StaffOption } from "@/pages/admin/lib/rto";
 
 /** Rebuilt four-column batch workspace. Existing RTO records remain authoritative. */
 export default function LmsBatchWorkspacePage() {
@@ -12,6 +12,7 @@ export default function LmsBatchWorkspacePage() {
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [batchDetail, setBatchDetail] = useState<BatchPageData | null>(null);
   const [saving, setSaving] = useState("");
+  const [trainers, setTrainers] = useState<StaffOption[]>([]);
   const [canEdit, setCanEdit] = useState(false);
   const [editor, setEditor] = useState<"edit" | null>(null);
   const [adding, setAdding] = useState(false);
@@ -70,6 +71,32 @@ export default function LmsBatchWorkspacePage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to create batch"); }
     finally { setSaving(""); }
   };
+  useEffect(() => {
+    let active = true;
+    rto<StaffOption[]>("staff_list").then(rows => { if (active) setTrainers(rows); })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load trainers"); });
+    return () => { active = false; };
+  }, []);
+  const assignTrainer = async (trainerId: string) => {
+    if (!batchId || !batchDetail || !trainerId) return;
+    const ids = batchDetail.batch.trainers.map(t => t.id);
+    if (ids.includes(trainerId)) return;
+    setSaving("trainer"); setError("");
+    try {
+      await rtoFlow("batch_trainers_set", { batchId, trainerIds: [...ids, trainerId] });
+      setBatchDetail(await rtoFlow<BatchPageData>("batch_get", { batchId }));
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to assign trainer"); }
+    finally { setSaving(""); }
+  };
+  const removeTrainer = async (trainerId: string) => {
+    if (!batchId || !batchDetail) return;
+    setSaving("trainer"); setError("");
+    try {
+      await rtoFlow("batch_trainers_set", { batchId, trainerIds: batchDetail.batch.trainers.filter(t => t.id !== trainerId).map(t => t.id) });
+      setBatchDetail(await rtoFlow<BatchPageData>("batch_get", { batchId }));
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to remove trainer"); }
+    finally { setSaving(""); }
+  };
   const saveDates = async (unitId: string, startDate: string, endDate: string) => {
     if (!batchId || !startDate || !endDate || startDate > endDate) { setError("End date must be on or after start date."); return; }
     setSaving(unitId); setError("");
@@ -122,8 +149,14 @@ export default function LmsBatchWorkspacePage() {
                 onSave={(start,end) => void saveDates(u.intakeUnitId,start,end)} />)}
             </div>
             <div className="mt-4 rounded-lg bg-background-100 p-3 text-xs text-foreground-600">
-              <strong>Assigned batch trainers:</strong> {batchDetail.batch.trainers.map(t => t.name).join(", ") || "None"}
-              <p className="mt-1">Trainer assignment is currently batch-wide. Per-unit trainer assignments need a backend change before they can be saved reliably.</p>
+              <label className="block text-xs font-semibold text-foreground-800">Assign trainer
+                <select aria-label="Assign batch trainer" className="mt-2 w-full rounded-md border border-background-300 bg-background-50 p-2 text-sm" value="" disabled={!canEdit || !!saving} onChange={e => void assignTrainer(e.target.value)}>
+                  <option value="">Select trainer…</option>
+                  {trainers.filter(t => !batchDetail.batch.trainers.some(x => x.id === t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </label>
+              <div className="mt-2 flex flex-wrap gap-2">{batchDetail.batch.trainers.map(t => <span key={t.id} className="inline-flex items-center gap-2 rounded-md border border-background-300 px-2 py-1 text-xs">{t.name}{canEdit && <button type="button" disabled={!!saving} aria-label={`Remove ${t.name}`} className="text-red-600" onClick={() => void removeTrainer(t.id)}>×</button>}</span>)}</div>
+              <p className="mt-2">These trainers are assigned to the entire batch. Separate trainer selection for each unit requires backend support.</p>
             </div>
           </>
         )}

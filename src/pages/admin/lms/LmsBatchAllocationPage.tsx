@@ -129,9 +129,8 @@ export default function LmsBatchAllocationPage() {
         </>}
       </section>
     </div>
-      {picker && <StudentPicker courseId={data.intake.courseId} batchId={batchId} rtoManager={canEdit}
+      {picker && data && current && <StudentPicker courseId={data.intake.courseId} batchId={batchId} rtoManager={canEdit}
         batches={[{ id: batchId, name: current.name, capacity: current.capacity, enrolled: students.length, studentIds: students.map(s => s.id) }]}
         onClose={() => setPicker(false)} onAdded={() => { setPicker(false); void load(); push("Students assigned", "success"); }} />}
-    </>}
   </div>;
 }

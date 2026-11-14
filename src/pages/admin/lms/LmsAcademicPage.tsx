@@ -10,6 +10,8 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
   const [newIntakeOpen, setNewIntakeOpen] = useState(false);
   const [batchEditorOpen, setBatchEditorOpen] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
+  const [unitEdit, setUnitEdit] = useState<{intakeUnitId:string;startDate:string;endDate:string}|null>(null);
+  const [savingUnit, setSavingUnit] = useState(false);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [courseId, setCourseId] = useState("");
@@ -48,6 +50,17 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     const text = (b.name + " " + b.intake.courseName + " " + b.intake.name).toLowerCase();
     return (!courseId || b.intake.courseId === courseId) && (!intakeId || b.intake.id === intakeId) && text.includes(query.toLowerCase());
   }), [intakes, courseId, intakeId, query]);
+  const saveUnit = async () => {
+    if (!unitEdit || !batchId) return;
+    if (unitEdit.endDate < unitEdit.startDate) { setError("End date cannot precede start date."); return; }
+    setSavingUnit(true);
+    try {
+      await rtoFlow<IntakeDetail>("batch_override_set", { batchId, intakeUnitId: unitEdit.intakeUnitId, startDate: unitEdit.startDate, endDate: unitEdit.endDate });
+      const updated = await rtoFlow<BatchPageData>("batch_get", { batchId });
+      setBatch(updated); setUnitEdit(null); setError("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save unit dates."); }
+    finally { setSavingUnit(false); }
+  };
   const titles = { batches: "Batches", "unit-delivery": "Unit Delivery", timetable: "Timetable", attendance: "Attendance" };
   return <div className="mx-auto max-w-6xl space-y-5 pb-10">
     <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold text-foreground-950">{titles[area]}</h1>
@@ -73,9 +86,18 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     </div> : null}
     {area === "unit-delivery" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4">
       <h2 className="mb-3 font-semibold">Unit delivery schedule</h2>
-      {!detail ? <p className="text-sm text-foreground-500">Choose an intake to see its units and delivery dates.</p> :
-      <div className="divide-y divide-background-200">{detail.schedule.map(u => <div key={u.id} className="flex flex-wrap justify-between gap-2 py-3"><div><strong>{u.code}</strong><span className="ml-2 text-foreground-600">{u.name}</span></div><span className="text-xs text-foreground-500">{u.startDate} – {u.endDate}</span></div>)}</div>}
-      {batchId ? <Link className="mt-4 inline-block font-semibold text-primary-600 underline" to={`/admin/batches/${batchId}`}>Edit batch unit delivery dates</Link> : null}
+      {!batch && !detail ? <p className="text-sm text-foreground-500">Choose an intake or batch to see its units.</p> :
+      <div className="divide-y divide-background-200">{(batch?.batch.schedule ?? detail?.schedule ?? []).map(u => <div key={"intakeUnitId" in u ? u.intakeUnitId : u.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+        <div><strong>{u.code}</strong><span className="ml-2 text-foreground-600">{u.name}</span></div>
+        <div className="flex items-center gap-3"><span className="text-xs text-foreground-500">{u.startDate} – {u.endDate}</span>
+          {batchId && canEdit && "intakeUnitId" in u ? <button type="button" className="text-sm font-semibold text-primary-600 underline" onClick={() => setUnitEdit({intakeUnitId:u.intakeUnitId,startDate:u.startDate,endDate:u.endDate})}>Edit</button> : null}
+        </div></div>)}</div>}
+      {unitEdit ? <div className="mt-4 space-y-3 rounded-md border border-background-200 p-4"><h3 className="font-semibold">Edit batch unit dates</h3>
+        <div className="flex flex-wrap gap-3"><label className="text-sm">Start date<input type="date" className="ml-2 rounded border p-2" value={unitEdit.startDate} onChange={e => setUnitEdit(v => v ? {...v,startDate:e.target.value}:v)} /></label>
+        <label className="text-sm">End date<input type="date" className="ml-2 rounded border p-2" value={unitEdit.endDate} onChange={e => setUnitEdit(v => v ? {...v,endDate:e.target.value}:v)} /></label></div>
+        <button disabled={savingUnit} className="rounded bg-primary-500 px-3 py-2 text-background-50 disabled:opacity-50" onClick={() => void saveUnit()}>{savingUnit ? "Saving…" : "Save unit dates"}</button>
+        <button className="ml-3 text-sm underline" onClick={() => setUnitEdit(null)}>Cancel</button>
+      </div> : null}
     </div> : null}
     {area === "timetable" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4"><h2 className="mb-3 font-semibold">Weekly class timing</h2>
       {!batch ? <p className="text-sm text-foreground-500">Choose a batch to view its class times.</p> : <>

@@ -112,32 +112,79 @@ export function CreateDialog({ courses, templates, onClose, onCreated }: { cours
 }
 
 function Submissions() {
-  const [ov, setOv] = useState<Overview | null>(null); const [error, setError] = useState(""); const [attempt, setAttempt] = useState<string | null>(null);
-  const [batchId, setBatchId] = useState(""); const [batches, setBatches] = useState<BatchOption[]>([]);
-  const load = useCallback(() => asmAdmin<Overview>("overview", { batchId: batchId || undefined }).then(setOv).catch((e) => setError(fail(e))), [batchId]);
+  const [ov, setOv] = useState<Overview | null>(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState<string | null>(null);
+  const [batchId, setBatchId] = useState("");
+  const [batches, setBatches] = useState<BatchOption[]>([]);
+  const [courseId, setCourseId] = useState("");
+  const [intakeId, setIntakeId] = useState("");
+  const [unitCode, setUnitCode] = useState("");
+  const [assessment, setAssessment] = useState("");
+  const [studentQuery, setStudentQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState(["", "", ""]);
+  const [page, setPage] = useState(1);
+  const load = useCallback(() => asmAdmin<Overview>("overview", { batchId: batchId || undefined }).then(v => { setOv(v); setError(""); }).catch((e) => setError(fail(e))), [batchId]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { void asmAdmin<BatchOption[]>("batch_list", { includeInactive: true }).then(setBatches).catch(() => setBatches([])); }, []);
-  return (
-    <div className="space-y-4">
-      <Select className="w-auto" value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">All batches</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.courseName} · {b.intake} · {b.name}</option>)}</Select>
-      {error ? <ErrorNote text={error} /> : null}
-      {ov ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Open assignments" value={ov.assignments} icon="ri-group-line" hint={`${ov.eligible} students`} />
-          <StatCard label="Not started / in progress" value={`${ov.notStarted} / ${ov.draft}`} icon="ri-edit-line" hint={`${ov.overdue} overdue`} />
-          <StatCard label="Waiting for marking" value={ov.submitted} icon="ri-inbox-line" hint={`${ov.returned} returned for reassessment`} />
-          <StatCard label="Final" value={ov.final} icon="ri-check-double-line" hint={`${ov.reassessmentsOpen} reassessment request${ov.reassessmentsOpen === 1 ? "" : "s"} waiting`} />
-        </div>
-      ) : <SkeletonLines lines={3} />}
-      <div>
-        <h3 className="mb-2 font-heading text-base font-semibold text-foreground-950">Pending marking</h3>
-        {ov && ov.pendingMarking.length === 0 ? <p className="text-sm text-foreground-600">Nothing is waiting for an assessor.</p> : null}
-        {ov && ov.pendingMarking.length ? <ul className="divide-y divide-background-100 rounded-md border border-background-200">{ov.pendingMarking.map((p) => <li key={p.attemptId} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm"><button type="button" className="min-w-0 flex-1 text-left" onClick={() => setAttempt(p.attemptId)}><span className="block font-medium text-foreground-900">{p.studentName} · {p.assessmentTitle}</span><span className="block text-xs text-foreground-600">{p.batchName} · attempt {p.attemptNo} · submitted {fmtDateTime(p.submittedAt)}</span></button><Badge tone={p.state === "marking" ? "accent" : "warn"}>{STATE_LABEL[p.state] ?? p.state}</Badge></li>)}</ul> : null}
-      </div>
-      <ReassessmentRequests onChanged={() => void load()} />
-      {attempt ? <AttemptDrawer attemptId={attempt} onClose={() => setAttempt(null)} onChanged={() => void load()} /> : null}
+  useEffect(() => { void asmAdmin<BatchOption[]>("batch_list", { includeInactive: true }).then(setBatches).catch(e => setError(fail(e))); }, []);
+  const courses = Array.from(new Map(batches.map(b => [b.courseId, { id: b.courseId, name: b.courseName }])).values());
+  const intakes = Array.from(new Map(batches.filter(b => b.courseId === courseId).map(b => [b.intakeId, { id: b.intakeId, name: b.intake }])).values());
+  const selectedBatches = batches.filter(b => b.courseId === courseId && b.intakeId === intakeId);
+  useEffect(() => { setCourseId(old => courses.some(c => c.id === old) ? old : courses[0]?.id ?? ""); }, [batches]);
+  useEffect(() => { setIntakeId(old => intakes.some(i => i.id === old) ? old : intakes[0]?.id ?? ""); }, [courseId, batches]);
+  useEffect(() => { setBatchId(old => selectedBatches.some(b => b.id === old) ? old : selectedBatches[0]?.id ?? ""); }, [intakeId, courseId, batches]);
+  const pending = ov?.pendingMarking ?? [];
+  const units = Array.from(new Set(pending.map(p => p.unitCode).filter((x): x is string => !!x)));
+  const assessmentTitles = Array.from(new Set(pending.filter(p => !unitCode || p.unitCode === unitCode).map(p => p.assessmentTitle)));
+  const filtered = pending.filter(p => (!unitCode || p.unitCode === unitCode) && (!assessment || p.assessmentTitle === assessment) && (statusFilter === "all" || p.state === statusFilter) && (p.studentName + " " + p.assessmentTitle).toLowerCase().includes(studentQuery.toLowerCase()));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / 8));
+  const visible = filtered.slice((Math.min(page,pageCount)-1)*8,Math.min(page,pageCount)*8);
+  useEffect(() => { setPage(1); }, [batchId, unitCode, assessment, studentQuery, statusFilter]);
+  const panel = "min-w-0 rounded-xl border border-background-200 bg-background-50 p-3";
+  const input = "w-full rounded-lg border border-background-300 bg-background-50 p-2 text-sm";
+  const option = (selected: boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm ${selected ? "border-primary-500 bg-primary-50 font-semibold" : "border-background-200 hover:bg-background-100"}`;
+  return <div className="space-y-4">
+    {error ? <ErrorNote text={error} /> : null}
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,0.9fr)_minmax(170px,0.9fr)_minmax(420px,2.6fr)]">
+      <section className={panel}><h3 className="mb-3 font-semibold">1. Course</h3>
+        <input aria-label="Search courses" placeholder="Search courses…" className={input+" mb-3"} value={search[0]} onChange={e=>setSearch(v=>[e.target.value,v[1],v[2]])}/>
+        <div className="space-y-2">{courses.filter(c=>c.name.toLowerCase().includes(search[0].toLowerCase())).map(c=><button type="button" key={c.id} className={option(courseId===c.id)} onClick={()=>setCourseId(c.id)}>{c.name}</button>)}</div>
+      </section>
+      <section className={panel}><h3 className="mb-3 font-semibold">2. Intake</h3>
+        <input aria-label="Search intakes" placeholder="Search intakes…" className={input+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value,v[2]])}/>
+        <div className="space-y-2">{intakes.filter(i=>i.name.toLowerCase().includes(search[1].toLowerCase())).map(i=><button type="button" key={i.id} className={option(intakeId===i.id)} onClick={()=>setIntakeId(i.id)}>{i.name}</button>)}</div>
+      </section>
+      <section className={panel}><h3 className="mb-3 font-semibold">3. Batch</h3>
+        <input aria-label="Search batches" placeholder="Search batches…" className={input+" mb-3"} value={search[2]} onChange={e=>setSearch(v=>[v[0],v[1],e.target.value])}/>
+        <div className="space-y-2">{selectedBatches.filter(b=>b.name.toLowerCase().includes(search[2].toLowerCase())).map(b=><button type="button" key={b.id} className={option(batchId===b.id)} onClick={()=>setBatchId(b.id)}>{b.name}</button>)}</div>
+      </section>
+      <section className={panel}>
+        <h3 className="mb-3 font-semibold">4. Submissions</h3>
+        {!batchId?<p className="text-sm text-foreground-500">Select a batch to view submissions.</p>:<>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-xs font-semibold">Unit<select className={input+" mt-1"} value={unitCode} onChange={e=>{setUnitCode(e.target.value);setAssessment("");}}><option value="">All units with pending marking</option>{units.map(u=><option key={u} value={u}>{u}</option>)}</select></label>
+            <label className="text-xs font-semibold">Assessment<select className={input+" mt-1"} value={assessment} onChange={e=>setAssessment(e.target.value)}><option value="">All assessments</option>{assessmentTitles.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
+          </div>
+          {ov?<div className="my-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[[ov.eligible,"Eligible"],[ov.submitted,"Submitted"],[ov.notStarted+ov.draft,"Not started / Draft"],[ov.overdue,"Overdue"]].map(([value,label])=><div key={label} className="rounded-lg border border-background-200 p-3"><p className="text-xl font-bold">{value}</p><p className="text-xs text-foreground-600">{label}</p></div>)}
+          </div>:<SkeletonLines lines={2}/>}
+          <p className="mb-3 text-xs text-foreground-500">The table shows submissions awaiting marking. Full submission history remains in the existing assessment workflow.</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input aria-label="Search student submissions" placeholder="Search student…" className={input} value={studentQuery} onChange={e=>setStudentQuery(e.target.value)}/>
+            <select aria-label="Submission status" className={input} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">All pending states</option><option value="submitted">Submitted</option><option value="marking">Marking</option></select>
+          </div>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-background-200">
+            <table className="w-full min-w-[460px] text-left text-sm"><thead className="bg-background-100 text-xs"><tr><th className="p-2">Student</th><th className="p-2">Assessment</th><th className="p-2">Attempt</th><th className="p-2">Status</th><th className="p-2">Action</th></tr></thead><tbody className="divide-y divide-background-100">{visible.map(p=><tr key={p.attemptId}><td className="p-2 font-medium">{p.studentName}</td><td className="p-2">{p.assessmentTitle}<p className="text-xs text-foreground-500">{p.unitCode||""}</p></td><td className="p-2">{p.attemptNo}</td><td className="p-2"><Badge tone={p.state==="marking"?"accent":"warn"}>{STATE_LABEL[p.state]??p.state}</Badge></td><td className="p-2"><button type="button" className="font-semibold text-primary-600 underline" onClick={()=>setAttempt(p.attemptId)}>Review</button></td></tr>)}</tbody></table>
+            {!visible.length&&<p className="p-4 text-sm text-foreground-500">No submissions waiting for marking.</p>}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs"><span>Showing {visible.length} of {filtered.length} pending submissions</span><div className="flex gap-2"><button type="button" disabled={page<=1} className="rounded border px-2 py-1 disabled:opacity-40" onClick={()=>setPage(v=>v-1)}>Previous</button><span className="py-1">{Math.min(page,pageCount)} / {pageCount}</span><button type="button" disabled={page>=pageCount} className="rounded border px-2 py-1 disabled:opacity-40" onClick={()=>setPage(v=>v+1)}>Next</button></div></div>
+          <div className="mt-4"><ReassessmentRequests onChanged={()=>void load()}/></div>
+        </>}
+      </section>
     </div>
-  );
+    {attempt?<AttemptDrawer attemptId={attempt} onClose={()=>setAttempt(null)} onChanged={()=>void load()}/>:null}
+  </div>;
 }
 
 function ReassessmentRequests({ onChanged }: { onChanged: () => void }) {

@@ -29,7 +29,8 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [batches, setBatches] = useState<RtoBatch[]>(given ?? []);
   const [locations, setLocations] = useState<LocationRooms[]>([]);
   const [timings, setTimings] = useState<CourseTiming[]>([]);
-  const [staff, setStaff] = useState<StaffOption[]>([]);\n  const [intakeUnits, setIntakeUnits] = useState<IntakeDetail["schedule"]>([]);
+  const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [intakeUnits, setIntakeUnits] = useState<IntakeDetail["schedule"]>([]);
   const [rows, setRows] = useState<Draft[]>(() => (batch?.sessions ?? []).map(toDraft));
   const [name, setName] = useState(batch?.name ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");

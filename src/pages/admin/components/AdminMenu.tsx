@@ -1,6 +1,6 @@
 import { LMS_MENU } from "@/pages/admin/lms/lmsConfig";
 import { useEffect, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { supabase } from '@/pages/admin/lib/supabase';
 import { useAuth } from '@/pages/admin/lib/authContext';
 import { menuActive, menuIcon, menuTree, type AdminMenuItem, type MenuNode } from '@/pages/admin/lib/adminMenu';
@@ -56,7 +56,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const nodes = result?.identity === identity ? menuTree(result.rows) : null;
   return <>
     <div className={`flex-1 overflow-y-auto py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /></> : <>
+      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /><Link to="/admin/communication" onClick={close} title={collapsed ? "Communication Hub" : undefined} className={linkClass + " mt-2 text-foreground-700 hover:bg-background-100"}><i className="ri-chat-3-line text-lg" aria-hidden="true" />{collapsed ? <span className="sr-only">Communication Hub</span> : "Communication Hub"}</Link></> : <>
         <NavLink to="/admin" end onClick={close} className={linkClass}><i className="ri-dashboard-3-line" aria-hidden="true" />Dashboard</NavLink>
         <p role="status" className="px-3 text-xs text-foreground-500">{failed ? 'Menu unavailable.' : 'Loading menu…'}</p>
         {failed ? <button type="button" onClick={() => setAttempt(v => v + 1)} className={linkClass}>Retry menu</button> : null}

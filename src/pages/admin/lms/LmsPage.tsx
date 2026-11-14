@@ -3,13 +3,13 @@ import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAcademicPage from "./LmsAcademicPage";
 import IntakesPage from "@/pages/admin/IntakesPage";
 import AssessmentsPage from "@/pages/admin/assessments/AssessmentsPage";
-import CoursesPage from "@/pages/admin/CoursesPage";
+import CourseFeesPage from "@/pages/admin/CourseFeesPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   const { area } = useParams<{ area?: LmsArea }>();
   const selected = LMS_MENU.find(x => x.id === area);
-  if (area === "courses") return <CoursesPage />;
+  if (area === "courses") return <CourseFeesPage />;
   if (area === "intakes") return <IntakesPage />;
   if (area === "assessments") return <AssessmentsPage />;
   if (area === "batches" || area === "unit-delivery" || area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;

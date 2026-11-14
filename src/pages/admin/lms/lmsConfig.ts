@@ -2,7 +2,7 @@
  * This file deliberately does not modify Master Data, CRM or HRMS.
  * All references resolve through existing authoritative APIs.
  */
-export type LmsArea = "dashboard" | "courses" | "intakes" | "batches" | "unit-delivery" | "timetable" | "attendance" | "assessments";
+export type LmsArea = "dashboard" | "courses" | "units" | "intakes" | "batches" | "unit-delivery" | "timetable" | "attendance" | "assessments";
 export type LmsDependency = "course" | "intake" | "batch" | "unit" | "unitDelivery" | "session";
 export interface LmsMenuEntry {
   id: LmsArea;
@@ -15,6 +15,7 @@ export interface LmsMenuEntry {
 export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "dashboard", label: "Dashboard", route: "/admin/lms", icon: "ri-dashboard-3-line", dependencies: [] },
   { id: "courses", label: "Courses", route: "/admin/lms/courses", icon: "ri-book-open-line", dependencies: [], primaryAction: "Add Course" },
+  { id: "units", label: "Units", route: "/admin/lms/units", icon: "ri-stack-line", dependencies: ["course"] },
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
   { id: "unit-delivery", label: "Unit Delivery", route: "/admin/lms/unit-delivery", icon: "ri-stack-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Unit Delivery" },

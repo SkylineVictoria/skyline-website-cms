@@ -52,30 +52,40 @@ function TemplateNamePicker({ name, names, onChange, onSelect }: {
   name: string; names: string[]; onChange: (name: string) => void; onSelect: (name: string) => void;
 }) {
   const id = useId();
-  const focusInput = () => document.getElementById(id)?.focus();
+  const input = () => document.getElementById(id) as HTMLInputElement | null;
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [addingName, setAddingName] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   const query = search.trim().toLowerCase();
   const newName = name.trim();
   const matches = names.filter((value) => value.toLowerCase().includes(query));
   const canAdd = Boolean(newName) && !names.some((value) => value.toLowerCase() === newName.toLowerCase());
-  const choices = [...matches.map((value) => ({ value, label: value })), ...(canAdd ? [{ value: newName, label: `+ Add new: ${newName}` }] : [])];
+  const addChoice = { value: null, label: canAdd ? `+ Add new: ${newName}` : "+ Add new" };
+  const choices = [addChoice, ...matches.map((value) => ({ value, label: value }))];
 
   const show = () => { setSearch(""); setHighlight(-1); setOpen(true); };
-  const choose = (value: string) => {
-    onSelect(value);
-    focusInput();
+  const choose = (value: string | null) => {
+    if (value === null && !canAdd) {
+      input()?.focus();
+      input()?.select();
+      setAddingName(true);
+      show();
+      return;
+    }
+    onSelect(value ?? newName);
+    input()?.focus();
+    setAddingName(false);
     setOpen(false);
   };
 
-  return <div className="min-w-0" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+  return <div className="min-w-0" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) { setAddingName(false); setOpen(false); } }}>
     <label htmlFor={id} className="mb-1.5 block text-label font-medium text-foreground-800">Template name <span aria-hidden="true" className="text-primary-600">*</span></label>
     <div className="relative">
       <TextInput id={id} inputMode="search" role="combobox" aria-required="true" aria-expanded={open}
         aria-controls={open ? `${id}-options` : undefined} aria-autocomplete="list"
         aria-activedescendant={open && choices[highlight] ? `${id}-option-${highlight}` : undefined}
-        className="pr-11 !text-base md:!text-sm" value={name} maxLength={120} placeholder="Search or add a template name" autoComplete="off"
+        className="pr-11 !text-base md:!text-sm" value={name} maxLength={120} placeholder={addingName ? "Enter a new template name" : "Search or add a template name"} autoComplete="off"
         onFocus={show} onClick={() => { if (!open) show(); }}
         onChange={(event) => {
           onChange(event.target.value);
@@ -84,11 +94,11 @@ function TemplateNamePicker({ name, names, onChange, onSelect }: {
           setOpen(true);
         }}
         onKeyDown={(event) => {
-          if (event.key === "Escape") setOpen(false);
+          if (event.key === "Escape") { setAddingName(false); setOpen(false); }
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
             if (!open) show();
-            else if (choices.length) {
+            else {
               const next = event.key === "ArrowDown" ? (highlight + 1) % choices.length : (highlight <= 0 ? choices.length - 1 : highlight - 1);
               setHighlight(next);
               document.getElementById(`${id}-option-${next}`)?.scrollIntoView({ block: "nearest" });
@@ -97,22 +107,21 @@ function TemplateNamePicker({ name, names, onChange, onSelect }: {
           if (event.key === "Enter" && open) {
             event.preventDefault();
             if (choices[highlight]) choose(choices[highlight].value);
-            else if (canAdd) choose(newName);
+            else if (canAdd) choose(null);
           }
         }} data-testid="template-name" />
       <button type="button" tabIndex={-1} aria-label={open ? "Hide template names" : "Show template names"} className="absolute inset-y-0 right-0 w-11"
-        onMouseDown={(event) => event.preventDefault()} onClick={() => { if (open) setOpen(false); else { focusInput(); show(); } }}>
+        onMouseDown={(event) => event.preventDefault()} onClick={() => { if (open) setOpen(false); else { input()?.focus(); show(); } }}>
         <i className="ri-arrow-down-s-line" aria-hidden="true" />
       </button>
     </div>
     {open && <div className="mt-1 rounded-md border border-background-300 bg-background-50 shadow-sm">
       <div id={`${id}-options`} role="listbox" aria-label="Template names" className="max-h-48 overflow-y-auto">
-        {choices.map(({ value, label }, index) => <button key={value} id={`${id}-option-${index}`} type="button" role="option" tabIndex={-1}
+        {choices.map(({ value, label }, index) => <button key={value === null ? "add-name" : `name:${value}`} id={`${id}-option-${index}`} type="button" role="option" tabIndex={-1}
           aria-selected={highlight === -1 ? value === name : highlight === index}
-          className={`block min-h-10 w-full break-words px-3 py-2 text-left text-sm hover:bg-background-100 ${highlight === index ? "bg-background-200" : ""}`}
+          className={`block min-h-10 w-full break-words px-3 py-2 text-left text-sm hover:bg-background-100 ${value === null ? "font-medium text-primary-700" : ""} ${highlight === index ? "bg-background-200" : ""}`}
           onMouseDown={(event) => event.preventDefault()} onClick={() => choose(value)}>{label}</button>)}
       </div>
-      {!choices.length && <p className="px-3 py-2 text-sm text-foreground-600">Type a name to add a new template.</p>}
     </div>}
   </div>;
 }

@@ -111,7 +111,7 @@ export function CreateDialog({ courses, templates, onClose, onCreated }: { cours
   );
 }
 
-function Submissions() {
+export function Submissions() {
   const [ov, setOv] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState<string | null>(null);

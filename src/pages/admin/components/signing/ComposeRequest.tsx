@@ -107,8 +107,8 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
           : <div><Field label={`Find the ${SUBJECT_LABEL[subjectType].toLowerCase()}`}><TextInput value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or email" data-testid="subject-search" /></Field>
             {matches.length > 0 && <ul className="mt-1 max-h-40 overflow-y-auto rounded-md border border-background-300 text-sm">{matches.map((m) => <li key={m.id}><button type="button" className="block w-full px-3 py-2 text-left hover:bg-background-100" onClick={() => setSubjectId(m.id)}>{m.name} · {m.email}</button></li>)}</ul>}</div>)}
       </section>
-      <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="radio" checked={source === "template"} onChange={() => setSource("template")} /> From a template</label>
-        <label className="flex items-center gap-2"><input type="radio" checked={source === "upload"} onChange={() => { setSource("upload"); setPeople(people.length ? people : [person(1)]); }} /> Upload a ready-made PDF</label></div>
+      <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="radio" checked={source === "template"} onChange={() => setSource("template")} /> Use existing template</label>
+        <label className="flex items-center gap-2"><input type="radio" checked={source === "upload"} onChange={() => { setSource("upload"); setPeople(people.length ? people : [person(1)]); }} /> One-time sign (upload PDF)</label></div>
       {source === "template" ? <>
         <Field label="Template" required><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template"><option value="">Choose a template</option>{usable.map((t) => <option key={t.id} value={t.id}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category})</option>)}</Select></Field>
         {copyText !== null && <section className="space-y-2"><h3 className="font-semibold">Text of this copy</h3>
@@ -123,7 +123,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
           <TextInput value={valueOf(key)} maxLength={2000} onChange={(e) => setTyped({ ...typed, [key]: e.target.value })} data-testid={`bracket-value-${key}`} /></Field>)}</div></section>}
         {signerTokens.length > 0 && <p className="rounded-md border border-background-300 bg-background-50 p-3 text-sm" data-testid="compose-signer-fields">The first signer fills in {signerTokens.map((n) => `[${n}]`).join(", ")} on the signing screen before signing; their initials go wherever [Student Initial] is.</p>}
       </> : <div className="grid gap-4 md:grid-cols-2">
-        <Field label="PDF document" required hint="Up to 7 MB, sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
+        <Field label="PDF document" required hint="Up to 7 MB. This request will not create or change any saved template."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
         <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
       </div>}

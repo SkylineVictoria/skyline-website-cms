@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAcademicPage from "./LmsAcademicPage";
+import LmsBatchesPage from "./LmsBatchesPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
@@ -14,7 +15,8 @@ export default function LmsPage() {
   if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
-  if (area === "batches" || area === "unit-delivery" || area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;
+  if (area === "batches") return <LmsBatchesPage />;
+  if (area === "unit-delivery" || area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],
     "unit-delivery": [{ label: "Open intake unit schedule", to: "/admin/intakes", note: "The unit schedule belongs to its intake and batch." }],

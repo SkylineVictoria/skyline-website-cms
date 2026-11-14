@@ -315,6 +315,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       <Button disabled={busy} onClick={() => void save()} data-testid="template-save">{busy ? "Saving…" : "Save template"}</Button></div>}>
     <div className="space-y-5" data-testid="template-dialog">
       {error && <p role="alert" className={ALERT} data-testid="template-error">{error}</p>}
+      {draft.kind !== "email" && <div className="rounded-md border border-background-300 bg-background-100 px-3 py-2 text-sm" data-testid="template-used-for"><span className="text-foreground-600">Used for: </span><span className="font-semibold text-foreground-900">{({ student: "Students", employee: "Employees", agent: "Agents / Businesses", any: "Anyone" } as const)[loo ? "student" : draft.audience]}</span></div>}
       {!template && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => changeKind("text")} /> Letter or document to sign (rich text with placeholders)</label>
         {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => changeKind("email")} /> Email</label>}
@@ -331,7 +332,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
           </Select></Field>
         </>}
         {separateLetterTitle && draft.kind !== "email" && hrms && <Field label="Letter title" required hint="Placeholders work here too."><TextInput value={draft.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} data-testid="template-subject" /></Field>}
-        {draft.kind !== "email" && <Field label="Used for"><Select value={loo ? "student" : draft.audience} disabled={hrms || loo || audience === "agent"} onChange={(e) => set({ audience: e.target.value as Draft["audience"] })}><option value="any">Anyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents / Businesses</option></Select></Field>}
+        
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
       {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}

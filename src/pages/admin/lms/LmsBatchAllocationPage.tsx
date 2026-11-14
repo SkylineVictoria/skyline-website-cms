@@ -70,32 +70,32 @@ export default function LmsBatchAllocationPage() {
     void save("enrolment_set", { enrolmentId: s.enrolmentId, status: "withdrawn" }, "Student removed");
   };
   return <div className="mx-auto max-w-7xl space-y-5 pb-10">
-    <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
+    <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p>
       <h1 className="font-heading text-3xl font-bold">Batch Allocation</h1>
-      <p className="mt-1 text-sm text-foreground-600">Assign existing CRM students and HRMS trainers to a batch.</p></div>
+      <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Assign students and trainers in the fourth column.</p></div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => { setError(""); void load(); }}>Retry</button></div>}
-    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.85fr)_minmax(360px,2.3fr)]">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
       <section aria-label="Course selection" className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4">
-        <h2 className="mb-3 font-semibold">1. Course</h2>
+        <h2 className="mb-3 font-semibold">Courses</h2>
         <input aria-label="Search courses" placeholder="Search courses…" className={inputClass + " mb-3"} value={courseSearch} onChange={e => setCourseSearch(e.target.value)} />
         <div className="space-y-2">{courses.filter(c => c.label.toLowerCase().includes(courseSearch.toLowerCase())).map(c => <button key={c.id} type="button" aria-pressed={courseId === c.id} onClick={() => { setCourseId(c.id); setPicker(false); }} className={selectionClass(courseId === c.id)}>{c.label}</button>)}</div>
       </section>
       <section aria-label="Intake selection" className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4">
-        <h2 className="mb-3 font-semibold">2. Intake</h2>
+        <h2 className="mb-3 font-semibold">Intakes</h2>
         <input aria-label="Search intakes" placeholder="Search intakes…" className={inputClass + " mb-3"} value={intakeSearch} onChange={e => setIntakeSearch(e.target.value)} />
         <div className="space-y-2">{availableIntakes.filter(i => i.name.toLowerCase().includes(intakeSearch.toLowerCase())).map(i => <button key={i.id} type="button" aria-pressed={intakeId === i.id} onClick={() => { setIntakeId(i.id); setPicker(false); }} className={selectionClass(intakeId === i.id)}>{i.name}</button>)}</div>
         {!availableIntakes.length && <p className="text-sm text-foreground-500">No intakes for this course.</p>}
       </section>
       <section aria-label="Batch selection" className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4">
-        <h2 className="mb-3 font-semibold">3. Batch</h2>
+        <h2 className="mb-3 font-semibold">Batches</h2>
         <input aria-label="Search batches" placeholder="Search batches…" className={inputClass + " mb-3"} value={batchSearch} onChange={e => setBatchSearch(e.target.value)} />
         <div className="space-y-2">{batches.filter(b => b.name.toLowerCase().includes(batchSearch.toLowerCase())).map(b => <button key={b.id} type="button" aria-pressed={batchId === b.id} onClick={() => { setBatchId(b.id); setPicker(false); }} className={selectionClass(batchId === b.id)}>{b.name}</button>)}</div>
         {!batches.length && <p className="text-sm text-foreground-500">No batches for this intake.</p>}
         <Link className="mt-4 inline-block text-sm font-semibold text-primary-600 hover:underline" to="/admin/lms/batches">Manage batches</Link>
       </section>
       <section aria-label="Allocation workspace" className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4">
-        <h2 className="mb-3 font-semibold">4. Allocation</h2>
-        {loading ? <p className="text-sm text-foreground-500">Loading academic records…</p> : !batchId ? <p className="text-sm text-foreground-500">Select a batch in column three.</p> : !current || data?.batch.id !== batchId ? <p className="text-sm text-foreground-500">Loading allocations…</p> : <>
+        <h2 className="mb-3 font-semibold">Allocation</h2>
+        {loading ? <p className="text-sm text-foreground-500">Loading academic records…</p> : !batchId ? <p className="text-sm text-foreground-500">Select a batch in the Batches column.</p> : !current || data?.batch.id !== batchId ? <p className="text-sm text-foreground-500">Loading allocations…</p> : <>
           <div className="mb-3 flex gap-2" role="tablist" aria-label="Allocation type">
             {(["students", "trainers"] as const).map(t => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${tab === t ? "bg-primary-500 text-white" : "bg-background-100 text-foreground-700"}`}>{t === "students" ? `Students (${students.length})` : `Trainers (${current.trainers.length})`}</button>)}
           </div>

@@ -13,7 +13,7 @@ import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import AttemptDrawer from "./panels/AttemptDrawer";
 
 const TABS = [
-  { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
+  { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "submissions", label: "Submissions", icon: "ri-inbox-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
   { id: "bank", label: "Question bank", icon: "ri-archive-line" }, { id: "calendar", label: "Calendar", icon: "ri-calendar-2-line" }, { id: "reports", label: "Reports", icon: "ri-bar-chart-2-line" },
   { id: "settings", label: "Settings", icon: "ri-settings-3-line" }, { id: "audit", label: "Audit", icon: "ri-history-line" },
 ];
@@ -22,7 +22,7 @@ const fail = (e: unknown) => (e instanceof Error ? e.message : "Something went w
 /** Master Data › Assessments: the library, the submissions overview, outcomes, the question bank, the calendar, reports, settings and the audit log. */
 export default function AssessmentsPage() {
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "submissions" ? "library" : (params.get("tab") ?? "library");
+  const tab = params.get("tab") ?? "library";
   const [me, setMe] = useState<{ assessmentAdmin: boolean } | null>(null);
   useEffect(() => { void asmAdmin<{ assessmentAdmin: boolean }>("me").then(setMe).catch(() => setMe({ assessmentAdmin: false })); }, []);
   return (
@@ -31,6 +31,7 @@ export default function AssessmentsPage() {
       {me && !me.assessmentAdmin ? <ErrorNote text="Only an Admin or an RTO Manager can manage assessments." /> : null}
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t })} />
       {tab === "library" ? <Library /> : null}
+      {tab === "submissions" ? <Submissions /> : null}
       {tab === "outcomes" ? <Outcomes /> : null}
       {tab === "bank" ? <Bank /> : null}
       {tab === "calendar" ? <AdminCalendar /> : null}

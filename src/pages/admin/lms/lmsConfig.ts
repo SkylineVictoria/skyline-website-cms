@@ -20,7 +20,7 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
   { id: "batch-allocation", label: "Batch Allocation", route: "/admin/lms/batch-allocation", icon: "ri-user-follow-line", dependencies: ["course", "intake", "batch"] },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "batch", "session"], primaryAction: "Mark Attendance" },
-  { id: "assessments", label: "Assessments & Results", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Assessment" },
+  { id: "assessments", label: "Assessments", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Assessment" },
 ] as const;
 /** A selected child must resolve all ancestor IDs without additional user selections.
  * Quick-create is allowed only through the authoritative entity's existing API.

@@ -4,7 +4,7 @@ import { asmAdmin, type AssessmentRow, type AssignmentRow } from "@/pages/admin/
 import { fromLocalInput, toLocalInput } from "@/lib/assessment/api";
 import StudentPicker from "@/pages/admin/components/rto/StudentPicker";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type StaffOption } from "@/pages/admin/lib/rto";
+import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type StaffOption } from "@/pages/admin/lib/rto";
 
 /** Dedicated allocation screen, backed by the existing CRM enrolment and HRMS trainer APIs. */
 export default function LmsBatchAllocationPage() {
@@ -25,6 +25,11 @@ export default function LmsBatchAllocationPage() {
   const [assessmentOptions, setAssessmentOptions] = useState<AssessmentRow[]>([]);
   const [assessmentAssignments, setAssessmentAssignments] = useState<AssignmentRow[]>([]);
   const [assessmentId, setAssessmentId] = useState("");
+  const [assessmentMode, setAssessmentMode] = useState<"existing" | "create">("existing");
+  const [newAssessmentTitle, setNewAssessmentTitle] = useState("");
+  const [newAssessmentUnit, setNewAssessmentUnit] = useState("");
+  const [courseUnits, setCourseUnits] = useState<CourseDetail["units"]>([]);
+  const [assessmentFile, setAssessmentFile] = useState<File | null>(null);
   const [availableFrom, setAvailableFrom] = useState(toLocalInput(new Date().toISOString()));
   const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + 14 * 86400000).toISOString()));
   const [busy, setBusy] = useState(false);
@@ -67,6 +72,37 @@ export default function LmsBatchAllocationPage() {
       .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load assessments"); });
     return () => { active = false; };
   }, [tab, batchId]);
+  useEffect(() => {
+    let active = true;
+    setNewAssessmentUnit("");
+    setAssessmentId("");
+    if (courseId) rto<CourseDetail>("course_get", {courseId}).then(d => {if(active)setCourseUnits(d.units);}).catch(e => {if(active)setError(e instanceof Error ? e.message : "Unable to load units");});
+    return () => {active = false;};
+  }, [courseId]);
+  const createAssessment = async () => {
+    if (!newAssessmentTitle.trim() || !newAssessmentUnit || busy || !canEdit) return;
+    setBusy(true);
+    try {
+      let imported: unknown;
+      if (assessmentFile) {
+        if (!assessmentFile.name.toLowerCase().endsWith(".json")) throw new Error("Only assessment JSON exports can currently be imported. PDF and Word upload require a document storage integration.");
+        try { imported = JSON.parse(await assessmentFile.text()); }
+        catch { throw new Error("The selected file is not valid assessment JSON."); }
+      }
+      const result = await asmAdmin<{id?:string;ok?:boolean;errors?:{message:string}[]}>("assessment_create", {
+        courseId, unitId:newAssessmentUnit, title:newAssessmentTitle.trim(), import:imported
+      });
+      if (result.ok === false || !result.id) throw new Error(result.errors?.map(e=>e.message).join("; ") || "Unable to create assessment");
+      const options = await asmAdmin<AssessmentRow[]>("assessment_list", {includeArchived:false});
+      setAssessmentOptions(options);
+      setAssessmentId(result.id);
+      setAssessmentMode("existing");
+      setNewAssessmentTitle("");
+      setAssessmentFile(null);
+      push("Assessment created. Publish it in Assessments before assigning.", "success");
+    } catch(e) {setError(e instanceof Error ? e.message : "Unable to create assessment");}
+    finally {setBusy(false);}
+  };
   const assignAssessment = async () => {
     if (!assessmentId || !batchId || !dueAt || busy || !data?.rtoManager) return;
     setBusy(true);
@@ -154,18 +190,31 @@ export default function LmsBatchAllocationPage() {
             </div>
           </> : <div className="space-y-4">
             <div className="rounded-lg border border-background-200 p-3">
-              <h3 className="mb-3 font-semibold">Assign assessment</h3>
-              <label className="block text-sm font-medium">Published assessment
-                <select className={inputClass + " mt-1"} value={assessmentId} onChange={e => setAssessmentId(e.target.value)}>
-                  <option value="">Select assessment</option>
-                  {assessmentOptions.filter(a => a.courseId === courseId && a.currentVersionStatus === "published" && !a.archivedAt).map(a => <option key={a.id} value={a.id}>{a.unitCode ? a.unitCode + " — " : ""}{a.title}</option>)}
-                </select>
-              </label>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <h3 className="mb-3 font-semibold">Assessment allocation</h3>
+              <div className="mb-4 grid grid-cols-2 gap-2">
+                <button type="button" className={assessmentMode === "create" ? buttonClass : "rounded-lg border border-background-300 px-3 py-2 text-sm"} onClick={() => setAssessmentMode("create")}>Upload / Create</button>
+                <button type="button" className={assessmentMode === "existing" ? buttonClass : "rounded-lg border border-background-300 px-3 py-2 text-sm"} onClick={() => setAssessmentMode("existing")}>Assign existing</button>
+              </div>
+              {assessmentMode === "create" ? <div className="space-y-3">
+                <label className="block text-sm font-medium">Assessment title<input className={inputClass + " mt-1"} value={newAssessmentTitle} onChange={e => setNewAssessmentTitle(e.target.value)} placeholder="e.g. A1 — Project" /></label>
+                <label className="block text-sm font-medium">Unit<select className={inputClass + " mt-1"} value={newAssessmentUnit} onChange={e => setNewAssessmentUnit(e.target.value)}><option value="">Select unit</option>{courseUnits.filter(u => u.id).map(u => <option key={u.id} value={u.id}>{u.code} — {u.name}</option>)}</select></label>
+                <label className="block text-sm font-medium">Import assessment JSON (optional)<input type="file" accept=".json,application/json" className={inputClass + " mt-1"} onChange={e => setAssessmentFile(e.target.files?.[0] ?? null)} /></label>
+                <p className="text-xs text-foreground-500">PDF/Word document upload is not yet connected. JSON imports use the existing assessment engine. Newly created assessments must be published before batch assignment.</p>
+                <button type="button" className={buttonClass} disabled={busy || !canEdit || !newAssessmentTitle.trim() || !newAssessmentUnit} onClick={() => void createAssessment()}>Create assessment</button>
+                <Link className="ml-3 text-sm text-primary-600 underline" to="/admin/lms/assessments">Open Assessments to publish</Link>
+              </div> : <>
+                <label className="block text-sm font-medium">Published assessment
+                  <select className={inputClass + " mt-1"} value={assessmentId} onChange={e => setAssessmentId(e.target.value)}>
+                    <option value="">Select assessment</option>
+                    {assessmentOptions.filter(a => a.courseId === courseId && a.currentVersionStatus === "published" && !a.archivedAt).map(a => <option key={a.id} value={a.id}>{a.unitCode ? a.unitCode + " — " : ""}{a.title}</option>)}
+                  </select>
+                </label>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <label className="text-sm font-medium">Available from<input type="datetime-local" className={inputClass + " mt-1"} value={availableFrom} onChange={e => setAvailableFrom(e.target.value)} /></label>
                 <label className="text-sm font-medium">Due date<input type="datetime-local" className={inputClass + " mt-1"} value={dueAt} onChange={e => setDueAt(e.target.value)} /></label>
               </div>
               <button type="button" className={buttonClass + " mt-3"} disabled={!canEdit || busy || !assessmentId || !dueAt || !current.isActive} onClick={() => void assignAssessment()}>{busy ? "Assigning…" : "Assign assessment"}</button>
+              </>
             </div>
             <div className="rounded-lg border border-background-200 p-3">
               <h3 className="mb-2 font-semibold">Assigned assessments</h3>

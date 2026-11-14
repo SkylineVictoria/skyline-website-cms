@@ -29,7 +29,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [batches, setBatches] = useState<RtoBatch[]>(given ?? []);
   const [locations, setLocations] = useState<LocationRooms[]>([]);
   const [timings, setTimings] = useState<CourseTiming[]>([]);
-  const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [staff, setStaff] = useState<StaffOption[]>([]);\n  const [intakeUnits, setIntakeUnits] = useState<IntakeDetail["schedule"]>([]);
   const [rows, setRows] = useState<Draft[]>(() => (batch?.sessions ?? []).map(toDraft));
   const [name, setName] = useState(batch?.name ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
@@ -45,11 +45,11 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       rtoFlow<LocationRooms[]>("locations_rooms"),
       rtoFlow<CourseTiming[]>("timing_list", { courseId: intake.courseId }),
       adding ? rto<StaffOption[]>("staff_list") : Promise.resolve([] as StaffOption[]),
-      given ? Promise.resolve(null) : rto<IntakeDetail>("intake_get", { intakeId: intake.id }),
+      rto<IntakeDetail>("intake_get", { intakeId: intake.id }),
     ]).then(([l, t, s, d]) => {
       if (!live) return;
       setLocations(l); setTimings(t); setStaff(s);
-      if (d) setBatches(d.batches);
+      if (d) { setIntakeUnits(d.schedule); if (!given) setBatches(d.batches); }
     }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Rooms and timing did not load."); });
     return () => { live = false; };
   }, [intake.id, intake.courseId, adding, given]);

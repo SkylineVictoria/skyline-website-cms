@@ -99,10 +99,15 @@ export default function LmsBatchAllocationPage() {
   };
   const createAssessment = async () => {
     const title = newAssessmentTitle.trim();
-    if (!title || !courseUnits.some(unit => unit.id === newAssessmentUnit) || !assessmentFile || busy || !canEdit) return;
+    if (!title || !courseUnits.some(unit => unit.id === newAssessmentUnit) || !assessmentFile || busy || !canEdit ||
+        !current?.isActive || current.id !== batchId || data?.intake.courseId !== courseId) return;
     setAssessmentError("");
+    setCreatedDraft(null);
     setBusy(true);
     try {
+      const startsAt = fromLocalInput(availableFrom);
+      const deadline = fromLocalInput(dueAt);
+      if (!startsAt || !deadline || deadline <= startsAt) throw new Error("Due Date must be after Available From.");
       if (!assessmentFile.name.toLowerCase().endsWith(".json")) throw new Error("Choose a JSON assessment export. PDF, Word and other file types are unsupported.");
       let imported: unknown;
       try { imported = JSON.parse(await assessmentFile.text()); }
@@ -115,11 +120,22 @@ export default function LmsBatchAllocationPage() {
         courseId, unitId: newAssessmentUnit, title, import: imported,
       });
       if (result.ok === false || !result.id) throw new Error(result.errors?.map(e => e.message).join(" ") || "Unable to create assessment");
-      setCreatedDraft({ id: result.id, courseId });
+      const id = result.id;
       setNewAssessmentTitle("");
       setAssessmentFile(null);
-      push("Assessment draft created", "success");
-    } catch (e) { setAssessmentError(e instanceof Error ? e.message : "Unable to create assessment"); }
+      const published = await asmAdmin<{ ok: boolean; errors?: { message: string }[] }>("version_publish", { assessmentId: id });
+      if (!published.ok) {
+        setCreatedDraft({ id, courseId });
+        refreshAssessments();
+        throw new Error("Uploaded as a draft but not published, so it was not assigned: " + (published.errors?.map(e => e.message).join(" ") ?? "") + " Open the draft to fix and publish it.");
+      }
+      const assigned = await asmAdmin<{ created: number; errors?: { message: string }[] }>("assignment_create", {
+        assessmentId: id, batchIds: [batchId], availableFrom: startsAt, dueAt: deadline,
+      });
+      refreshAssessments();
+      if (assigned.errors?.length || !assigned.created) throw new Error("Uploaded and published, but not assigned: " + (assigned.errors?.map(e => e.message).join(" ") || "check assessment eligibility.") + " Assign it under Select Existing Assessment.");
+      push("Assessment uploaded and assigned to " + current.name, "success");
+    } catch (e) { setAssessmentError(e instanceof Error ? e.message : "Unable to upload assessment"); }
     finally { setBusy(false); }
   };
   const assignAssessment = async () => {
@@ -156,6 +172,11 @@ export default function LmsBatchAllocationPage() {
   const selectionClass = (selected: boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm transition ${selected ? "border-primary-500 bg-primary-50 font-semibold" : "border-background-200 hover:bg-background-100"}`;
   const buttonClass = "rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50";
   const assessmentSourceClass = (selected: boolean) => `min-h-11 rounded-lg border px-3 py-2.5 text-left text-sm font-semibold transition ${selected ? "border-primary-600 bg-primary-600 text-white" : "border-background-300 bg-background-50 text-foreground-900 hover:bg-background-100"}`;
+  const dateFields = <>
+    <p className="text-xs text-foreground-600">Dates and times use Melbourne time.</p>
+    <label className="block text-sm font-medium">Available From<input type="datetime-local" className={inputClass + " mt-1 min-w-0"} value={availableFrom} onChange={e => setAvailableFrom(e.target.value)} /></label>
+    <label className="block text-sm font-medium">Due Date<input type="datetime-local" className={inputClass + " mt-1 min-w-0"} value={dueAt} onChange={e => setDueAt(e.target.value)} /></label>
+  </>;
   const batchAssessments = assessmentAssignments.filter(a => a.batchId === batchId && a.status !== "cancelled");
   const removeStudent = (s: BatchStudent) => {
     if (!window.confirm(`Remove ${s.name} from this batch?`)) return;
@@ -239,14 +260,15 @@ export default function LmsBatchAllocationPage() {
                     <p id="batch-assessment-template-help" className="mt-2 text-xs text-foreground-600">Use a JSON export from the Assessments editor. PDF, Word, PowerPoint and other formats are unsupported.</p>
                     {assessmentFile && <p className="mt-2 break-all text-sm" role="status">Selected file · {assessmentFile.name}</p>}
                   </div>
-                  <button type="button" className={buttonClass} disabled={!newAssessmentTitle.trim() || !newAssessmentUnit || !assessmentFile} onClick={() => void createAssessment()}>{busy ? "Creating…" : "Create draft assessment"}</button>
+                  {dateFields}
+                  <button type="button" className={buttonClass} disabled={!newAssessmentTitle.trim() || !newAssessmentUnit || !assessmentFile || !availableFrom || !dueAt || !current.isActive} onClick={() => void createAssessment()}>{busy ? "Uploading…" : "Upload & assign to " + current.name}</button>
                 </fieldset>
                 {createdDraft?.courseId === courseId ? (
                   <div className="rounded-lg border border-background-200 bg-background-100 p-3 text-sm">
                     <Link className="font-semibold text-primary-600 underline" to={`/admin/assessments/${createdDraft.id}`} target="_blank" rel="noopener">Open draft to review and publish</Link>
                     <p className="mt-1 text-foreground-600">The editor opens in a new tab. After publishing, choose Select Existing Assessment here to assign it.</p>
                   </div>
-                ) : <p className="text-xs text-foreground-600">Review and publish the draft before assigning it to a batch.</p>}
+                ) : <p className="text-xs text-foreground-600">The file is created under the chosen unit, published, and assigned to this batch in one step.</p>}
               </div> : <>
                 <label className="block text-sm font-medium">Published assessment
                   <select className={inputClass + " mt-1"} value={assessmentId} disabled={assessmentLoading || busy} onChange={e => setAssessmentId(e.target.value)}>
@@ -257,9 +279,7 @@ export default function LmsBatchAllocationPage() {
                 {!assessmentLoading && !assessmentError && !publishedAssessments.length && <p className="mt-2 text-sm text-foreground-600">This course has no published assessments.</p>}
                 <button type="button" className="mt-2 text-sm font-semibold text-primary-600 underline disabled:opacity-50" disabled={assessmentLoading || busy} onClick={refreshAssessments}>Refresh published assessments</button>
                 <fieldset className="mt-3 min-w-0 space-y-2" disabled={busy}>
-                  <legend className="text-xs text-foreground-600">Dates and times use Melbourne time.</legend>
-                  <label className="block text-sm font-medium">Available From<input type="datetime-local" className={inputClass + " mt-1 min-w-0"} value={availableFrom} onChange={e => setAvailableFrom(e.target.value)} /></label>
-                  <label className="block text-sm font-medium">Due Date<input type="datetime-local" className={inputClass + " mt-1 min-w-0"} value={dueAt} onChange={e => setDueAt(e.target.value)} /></label>
+                  {dateFields}
                   <button type="button" className={buttonClass} disabled={!canEdit || assessmentLoading || !publishedAssessments.some(a => a.id === assessmentId) || !availableFrom || !dueAt || !current.isActive} onClick={() => void assignAssessment()}>{busy ? "Assigning…" : "Assign assessment"}</button>
                 </fieldset>
               </>}

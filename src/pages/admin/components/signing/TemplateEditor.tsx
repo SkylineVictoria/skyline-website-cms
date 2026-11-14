@@ -57,7 +57,7 @@ const categoryOptions = (kind: Kind, audience?: SigningTemplate["audience"]): Ar
  * ready-made PDF), or an email. Signer roles, placed fields, expiry and reminders apply to documents; a default per kind; versions.
  */
 export default function TemplateEditor({ template, onClose, onSaved, newKind = "text", newCategory, audience }: {
-  template: SigningTemplate | null; onClose: () => void; onSaved: (message: string) => void; newKind?: Kind; newCategory?: string;
+  template: SigningTemplate | null; onClose: () => void; onSaved: (message: string, id?: string) => void; newKind?: Kind; newCategory?: string;
   /** A new template: the audience chosen first (only its types are offered). */ audience?: SigningTemplate["audience"];
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
@@ -142,9 +142,9 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     if (loo && !confirmed) { await rehostSections(); setLetterCheck(true); return; }
     if (sections && !loo && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
     setConfirming(null); setLetterCheck(false);
-    if (draft.kind === "pdf" && file) await signingAction({ action: "template_upload", id: draft.id, template: payload() }, file);
-    else await signingAdmin("template_save", draft.id, payload());
-    onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : ""));
+    const saved = draft.kind === "pdf" && file ? await signingAction<{ id?: string } | null>({ action: "template_upload", id: draft.id, template: payload() }, file)
+      : await signingAdmin<{ id?: string } | null>("template_save", draft.id, payload());
+    onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : ""), saved?.id ?? draft.id ?? undefined);
   });
   const documentSource = async (): Promise<string | Uint8Array> => {
     if (draft.kind === "pdf") return file ? new Uint8Array(await file.arrayBuffer()) : (await signingAction<{ url: string }>({ action: "template_url", id: draft.id })).url;

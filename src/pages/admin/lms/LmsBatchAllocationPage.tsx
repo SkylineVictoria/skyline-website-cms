@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { asmAdmin, type AssessmentRow, type AssignmentRow } from "@/pages/admin/lib/assessments";
 import { fmtDate, fromLocalInput, toLocalInput } from "@/lib/assessment/api";
 import StudentPicker from "@/pages/admin/components/rto/StudentPicker";
+import UnitDocumentsPanel from "./UnitDocumentsPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type StaffOption } from "@/pages/admin/lib/rto";
 
@@ -287,6 +288,7 @@ export default function LmsBatchAllocationPage() {
               </>}
               </>}
             </div>
+            {newAssessmentUnit && <UnitDocumentsPanel batchId={batchId} batchName={current.name} unitId={newAssessmentUnit} students={students} disabled={busy || !current.isActive} />}
             <div className="rounded-lg border border-background-200 p-3">
               <h3 className="mb-2 font-semibold">Assigned assessments</h3>
               {batchAssessments.map(a => <div key={a.id} className="border-b border-background-100 py-3 last:border-0"><p className="break-words font-medium">{a.assessmentTitle}</p><p className="text-xs text-foreground-500">{a.unitCode ?? "Assessment"} · Due {fmtDate(a.dueAt)} · {a.eligibleCount} students · {a.status}</p></div>)}

@@ -10,7 +10,8 @@ import LmsUnitsPage from "./LmsUnitsPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
-  const { area } = useParams<{ area?: LmsArea }>();
+  // Retired areas stay in the URL space so old links redirect instead of 404ing.
+  const { area } = useParams<{ area?: LmsArea | "assessment-allocation" | "submissions" | "unit-delivery" | "timetable" }>();
   const selected = LMS_MENU.find(x => x.id === area);
   if (area === "courses") return <LmsCoursesPage />;
   if (area === "units") return <LmsUnitsPage />;

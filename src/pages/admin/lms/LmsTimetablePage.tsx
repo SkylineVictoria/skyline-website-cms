@@ -31,7 +31,8 @@ export default function LmsTimetablePage() {
         rto<{ rtoManager: boolean }>("me"),
       ]);
       setCourses(c); setIntakes(i); setCanEdit(me.rtoManager);
-      // Prefer a course with an intake so the timetable opens with usable selections.\n      setCourseId(prev => c.some(x => x.id === prev) ? prev : c.find(x => i.some(t => t.courseId === x.id))?.id ?? c[0]?.id ?? "");
+      // Prefer a course with an intake so the timetable opens with usable selections.
+      setCourseId(prev => c.some(x => x.id === prev) ? prev : c.find(x => i.some(t => t.courseId === x.id))?.id ?? c[0]?.id ?? "");
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load timetable"); }
     finally { setLoading(false); }
@@ -41,7 +42,17 @@ export default function LmsTimetablePage() {
   const courseIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
   useEffect(() => { setIntakeId(prev => courseIntakes.some(i => i.id === prev) ? prev : courseIntakes[0]?.id ?? ""); }, [courseIntakes]);
   const intake = courseIntakes.find(i => i.id === intakeId);
-  // The intake list may omit batchList; intake_get provides the authoritative batches.\n  const batches = useMemo(() => {\n    if (detail?.intake.id === intakeId) return detail.batches;\n    return intake?.batchList ?? [];\n  }, [detail, intake, intakeId]);\n  useEffect(() => {\n    if (!intakeId) { setBatchId(""); return; }\n    // Wait for intake_get before selecting a default, so missing batchList cannot leave the selector empty.\n    if (detail?.intake.id !== intakeId) return;\n    setBatchId(prev => batches.some(b => b.id === prev) ? prev : batches[0]?.id ?? "");\n  }, [batches, detail, intakeId]);
+  // The intake list may omit batchList; intake_get provides the authoritative batches.
+  const batches = useMemo(() => {
+    if (detail?.intake.id === intakeId) return detail.batches;
+    return intake?.batchList ?? [];
+  }, [detail, intake, intakeId]);
+  useEffect(() => {
+    if (!intakeId) { setBatchId(""); return; }
+    // Wait for intake_get before selecting a default, so missing batchList cannot leave the selector empty.
+    if (detail?.intake.id !== intakeId) return;
+    setBatchId(prev => batches.some(b => b.id === prev) ? prev : batches[0]?.id ?? "");
+  }, [batches, detail, intakeId]);
   useEffect(() => {
     setDetail(null);
     if (!intakeId) return;

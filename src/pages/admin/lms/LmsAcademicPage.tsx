@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import { rto, rtoFlow, type RtoIntake, type IntakeDetail, type BatchPageData, type RtoCourse } from "@/pages/admin/lib/rto";
 
 type Item = { id: string; name: string; intake: RtoIntake };
 export default function LmsAcademicPage({ area }: { area: "batches" | "unit-delivery" | "timetable" | "attendance" }) {
   const navigate = useNavigate();
   const [newIntakeOpen, setNewIntakeOpen] = useState(false);
+  const [batchEditorOpen, setBatchEditorOpen] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [courseId, setCourseId] = useState("");
@@ -20,8 +23,8 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [i, c] = await Promise.all([rto<RtoIntake[]>("intake_list"), rto<RtoCourse[]>("course_list")]);
-      setIntakes(i); setCourses(c); setError("");
+      const [i, c, role] = await Promise.all([rto<RtoIntake[]>("intake_list"), rto<RtoCourse[]>("course_list"), rto<{rtoManager:boolean}>("me")]);
+      setIntakes(i); setCourses(c); setCanEdit(role.rtoManager); setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load academic records."); }
     finally { setLoading(false); }
   }, []);
@@ -59,10 +62,12 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
       <label className="space-y-1 text-sm font-medium">Batch<select className="w-full rounded-md border border-background-300 bg-background-50 p-2" value={batchId} onChange={e => { const b = items.find(x => x.id === e.target.value); setBatchId(e.target.value); if (b) { setIntakeId(b.intake.id); setCourseId(b.intake.courseId); } }}>
         <option value="">All batches</option>{items.map(b => <option key={b.id} value={b.id}>{b.intake.courseCode} · {b.name}</option>)}</select></label>
     </div>
+    {canEdit && (area === "batches" || area === "timetable") && intakeId ? <div className="flex justify-end"><button type="button" onClick={() => setBatchEditorOpen(true)} className="rounded-md bg-primary-500 px-4 py-2 text-sm font-semibold text-background-50">{batchId && area === "timetable" ? "Edit class timing" : "Add Batch"}</button></div> : null}
+    {batchEditorOpen && detail && canEdit ? <BatchTimingDrawer key={batchId || "new"} intake={detail.intake} batches={detail.batches} batch={area === "timetable" && batchId ? detail.batches.find(b => b.id === batchId) ?? null : null} onClose={() => setBatchEditorOpen(false)} onSaved={out => { setBatchEditorOpen(false); setDetail(out); void load(); }} /> : null}
     <NewIntakeDrawer open={newIntakeOpen} onClose={() => setNewIntakeOpen(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined} onCreated={(created, addBatch) => { setNewIntakeOpen(false); setCourseId(created.intake.courseId); setIntakeId(created.intake.id); void load(); if (addBatch) navigate({ pathname: "/admin/intakes", hash: created.intake.id }); }} />
     {area === "batches" ? <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3"><input aria-label="Search batches" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search batches" className="rounded-md border border-background-300 bg-background-50 px-3 py-2" />
-        <Link to="/admin/lms/intakes" className="rounded-md bg-primary-500 px-4 py-2 font-semibold text-background-50">Add Batch via Intake</Link></div>
+        {!intakeId ? <span className="text-sm text-foreground-500">Select an intake to add a batch</span> : null}</div>
       {loading ? <p>Loading batches…</p> : items.length ? <div className="divide-y divide-background-200 rounded-xl border border-background-200 bg-background-50">
         {items.map(b => <Link key={b.id} to={`/admin/batches/${b.id}`} className="flex items-center justify-between gap-3 p-4 hover:bg-background-100"><div><p className="font-semibold">{b.name}</p><p className="text-xs text-foreground-500">{b.intake.courseName} · {b.intake.name}</p></div><i className="ri-arrow-right-s-line" /></Link>)}</div> : <p className="text-sm text-foreground-500">No matching batches.</p>}
     </div> : null}

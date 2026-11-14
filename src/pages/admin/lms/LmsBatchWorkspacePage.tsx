@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { supabase } from "@/pages/admin/lib/supabase";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import { rto, rtoFlow, type RtoCourse, type RtoIntake, type IntakeDetail, type BatchPageData, type StaffOption } from "@/pages/admin/lib/rto";
 
@@ -13,6 +14,7 @@ export default function LmsBatchWorkspacePage() {
   const [batchDetail, setBatchDetail] = useState<BatchPageData | null>(null);
   const [saving, setSaving] = useState("");
   const [trainers, setTrainers] = useState<StaffOption[]>([]);
+  const [unitTrainers, setUnitTrainers] = useState<Record<string,string>>({});
   const [canEdit, setCanEdit] = useState(false);
   const [editor, setEditor] = useState<"edit" | null>(null);
   const [adding, setAdding] = useState(false);
@@ -59,6 +61,27 @@ export default function LmsBatchWorkspacePage() {
       .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load batch"); });
     return () => { active = false; };
   }, [batchId]);
+  useEffect(() => {
+    setUnitTrainers({});
+    if (!batchId) return;
+    let active = true;
+    supabase.rpc("rto_batch_unit_trainers_get", { p_batch_id: batchId }).then(({ data, error }) => {
+      if (active) { if (error) setError(error.message); else setUnitTrainers((data ?? {}) as Record<string,string>); }
+    });
+    return () => { active = false; };
+  }, [batchId]);
+  const setUnitTrainer = async (unitId: string, trainerId: string) => {
+    if (!batchId) return;
+    setSaving(unitId); setError("");
+    try {
+      const { error } = await supabase.rpc("rto_batch_unit_trainer", {
+        p_batch_id: batchId, p_intake_unit_id: unitId, p_staff_id: trainerId || null,
+      });
+      if (error) throw error;
+      setUnitTrainers(prev => ({ ...prev, [unitId]: trainerId }));
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save trainer"); }
+    finally { setSaving(""); }
+  };
   const createBatch = async () => {
     if (!intakeId || !newName.trim()) { setError("Enter a batch name."); return; }
     setSaving("new"); setError("");
@@ -146,6 +169,8 @@ export default function LmsBatchWorkspacePage() {
             <div className="space-y-3">
               {(batchDetail.batch.schedule ?? []).map(u => <UnitAllocationRow key={u.intakeUnitId} unit={u}
                 disabled={!canEdit || !!saving} saving={saving === u.intakeUnitId}
+                trainers={batchDetail.batch.trainers} trainerId={unitTrainers[u.intakeUnitId] ?? ""}
+                onTrainerChange={id => void setUnitTrainer(u.intakeUnitId,id)}
                 onSave={(start,end) => void saveDates(u.intakeUnitId,start,end)} />)}
             </div>
             <div className="mt-4 rounded-lg bg-background-100 p-3 text-xs text-foreground-600">
@@ -156,7 +181,7 @@ export default function LmsBatchWorkspacePage() {
                 </select>
               </label>
               <div className="mt-2 flex flex-wrap gap-2">{batchDetail.batch.trainers.map(t => <span key={t.id} className="inline-flex items-center gap-2 rounded-md border border-background-300 px-2 py-1 text-xs">{t.name}{canEdit && <button type="button" disabled={!!saving} aria-label={`Remove ${t.name}`} className="text-red-600" onClick={() => void removeTrainer(t.id)}>×</button>}</span>)}</div>
-              <p className="mt-2">These trainers are assigned to the entire batch. Separate trainer selection for each unit requires backend support.</p>
+              <p className="mt-2">Add trainers to the batch here, then select a trainer for each unit above.</p>
             </div>
           </>
         )}
@@ -172,9 +197,9 @@ export default function LmsBatchWorkspacePage() {
   </div>;
 }
 
-function UnitAllocationRow({ unit, disabled, saving, onSave }: {
+function UnitAllocationRow({ unit, disabled, saving, trainers, trainerId, onTrainerChange, onSave }: {
   unit: { intakeUnitId: string; code: string; name: string; startDate: string; endDate: string };
-  disabled: boolean; saving: boolean; onSave: (start: string, end: string) => void;
+  disabled: boolean; saving: boolean; trainers: {id:string;name:string}[]; trainerId: string; onTrainerChange: (id:string) => void; onSave: (start: string, end: string) => void;
 }) {
   const [start, setStart] = useState(unit.startDate);
   const [end, setEnd] = useState(unit.endDate);
@@ -187,6 +212,12 @@ function UnitAllocationRow({ unit, disabled, saving, onSave }: {
       <label className="text-xs text-foreground-600">Start date<input type="date" value={start} disabled={disabled} onChange={e => setStart(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-xs" /></label>
       <label className="text-xs text-foreground-600">End date<input type="date" value={end} disabled={disabled} onChange={e => setEnd(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-xs" /></label>
     </div>
+    <label className="mt-2 block text-xs text-foreground-600">Trainer
+      <select aria-label={`Trainer for ${unit.code}`} value={trainerId} disabled={disabled} onChange={e => onTrainerChange(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-sm">
+        <option value="">Select trainer…</option>
+        {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
+    </label>
     {changed && <button type="button" disabled={disabled || !start || !end || start > end} onClick={() => onSave(start,end)} className="mt-2 rounded-md bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save dates"}</button>}
   </div>;
 }

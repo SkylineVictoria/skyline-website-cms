@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import IntakeSheet from "@/pages/admin/components/rto/IntakeSheet";
 import { rto, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** LMS course workspace: academic delivery overview, not the Master Data course editor. */
@@ -11,6 +11,7 @@ export default function LmsCoursesPage() {
   const [query, setQuery] = useState("");
   const [createIntake, setCreateIntake] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
+  const [activeIntakeId, setActiveIntakeId] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
@@ -66,12 +67,13 @@ export default function LmsCoursesPage() {
             <h3 className="font-semibold">Intakes and delivery</h3>
             {runs.length ? <div className="mt-3 divide-y divide-background-200">{runs.map(i => <div key={i.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
               <div><p className="font-medium">{i.name}</p><p className="text-xs text-foreground-500">{i.startDate} – {i.endDate} · {i.batchList?.length ?? 0} batches</p></div>
-              <Link to="/admin/lms/batches" className="text-sm font-semibold text-primary-600">Manage batches</Link>
+              <button type="button" onClick={() => setActiveIntakeId(i.id)} className="text-sm font-semibold text-primary-600">Manage batches</button>
             </div>)}</div> : <p className="mt-3 text-sm text-foreground-500">No intakes yet. Create an intake to start delivery.</p>}
           </div>
         </>}
       </section>
     </div>
+    {activeIntakeId ? <IntakeSheet key={activeIntakeId} intakeId={activeIntakeId} canEdit={canEdit} canEnrol={canEdit} startTab="batches" onClose={() => setActiveIntakeId("")} onChanged={() => void load()} onDuplicate={() => { setActiveIntakeId(""); void load(); }} onDelete={() => { setActiveIntakeId(""); void load(); }} /> : null}
     <NewIntakeDrawer open={createIntake && canEdit} onClose={() => setCreateIntake(false)} courses={courses.map(c => ({id:c.id,label:c.label}))} courseId={selectedId || undefined}
       onCreated={(detail: IntakeDetail) => { setCreateIntake(false); setSelectedId(detail.intake.courseId); void load(); }} />
   </div>;

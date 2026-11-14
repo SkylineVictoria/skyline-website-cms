@@ -16,7 +16,7 @@ export default function LmsAssessmentsPage() {
   const [batchId,setBatchId] = useState("");
   const [unitId,setUnitId] = useState("");
   const [assessmentId,setAssessmentId] = useState("");
-  const [tab,setTab] = useState<"results"|"assessments"|"reassessments"|"submissions">(params.get("tab")==="submissions"?"submissions":"results");
+  const [tab,setTab] = useState<"results"|"assessments"|"reassessments"|"submissions">((["results","assessments","reassessments","submissions"].includes(params.get("tab")??"") ? params.get("tab") : "assessments") as "results"|"assessments"|"reassessments"|"submissions");
   const [search,setSearch] = useState(["","",""]);
   const [creating,setCreating] = useState(false);
   const [error,setError] = useState("");
@@ -46,22 +46,24 @@ export default function LmsAssessmentsPage() {
   const field="w-full rounded-lg border border-background-300 bg-background-50 p-2 text-sm";
   const item=(active:boolean)=>`w-full rounded-lg border px-3 py-3 text-left text-sm ${active?"border-primary-400 bg-primary-50 font-semibold":"border-background-200 hover:bg-background-100"}`;
   return <div className="mx-auto max-w-[1600px] space-y-4 pb-10">
-    <header><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold">Assessments & Results</h1><p className="text-sm text-foreground-600">Choose course, intake and batch to manage existing assessments and student outcomes.</p></header>
+    <header><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold">Assessments</h1><p className="text-sm text-foreground-600">Choose course, intake and batch to manage existing assessments and student outcomes.</p></header>
     {error&&<p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}<button className="ml-3 underline" onClick={()=>void load()}>Retry</button></p>}
-    <div className="flex flex-wrap gap-2">{(["results","assessments","submissions","reassessments"] as const).map(t=><button type="button" key={t} className={`rounded-lg px-3 py-2 text-sm font-semibold capitalize ${tab===t?"bg-primary-500 text-white":"bg-background-100"}`} onClick={()=>{setTab(t);setParams(t==="submissions"?{tab:"submissions"}:{});}}>{t}</button>)}</div>
-    {tab === "submissions" ? <div className="mb-3 rounded-xl border border-background-200 p-3"><Submissions /></div> : <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,0.9fr)_minmax(170px,0.9fr)_minmax(400px,2.5fr)]">
+
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,0.9fr)_minmax(170px,0.9fr)_minmax(400px,2.5fr)]">
       <section className={box}><h2 className="mb-3 font-semibold">1. Course</h2><input aria-label="Search courses" placeholder="Search course…" className={field+" mb-3"} value={search[0]} onChange={e=>setSearch(v=>[e.target.value,v[1],v[2]])}/><div className="space-y-2">{courses.filter(c=>c.label.toLowerCase().includes(search[0].toLowerCase())).map(c=><button key={c.id} className={item(courseId===c.id)} onClick={()=>setCourseId(c.id)}>{c.label}</button>)}</div></section>
       <section className={box}><h2 className="mb-3 font-semibold">2. Intake</h2><input aria-label="Search intakes" placeholder="Search intake…" className={field+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value,v[2]])}/><div className="space-y-2">{matchingIntakes.filter(i=>i.name.toLowerCase().includes(search[1].toLowerCase())).map(i=><button key={i.id} className={item(intakeId===i.id)} onClick={()=>setIntakeId(i.id)}>{i.name}</button>)}</div></section>
       <section className={box}><h2 className="mb-3 font-semibold">3. Batch</h2><input aria-label="Search batches" placeholder="Search batch…" className={field+" mb-3"} value={search[2]} onChange={e=>setSearch(v=>[v[0],v[1],e.target.value])}/><div className="space-y-2">{batches.filter(b=>b.name.toLowerCase().includes(search[2].toLowerCase())).map(b=><button key={b.id} className={item(batchId===b.id)} onClick={()=>setBatchId(b.id)}>{b.name}</button>)}</div></section>
-      <section className={box}><h2 className="mb-3 font-semibold">4. Assessments & Results</h2>
+      <section className={box}><h2 className="mb-3 font-semibold">4. Assessments</h2>
+        <div className="mb-4 grid grid-cols-4 gap-1 rounded-lg bg-background-100 p-1">{(["assessments","submissions","results","reassessments"] as const).map(t=><button type="button" key={t} className={`rounded-md px-2 py-2 text-xs font-semibold capitalize ${tab===t?"bg-primary-500 text-white":"text-foreground-700 hover:bg-background-50"}`} onClick={()=>{setTab(t);setParams(t==="assessments"?{}:{tab:t});}}>{t}</button>)}</div>
         {!batchId?<p className="text-sm text-foreground-500">Select a batch.</p>:<>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-xs font-semibold">Unit<select className={field+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}><option value="">All units</option>{unitOptions.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select></label>
             <label className="text-xs font-semibold">Assessment<select className={field+" mt-1"} value={assessmentId} onChange={e=>setAssessmentId(e.target.value)}><option value="">Select assessment</option>{shown.map(a=><option key={a.id} value={a.id}>{a.title}</option>)}</select></label>
           </div>
-          {tab==="assessments"?<div className="space-y-3">
+          {tab==="submissions"?<Submissions />:tab==="assessments"?<div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Assessment library</h3><button className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" onClick={()=>setCreating(true)}>+ New assessment</button></div>
-            {shown.map(a=><Link key={a.id} to={`/admin/assessments/${a.id}`} className="block rounded-lg border border-background-200 p-3 hover:bg-background-100"><p className="font-semibold">{a.title}</p><p className="text-xs text-foreground-500">{a.unitCode||"Course assessment"} · {a.currentVersionStatus||"Unpublished"}</p></Link>)}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{[[shown.length,"Assessments"],[shown.filter(a=>a.currentVersionStatus==="published").length,"Published"],[shown.filter(a=>a.currentVersionStatus!=="published").length,"Draft / Other"],[selectedAssignments.reduce((n,a)=>n+(a.toMark??0),0),"To mark"]].map(([n,label])=><div key={label} className="rounded-lg border border-background-200 p-3"><p className="text-xl font-bold">{n}</p><p className="text-xs text-foreground-500">{label}</p></div>)}</div>
+            <div className="overflow-x-auto rounded-lg border border-background-200"><table className="w-full min-w-[460px] text-left text-sm"><thead className="bg-background-100"><tr><th className="p-3">Assessment name</th><th className="p-3">Unit</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y divide-background-100">{shown.map(a=><tr key={a.id}><td className="p-3 font-semibold">{a.title}</td><td className="p-3">{a.unitCode||"Course"}</td><td className="p-3 capitalize">{a.currentVersionStatus||"Draft"}</td><td className="p-3"><Link className="font-semibold text-primary-600 underline" to={`/admin/assessments/${a.id}`}>Open</Link></td></tr>)}</tbody></table></div>
             {!shown.length&&<p className="text-sm text-foreground-500">No assessments for this unit.</p>}
           </div>:tab==="results"?<div className="space-y-3">
             <h3 className="font-semibold">{selected?.title||"Select an assessment"}</h3>
@@ -72,7 +74,7 @@ export default function LmsAssessmentsPage() {
           </div>:<div className="space-y-3"><h3 className="font-semibold">Reassessments</h3><p className="text-sm text-foreground-600">Use existing assessment attempts and reassessment controls; no duplicate result records are created.</p><Link className="inline-block rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" to="/admin/lms/assessments?tab=submissions">Open reassessment workflow</Link></div>}
         </>}
       </section>
-    </div>}
+    </div>
     {creating&&<CreateDialog courses={courses} templates={assessments.filter(a=>a.isTemplate||!!a.currentVersionNo)} onClose={()=>setCreating(false)} onCreated={()=>{setCreating(false);void load();}}/>}
   </div>;
 }

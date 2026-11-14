@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import { rto, rtoFlow, type RtoIntake, type IntakeDetail, type BatchPageData, type RtoCourse } from "@/pages/admin/lib/rto";
 
 type Item = { id: string; name: string; intake: RtoIntake };
 export default function LmsAcademicPage({ area }: { area: "batches" | "unit-delivery" | "timetable" | "attendance" }) {
-  const navigate = useNavigate();
+
   const [newIntakeOpen, setNewIntakeOpen] = useState(false);
   const [batchEditorOpen, setBatchEditorOpen] = useState(false);
+  const [newBatchAfterIntake, setNewBatchAfterIntake] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [unitEdit, setUnitEdit] = useState<{intakeUnitId:string;startDate:string;endDate:string}|null>(null);
   const [savingUnit, setSavingUnit] = useState(false);
@@ -66,7 +67,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold text-foreground-950">{titles[area]}</h1>
       <p className="mt-1 text-sm text-foreground-600">Select an existing course, intake and batch. Parent details are filled automatically.</p></div>
     {error ? <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-red-800">{error}<button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
-    {canEdit ? <div className="flex justify-end"><button type="button" onClick={() => setNewIntakeOpen(true)} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">+ New Intake</button></div> : null}
+    {canEdit ? <div className="flex justify-end gap-2"><Link to="/admin/courses/new/details" className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">+ New Course</Link><button type="button" onClick={() => setNewIntakeOpen(true)} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">+ New Intake</button></div> : null}
     <div className="grid gap-3 rounded-xl border border-background-200 bg-background-50 p-4 sm:grid-cols-3">
       <label className="space-y-1 text-sm font-medium">Course<select className="w-full rounded-md border border-background-300 bg-background-50 p-2" value={courseId} onChange={e => { setCourseId(e.target.value); setIntakeId(""); setBatchId(""); }}>
         <option value="">All courses</option>{courses.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
@@ -76,8 +77,9 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
         <option value="">All batches</option>{items.map(b => <option key={b.id} value={b.id}>{b.intake.courseCode} · {b.name}</option>)}</select></label>
     </div>
     {canEdit && (area === "batches" || area === "timetable") && intakeId ? <div className="flex justify-end"><button type="button" onClick={() => setBatchEditorOpen(true)} className="rounded-md bg-primary-500 px-4 py-2 text-sm font-semibold text-background-50">{batchId && area === "timetable" ? "Edit class timing" : "Add Batch"}</button></div> : null}
-    {batchEditorOpen && detail && canEdit ? <BatchTimingDrawer key={batchId || "new"} intake={detail.intake} batches={detail.batches} batch={area === "timetable" && batchId ? detail.batches.find(b => b.id === batchId) ?? null : null} onClose={() => setBatchEditorOpen(false)} onSaved={out => { setBatchEditorOpen(false); setDetail(out); void load(); }} /> : null}
-    <NewIntakeDrawer open={newIntakeOpen && canEdit} onClose={() => setNewIntakeOpen(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined} onCreated={(created, addBatch) => { setNewIntakeOpen(false); setCourseId(created.intake.courseId); setIntakeId(created.intake.id); void load(); if (addBatch) navigate({ pathname: "/admin/intakes", hash: created.intake.id }); }} />
+    {batchEditorOpen && detail && canEdit ? <BatchTimingDrawer key={`${detail.intake.id}:${batchId || "new"}`} intake={detail.intake} batches={detail.batches} batch={area === "timetable" && batchId ? detail.batches.find(b => b.id === batchId) ?? null : null} onClose={() => setBatchEditorOpen(false)} onSaved={out => { setBatchEditorOpen(false); setDetail(out); setIntakeId(out.intake.id); setCourseId(out.intake.courseId); setBatchId(out.batchId); void load(); }} /> : null}
+    <NewIntakeDrawer open={newIntakeOpen && canEdit} onClose={() => setNewIntakeOpen(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined} onCreated={(created, addBatch) => { setNewIntakeOpen(false); setCourseId(created.intake.courseId); setIntakeId(created.intake.id); setBatchId(""); setDetail(created); setNewBatchAfterIntake(addBatch); void load(); }} />
+    {newBatchAfterIntake && detail && canEdit ? <BatchTimingDrawer key={detail.intake.id} intake={detail.intake} batches={detail.batches} onClose={() => setNewBatchAfterIntake(false)} onSaved={out => { setNewBatchAfterIntake(false); setDetail(out); setCourseId(out.intake.courseId); setIntakeId(out.intake.id); setBatchId(out.batchId); void load(); }} /> : null}
     {area === "batches" ? <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3"><input aria-label="Search batches" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search batches" className="rounded-md border border-background-300 bg-background-50 px-3 py-2" />
         {!intakeId ? <span className="text-sm text-foreground-500">Select an intake to add a batch</span> : null}</div>

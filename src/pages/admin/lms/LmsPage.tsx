@@ -4,12 +4,14 @@ import LmsAcademicPage from "./LmsAcademicPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
+import LmsUnitsPage from "./LmsUnitsPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   const { area } = useParams<{ area?: LmsArea }>();
   const selected = LMS_MENU.find(x => x.id === area);
   if (area === "courses") return <LmsCoursesPage />;
+  if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "batches" || area === "unit-delivery" || area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;

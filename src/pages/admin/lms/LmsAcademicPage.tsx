@@ -67,7 +67,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold text-foreground-950">{titles[area]}</h1>
       <p className="mt-1 text-sm text-foreground-600">Select an existing course, intake and batch. Parent details are filled automatically.</p></div>
     {error ? <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-red-800">{error}<button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
-    {canEdit ? <div className="flex justify-end gap-2"><Link to="/admin/courses" className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">Manage Courses</Link><button type="button" onClick={() => setNewIntakeOpen(true)} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">+ New Intake</button></div> : null}
+    {canEdit ? <div className="flex justify-end gap-2"><Link to="/admin/lms/courses" className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">Manage Courses</Link><button type="button" onClick={() => setNewIntakeOpen(true)} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">+ New Intake</button></div> : null}
     <div className="grid gap-3 rounded-xl border border-background-200 bg-background-50 p-4 sm:grid-cols-3">
       <label className="space-y-1 text-sm font-medium">Course<select className="w-full rounded-md border border-background-300 bg-background-50 p-2" value={courseId} onChange={e => { setCourseId(e.target.value); setIntakeId(""); setBatchId(""); }}>
         <option value="">All courses</option>{courses.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
@@ -104,7 +104,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     {area === "timetable" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4"><h2 className="mb-3 font-semibold">Weekly class timing</h2>
       {!batch ? <p className="text-sm text-foreground-500">Choose a batch to view its class times.</p> : <>
       {(batch.batch.sessions ?? []).length ? <div className="divide-y divide-background-200">{batch.batch.sessions!.map((s, i) => <div key={s.id ?? i} className="flex justify-between gap-3 py-3 text-sm"><span>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][s.weekday-1]} · {s.type}</span><span>{s.startTime}–{s.endTime} · {s.room ?? "Room not assigned"}</span></div>)}</div> : <p className="text-sm text-foreground-500">No class timing configured.</p>}
-      <Link className="mt-4 inline-block font-semibold text-primary-600 underline" to={`/admin/batches/${batchId}`}>Edit class timing</Link></>}
+      <Link className="mt-4 inline-block font-semibold text-primary-600 underline" to="#" onClick={e => { e.preventDefault(); if (canEdit) setBatchEditorOpen(true); }}>Edit class timing</Link></>}
     </div> : null}
     {area === "attendance" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4"><h2 className="mb-3 font-semibold">Class attendance</h2>
       {!batch ? <p className="text-sm text-foreground-500">Choose a batch to see its enrolled students.</p> : <>

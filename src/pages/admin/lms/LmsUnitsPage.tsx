@@ -116,7 +116,7 @@ export default function LmsUnitsPage() {
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>
         </div>}
         {notice ? <p role="alert" className="mt-4 text-sm text-red-700">{notice}</p> : null}
-        <div className="mt-8 flex justify-end gap-3"><button className="rounded-lg border px-4 py-2" onClick={()=>setSelected(null)}>Cancel</button>{canEdit && drawerTab==="details" ? <button disabled={busy} className="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white disabled:opacity-50" onClick={()=>void save()}>{busy?"Saving…":"{adding ? "Add unit" : "Save unit"}"}</button>:null}</div>
+        <div className="mt-8 flex justify-end gap-3"><button className="rounded-lg border px-4 py-2" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}}>Cancel</button>{canEdit && drawerTab==="details" ? <button disabled={busy} className="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white disabled:opacity-50" onClick={()=>void save()}>{busy?"Saving…" : adding ? "Add unit" : "Save unit"}</button>:null}</div>
       </section></div> : null}
   </div>;
 }

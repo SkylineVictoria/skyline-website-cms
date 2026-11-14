@@ -2,6 +2,7 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAcademicPage from "./LmsAcademicPage";
 import LmsBatchesPage from "./LmsBatchesPage";
+import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
@@ -16,6 +17,7 @@ export default function LmsPage() {
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "batches") return <LmsBatchesPage />;
+  if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "timetable" || area === "attendance") return <LmsAcademicPage area={area} />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {

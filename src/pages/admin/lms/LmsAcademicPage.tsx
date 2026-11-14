@@ -104,7 +104,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     {area === "timetable" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4"><h2 className="mb-3 font-semibold">Weekly class timing</h2>
       {!batch ? <p className="text-sm text-foreground-500">Choose a batch to view its class times.</p> : <>
       {(batch.batch.sessions ?? []).length ? <div className="divide-y divide-background-200">{batch.batch.sessions!.map((s, i) => <div key={s.id ?? i} className="flex justify-between gap-3 py-3 text-sm"><span>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][s.weekday-1]} · {s.type}</span><span>{s.startTime}–{s.endTime} · {s.room ?? "Room not assigned"}</span></div>)}</div> : <p className="text-sm text-foreground-500">No class timing configured.</p>}
-      <Link className="mt-4 inline-block font-semibold text-primary-600 underline" to="#" onClick={e => { e.preventDefault(); if (canEdit) setBatchEditorOpen(true); }}>Edit class timing</Link></>}
+      {canEdit ? <button type="button" className="mt-4 inline-block font-semibold text-primary-600 underline" onClick={() => setBatchEditorOpen(true)}>Edit class timing</button> : null}</>}
     </div> : null}
     {area === "attendance" ? <div className="rounded-xl border border-background-200 bg-background-50 p-4"><h2 className="mb-3 font-semibold">Class attendance</h2>
       {!batch ? <p className="text-sm text-foreground-500">Choose a batch to see its enrolled students.</p> : <>

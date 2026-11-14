@@ -8,6 +8,7 @@ import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 export default function LmsAssessmentsPage() {
   const [courses,setCourses] = useState<RtoCourse[]>([]);
   const [units,setUnits] = useState<RtoUnit[]>([]);
+  const [unitsLoading,setUnitsLoading] = useState(false);
   const [assessments,setAssessments] = useState<AssessmentRow[]>([]);
   const [courseId,setCourseId] = useState("");
   const [unitId,setUnitId] = useState("");
@@ -24,18 +25,19 @@ export default function LmsAssessmentsPage() {
         rto<RtoCourse[]>("course_list"),
         asmAdmin<AssessmentRow[]>("assessment_list",{includeArchived:false})
       ]);
-      setCourses(c);setAssessments(a);setCourseId(old=>old||c[0]?.id||"");setError("");
+      setCourses(c);setAssessments(a);setCourseId(old=>c.some(x=>x.id===old)?old:c[0]?.id??"");setError("");
     }catch(e){setError(e instanceof Error?e.message:"Unable to load assessment records");}
   },[]);
   useEffect(()=>{void load();},[load]);
   useEffect(()=>{
     if(!courseId){setUnits([]);setUnitId("");return;}
     let active=true;
-    rto<CourseDetail>("course_get",{courseId}).then(detail=>{if(active)setUnits(detail.units);}).catch(e=>{if(active){setUnits([]);setError(e instanceof Error?e.message:"Unable to load course units");}});
+    setUnitsLoading(true);setUnits([]);setSearch(v=>[v[0],""]);
+    rto<CourseDetail>("course_get",{courseId}).then(detail=>{if(active){setUnits(detail.units??[]);setError("");}}).catch(e=>{if(active){setUnits([]);setError(e instanceof Error?e.message:"Unable to load course units");}}).finally(()=>{if(active)setUnitsLoading(false);});
     return ()=>{active=false;};
   },[courseId]);
-  const unitOptions=units.filter(u=>u.isActive&&u.id).map(u=>({id:u.id!,label:`${u.code} — ${u.name}`}));
-  useEffect(()=>{setUnitId(old=>unitOptions.some(u=>u.id===old)?old:unitOptions[0]?.id??"");},[units]);
+  const unitOptions=units.map(u=>({id:u.id??"",label:`${u.code} — ${u.name}${u.isActive===false?" (Inactive)":""}`}));
+  useEffect(()=>{setUnitId(old=>unitOptions.some(u=>u.id===old&&!!u.id)?old:unitOptions.find(u=>!!u.id)?.id??"");},[units]);
   const create=async()=>{
     if(!courseId||!unitId||!title.trim()||saving)return;
     setSaving(true);setError("");
@@ -58,7 +60,7 @@ export default function LmsAssessmentsPage() {
 
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(240px,1fr)_minmax(420px,2.5fr)]">
       <section className={box}><h2 className="mb-3 font-semibold">1. Course</h2><input aria-label="Search courses" placeholder="Search course…" className={field+" mb-3"} value={search[0]} onChange={e=>setSearch(v=>[e.target.value,v[1]])}/><div className="space-y-2">{courses.filter(c=>c.label.toLowerCase().includes(search[0].toLowerCase())).map(c=><button key={c.id} className={item(courseId===c.id)} onClick={()=>setCourseId(c.id)}>{c.label}</button>)}</div></section>
-      <section className={box}><h2 className="mb-3 font-semibold">2. Units</h2><input aria-label="Search units" placeholder="Search unit…" className={field+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value])}/><div className="space-y-2">{unitOptions.filter(u=>u.label.toLowerCase().includes(search[1].toLowerCase())).map(u=><button type="button" key={u.id} className={item(unitId===u.id)} onClick={()=>setUnitId(u.id)}>{u.label}</button>)}</div>{!unitOptions.length?<p className="text-sm text-foreground-500">No active units found for this course.</p>:null}</section>
+      <section className={box}><h2 className="mb-3 font-semibold">2. Units</h2><input aria-label="Search units" placeholder="Search unit…" className={field+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value])}/><div className="space-y-2">{unitOptions.filter(u=>u.label.toLowerCase().includes(search[1].toLowerCase())).map(u=><button type="button" key={u.id} className={item(unitId===u.id)} disabled={!u.id} onClick={()=>setUnitId(u.id)}>{u.label}</button>)}</div>{unitsLoading?<p className="text-sm text-foreground-500">Loading course units…</p>:!unitOptions.length?<p className="text-sm text-foreground-500">No units are assigned to this course.</p>:null}</section>
       <section className={box}><h2 className="mb-3 font-semibold">3. Assessments</h2>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Assessment library</h3><button className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" disabled={!unitId} onClick={()=>setCreating(true)}>+ Add assessment</button></div>

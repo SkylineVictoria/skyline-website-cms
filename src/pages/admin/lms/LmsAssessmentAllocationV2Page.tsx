@@ -65,9 +65,9 @@ export default function LmsAssessmentAllocationV2Page() {
   const field="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
   const panel="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4";
   return <div className="mx-auto max-w-[1750px] space-y-4 pb-10">
-    <header><p className="text-xs uppercase tracking-wide text-foreground-500">LMS</p><h1 className="font-heading text-3xl font-bold">Assessment Allocation</h1><p className="text-sm text-foreground-600">Select Course → Unit → Assessment, then choose an intake and batch to allocate to students.</p></header>
+    <header><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold">Assessment Allocation</h1><p className="text-sm text-foreground-600">Select Course → Unit → Assessment, then choose an intake and batch to allocate to students.</p></header>
     {error?<div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}<button type="button" className="ml-3 underline" onClick={()=>void load()}>Retry</button></div>:null}
-    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(190px,0.9fr)_minmax(210px,1fr)_minmax(250px,1.1fr)_minmax(440px,2.1fr)]">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
       <section className={panel}>
         <h2 className="mb-4 text-lg font-bold">1. Course</h2>
         <input className={field+" mb-3"} aria-label="Search courses" placeholder="Search course…" value={courseSearch} onChange={e=>setCourseSearch(e.target.value)}/>

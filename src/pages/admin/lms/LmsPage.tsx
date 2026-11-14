@@ -16,7 +16,7 @@ export default function LmsPage() {
   if (area === "units") return <LmsUnitsPage />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
-  if (area === "submissions") return <Navigate to="/admin/lms/assessments?tab=submissions" replace />;
+  if (area === "submissions") return <Navigate to="/admin/lms/assessments" replace />;
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;

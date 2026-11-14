@@ -2,7 +2,6 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAcademicPage from "./LmsAcademicPage";
 import LmsBatchWorkspacePage from "./LmsBatchWorkspacePage";
-import LmsTimetablePage from "./LmsTimetablePage";
 import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
@@ -20,11 +19,10 @@ export default function LmsPage() {
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
-  if (area === "timetable") return <LmsTimetablePage />;
+  if (area === "timetable") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "attendance") return <LmsAcademicPage area={area} />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],
-    timetable: [{ label: "Open batch class timing", to: "/admin/intakes", note: "Class timing is saved through the existing batch workflow." }],
     attendance: [{ label: "Open batch and student list", to: "/admin/intakes", note: "Student attendance requires a dedicated dated-session register before marking can be enabled." }],
   };
   return <div className="mx-auto max-w-5xl space-y-6 pb-10">

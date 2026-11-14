@@ -1,6 +1,6 @@
 import { LMS_MENU } from "@/pages/admin/lms/lmsConfig";
 import { useEffect, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { supabase } from '@/pages/admin/lib/supabase';
 import { useAuth } from '@/pages/admin/lib/authContext';
 import { menuActive, menuIcon, menuTree, type AdminMenuItem, type MenuNode } from '@/pages/admin/lib/adminMenu';
@@ -19,7 +19,7 @@ function MenuEntry({ node, close, collapsed }: { node: MenuNode; close: () => vo
       <button type="button" aria-expanded={expanded} title={collapsed ? node.label : undefined} onClick={() => setExpanded(v => !v)} className={`${linkClass} ${shape} w-full ${collapsed && active ? 'text-primary-600' : 'text-foreground-700'} hover:bg-background-100`}>
         {content}{collapsed ? null : <i className={expanded ? 'ri-arrow-up-s-line ml-auto' : 'ri-arrow-down-s-line ml-auto'} aria-hidden="true" />}
       </button>
-      {expanded ? <ul className={collapsed ? 'mb-1 border-b border-background-200 pb-1' : 'ml-3 border-l border-background-200 pl-2'}>{node.children.map(child => <MenuEntry key={child.id} node={child} close={close} collapsed={collapsed} />)}</ul> : null}
+      {expanded ? <ul className={collapsed ? 'mb-1 border-b border-background-200 pb-1' : 'ml-3 border-l border-background-200 pl-2'}>{node.children.map(child => <MenuEntry key={child.id} node={child} close={close} collapsed={collapsed} />)}{node.id === "communications" && !node.children.some(child => child.route === "/admin/communication") ? <li><NavLink to="/admin/communication" onClick={close} className={linkClass + " text-foreground-700 hover:bg-background-100"}><i className="ri-chat-3-line text-lg" aria-hidden="true" />{collapsed ? <span className="sr-only">Communication Hub</span> : "Communication Hub"}</NavLink></li> : null}</ul> : null}
     </> : node.route ? <NavLink to={node.route} end={node.route === '/admin' || node.route === '/'} onClick={close}
       target={node.open_in_new_tab ? '_blank' : undefined} rel={node.open_in_new_tab ? 'noopener noreferrer' : undefined} title={collapsed ? node.label : undefined}
       className={() => `${linkClass} ${shape} ${pathname === node.route ? 'bg-primary-500 text-background-50' : 'text-foreground-700 hover:bg-background-100'}`}>
@@ -56,7 +56,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const nodes = result?.identity === identity ? menuTree(result.rows) : null;
   return <>
     <div className={`flex-1 overflow-y-auto py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /><Link to="/admin/communication" onClick={close} title={collapsed ? "Communication Hub" : undefined} className={linkClass + " mt-2 text-foreground-700 hover:bg-background-100"}><i className="ri-chat-3-line text-lg" aria-hidden="true" />{collapsed ? <span className="sr-only">Communication Hub</span> : "Communication Hub"}</Link></> : <>
+      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /></> : <>
         <NavLink to="/admin" end onClick={close} className={linkClass}><i className="ri-dashboard-3-line" aria-hidden="true" />Dashboard</NavLink>
         <p role="status" className="px-3 text-xs text-foreground-500">{failed ? 'Menu unavailable.' : 'Loading menu…'}</p>
         {failed ? <button type="button" onClick={() => setAttempt(v => v + 1)} className={linkClass}>Retry menu</button> : null}

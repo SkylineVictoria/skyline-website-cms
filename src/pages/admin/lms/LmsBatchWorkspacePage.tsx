@@ -13,7 +13,9 @@ export default function LmsBatchWorkspacePage() {
   const [batchDetail, setBatchDetail] = useState<BatchPageData | null>(null);
   const [saving, setSaving] = useState("");
   const [canEdit, setCanEdit] = useState(false);
-  const [editor, setEditor] = useState<"add" | "edit" | null>(null);
+  const [editor, setEditor] = useState<"edit" | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const refresh = useCallback(async () => {
@@ -56,6 +58,18 @@ export default function LmsBatchWorkspacePage() {
       .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load batch"); });
     return () => { active = false; };
   }, [batchId]);
+  const createBatch = async () => {
+    if (!intakeId || !newName.trim()) { setError("Enter a batch name."); return; }
+    setSaving("new"); setError("");
+    try {
+      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", {
+        batchId: null, intakeId, name: newName.trim(), sessions: [],
+      });
+      setDetail(out); setBatchId(out.batchId); setAdding(false); setNewName("");
+      void refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to create batch"); }
+    finally { setSaving(""); }
+  };
   const saveDates = async (unitId: string, startDate: string, endDate: string) => {
     if (!batchId || !startDate || !endDate || startDate > endDate) { setError("End date must be on or after start date."); return; }
     setSaving(unitId); setError("");
@@ -71,7 +85,7 @@ export default function LmsBatchWorkspacePage() {
       <h1 className="font-heading text-3xl font-bold text-foreground-950">Batches · New Workspace</h1>
       <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Allocate unit dates in the fourth column.</p></div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => void refresh()}>Retry</button></div>}
-    <div className="w-full overflow-x-auto pb-3" role="region" aria-label="Batch management columns" tabIndex={0}><div className="grid grid-cols-[minmax(230px,1fr)_minmax(210px,0.85fr)_minmax(190px,0.8fr)_minmax(390px,2.2fr)] gap-3 min-w-[1080px]">
+    <div className="w-full pb-3" role="region" aria-label="Batch management columns" tabIndex={0}><div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
       <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Courses">
         <h2 className="mb-3 font-semibold">Courses</h2>
         <div className="space-y-2">{courses.map(c => <button type="button" key={c.id} className={row(courseId === c.id)} aria-pressed={courseId === c.id} onClick={() => {setCourseId(c.id);setEditor(null);}}>{c.label}</button>)}</div>
@@ -84,8 +98,12 @@ export default function LmsBatchWorkspacePage() {
       </section>
       <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Batches">
         <div className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold">Batches</h2>
-          {canEdit && intakeId && <button type="button" className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" onClick={() => setEditor("add")}>+ Add</button>}</div>
-        <div className="space-y-2">{batches.map(b => <button type="button" key={b.id} className={row(batchId === b.id)} aria-pressed={batchId === b.id} onClick={() => {setBatchId(b.id);setEditor(null);}}>
+          {canEdit && intakeId && <button type="button" className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" onClick={() => {setAdding(true);setEditor(null);}}>+ Add</button>}</div>
+        {adding && <div className="mb-3 space-y-2 rounded-lg border border-primary-300 bg-primary-50 p-3">
+          <label className="block text-xs font-semibold">New batch name<input autoFocus value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. G1" className="mt-1 w-full rounded-md border border-background-300 bg-white p-2 text-sm" /></label>
+          <div className="flex gap-2"><button type="button" disabled={!!saving || !newName.trim()} onClick={() => void createBatch()} className="rounded-md bg-primary-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{saving === "new" ? "Creating…" : "Create batch"}</button><button type="button" onClick={() => setAdding(false)} className="text-xs underline">Cancel</button></div>
+        </div>}
+        <div className="space-y-2">{batches.map(b => <button type="button" key={b.id} className={row(batchId === b.id)} aria-pressed={batchId === b.id} onClick={() => {setBatchId(b.id);setEditor(null);setAdding(false);}}>
           <span className="flex items-center justify-between gap-2"><span>{b.name}</span>{canEdit && <span className="text-xs text-primary-600">Edit</span>}</span>
         </button>)}</div>
         {!loading && !batches.length && <p className="text-sm text-foreground-500">No batches for this intake.</p>}

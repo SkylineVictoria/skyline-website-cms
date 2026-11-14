@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { rto, rtoFlow, type RtoIntake, type IntakeDetail, type BatchPageData, type RtoCourse } from "@/pages/admin/lib/rto";
+import { rto, type RtoIntake, type IntakeDetail, type BatchPageData, type RtoCourse } from "@/pages/admin/lib/rto";
 
 type Item = { id: string; name: string; intake: RtoIntake };
 export default function LmsAcademicPage({ area }: { area: "batches" | "unit-delivery" | "timetable" | "attendance" }) {
@@ -34,7 +34,7 @@ export default function LmsAcademicPage({ area }: { area: "batches" | "unit-deli
     setBatch(null);
     if (!batchId) return;
     let live = true;
-    rtoFlow<BatchPageData>("batch_get", { batchId }).then(d => { if (live) setBatch(d); }).catch(e => { if (live) setError(e.message); });
+    rto<BatchPageData>("batch_get", { batchId }).then(d => { if (live) setBatch(d); }).catch(e => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [batchId]);
   const matching = useMemo(() => intakes.filter(i => !courseId || i.courseId === courseId), [intakes, courseId]);

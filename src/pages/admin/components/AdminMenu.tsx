@@ -71,7 +71,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
 
 /** LMS is additive navigation; it does not mutate the DB-driven Master Data menu. */
 function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
-  const { pathname, search } = useLocation();
+  const { pathname } = useLocation();
   const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));
   useEffect(() => { if (pathname.startsWith("/admin/lms")) setExpanded(true); }, [pathname]);
   return <div className="mt-3 border-t border-background-200 pt-3">
@@ -89,14 +89,6 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
           <i className={item.icon + " text-lg"} aria-hidden="true" />
           {collapsed ? <span className="sr-only">{item.label}</span> : <span className="truncate">{item.label}</span>}
         </NavLink>
-        {item.id === "assessments" ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
-          <li><NavLink to="/admin/lms/assessments?tab=submissions" onClick={close}
-            title={collapsed ? "Submissions" : undefined}
-            className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (pathname === "/admin/lms/assessments" && new URLSearchParams(search).get("tab") === "submissions" ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
-            <i className="ri-inbox-line text-lg" aria-hidden="true" />
-            {collapsed ? <span className="sr-only">Submissions</span> : <span>Submissions</span>}
-          </NavLink></li>
-        </ul> : null}
       </li>)}
     </ul> : null}
   </div>;

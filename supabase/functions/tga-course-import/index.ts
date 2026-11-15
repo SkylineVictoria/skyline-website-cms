@@ -29,6 +29,7 @@ Deno.serve(async req => {
   if (domain) headers["x-tenant-domain"] = domain;
   const caller = createClient(url, anon, { auth, global: { headers } });
 
+  let stage = "authorize";
   try {
     const { data: { user }, error: authError } = await caller.auth.getUser(authorization.slice(7));
     if (authError || !user) return json({ error: "Your session has expired. Sign in again." }, 401);
@@ -43,6 +44,7 @@ Deno.serve(async req => {
     if (input.action === "search") {
       const query = "query" in input && typeof input.query === "string" ? input.query.trim() : "";
       if (query.length < 2 || query.length > 120) return json({ error: "Enter a qualification code or name between 2 and 120 characters." }, 400);
+      stage = "search";
       return json(await searchQualifications(query));
     }
     if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
@@ -53,11 +55,13 @@ Deno.serve(async req => {
         input.electives.some(code => typeof code !== "string"))) {
       return json({ error: "The approved qualification review is required." }, 400);
     }
+    stage = "review";
     const review = await qualificationDetails(input.code.trim().toUpperCase());
     if (input.action === "details") return json(review);
     if (!("revision" in input) || input.revision !== review.revision) {
       return json({ error: "The government release details changed. Reopen the qualification to review them again." }, 409);
     }
+    stage = "save";
     const units = selectedUnits(review, "electives" in input ? input.electives : null, "attested" in input && input.attested);
     const db = createClient(url, service, { auth });
     const { data: courseId, error } = await db.rpc("rto_tga_import_save", {
@@ -73,7 +77,14 @@ Deno.serve(async req => {
     if (error || !courseId) return json({ error: "The draft course could not be saved." }, 500);
     return json({ courseId }, 201);
   } catch (error) {
-    if (error instanceof ImportError) return json({ error: error.message }, error.status);
+    if (error instanceof ImportError) {
+      if (error.status >= 500) console.warn("tga-course-import", stage, error.message);
+      return json({ error: error.message }, error.status);
+    }
+    const location = error instanceof Error
+      ? error.stack?.match(/(?:tga\.ts|index\.ts):\d+:\d+/)?.[0]
+      : undefined;
+    console.error("tga-course-import unexpected error", stage, location ?? "unknown location");
     return json({ error: "The course import could not be completed." }, 502);
   }
 });

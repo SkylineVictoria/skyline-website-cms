@@ -30,9 +30,9 @@ function parseXml(xml: string) {
   }
 }
 
-async function readXml(response: Response) {
+async function readXml(response: Response, source: string) {
   const reader = response.body?.getReader();
-  if (!reader) throw new ImportError("The government service returned an empty response.");
+  if (!reader) throw new ImportError(`${source} returned an empty response.`);
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let size = 0;
   let value = "";
@@ -44,9 +44,18 @@ async function readXml(response: Response) {
       if (size > 5_000_000) throw new ImportError("The government XML response exceeded the import size limit.");
       value += decoder.decode(bytes, { stream: true });
     }
+  } catch (error) {
+    if (error instanceof ImportError) throw error;
+    throw new ImportError(`${source} returned a response that could not be read.`);
   } finally {
-    await reader.cancel().catch(() => {});
+    // Supabase's runtime may close a response stream as soon as it is
+    // consumed. Cleanup should never replace the response or original error.
+    try { await reader.cancel(); } catch { /* Already closed. */ }
   }
+}
+
+async function discardResponse(response: Response) {
+  try { await response.body?.cancel(); } catch { /* Already closed. */ }
 }
 
 async function soap(op: "Search" | "GetDetails", request: string) {
@@ -64,12 +73,29 @@ async function soap(op: "Search" | "GetDetails", request: string) {
     headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: `"${namespace}ITrainingComponentService/${op}"` },
   }).catch(() => { throw new ImportError(`The Training.gov.au sandbox did not respond to ${op}.`); });
 
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new ImportError(`Training.gov.au sandbox ${op} returned HTTP ${response.status}. Check the sandbox connection and credentials.`);
+  const source = `Training.gov.au sandbox ${op}`;
+  if (!response.ok && response.status !== 500) {
+    await discardResponse(response);
+    throw new ImportError(`${source} returned HTTP ${response.status}.`);
   }
-  const root = await readXml(response);
+  const root = await readXml(response, source).catch((error: unknown) => {
+    if (response.ok) throw error;
+    throw new ImportError(`${source} returned HTTP ${response.status}.`);
+  });
   const body = child(root, "Body", soapNamespace);
+  const fault = child(body, "Fault", soapNamespace);
+  if (fault) {
+    const reason = Array.from(fault.childNodes).find(node =>
+      node.nodeType === 1 && (node as Element).localName === "faultstring")?.textContent ?? "";
+    if (/security token|authentication|invalid credentials|username.*password/i.test(reason)) {
+      throw new ImportError(`${source} rejected the WS-Security credentials.`);
+    }
+    if (/deserializ|serializ|invalid.*request|required member/i.test(reason)) {
+      throw new ImportError(`${source} rejected the SOAP request format.`);
+    }
+    throw new ImportError(`${source} returned a SOAP fault (HTTP ${response.status}).`);
+  }
+  if (!response.ok) throw new ImportError(`${source} returned HTTP ${response.status}.`);
   const result = child(child(body, op + "Response"), op + "Result");
   if (!result) throw new ImportError(`Training.gov.au returned an unexpected ${op} response.`);
   return result;
@@ -196,10 +222,10 @@ export async function qualificationDetails(code: string) {
     redirect: "error", signal: AbortSignal.timeout(15_000),
   }).catch(() => { throw new ImportError("The published Training.gov.au qualification XML could not be reached."); });
   if (!response.ok) {
-    await response.body?.cancel();
+    await discardResponse(response);
     throw new ImportError(`The government qualification XML returned HTTP ${response.status}.`);
   }
-  const rules = parseRelease(await readXml(response), code, releaseNumber);
+  const rules = parseRelease(await readXml(response, "The published Training.gov.au qualification XML"), code, releaseNumber);
   const review = {
     ...rules,
     code, name, packageCode, packageName: field(result, "ParentTitle"),

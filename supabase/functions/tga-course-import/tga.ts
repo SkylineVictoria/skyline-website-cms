@@ -482,7 +482,7 @@ export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDet
   if (electives.length !== codes.length) throw new ImportError("Select electives listed in this qualification release.", 422);
   const spec = review.specialisations.find(item => item.code === specialisation) ?? null;
   if (specialisation && !spec) throw new ImportError("Choose a specialisation listed for this release.", 422);
-  if (review.specialisations.length && !spec) throw new ImportError("Choose the specialisation this course delivers.", 422);
+  // A specialisation is optional; without one the release-level rules below apply.
   const units = () => ({
     specialisation: spec,
     units: [

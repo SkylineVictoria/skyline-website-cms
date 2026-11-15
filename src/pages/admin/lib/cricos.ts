@@ -165,3 +165,36 @@ export async function saveCricos(courseId: string | null, record: CricosRecord):
   }
   return data as string;
 }
+
+export interface ProviderCourse {
+  cricos_course_code: string; vet_national_code: string | null; course_name: string | null;
+  duration_weeks: number | null; total_cost: number | null; expired: boolean;
+}
+
+/** The site's CRICOS provider code from Settings (the tenant's row, else the site-wide row). */
+export async function siteProviderCode(): Promise<string> {
+  const { data } = await supabase.from("cms_settings").select("tenant_id,cricos");
+  const rows = (data ?? []) as { tenant_id: string | null; cricos: string | null }[];
+  const code = (rows.find(row => row.tenant_id && row.cricos?.trim()) ?? rows.find(row => row.cricos?.trim()))?.cricos?.trim().toUpperCase();
+  if (!code) throw new Error("Set the CRICOS provider code in Settings first.");
+  return code;
+}
+
+const CRICOS_COURSES_RESOURCE = "48cacf69-2082-415e-9595-f17d0c3a4af0";
+const text = (value: unknown) => value === null || value === undefined || String(value).trim() === "" ? null : String(value).trim();
+const number = (value: unknown) => { const n = Number(String(value ?? "").replace(/[$,\s]/g, "")); return text(value) && Number.isFinite(n) ? n : null; };
+
+/** Every course the provider has on the CRICOS register. Public, read-only summary straight from data.gov.au
+ *  (CORS open); full entries still come through the cricos-lookup function. */
+export async function listProviderCourses(providerCode: string): Promise<ProviderCourse[]> {
+  const filters = encodeURIComponent(JSON.stringify({ "CRICOS Provider Code": providerCode }));
+  const response = await fetch(`https://data.gov.au/data/api/3/action/datastore_search?resource_id=${CRICOS_COURSES_RESOURCE}&limit=1000&filters=${filters}`)
+    .catch(() => { throw new Error("The CRICOS register (data.gov.au) did not respond."); });
+  const body = await response.json().catch(() => null) as { success?: boolean; result?: { records?: Record<string, unknown>[] } } | null;
+  if (!response.ok || !body?.success || !Array.isArray(body.result?.records)) throw new Error("The CRICOS register could not be read.");
+  return body.result.records.map(row => ({
+    cricos_course_code: (text(row["CRICOS Course Code"]) ?? "").toUpperCase(), vet_national_code: text(row["VET National Code"]),
+    course_name: text(row["Course Name"]), duration_weeks: number(row["Duration (Weeks)"]),
+    total_cost: number(row["Estimated Total Course Cost"]), expired: text(row.Expired)?.toLowerCase() === "yes",
+  })).filter(row => row.cricos_course_code);
+}

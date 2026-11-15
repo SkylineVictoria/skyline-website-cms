@@ -12,7 +12,7 @@ const HOURS_SOURCE = "NCVER nationally agreed nominal hours (2026)";
  * Re-reads Training.gov.au and NCVER hours for an existing course and fills what is missing (CRICOS: cricos-lookup).
  * Register data columns (tga_*) are refreshed; fields people edit (code, name,
  * career, description, entry requirements, training package, link) are only filled when empty. Units are never
- * added or removed; existing units get missing hours, groups, prerequisites and usage. Nothing is ever erased.
+ * removed; a course without units gets the core units; existing units get missing hours, groups, prerequisites and usage. Nothing is ever erased.
  */
 export async function syncCourse(db: SupabaseClient, tenantId: string | null, courseId: string,
   providerCode: string | null, hoursLookup: HoursLookup) {
@@ -88,6 +88,18 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
     if (blank(unit.elective_groups) && source.groups.length) next.elective_groups = source.groups.join(", ");
     if (Object.keys(next).length) changes.push({ id: unit.id, patch: next });
   }
+  // A course with no units yet (e.g. created from CRICOS) gets the release's core units; electives stay a choice.
+  let coreAdded = 0;
+  if (!(units ?? []).length && review.core.length) {
+    const { error: insertError } = await db.from("cms_course_units").insert(review.core.map((unit, index) => ({
+      id: "unit-" + crypto.randomUUID().replaceAll("-", ""), course_id: courseId, code: unit.code, name: unit.name,
+      category: "Core", unit_type: "core", sort: index + 1, nominal_hours: unit.nominalHours,
+      nominal_hours_source: unit.nominalHours === null ? null : HOURS_SOURCE, has_prerequisites: unit.hasPrerequisites,
+      usage_recommendation: unit.usageRecommendation || null,
+    })));
+    if (insertError) return reply({ error: "The core units could not be added." }, 500);
+    coreAdded = review.core.length;
+  }
   for (let index = 0; index < changes.length; index += 20) {
     const results = await Promise.all(changes.slice(index, index + 20).map(change =>
       db.from("cms_course_units").update(change.patch).eq("id", change.id).eq("course_id", courseId)));
@@ -95,7 +107,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
   }
 
   return reply({
-    courseId, code, filled, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
+    courseId, code, filled, coreAdded, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
       official.has(String(unit.code ?? "").trim().toUpperCase())).length, unitCount: (units ?? []).length,
     cricos: review.cricos ? { registered: review.cricos.registered, providerCode: review.cricos.providerCode,
       courseCode: review.cricos.registered ? review.cricos.courseCode : null } : null,

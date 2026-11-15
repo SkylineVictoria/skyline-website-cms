@@ -4,6 +4,7 @@ import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovC
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
+import CricosBulkSync from "@/pages/admin/components/rto/CricosBulkSync";
 import { Modal } from "@/pages/admin/components/ui";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
@@ -69,6 +70,7 @@ export default function LmsCoursesPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState("");
   const [editing, setEditing] = useState(false);
+  const [bulkSync, setBulkSync] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
@@ -158,6 +160,9 @@ export default function LmsCoursesPage() {
         <p className="mt-1 text-sm text-foreground-600">View and edit course information and qualification details. Units are managed separately.</p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
+      {canEdit ? <button type="button" onClick={() => setBulkSync(true)} title="Link or create every course registered on CRICOS for your provider code"
+        className="flex items-center gap-1 rounded-xl border border-background-300 bg-background-50 px-4 py-2.5 font-semibold text-foreground-800 hover:bg-background-100">
+        <i className="ri-refresh-line" aria-hidden="true" />Sync CRICOS courses</button> : null}
       {canEdit ? <button type="button" onClick={() => setAddingCourse("choose")} className="rounded-xl bg-primary-600 px-4 py-2.5 font-semibold text-white">+ Add New</button> : null}
       <label className="flex items-center gap-2 rounded-xl border border-background-200 bg-background-50 px-3 py-2 text-sm">
         {icon("ri-map-pin-line")}<span className="sr-only">Campus</span>
@@ -166,6 +171,8 @@ export default function LmsCoursesPage() {
         </select>
       </label></div>
     </header>
+    <CricosBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
+      onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }} />
     <Modal open={addingCourse === "choose" && canEdit} title="Add a course" onClose={() => setAddingCourse(null)}>
       <div className="grid gap-3 sm:grid-cols-2">
         {([

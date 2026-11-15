@@ -1,4 +1,4 @@
-import { clean, CODE_PATTERN, mapCricos, RESOURCES, type RawCricos, type Row } from "./cricos.ts";
+import { clean, CODE_PATTERN, mapCricos, RESOURCES, toBoolean, toInteger, toMoney, toText, type RawCricos, type Row } from "./cricos.ts";
 
 // Reads the public CRICOS register for one course code. Never writes to the database; the CMS saves the reviewed
 // values through rto_course_cricos_save. JWT verification stays on (signed-in CMS users only).
@@ -19,8 +19,8 @@ function json(body: unknown, status = 200, cached = false) {
 }
 
 class RegisterError extends Error {}
-async function search(resource: string, filters: Record<string, string>): Promise<Row[]> {
-  const url = `${API}?resource_id=${resource}&limit=100&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+async function search(resource: string, filters: Record<string, string>, limit = 100): Promise<Row[]> {
+  const url = `${API}?resource_id=${resource}&limit=${limit}&filters=${encodeURIComponent(JSON.stringify(filters))}`;
   let response: Response;
   try {
     response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(15_000), headers: { Accept: "application/json" } });
@@ -34,7 +34,22 @@ async function search(resource: string, filters: Record<string, string>): Promis
 Deno.serve(async req => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
-  const input = await req.json().catch(() => null) as { cricos_code?: unknown } | null;
+  const input = await req.json().catch(() => null) as { cricos_code?: unknown; provider_code?: unknown } | null;
+  // { provider_code }: every course this provider has on the CRICOS register (summary rows for the bulk sync).
+  if (typeof input?.provider_code === "string") {
+    const provider = input.provider_code.trim().toUpperCase();
+    if (!/^[0-9]{5}[A-Z]$/.test(provider)) return json({ error: "A CRICOS provider code is five digits and a letter, e.g. 04114B." }, 400);
+    try {
+      const rows = await search(RESOURCES.courses, { "CRICOS Provider Code": provider }, 1000);
+      return json({ provider_code: provider, courses: rows.map(row => ({
+        cricos_course_code: toText(row["CRICOS Course Code"])?.toUpperCase() ?? null, vet_national_code: toText(row["VET National Code"]),
+        course_name: toText(row["Course Name"]), duration_weeks: toInteger(row["Duration (Weeks)"]),
+        total_cost: toMoney(row["Estimated Total Course Cost"]), expired: toBoolean(row.Expired) === true,
+      })).filter(row => row.cricos_course_code) });
+    } catch (error) {
+      return json({ error: `The CRICOS register could not be read: ${error instanceof Error ? error.message : "error"}` }, 502);
+    }
+  }
   const code = typeof input?.cricos_code === "string" ? input.cricos_code.trim().toUpperCase() : "";
   if (!CODE_PATTERN.test(code)) return json({ error: "A CRICOS course code is six digits and a letter, e.g. 112739C." }, 400);
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 
 const sections = [
@@ -10,7 +10,9 @@ const sections = [
 ] as const;
 type Section = typeof sections[number]["id"];
 export default function EmailManagementPage() {
-  const [active, setActive] = useState<Section>("accounts");
+  const [params] = useSearchParams();
+  const selected = params.get("section");
+  const active: Section = sections.some(section => section.id === selected) ? selected as Section : "accounts";
   const current = sections.find(section => section.id === active)!;
   return <main className="mx-auto max-w-6xl space-y-6 pb-12">
     <header>
@@ -21,14 +23,7 @@ export default function EmailManagementPage() {
     <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" role="status">
       <strong>Setup required.</strong> Microsoft 365 is not connected to this module yet. No accounts can be created, modified or disabled from this screen.
     </div>
-    <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
-      <nav className="space-y-1" aria-label="Email Management sections">
-        {sections.map(section => <button key={section.id} type="button" onClick={() => setActive(section.id)}
-          aria-current={active === section.id ? "page" : undefined}
-          className={`flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-medium ${active === section.id ? "bg-primary-500 text-white" : "border border-background-200 text-foreground-800 hover:bg-background-100"}`}>
-          <i className={section.icon} aria-hidden="true" />{section.label}
-        </button>)}
-      </nav>
+    <div>
       <section className="min-h-64 rounded-xl border border-background-200 bg-white p-6">
         <h2 className="text-xl font-semibold text-foreground-950">{current.label}</h2>
         <p className="mt-3 text-sm text-foreground-600">{current.detail}</p>

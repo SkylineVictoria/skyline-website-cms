@@ -12,6 +12,8 @@ interface Unit {
   code: string;
   name: string;
   groups: string[];
+  nominalHours: number | null;
+  hoursSource: string | null;
 }
 
 interface Review extends Qualification {
@@ -86,6 +88,9 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
     });
   }
 
+  const chosenUnits = review ? [...review.core, ...review.electives.filter(unit => selectedCodes.includes(unit.code))] : [];
+  const knownHours = chosenUnits.filter(unit => unit.nominalHours !== null);
+  const hoursTotal = knownHours.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
   const minimum = review?.minimumGroup;
   const groupSelected = minimum ? review.electives.filter(unit =>
     unit.groups.includes(minimum.group) && selectedCodes.includes(unit.code)).length : 0;
@@ -151,7 +156,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         <div className="rounded-lg border border-background-200 p-3">
           <h4 className="mb-2 text-sm font-semibold">Core units ({review.core.length})</h4>
           <ul className="space-y-2 text-sm">
-            {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name}</li>)}
+            {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}</span></li>)}
           </ul>
         </div>
         <fieldset disabled={Boolean(busy)} className="min-w-0 rounded-lg border border-background-200 p-3">
@@ -165,7 +170,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
                   setAttested(false);
                   setSelectedCodes(previous => event.target.checked ? [...previous, unit.code] : previous.filter(code => code !== unit.code));
                 }} />
-              <span><strong>{unit.code}</strong> {unit.name}
+              <span><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}</span>
                 {unit.groups.length > 0 && <span className="mt-0.5 block text-xs text-foreground-600">
                   {unit.groups.map(group => `${group} · ${review.groups[group]}`).join(" / ")}
                 </span>}
@@ -178,6 +183,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         Electives selected: {selectedCodes.length} / {review.requiredElectives}
         {selectedCodes.length !== review.requiredElectives && ` — select exactly ${review.requiredElectives} electives to save.`}
       </p>}
+      <p className="text-sm" role="status">Known nominal hours: <strong>{hoursTotal} hrs</strong> across {knownHours.length} of {chosenUnits.length} selected units{knownHours.length !== chosenUnits.length ? " (partial total; missing hours are not counted)" : ""}. Source: NCVER national reporting dataset; confirm Victorian funded hours separately.</p>
       {!review.canValidate && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
         You can select electives for review, but this release’s packaging rules could not be validated automatically. Saving is unavailable until the official rules are supported; review the rules above.
       </p>}

@@ -1,14 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 
 type Tab = "overview";
+type CatalogueRow = {course_code:string;course_name:string;aqf_level:string|null;training_package_name:string|null;national_status:string|null;release_number:string|null;cms_course_id:string|null};
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
+  const [addingCourse, setAddingCourse] = useState(false);
+  const [qualificationQuery, setQualificationQuery] = useState("");
+  const [catalogueResults, setCatalogueResults] = useState<CatalogueRow[]>([]);
+  const [qualification, setQualification] = useState<CatalogueRow | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const searchQualifications = async () => {
+    if (!qualificationQuery.trim()) return;
+    setSearchBusy(true); setSearchError(""); setQualification(null);
+    const {data,error} = await supabase.rpc("search_australian_course_catalogue", {p_query:qualificationQuery.trim(),p_limit:20});
+    if (error) setSearchError(error.message);
+    else setCatalogueResults((data ?? []) as CatalogueRow[]);
+    setSearchBusy(false);
+  };
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [query, setQuery] = useState("");
@@ -80,13 +96,31 @@ export default function LmsCoursesPage() {
         <h1 className="mt-3 font-heading text-3xl font-bold text-foreground-950">Courses</h1>
         <p className="mt-1 text-sm text-foreground-600">View and edit course information and qualification details. Units are managed separately.</p>
       </div>
+      <div className="flex flex-wrap items-center gap-3">
+      {canEdit ? <button type="button" onClick={() => {setAddingCourse(true);setQualification(null);setCatalogueResults([]);setSearchError("");}} className="rounded-xl bg-primary-600 px-4 py-2.5 font-semibold text-white">+ Add New</button> : null}
       <label className="flex items-center gap-2 rounded-xl border border-background-200 bg-background-50 px-3 py-2 text-sm">
         {icon("ri-map-pin-line")}<span className="sr-only">Campus</span>
         <select className="max-w-48 bg-transparent outline-none" value={campus} onChange={e => setCampus(e.target.value)}>
           <option value="">All Campuses</option>{campuses.map(x => <option key={x} value={x}>{x}</option>)}
         </select>
-      </label>
+      </label></div>
     </header>
+    {addingCourse ? <section className={card + " p-5 space-y-4"} aria-label="Import government qualification">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-heading text-xl font-bold">Import government qualification</h2><p className="text-sm text-foreground-600">Search the existing Training.gov.au catalogue by qualification code or name.</p></div><button type="button" className="rounded-lg border px-3 py-2" onClick={()=>setAddingCourse(false)}>Close</button></div>
+      <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();void searchQualifications();}}>
+        <input aria-label="Qualification code or name" autoFocus className="min-w-[220px] flex-1 rounded-lg border border-background-300 p-3" value={qualificationQuery} onChange={e=>setQualificationQuery(e.target.value)} placeholder="e.g. BSB50120 or Diploma of Business" />
+        <button disabled={searchBusy || !qualificationQuery.trim()} type="submit" className="rounded-lg bg-primary-600 px-5 py-2 text-white disabled:opacity-50">{searchBusy?"Searching…":"Search"}</button>
+      </form>
+      {searchError ? <p role="alert" className="text-sm text-red-700">{searchError}</p> : null}
+      {!qualification ? <div className="max-h-72 space-y-2 overflow-auto">{catalogueResults.map(item=><button type="button" key={item.course_code} onClick={()=>setQualification(item)} className="block w-full rounded-lg border border-background-200 p-3 text-left hover:border-primary-500"><strong>{item.course_code}</strong> — {item.course_name}<span className="ml-2 text-xs text-foreground-500">{item.national_status}</span></button>)}{!searchBusy && qualificationQuery && catalogueResults.length===0 && !searchError ? <p className="text-sm text-foreground-500">Search for a qualification to see matching results.</p>:null}</div> :
+      <div className="space-y-3 rounded-xl border border-background-200 p-4">
+        <h3 className="font-heading text-lg font-bold">{qualification.course_code} — {qualification.course_name}</h3>
+        <div className="grid gap-2 text-sm sm:grid-cols-2"><p><strong>AQF:</strong> {qualification.aqf_level || "Not provided"}</p><p><strong>Training package:</strong> {qualification.training_package_name || "Not provided"}</p><p><strong>National status:</strong> {qualification.national_status || "Unknown"}</p><p><strong>Release:</strong> {qualification.release_number || "Not provided"}</p></div>
+        <a className="text-sm text-primary-600 underline" href={"https://training.gov.au/training/details/"+encodeURIComponent(qualification.course_code)} target="_blank" rel="noreferrer">View official qualification</a>
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">The existing catalogue contains qualification summaries, but not the complete official core/elective unit list or packaging rules. Saving is disabled until verified unit data can be retrieved and reviewed. No incomplete course will be created.</div>
+        <div className="flex justify-end gap-2"><button type="button" className="rounded-lg border px-4 py-2" onClick={()=>setQualification(null)}>Back to results</button><button type="button" disabled className="rounded-lg bg-primary-600 px-4 py-2 text-white opacity-50">Save course</button></div>
+      </div>}
+    </section> : null}
     {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(280px,0.95fr)_minmax(0,2.25fr)]">
       <section className={card + " p-4"}>

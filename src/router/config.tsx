@@ -1,5 +1,6 @@
 import LmsPage from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
+import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
 import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
 import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
@@ -217,6 +218,7 @@ const routes: RouteObject[] = [
           { index: true, element: <DashboardPage /> },
           { path: "lms", element: <RequireAdmin><LmsPage /></RequireAdmin> },
           { path: "communication", element: <RequireAdmin><CommunicationHubPage /></RequireAdmin> },
+          { path: "email-management", element: <RequireAdmin><EmailManagementPage /></RequireAdmin> },
           { path: "lms/:area", element: <RequireAdmin><LmsPage /></RequireAdmin> },
           { path: "courses", element: <AdminCoursesPage /> },
           { path: "courses/:slug", element: <CourseEditorPage /> },

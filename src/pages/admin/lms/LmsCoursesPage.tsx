@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
+import { supabase } from "@/pages/admin/lib/supabase";
 
 type Tab = "overview";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -70,6 +71,17 @@ export default function LmsCoursesPage() {
     } catch (e) { setDetailError(e instanceof Error ? e.message : "Unable to save course."); }
     finally { setSaving(false); }
   }, [canEdit, selectedId, saving]);
+  const remove = useCallback(async () => {
+    const course = courses.find(c => c.id === selectedId);
+    if (!canEdit || !course || saving) return;
+    if (!window.confirm(`Delete ${course.code} – ${course.name} and its units? This cannot be undone.`)) return;
+    setSaving(true); setDetailError("");
+    const { error: deleteError } = await supabase.rpc("rto_course_delete", { p_course_id: course.id });
+    setSaving(false);
+    if (deleteError) { setDetailError(deleteError.message || "Unable to delete the course."); return; }
+    setSavedAt(""); setSelectedId("");
+    void load();
+  }, [canEdit, courses, load, saving, selectedId]);
   const campuses = useMemo(() => Array.from(new Set(courses.map(c => c.campus).filter((x): x is string => !!x))).sort(), [courses]);
   const visible = useMemo(() => courses.filter(c =>
     (!activeOnly || c.isActive) && (!campus || c.campus === campus) &&
@@ -122,7 +134,7 @@ export default function LmsCoursesPage() {
               <span className="rounded-lg bg-background-100 p-2">{icon("ri-graduation-cap-line")}</span>
               <span className="min-w-0 flex-1"><span className="block font-semibold text-foreground-950">{c.code}</span>
                 <span className="mt-1 block text-sm text-foreground-600">{c.name}</span></span>
-              <span className={"rounded-full px-2 py-1 text-xs font-semibold " + (c.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{c.status === "Draft" ? "Draft" : c.isActive ? "Active" : "Inactive"}</span>
+              <span className={"rounded-full px-2 py-1 text-xs font-semibold " + (c.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{c.isActive ? "Active" : "Inactive"}</span>
             </button>)}
         </div>
       </section>
@@ -132,8 +144,21 @@ export default function LmsCoursesPage() {
             <span className="rounded-xl bg-primary-50 p-4">{icon("ri-graduation-cap-line")}</span>
             <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2">
               <h2 className="font-heading text-xl font-bold text-foreground-950">{selected.code} – {selected.name}</h2>
-              <span className={"rounded-full px-3 py-1 text-xs font-semibold " + (selected.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{selected.status === "Draft" ? "Draft" : selected.isActive ? "Active" : "Inactive"}</span>
+              <span className={"rounded-full px-3 py-1 text-xs font-semibold " + (selected.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{selected.isActive ? "Active" : "Inactive"}</span>
+              {selected.status === "Draft" ? <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800" title="Not published on the website">Website draft</span> : null}
             </div><p className="mt-1 text-sm text-foreground-600">{selected.cricos ? "CRICOS: " + selected.cricos : "CRICOS not specified"}</p></div>
+            {canEdit ? <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 rounded-xl border border-background-300 px-3 py-2 text-sm font-semibold">
+                <span>Status</span>
+                <select aria-label="Course status" value={selected.isActive ? "active" : "inactive"} disabled={saving || !detail}
+                  onChange={e => void save("course_save", { isActive: e.target.value === "active" })} className="bg-transparent outline-none">
+                  <option value="active">Active</option><option value="inactive">Inactive</option>
+                </select>
+              </label>
+              <button type="button" onClick={() => void remove()} disabled={saving}
+                className="flex items-center gap-1 rounded-xl border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+                <i className="ri-delete-bin-line" aria-hidden="true" />Delete</button>
+            </div> : null}
           </div>
           <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
@@ -148,6 +173,7 @@ export default function LmsCoursesPage() {
             </div>)}
           </div>
           <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
+          {detailError ? <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{detailError}</div> : null}
           <div role="tablist" aria-label="Course sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
             {([{ id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
               <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}

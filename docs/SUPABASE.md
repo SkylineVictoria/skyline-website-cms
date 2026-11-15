@@ -706,3 +706,6 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 - `public.tga_nominal_hours` (unit_code, hours; service role only) holds the NCVER nationally agreed hours; loaded 2026-11-15 with 66,539 units. Ambiguous codes are left out.
 - `tga-course-import` v13 reads hours from this table and downloads the NCVER file only when the table has none (the Edge runtime usually cannot fetch it in time).
 - Refresh (about yearly), in the SQL editor: `select net.http_get('https://www.ncver.edu.au/sites/default/files/ncver-documents/Nationally-agreed-hours.txt', timeout_milliseconds => 60000);` then `select public.tga_nominal_hours_load(<id>);`. Loading also fills empty hours on units of already imported courses; hours entered by hand are never replaced.
+
+## Course status and delete (COURSE-DELETE 2026-11-15; migration 20261115120000 local, run on hosted by the owner)
+- LMS › Courses: RTO Managers switch a course Active / Inactive (`rto_admin('course_save', {isActive})`) and delete it with `public.rto_course_delete(p_course_id)` (security definer, RTO Manager only). Courses with intakes, applications, assessments or unit outcomes are refused with a message to make them inactive instead; the course's units are deleted with it.

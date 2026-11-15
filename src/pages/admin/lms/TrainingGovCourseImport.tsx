@@ -94,8 +94,10 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
   const minimum = review?.minimumGroup;
   const groupSelected = minimum ? review.electives.filter(unit =>
     unit.groups.includes(minimum.group) && selectedCodes.includes(unit.code)).length : 0;
-  const canSave = review?.canValidate && selectedCodes.length === review.requiredElectives
-    && (!minimum || groupSelected >= minimum.count) && (!review.requiresElectiveAttestation || attested);
+  const canSave = !review ? false : review.canValidate
+    ? selectedCodes.length === review.requiredElectives && (!minimum || groupSelected >= minimum.count) && (!review.requiresElectiveAttestation || attested)
+    // Rules not checked automatically: the user confirms them; electives must be chosen when the release lists any.
+    : attested && (!review.electives.length || selectedCodes.length > 0);
 
   function save() {
     if (!review || !canSave || busy) return;
@@ -181,12 +183,18 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
       </div>
       {review.requiredElectives !== null && <p role="status" className="text-sm font-semibold" aria-live="polite">
         Electives selected: {selectedCodes.length} / {review.requiredElectives}
-        {selectedCodes.length !== review.requiredElectives && ` — select exactly ${review.requiredElectives} electives to save.`}
+        {selectedCodes.length !== review.requiredElectives && (review.canValidate
+          ? ` — select exactly ${review.requiredElectives} electives to save.`
+          : ` — the first rule lists ${review.requiredElectives}; follow the packaging rules for your specialisation.`)}
       </p>}
       <p className="text-sm" role="status">Known nominal hours: <strong>{hoursTotal} hrs</strong> across {knownHours.length} of {chosenUnits.length} selected units{knownHours.length !== chosenUnits.length ? " (partial total; missing hours are not counted)" : ""}. Source: NCVER national reporting dataset; confirm Victorian funded hours separately.</p>
-      {!review.canValidate && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-        You can select electives for review, but this release’s packaging rules could not be validated automatically. Saving is unavailable until the official rules are supported; review the rules above.
-      </p>}
+      {!review.canValidate && <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+        <p role="status">This release’s packaging rules (for example specialisations or group minimums) can’t be checked automatically. Check your elective choice against the packaging rules above, then confirm to save.</p>
+        <label className="flex gap-2">
+          <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
+          <span>I have checked the core and selected elective units against the official packaging rules for this qualification (including any specialisation).</span>
+        </label>
+      </div>}
       {review.canValidate && review.requiresElectiveAttestation && <label className="flex gap-2 text-sm">
         <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
         <span>I confirm the selected electives meet the relevance, AQF alignment and vocational outcome requirements in the packaging rules.</span>

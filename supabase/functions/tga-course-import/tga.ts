@@ -351,12 +351,20 @@ export async function qualificationDetails(code: string) {
 }
 
 export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDetails>>, codes: unknown, attested: unknown) {
-  if (!review.canValidate) throw new ImportError("This release's packaging could not be validated automatically.", 422);
-  if (!Array.isArray(codes) || codes.length !== review.requiredElectives || new Set(codes).size !== codes.length) {
-    throw new ImportError(`Select ${review.requiredElectives} distinct electives.`, 422);
-  }
+  if (!Array.isArray(codes) || new Set(codes).size !== codes.length) throw new ImportError("Select distinct electives.", 422);
   const electives = review.electives.filter(unit => codes.includes(unit.code));
   if (electives.length !== codes.length) throw new ImportError("Select electives listed in this qualification release.", 422);
+  if (!review.canValidate) {
+    // Rules the importer cannot check (e.g. specialisations with their own group minimums): the RTO Manager reviews them
+    // against the official packaging rules and confirms before the draft course is saved.
+    if (review.electives.length && !codes.length) throw new ImportError("Select the electives for this course.", 422);
+    if (attested !== true) throw new ImportError("Confirm the selected units meet the official packaging rules.", 422);
+    return [
+      ...review.core.map(unit => ({ code: unit.code, name: unit.name, type: "core", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
+      ...electives.map(unit => ({ code: unit.code, name: unit.name, type: "elective", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
+    ];
+  }
+  if (codes.length !== review.requiredElectives) throw new ImportError(`Select ${review.requiredElectives} distinct electives.`, 422);
   const minimum = review.minimumGroup;
   if (minimum && electives.filter(unit => unit.groups.includes(minimum.group)).length < minimum.count) {
     throw new ImportError(`Select at least ${minimum.count} electives from Group ${minimum.group}.`, 422);

@@ -33,7 +33,7 @@ function parseXml(xml: string) {
 async function readXml(response: Response, source: string) {
   const reader = response.body?.getReader();
   if (!reader) throw new ImportError(`${source} returned an empty response.`);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let phase = "download";
   let size = 0;
   const chunks: Uint8Array[] = [];
   try {
@@ -50,10 +50,30 @@ async function readXml(response: Response, source: string) {
       data.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return parseXml(decoder.decode(data)) ?? undefined;
+    phase = "decode";
+    // XML encoding is determined by BOM, HTTP charset, then XML signature.
+    // WCF may return UTF-16 even when the request is UTF-8.
+    const charset = response.headers.get("content-type")?.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1];
+    const encoding = data[0] === 0xff && data[1] === 0xfe ? "utf-16le"
+      : data[0] === 0xfe && data[1] === 0xff ? "utf-16be"
+      : data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf ? "utf-8"
+      : charset || (data[0] === 0 && data[1] === 0x3c ? "utf-16be"
+        : data[0] === 0x3c && data[1] === 0 ? "utf-16le" : "utf-8");
+    if (!/^(utf-?8|utf-?16(le|be)?|us-ascii)$/i.test(encoding)) {
+      throw new ImportError(`${source} returned an unsupported XML character encoding.`);
+    }
+    const decoded = new TextDecoder(encoding, { fatal: true }).decode(data);
+    phase = "parse";
+    return parseXml(decoded) ?? undefined;
   } catch (error) {
     if (error instanceof ImportError) throw error;
-    throw new ImportError(`${source} returned a response that could not be read.`);
+    // Only fixed diagnostics: never log response bodies or credentials.
+    const kind = error instanceof Error && ["TypeError", "RangeError", "AbortError", "TimeoutError"].includes(error.name)
+      ? error.name : "Error";
+    console.warn("tga-course-import response failure", { phase, bytes: size, status: response.status, kind });
+    throw new ImportError(phase === "download"
+      ? `${source} response download failed (${kind}; ${size} bytes received).`
+      : `${source} XML ${phase} failed (${kind}; ${size} bytes received).`);
   } finally {
     // Supabase's runtime may close a response stream as soon as it is
     // consumed. Cleanup should never replace the response or original error.

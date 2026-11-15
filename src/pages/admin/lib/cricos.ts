@@ -129,7 +129,7 @@ export async function loadCricos(courseId: string): Promise<CricosRecord> {
     supabase.from("cms_courses").select(COLUMNS).eq("id", courseId).maybeSingle<Record<string, unknown>>(),
     supabase.from("course_locations").select(LOCATION_FIELDS.map(field => field.key).join(",")).eq("course_id", courseId).order("sort_order"),
   ]);
-  if (error || rowsError) throw new Error("CRICOS details are not available yet: the database update for them has not been applied.");
+  if (error || rowsError) throw new Error("CRICOS details need a one-time database update (migration 20261115130000). Run it in the Supabase SQL editor, then reload.");
   if (!data) throw new Error("Course not found.");
   const fields = Object.fromEntries(ALL_FIELDS.map(field => [field.key, norm(field.kind, data[field.key])]));
   return {

@@ -17,8 +17,11 @@ interface SyncResult {
 function describeSync(r: SyncResult) {
   const lines = [`Synced ${r.code} with Training.gov.au.`];
   lines.push(r.filled.length ? "Filled: " + r.filled.join(", ") + "." : "No empty course fields needed filling.");
-  lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} updated, ${r.hoursFilled} got nominal hours.`);
-  if (r.failedSources.length) lines.push("Not reachable: " + r.failedSources.join("; "));
+  lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} refreshed (prerequisites, usage, groups)` +
+    (r.hoursFilled ? `, ${r.hoursFilled} given nominal hours.` : "; units that already had nominal hours were left as they are."));
+  // Sync does not use CRICOS (that is the CRICOS section's Fetch), so a CRICOS source is never a sync failure.
+  const failed = r.failedSources.filter(source => !source.startsWith("CRICOS"));
+  if (failed.length) lines.push("Not reachable: " + failed.join("; "));
   return lines;
 }
 

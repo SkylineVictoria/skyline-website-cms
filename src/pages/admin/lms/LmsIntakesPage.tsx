@@ -4,6 +4,9 @@ import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import { rto, type RtoCourse, type RtoIntake, type IntakeDetail } from "@/pages/admin/lib/rto";
 
 const field = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
+const statusBadge = (s: string) => "rounded-full px-2 py-0.5 text-xs font-semibold capitalize " + (
+  s === "open" || s === "active" ? "bg-green-100 text-green-800" : s === "cancelled" ? "bg-red-100 text-red-700" : "bg-background-200 text-foreground-600");
 export default function LmsIntakesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
@@ -50,44 +53,75 @@ export default function LmsIntakesPage() {
     }catch(e){setNotice(e instanceof Error?e.message:"Could not save intake.");}
     finally{setBusy(false);}
   };
+  const visibleCourses=courses.filter(c=>(c.code+" "+c.name).toLowerCase().includes(courseSearch.toLowerCase()));
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
-    <header><p className="text-sm text-foreground-500">LMS / Intakes</p><h1 className="mt-2 font-heading text-3xl font-bold">Intakes</h1>
-      <p className="mt-1 text-sm text-foreground-600">Select a course to view, add or edit its intakes. Batches are managed separately.</p></header>
-    {error?<div role="alert" className="rounded-lg border border-red-200 p-3 text-red-700">{error}<button onClick={()=>void load()} className="ml-3 underline">Retry</button></div>:null}
-    <div className="grid items-start gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,2fr)]">
-      <aside className="rounded-2xl border border-background-200 bg-background-50 p-4 shadow-sm">
-        <h2 className="mb-3 font-heading text-lg font-bold">Courses</h2>
-        <input className={field+" mb-3"} aria-label="Search courses" placeholder="Search course" value={courseSearch} onChange={e=>setCourseSearch(e.target.value)}/>
-        <div className="max-h-[680px] space-y-2 overflow-auto">{courses.filter(c=>(c.code+" "+c.name).toLowerCase().includes(courseSearch.toLowerCase())).map(c=>
-          <button type="button" key={c.id} aria-pressed={courseId===c.id} onClick={()=>chooseCourse(c.id)} className={"w-full rounded-lg border p-3 text-left hover:border-primary-500 "+(courseId===c.id?"border-primary-500 bg-primary-50":"border-background-200")}>
-            <span className="block font-semibold">{c.code}</span><span className="block text-sm text-foreground-600">{c.name}</span><span className="mt-1 block text-xs text-primary-600">{intakes.filter(i=>i.courseId===c.id).length} intakes</span>
-          </button>)}</div>
+    <header className="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="font-heading text-2xl font-bold text-foreground-950">Intakes</h1>
+        <p className="text-sm text-foreground-500">Intakes for each course.</p>
+      </div>
+      {role.rtoManager&&selectedCourse?<button type="button" onClick={()=>setCreating(true)} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add intake</button>:null}
+    </header>
+    {error?<div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button onClick={()=>void load()} className="ml-3 underline">Retry</button></div>:null}
+    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className={card+" p-3"}>
+        <label className="relative block"><span className="sr-only">Search courses</span>
+          <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+          <input className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" aria-label="Search courses" placeholder="Search course" value={courseSearch} onChange={e=>setCourseSearch(e.target.value)}/>
+        </label>
+        <div className="mt-3 max-h-[70vh] space-y-1 overflow-auto">{visibleCourses.length===0?<p className="p-3 text-sm text-foreground-500">No matching courses.</p>:visibleCourses.map(c=>{
+          const count=intakes.filter(i=>i.courseId===c.id).length;
+          return <button type="button" key={c.id} aria-pressed={courseId===c.id} onClick={()=>chooseCourse(c.id)}
+            className={"flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors "+(courseId===c.id?"bg-primary-50 ring-1 ring-primary-300":"hover:bg-background-100")}>
+            <span className={"mt-1.5 h-2 w-2 shrink-0 rounded-full "+(c.isActive?"bg-green-500":"bg-background-300")} title={c.isActive?"Active":"Inactive"} />
+            <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-foreground-950">{c.code}</span>
+              <span className="block truncate text-xs text-foreground-600">{c.name}</span></span>
+            <span className="shrink-0 text-xs text-foreground-500" title={count+" intakes"}>{count}</span>
+          </button>;})}</div>
       </aside>
-      <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-4 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-heading text-lg font-bold">Intakes — {selectedCourse?.code??"Select course"}</h2><p className="text-sm text-foreground-600">{selectedCourse?.name}</p></div>
-          {role.rtoManager&&selectedCourse?<button type="button" onClick={()=>setCreating(true)} className="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white">+ Add Intake</button>:null}
-        </div>
-        <div className="mb-4 flex flex-wrap gap-3"><input className={field+" min-w-48 flex-1"} aria-label="Search intakes" placeholder="Search intakes" value={search} onChange={e=>setSearch(e.target.value)}/>
-          <select className={field+" w-auto"} aria-label="Intake status" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">All statuses</option><option value="planned">Planned</option><option value="open">Open</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>
-        </div>
-        <div className="overflow-x-auto rounded-xl border border-background-200"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-background-100"><tr>{["Intake","Start date","End date","Campus","Places","Status"].map(x=><th key={x} className="px-3 py-3">{x}</th>)}</tr></thead>
-          <tbody className="divide-y divide-background-200">{filtered.map(i=><tr key={i.id} tabIndex={0} role="button" aria-label={"Open "+i.name} onClick={()=>setSelectedId(i.id)} onKeyDown={e=>{if(e.key==="Enter")setSelectedId(i.id);}} className={"cursor-pointer hover:bg-primary-50 "+(selectedId===i.id?"bg-primary-50":"")}>
-            <td className="px-3 py-3 font-semibold">{i.name}</td><td className="px-3 py-3">{i.startDate}</td><td className="px-3 py-3">{i.endDate||"—"}</td><td className="px-3 py-3">{i.campus||"—"}</td><td className="px-3 py-3">{i.capacity??"—"}</td><td className="px-3 py-3 capitalize">{i.status}</td>
-          </tr>)}</tbody></table>{!filtered.length?<p className="p-6 text-center text-sm text-foreground-500">No intakes for this selection.</p>:null}</div>
-        <p className="mt-3 text-sm text-foreground-500">{filtered.length} intakes</p>
+      <section className={card+" min-w-0 p-5"}>
+        {!selectedCourse?<p className="py-10 text-center text-sm text-foreground-500">Select a course.</p>:<>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
+            <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <label className="relative min-w-48 flex-1"><span className="sr-only">Search intakes</span>
+              <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+              <input className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" aria-label="Search intakes" placeholder="Search intakes" value={search} onChange={e=>setSearch(e.target.value)}/>
+            </label>
+            <select className="rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" aria-label="Intake status" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">All statuses</option><option value="planned">Planned</option><option value="open">Open</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>
+            <span className="text-xs text-foreground-500">{filtered.length} intake{filtered.length===1?"":"s"}</span>
+          </div>
+          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Intake","Start date","End date","Campus","Places","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+            <tbody>{filtered.map(i=><tr key={i.id} tabIndex={0} role="button" aria-label={"Open "+i.name} onClick={()=>setSelectedId(i.id)} onKeyDown={e=>{if(e.key==="Enter")setSelectedId(i.id);}} className={"cursor-pointer border-b border-background-100 "+(selectedId===i.id?"bg-primary-50":"hover:bg-background-100")}>
+              <td className="px-3 py-2 font-semibold text-foreground-950">{i.name}</td><td className="px-3 py-2">{i.startDate}</td><td className="px-3 py-2">{i.endDate||"—"}</td><td className="px-3 py-2">{i.campus||"—"}</td><td className="px-3 py-2">{i.capacity??"—"}</td><td className="px-3 py-2"><span className={statusBadge(i.status)}>{i.status}</span></td>
+            </tr>)}</tbody></table>{!filtered.length?<p className="py-10 text-center text-sm text-foreground-500">No intakes for this selection.</p>:null}</div>
+        </>}
       </section>
     </div>
     {selectedId?<div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={()=>setSelectedId("")}>
-      <section role="dialog" aria-modal="true" aria-label="Edit intake" className="h-full w-full max-w-lg overflow-y-auto bg-background-50 p-6 shadow-xl" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="font-heading text-xl font-bold">Intake details</h2><button type="button" aria-label="Close" onClick={()=>setSelectedId("")}>✕</button></div>
-        {!detail?<p className="mt-6 text-sm">Loading intake…</p>:<div className="mt-5 space-y-4">
-          <div className="rounded-lg bg-primary-50 p-3"><p className="text-sm font-semibold">{detail.intake.name}</p><Link to="/admin/lms/courses" className="text-sm text-primary-600 underline">Parent course: {detail.intake.courseCode} — {detail.intake.courseName}</Link></div>
-          <div className="grid grid-cols-2 gap-3"><div><p className="text-xs text-foreground-500">Start date</p><p className="font-semibold">{detail.intake.startDate}</p></div><div><p className="text-xs text-foreground-500">End date</p><p className="font-semibold">{detail.intake.endDate}</p></div></div>
-          <label className="block text-sm font-semibold">Status<select disabled={!role.rtoManager||busy} className={field+" mt-1"} value={detail.intake.status} onChange={e=>setDetail(d=>d?{...d,intake:{...d.intake,status:e.target.value as RtoIntake["status"]}}:d)}>{Array.from(new Set([detail.intake.status,"planned","open","active","completed","cancelled"])).map(s=><option key={s} value={s}>{s}</option>)}</select></label>
-          <label className="block text-sm font-semibold">Capacity<input disabled={!role.rtoManager||busy} type="number" min="0" className={field+" mt-1"} value={capacity} onChange={e=>setCapacity(e.target.value)}/></label>
-          <div className="grid grid-cols-2 gap-3"><div className="rounded-lg bg-background-100 p-3"><p className="text-xs text-foreground-500">Enrolled</p><p className="text-xl font-bold">{detail.intake.enrolled}</p></div><div className="rounded-lg bg-background-100 p-3"><p className="text-xs text-foreground-500">Campus</p><p className="font-semibold">{detail.intake.campus||"—"}</p></div></div>
-          {notice?<p role="status" className="text-sm text-primary-700">{notice}</p>:null}
-          <div className="flex justify-end gap-3"><button className="rounded-lg border px-4 py-2" onClick={()=>setSelectedId("")}>Cancel</button>{role.rtoManager?<button disabled={busy} className="rounded-lg bg-primary-600 px-4 py-2 font-semibold text-white" onClick={()=>void save(detail.intake.status)}>{busy?"Saving…":"Save Changes"}</button>:null}</div>
+      <section role="dialog" aria-modal="true" aria-label="Edit intake" className="h-full w-full max-w-lg overflow-y-auto bg-background-50 p-5 shadow-xl" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Intake</p>
+            <h2 className="font-heading text-xl font-bold text-foreground-950">{detail?.intake.name??"…"}</h2>
+          </div>
+          <button type="button" aria-label="Close" onClick={()=>setSelectedId("")} className="rounded-lg p-1.5 text-foreground-600 hover:bg-background-100"><i className="ri-close-line text-lg" aria-hidden="true" /></button>
+        </div>
+        {!detail?<p className="py-10 text-center text-sm text-foreground-500">{notice||"Loading intake…"}</p>:<div className="mt-4 space-y-4">
+          <Link to="/admin/lms/courses" className="block truncate text-sm text-primary-700 underline">{detail.intake.courseCode} — {detail.intake.courseName}</Link>
+          <dl className="grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">
+            {([["Start",detail.intake.startDate],["End",detail.intake.endDate||"—"],["Enrolled",String(detail.intake.enrolled)],["Campus",detail.intake.campus||"—"]] as [string,string][]).map(([label,value])=><div key={label} className="px-3 py-2">
+              <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
+            </div>)}
+          </dl>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs font-semibold text-foreground-700">Status<select disabled={!role.rtoManager||busy} className={field+" mt-1 capitalize"} value={detail.intake.status} onChange={e=>setDetail(d=>d?{...d,intake:{...d.intake,status:e.target.value as RtoIntake["status"]}}:d)}>{Array.from(new Set([detail.intake.status,"planned","open","active","completed","cancelled"])).map(s=><option key={s} value={s}>{s}</option>)}</select></label>
+            <label className="block text-xs font-semibold text-foreground-700">Capacity<input disabled={!role.rtoManager||busy} type="number" min="0" className={field+" mt-1"} value={capacity} onChange={e=>setCapacity(e.target.value)}/></label>
+          </div>
+          {notice?<p role="status" className={"rounded-lg border px-3 py-2 text-sm "+(notice==="Intake saved."?"border-green-200 bg-green-50 text-green-800":"border-red-200 bg-red-50 text-red-700")}>{notice}</p>:null}
+          <div className="flex justify-end gap-2"><button className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={()=>setSelectedId("")}>Cancel</button>{role.rtoManager?<button disabled={busy} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" onClick={()=>void save(detail.intake.status)}>{busy?"Saving…":"Save changes"}</button>:null}</div>
         </div>}
       </section></div>:null}
     <NewIntakeDrawer open={creating&&role.rtoManager} onClose={()=>setCreating(false)} courses={courses.map(c=>({id:c.id,label:c.label}))} courseId={courseId||undefined}

@@ -73,66 +73,68 @@ export default function LmsTimetablePage() {
   const sessions = ordered(data?.batch.sessions ?? []);
   const canManage = canEdit && !!data && !!detail && detail.intake.id === intakeId;
   const selectClass = () => { if (canManage) setEditor(true); };
-  const selectClassButton = (label: string) => <button type="button" disabled={!canManage} onClick={selectClass} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50">{label}</button>;
-  const inputClass = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
-  return <div className="mx-auto max-w-7xl space-y-5 pb-10">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
-        <h1 className="font-heading text-3xl font-bold text-foreground-950">Timetable</h1>
-        <p className="mt-1 text-sm text-foreground-600">Weekly recurring class times from the selected batch.</p></div>
-      {canManage && <button type="button" onClick={selectClass} className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white">+ Add / Edit Class</button>}
-    </div>
-    {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button type="button" className="ml-3 underline" onClick={() => { void reload(); void refreshBatch(); }}>Retry</button></div>}
-    <div className="grid gap-3 rounded-xl border border-background-200 bg-background-50 p-4 md:grid-cols-3">
-      <label className="space-y-1 text-sm font-medium">Course
+  const selectClassButton = (label: string) => <button type="button" disabled={!canManage} onClick={selectClass} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50">{label}</button>;
+  const inputClass = "mt-1 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+  const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
+  return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
+    <header className="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
+        <p className="text-sm text-foreground-500">Weekly recurring class times for a batch.</p>
+      </div>
+      {canManage && <button type="button" onClick={selectClass} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Edit class times</button>}
+    </header>
+    {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button type="button" className="ml-3 underline" onClick={() => { void reload(); void refreshBatch(); }}>Retry</button></div>}
+    <div className={card + " grid gap-3 p-3 md:grid-cols-3"}>
+      <label className="block text-xs font-semibold text-foreground-500">Course
         <select className={inputClass} value={courseId} onChange={e => setCourseId(e.target.value)}><option value="">Select course</option>{courses.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
       </label>
-      <label className="space-y-1 text-sm font-medium">Intake
+      <label className="block text-xs font-semibold text-foreground-500">Intake
         <select className={inputClass} value={intakeId} onChange={e => setIntakeId(e.target.value)}><option value="">Select intake</option>{courseIntakes.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select>
       </label>
-      <label className="space-y-1 text-sm font-medium">Batch
+      <label className="block text-xs font-semibold text-foreground-500">Batch
         <select className={inputClass} value={batchId} onChange={e => setBatchId(e.target.value)}><option value="">Select batch</option>{batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
       </label>
     </div>
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="inline-flex rounded-lg border border-background-300 bg-background-50 p-1">
-        {(["week", "list"] as const).map(v => <button key={v} type="button" onClick={() => setView(v)} aria-pressed={view === v}
-          className={`rounded-md px-4 py-2 text-sm font-semibold ${view === v ? "bg-primary-500 text-white" : "text-foreground-700 hover:bg-background-100"}`}>{v === "week" ? "Weekly View" : "List View"}</button>)}
-      </div>
-      <p className="text-xs text-foreground-500">Recurring weekly pattern · not individual dated occurrences</p>
-    </div>
-    {loading ? <p className="text-sm text-foreground-500">Loading timetable…</p> : !batchId ? <p className="rounded-xl border border-background-200 p-6 text-sm text-foreground-500">Select a course, intake and batch to view class times.</p> : !data ? <p className="text-sm text-foreground-500">Loading batch schedule…</p> : <>
-      {view === "week" ? <div className="overflow-x-auto rounded-xl border border-background-200 bg-background-50">
-        <div className="grid min-w-[760px] grid-cols-7 divide-x divide-background-200">
-          {DAYS.map((day, i) => <section key={day} className="min-h-52 p-2.5">
-            <h2 className="mb-3 border-b border-background-200 pb-2 text-center text-xs font-bold text-foreground-700">{day}</h2>
-            <div className="space-y-2">{sessions.filter(s => s.weekday === i + 1).map((s, j) =>
-              <button key={s.id ?? j} type="button" disabled={!canManage} onClick={selectClass}
-                className="w-full rounded-lg border-l-4 border-primary-500 bg-primary-50 p-2.5 text-left text-xs text-foreground-900 disabled:cursor-default">
-                <strong className="block">{shortTime(s.startTime)} – {shortTime(s.endTime)}</strong>
-                <span className="mt-1 block capitalize">{s.type}</span>
-                <span className="mt-1 block text-foreground-600">{s.room || "Room not assigned"}</span>
-              </button>)}</div>
-          </section>)}
+    <section className={card + " min-w-0 p-5"}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-lg border border-background-300 p-0.5">
+          {(["week", "list"] as const).map(v => <button key={v} type="button" onClick={() => setView(v)} aria-pressed={view === v}
+            className={`rounded-md px-3 py-1.5 text-sm font-semibold ${view === v ? "bg-primary-600 text-white" : "text-foreground-600 hover:bg-background-100"}`}>{v === "week" ? "Week" : "List"}</button>)}
         </div>
-      </div> : <div className="overflow-x-auto rounded-xl border border-background-200 bg-background-50">
-        <table className="w-full min-w-[600px] text-left text-sm"><thead className="border-b border-background-200 bg-background-100"><tr>
-          {["Day", "Time", "Session type", "Room", "Action"].map(x => <th key={x} className="px-4 py-3 font-semibold">{x}</th>)}
-        </tr></thead><tbody className="divide-y divide-background-200">{sessions.map((s, i) => <tr key={s.id ?? i}>
-          <td className="px-4 py-3">{dayName(s.weekday)}</td><td className="px-4 py-3">{shortTime(s.startTime)} – {shortTime(s.endTime)}</td>
-          <td className="px-4 py-3 capitalize">{s.type}</td><td className="px-4 py-3">{s.room || "Not assigned"}</td>
-          <td className="px-4 py-3">{canManage && <button type="button" onClick={selectClass} className="font-semibold text-primary-600 hover:underline">Edit</button>}</td>
-        </tr>)}</tbody></table>
-      </div>}
-      {!sessions.length && <div className="rounded-lg border border-dashed border-background-300 p-5 text-center">
-        <p className="text-sm text-foreground-500">No class times have been saved for this batch.</p>
-        {canManage && <div className="mt-3">{selectClassButton("Set class timing")}</div>}
-      </div>}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-500">
-        <span>{sessions.length} weekly class {sessions.length === 1 ? "slot" : "slots"} · {data.batch.trainers.length} assigned trainers</span>
-        <Link className="font-semibold text-primary-600 hover:underline" to="/admin/lms/batch-allocation">View batch allocation</Link>
+        {data && <div className="flex flex-wrap items-center gap-3 text-xs text-foreground-500">
+          <span>{sessions.length} weekly {sessions.length === 1 ? "slot" : "slots"} · {data.batch.trainers.length} trainer{data.batch.trainers.length === 1 ? "" : "s"}</span>
+          <Link className="font-semibold text-primary-700 hover:underline" to="/admin/lms/batch-allocation">Batch allocation</Link>
+        </div>}
       </div>
-    </>}
+      <div className="mt-4">
+        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p> : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p> : !sessions.length ? <div className="py-10 text-center">
+          <p className="text-sm text-foreground-500">No class times saved for this batch.</p>
+          {canManage && <div className="mt-3">{selectClassButton("Set class timing")}</div>}
+        </div> : view === "week" ? <div className="overflow-x-auto">
+          <div className="grid min-w-[760px] grid-cols-7 divide-x divide-background-200 rounded-lg border border-background-200">
+            {DAYS.map((day, i) => <section key={day} className="min-h-44 p-2">
+              <h2 className="mb-2 text-center text-xs font-semibold uppercase tracking-wide text-foreground-500">{day.slice(0, 3)}</h2>
+              <div className="space-y-1.5">{sessions.filter(s => s.weekday === i + 1).map((s, j) =>
+                <button key={s.id ?? j} type="button" disabled={!canManage} onClick={selectClass}
+                  className="w-full rounded-lg bg-primary-50 px-2 py-1.5 text-left text-xs text-foreground-900 ring-1 ring-primary-200 hover:ring-primary-400 disabled:cursor-default disabled:hover:ring-primary-200">
+                  <strong className="block">{shortTime(s.startTime)} – {shortTime(s.endTime)}</strong>
+                  <span className="block capitalize text-foreground-700">{s.type}</span>
+                  <span className="block truncate text-foreground-500">{s.room || "No room"}</span>
+                </button>)}</div>
+            </section>)}
+          </div>
+        </div> : <div className="overflow-x-auto">
+          <table className="w-full min-w-[600px] text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
+            {["Day", "Time", "Session type", "Room", ""].map(x => <th key={x || "action"} className="px-3 py-2">{x}</th>)}
+          </tr></thead><tbody>{sessions.map((s, i) => <tr key={s.id ?? i} className="border-b border-background-100 hover:bg-background-100">
+            <td className="px-3 py-2">{dayName(s.weekday)}</td><td className="px-3 py-2">{shortTime(s.startTime)} – {shortTime(s.endTime)}</td>
+            <td className="px-3 py-2 capitalize">{s.type}</td><td className="px-3 py-2">{s.room || "Not assigned"}</td>
+            <td className="px-3 py-2 text-right">{canManage && <button type="button" onClick={selectClass} className="font-semibold text-primary-700 hover:underline">Edit</button>}</td>
+          </tr>)}</tbody></table>
+        </div>}
+      </div>
+    </section>
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
       onClose={() => setEditor(false)}
       onSaved={out => { setEditor(false); setDetail(out); void refreshBatch(); void reload(); }} />}

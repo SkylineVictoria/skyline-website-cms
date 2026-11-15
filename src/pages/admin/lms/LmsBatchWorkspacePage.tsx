@@ -3,6 +3,14 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import { rto, rtoFlow, type RtoCourse, type RtoIntake, type IntakeDetail, type BatchPageData, type StaffOption } from "@/pages/admin/lib/rto";
 
+const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
+const sectionHeading = "text-xs font-semibold uppercase tracking-wide text-foreground-500";
+const inputClass = "rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+const listRow = (selected: boolean) => "flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors " + (selected ? "bg-primary-50 ring-1 ring-primary-300" : "hover:bg-background-100");
+const dot = (tone: "green" | "amber" | "grey", title: string) =>
+  <span className={"mt-1.5 h-2 w-2 shrink-0 rounded-full " + (tone === "green" ? "bg-green-500" : tone === "amber" ? "bg-amber-500" : "bg-background-300")} title={title} />;
+const emptyRow = "px-3 py-2 text-xs text-foreground-500";
+
 /** Rebuilt four-column batch workspace. Existing RTO records remain authoritative. */
 export default function LmsBatchWorkspacePage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
@@ -21,6 +29,7 @@ export default function LmsBatchWorkspacePage() {
   const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [courseQuery, setCourseQuery] = useState("");
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -129,66 +138,106 @@ export default function LmsBatchWorkspacePage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to save unit dates"); }
     finally { setSaving(""); }
   };
-  const row = (selected:boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm transition hover:bg-background-100 ${selected ? "border-primary-500 bg-primary-50 font-semibold" : "border-background-200 bg-background-50"}`;
-  return <div className="mx-auto max-w-7xl space-y-5 pb-10">
-    <div><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p>
-      <h1 className="font-heading text-3xl font-bold text-foreground-950">Batches · New Workspace</h1>
-      <p className="mt-1 text-sm text-foreground-600">Select a course, intake and batch across the first three columns. Allocate unit dates in the fourth column.</p></div>
-    {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button className="ml-3 underline" onClick={() => void refresh()}>Retry</button></div>}
-    <div className="w-full pb-3" role="region" aria-label="Batch management columns" tabIndex={0}><div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
-      <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Courses">
-        <h2 className="mb-3 font-semibold">Courses</h2>
-        <div className="space-y-2">{courses.map(c => <button type="button" key={c.id} className={row(courseId === c.id)} aria-pressed={courseId === c.id} onClick={() => {setCourseId(c.id);setEditor(null);}}>{c.label}</button>)}</div>
-        {!loading && !courses.length && <p className="text-sm text-foreground-500">No courses found.</p>}
-      </section>
-      <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Intakes">
-        <h2 className="mb-3 font-semibold">Intakes</h2>
-        <div className="space-y-2">{courseIntakes.map(i => <button type="button" key={i.id} className={row(intakeId === i.id)} aria-pressed={intakeId === i.id} onClick={() => {setIntakeId(i.id);setEditor(null);}}>{i.name}</button>)}</div>
-        {!loading && !courseIntakes.length && <p className="text-sm text-foreground-500">No intakes for this course.</p>}
-      </section>
-      <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Batches">
-        <div className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold">Batches</h2>
-          {canEdit && intakeId && <button type="button" className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white" onClick={() => {setAdding(true);setEditor(null);}}>+ Add</button>}</div>
-        {adding && <div className="mb-3 space-y-2 rounded-lg border border-primary-300 bg-primary-50 p-3">
-          <label className="block text-xs font-semibold">New batch name<input autoFocus value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. G1" className="mt-1 w-full rounded-md border border-background-300 bg-white p-2 text-sm" /></label>
-          <div className="flex gap-2"><button type="button" disabled={!!saving || !newName.trim()} onClick={() => void createBatch()} className="rounded-md bg-primary-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{saving === "new" ? "Creating…" : "Create batch"}</button><button type="button" onClick={() => setAdding(false)} className="text-xs underline">Cancel</button></div>
-        </div>}
-        <div className="space-y-2">{batches.map(b => <button type="button" key={b.id} className={row(batchId === b.id)} aria-pressed={batchId === b.id} onClick={() => {setBatchId(b.id);setEditor(null);setAdding(false);}}>
-          <span className="flex items-center justify-between gap-2"><span>{b.name}</span>{canEdit && <span className="text-xs text-primary-600">Edit</span>}</span>
-        </button>)}</div>
-        {!loading && !batches.length && <p className="text-sm text-foreground-500">No batches for this intake.</p>}
-      </section>
-      <section className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4" aria-label="Batch unit allocations">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">Unit Allocation</h2>
-          {canEdit && batchId && <button type="button" className="text-xs font-semibold text-primary-600 hover:underline" onClick={() => setEditor("edit")}>Edit batch timing</button>}
-        </div>
-        {!batchId ? <p className="text-sm text-foreground-500">Select an existing batch, or add a new batch in column three.</p> : !batchDetail || batchDetail.batch.id !== batchId ? <p className="text-sm text-foreground-500">Loading units…</p> : (
+  const visibleCourses = courses.filter(c => (c.label + " " + c.code).toLowerCase().includes(courseQuery.trim().toLowerCase()));
+  const shown = batchDetail && batchDetail.batch.id === batchId ? batchDetail.batch : null;
+  const facts: [string, string][] = shown ? [
+    ["Intake", selectedIntake?.name ?? "—"],
+    ["Units", String(shown.schedule?.length ?? 0)],
+    ["Trainers", String(shown.trainers.length)],
+    ["Capacity", shown.capacity === null ? "—" : String(shown.capacity)],
+  ] : [];
+  return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
+    <header>
+      <h1 className="font-heading text-2xl font-bold text-foreground-950">Batches</h1>
+      <p className="text-sm text-foreground-500">Unit dates and trainers for each batch.</p>
+    </header>
+    {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button className="ml-3 underline" onClick={() => void refresh()}>Retry</button></div>}
+    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]" role="region" aria-label="Batch management columns" tabIndex={0}>
+      <div className={card + " space-y-4 p-3"}>
+        <section aria-label="Courses">
+          <label className="relative block"><span className="sr-only">Search courses</span>
+            <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+            <input value={courseQuery} onChange={e => setCourseQuery(e.target.value)} placeholder="Search code or name" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" />
+          </label>
+          <div className="mt-2 max-h-[40vh] space-y-1 overflow-auto">
+            {loading && !courses.length ? <p className={emptyRow}>Loading…</p> : null}
+            {visibleCourses.map(c => <button type="button" key={c.id} className={listRow(courseId === c.id)} aria-pressed={courseId === c.id} onClick={() => {setCourseId(c.id);setEditor(null);}}>
+              {dot(c.isActive ? "green" : "grey", c.isActive ? "Active" : "Inactive")}
+              <span className="min-w-0"><span className="block text-sm font-semibold text-foreground-950">{c.code}</span>
+                <span className="block truncate text-xs text-foreground-600">{c.name}</span></span>
+            </button>)}
+            {!loading && !visibleCourses.length && <p className={emptyRow}>No courses found.</p>}
+          </div>
+        </section>
+        <section aria-label="Intakes" className="border-t border-background-200 pt-3">
+          <h2 className={sectionHeading + " px-1"}>Intakes</h2>
+          <div className="mt-2 space-y-1">{courseIntakes.map(i => <button type="button" key={i.id} className={listRow(intakeId === i.id)} aria-pressed={intakeId === i.id} onClick={() => {setIntakeId(i.id);setEditor(null);}}>
+            {dot(i.status === "open" ? "green" : i.status === "full" ? "amber" : "grey", i.status)}
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground-950">{i.name}</span>
+          </button>)}</div>
+          {!loading && !courseIntakes.length && <p className={emptyRow}>No intakes for this course.</p>}
+        </section>
+        <section aria-label="Batches" className="border-t border-background-200 pt-3">
+          <div className="flex items-center justify-between gap-2 px-1"><h2 className={sectionHeading}>Batches</h2>
+            {canEdit && intakeId && <button type="button" className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => {setAdding(true);setEditor(null);}}>+ Add</button>}</div>
+          {adding && <div className="mt-2 space-y-2 rounded-lg bg-background-100 p-2">
+            <label className="block text-xs text-foreground-500">New batch name<input autoFocus value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. G1" className={inputClass + " mt-1 w-full"} /></label>
+            <div className="flex items-center gap-2"><button type="button" disabled={!!saving || !newName.trim()} onClick={() => void createBatch()} className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{saving === "new" ? "Creating…" : "Create batch"}</button><button type="button" onClick={() => setAdding(false)} className="text-xs text-foreground-600 hover:underline">Cancel</button></div>
+          </div>}
+          <div className="mt-2 space-y-1">{batches.map(b => <button type="button" key={b.id} className={listRow(batchId === b.id)} aria-pressed={batchId === b.id} onClick={() => {setBatchId(b.id);setEditor(null);setAdding(false);}}>
+            {dot(b.isActive ? "green" : "grey", b.isActive ? "Active" : "Inactive")}
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground-950">{b.name}</span>
+          </button>)}</div>
+          {!loading && !batches.length && <p className={emptyRow}>No batches for this intake.</p>}
+        </section>
+      </div>
+      <section className={card + " min-w-0 p-5"} aria-label="Batch unit allocations">
+        {!batchId ? <p className="py-10 text-center text-sm text-foreground-500">{loading ? "Loading…" : "Select a batch."}</p> : !shown ? <p className="py-10 text-center text-sm text-foreground-500">Loading units…</p> : (
           <>
-            <p className="mb-3 text-sm text-foreground-600"><strong>{batchDetail.batch.name}</strong> · {batchDetail.batch.schedule?.length ?? 0} intake units</p>
-            <div className="space-y-3">
-              {(batchDetail.batch.schedule ?? []).map(u => <UnitAllocationRow key={u.intakeUnitId} unit={u}
-                disabled={!canEdit || !!saving} saving={saving === u.intakeUnitId}
-                trainers={batchDetail.batch.trainers} trainerId={unitTrainers[u.intakeUnitId] ?? ""}
-                onTrainerChange={id => void setUnitTrainer(u.intakeUnitId,id)}
-                onSave={(start,end) => void saveDates(u.intakeUnitId,start,end)} />)}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className={sectionHeading}>Batch</p>
+                <h2 className="font-heading text-xl font-bold text-foreground-950">{shown.name}</h2>
+              </div>
+              {canEdit && <button type="button" className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={() => setEditor("edit")}>Edit batch timing</button>}
             </div>
-            <div className="mt-4 rounded-lg bg-background-100 p-3 text-xs text-foreground-600">
-              <label className="block text-xs font-semibold text-foreground-800">Assign trainer
-                <select aria-label="Assign batch trainer" className="mt-2 w-full rounded-md border border-background-300 bg-background-50 p-2 text-sm" value="" disabled={!canEdit || !!saving} onChange={e => void assignTrainer(e.target.value)}>
-                  <option value="">Select trainer…</option>
-                  {trainers.filter(t => !batchDetail.batch.trainers.some(x => x.id === t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </label>
-              <div className="mt-2 flex flex-wrap gap-2">{batchDetail.batch.trainers.map(t => <span key={t.id} className="inline-flex items-center gap-2 rounded-md border border-background-300 px-2 py-1 text-xs">{t.name}{canEdit && <button type="button" disabled={!!saving} aria-label={`Remove ${t.name}`} className="text-red-600" onClick={() => void removeTrainer(t.id)}>×</button>}</span>)}</div>
-              <p className="mt-2">Add trainers to the batch here, then select a trainer for each unit above.</p>
+            <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">
+              {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
+                <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
+              </div>)}
+            </dl>
+
+            <h3 className={sectionHeading + " mt-6"}>Trainers</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {shown.trainers.map(t => <span key={t.id} className="inline-flex items-center gap-1.5 rounded-full bg-background-200 px-2.5 py-0.5 text-xs font-semibold text-foreground-700">{t.name}{canEdit && <button type="button" disabled={!!saving} aria-label={`Remove ${t.name}`} className="text-foreground-500 hover:text-red-700 disabled:opacity-50" onClick={() => void removeTrainer(t.id)}><i className="ri-close-line" aria-hidden="true" /></button>}</span>)}
+              {!shown.trainers.length && <span className="text-sm text-foreground-500">No trainers yet.</span>}
+              <select aria-label="Assign batch trainer" className={inputClass + " w-full sm:ml-auto sm:w-56"} value="" disabled={!canEdit || !!saving} onChange={e => void assignTrainer(e.target.value)}>
+                <option value="">Add trainer…</option>
+                {trainers.filter(t => !shown.trainers.some(x => x.id === t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
             </div>
+
+            <h3 className={sectionHeading + " mt-6"}>Units</h3>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
+                  <th className="px-3 py-2">Unit</th><th className="px-3 py-2">Start</th><th className="px-3 py-2">End</th><th className="px-3 py-2">Trainer</th><th className="px-3 py-2"><span className="sr-only">Actions</span></th>
+                </tr></thead>
+                <tbody>
+                  {(shown.schedule ?? []).map(u => <UnitAllocationRow key={u.intakeUnitId} unit={u}
+                    disabled={!canEdit || !!saving} saving={saving === u.intakeUnitId}
+                    trainers={shown.trainers} trainerId={unitTrainers[u.intakeUnitId] ?? ""}
+                    onTrainerChange={id => void setUnitTrainer(u.intakeUnitId,id)}
+                    onSave={(start,end) => void saveDates(u.intakeUnitId,start,end)} />)}
+                </tbody>
+              </table>
+              {!(shown.schedule ?? []).length && <p className="py-10 text-center text-sm text-foreground-500">No units in this intake.</p>}
+            </div>
+            <p className="mt-2 text-xs text-foreground-500">Pick a unit trainer from the trainers added above.</p>
           </>
         )}
       </section>
     </div>
-    </div>
-    {loading && <p className="text-sm text-foreground-500">Loading…</p>}
     {editor && detail && canEdit && <BatchTimingDrawer key={`${intakeId}:${editor}:${editor === "edit" ? batchId : "new"}`}
       intake={detail.intake} batches={detail.batches}
       batch={editor === "edit" ? detail.batches.find(b => b.id === batchId) ?? null : null}
@@ -205,19 +254,17 @@ function UnitAllocationRow({ unit, disabled, saving, trainers, trainerId, onTrai
   const [end, setEnd] = useState(unit.endDate);
   useEffect(() => { setStart(unit.startDate); setEnd(unit.endDate); }, [unit.startDate, unit.endDate]);
   const changed = start !== unit.startDate || end !== unit.endDate;
-  return <div className="rounded-lg border border-background-200 p-3">
-    <p className="text-sm font-semibold text-foreground-900">{unit.code}</p>
-    <p className="mb-2 text-xs text-foreground-600">{unit.name}</p>
-    <div className="grid grid-cols-2 gap-2">
-      <label className="text-xs text-foreground-600">Start date<input type="date" value={start} disabled={disabled} onChange={e => setStart(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-xs" /></label>
-      <label className="text-xs text-foreground-600">End date<input type="date" value={end} disabled={disabled} onChange={e => setEnd(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-xs" /></label>
-    </div>
-    <label className="mt-2 block text-xs text-foreground-600">Trainer
-      <select aria-label={`Trainer for ${unit.code}`} value={trainerId} disabled={disabled} onChange={e => onTrainerChange(e.target.value)} className="mt-1 w-full rounded-md border border-background-200 bg-background-50 p-2 text-sm">
+  const field = "rounded-lg border border-background-300 bg-background-50 px-2 py-1.5 text-sm disabled:opacity-60";
+  return <tr className="border-b border-background-100 align-middle hover:bg-background-100">
+    <td className="max-w-[260px] px-3 py-2"><span className="block font-semibold text-foreground-950">{unit.code}</span><span className="block truncate text-xs text-foreground-600" title={unit.name}>{unit.name}</span></td>
+    <td className="px-3 py-2"><label><span className="sr-only">Start date</span><input type="date" value={start} disabled={disabled} onChange={e => setStart(e.target.value)} className={field} /></label></td>
+    <td className="px-3 py-2"><label><span className="sr-only">End date</span><input type="date" value={end} disabled={disabled} onChange={e => setEnd(e.target.value)} className={field} /></label></td>
+    <td className="px-3 py-2">
+      <select aria-label={`Trainer for ${unit.code}`} value={trainerId} disabled={disabled} onChange={e => onTrainerChange(e.target.value)} className={field + " min-w-[150px]"}>
         <option value="">Select trainer…</option>
         {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
-    </label>
-    {changed && <button type="button" disabled={disabled || !start || !end || start > end} onClick={() => onSave(start,end)} className="mt-2 rounded-md bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save dates"}</button>}
-  </div>;
+    </td>
+    <td className="px-3 py-2 text-right">{changed && <button type="button" disabled={disabled || !start || !end || start > end} onClick={() => onSave(start,end)} className="whitespace-nowrap rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{saving ? "Saving…" : "Save dates"}</button>}</td>
+  </tr>;
 }

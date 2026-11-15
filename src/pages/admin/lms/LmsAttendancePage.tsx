@@ -6,7 +6,16 @@ type Mark = "present" | "absent" | "late" | "excused";
 type History = { date: string; unitId: string; state: string };
 const statuses: Mark[] = ["present", "absent", "late", "excused"];
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
-const itemClass = (active: boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm ${active ? "border-primary-400 bg-primary-50 font-semibold" : "border-background-200 hover:bg-background-100"}`;
+const itemClass = (active: boolean) => `block w-full truncate rounded-lg px-3 py-2 text-left text-sm transition-colors ${active ? "bg-primary-50 font-semibold text-foreground-950 ring-1 ring-primary-300" : "text-foreground-700 hover:bg-background-100"}`;
+const heading = "text-xs font-semibold uppercase tracking-wide text-foreground-500";
+const searchClass = "w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm";
+const markClass: Record<Mark, string> = { present: "bg-green-100 text-green-800 ring-green-300", absent: "bg-red-100 text-red-700 ring-red-300", late: "bg-amber-100 text-amber-800 ring-amber-300", excused: "bg-background-200 text-foreground-700 ring-background-300" };
+function Search({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return <label className="relative mt-2 block"><span className="sr-only">{label}</span>
+    <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+    <input aria-label={label} placeholder="Search" className={searchClass} value={value} onChange={e => onChange(e.target.value)} />
+  </label>;
+}
 export default function LmsAttendancePage() {
   const [courses,setCourses] = useState<RtoCourse[]>([]);
   const [intakes,setIntakes] = useState<RtoIntake[]>([]);
@@ -48,30 +57,57 @@ export default function LmsAttendancePage() {
     try{const {error}=await supabase.rpc("lms_attendance",{p_action:"save",p_batch_id:batchId,p_unit_id:unitId,p_class_date:date,p_state:next,p_marks:students.filter(s=>marks[s.enrolmentId]).map(s=>({enrolmentId:s.enrolmentId,status:marks[s.enrolmentId]}))});if(error)throw error;setState(next);setMessage(next==="final"?"Attendance saved.":"Draft saved.");}
     catch(e){setError(e instanceof Error?e.message:"Unable to save attendance");}finally{setBusy(false);}
   };
-  const panel="min-w-0 rounded-xl border border-background-200 bg-background-50 p-4";
-  const input="w-full rounded-lg border border-background-300 bg-background-50 p-2 text-sm";
-  return <div className="mx-auto max-w-[1600px] space-y-4 pb-10">
-    <header><p className="text-xs uppercase tracking-wide text-foreground-500">Learning Management</p><h1 className="font-heading text-3xl font-bold">Attendance</h1><p className="text-sm text-foreground-600">Record attendance for the selected batch, unit and class date.</p></header>
-    {error&&<div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}<button className="ml-3 underline" onClick={()=>setError("")}>Dismiss</button></div>}
-    {message&&<p role="status" className="text-sm text-green-700">{message}</p>}
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(180px,1fr)_minmax(170px,0.85fr)_minmax(170px,0.8fr)_minmax(330px,2.2fr)]">
-      <section className={panel}><h2 className="mb-3 font-semibold">1. Course</h2><input aria-label="Search courses" placeholder="Search course…" className={input+" mb-3"} value={courseSearch} onChange={e=>setCourseSearch(e.target.value)}/><div className="space-y-2">{courses.filter(c=>c.label.toLowerCase().includes(courseSearch.toLowerCase())).map(c=><button key={c.id} type="button" className={itemClass(c.id===courseId)} onClick={()=>setCourseId(c.id)}>{c.label}</button>)}</div></section>
-      <section className={panel}><h2 className="mb-3 font-semibold">2. Intake</h2><input aria-label="Search intakes" placeholder="Search intake…" className={input+" mb-3"} value={intakeSearch} onChange={e=>setIntakeSearch(e.target.value)}/><div className="space-y-2">{filteredIntakes.filter(i=>i.name.toLowerCase().includes(intakeSearch.toLowerCase())).map(i=><button key={i.id} type="button" className={itemClass(i.id===intakeId)} onClick={()=>setIntakeId(i.id)}>{i.name}</button>)}</div></section>
-      <section className={panel}><h2 className="mb-3 font-semibold">3. Batch</h2><input aria-label="Search batches" placeholder="Search batch…" className={input+" mb-3"} value={batchSearch} onChange={e=>setBatchSearch(e.target.value)}/><div className="space-y-2">{batches.filter(b=>b.name.toLowerCase().includes(batchSearch.toLowerCase())).map(b=><button key={b.id} type="button" className={itemClass(b.id===batchId)} onClick={()=>setBatchId(b.id)}>{b.name}</button>)}</div></section>
-      <section className={panel}><h2 className="mb-3 font-semibold">4. Attendance</h2>
-        {!batchId?<p className="text-sm text-foreground-500">Select a batch.</p>:!batch||batch.batch.id!==batchId?<p className="text-sm text-foreground-500">Loading batch…</p>:<>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            <label className="text-xs font-semibold">Class date<input type="date" className={input+" mt-1"} value={date} onChange={e=>setDate(e.target.value)}/></label>
-            <label className="text-xs font-semibold">Unit<select className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</select></label>
-            <div className="text-xs font-semibold">Trainer<div className={input+" mt-1 text-foreground-600"}>{batch.batch.trainers.map(t=>t.name).join(", ")||"Not assigned"}</div></div>
+  const card="rounded-2xl border border-background-200 bg-background-50 shadow-sm";
+  const input="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+  const list="mt-2 max-h-56 space-y-0.5 overflow-auto";
+  const empty=<p className="px-3 py-2 text-xs text-foreground-500">None</p>;
+  const visibleCourses=courses.filter(c=>c.label.toLowerCase().includes(courseSearch.toLowerCase()));
+  const visibleIntakes=filteredIntakes.filter(i=>i.name.toLowerCase().includes(intakeSearch.toLowerCase()));
+  const visibleBatches=batches.filter(b=>b.name.toLowerCase().includes(batchSearch.toLowerCase()));
+  const markedCount=students.filter(s=>marks[s.enrolmentId]).length;
+  return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
+    <header>
+      <h1 className="font-heading text-2xl font-bold text-foreground-950">Attendance</h1>
+      <p className="text-sm text-foreground-500">Mark attendance by batch, unit and class date.</p>
+    </header>
+    {error&&<div role="alert" className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button className="underline" onClick={()=>setError("")}>Dismiss</button></div>}
+    {message&&<p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{message}</p>}
+    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className={card+" space-y-4 p-3"}>
+        <section><h2 className={heading+" px-1"}>Course</h2><Search label="Search courses" value={courseSearch} onChange={setCourseSearch}/>
+          <div className={list}>{visibleCourses.length?visibleCourses.map(c=><button key={c.id} type="button" className={itemClass(c.id===courseId)} onClick={()=>setCourseId(c.id)} title={c.label}>{c.label}</button>):empty}</div></section>
+        <section className="border-t border-background-200 pt-3"><h2 className={heading+" px-1"}>Intake</h2><Search label="Search intakes" value={intakeSearch} onChange={setIntakeSearch}/>
+          <div className={list}>{visibleIntakes.length?visibleIntakes.map(i=><button key={i.id} type="button" className={itemClass(i.id===intakeId)} onClick={()=>setIntakeId(i.id)}>{i.name}</button>):empty}</div></section>
+        <section className="border-t border-background-200 pt-3"><h2 className={heading+" px-1"}>Batch</h2><Search label="Search batches" value={batchSearch} onChange={setBatchSearch}/>
+          <div className={list}>{visibleBatches.length?visibleBatches.map(b=><button key={b.id} type="button" className={itemClass(b.id===batchId)} onClick={()=>setBatchId(b.id)}>{b.name}</button>):empty}</div></section>
+      </aside>
+      <section className={card+" min-w-0 p-5"}>
+        {!batchId?<p className="py-10 text-center text-sm text-foreground-500">Select a batch.</p>:!batch||batch.batch.id!==batchId?<p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>:<>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <label className="block text-xs font-semibold text-foreground-500">Class date<input type="date" className={input+" mt-1"} value={date} onChange={e=>setDate(e.target.value)}/></label>
+            <label className="block text-xs font-semibold text-foreground-500">Unit<select className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</select></label>
+            <div className="text-xs font-semibold text-foreground-500">Trainer<p className="mt-1 truncate py-2 text-sm font-semibold text-foreground-950">{batch.batch.trainers.map(t=>t.name).join(", ")||"Not assigned"}</p></div>
           </div>
-          <div className="my-4 grid grid-cols-2 gap-2">{(["mark","history"] as const).map(t=><button type="button" key={t} className={`rounded-lg p-2 text-sm font-semibold ${mode===t?"bg-primary-500 text-white":"bg-background-100"}`} onClick={()=>setMode(t)}>{t==="mark"?"Mark Attendance":"Attendance History"}</button>)}</div>
-          {mode==="history"?<div className="space-y-2">{history.map((h,i)=><button key={i} type="button" className="w-full rounded-lg border border-background-200 p-3 text-left text-sm" onClick={()=>{setDate(h.date);setUnitId(h.unitId);setMode("mark");}}>{h.date} · {units.find(u=>u.intakeUnitId===h.unitId)?.code??"Unit"} · {h.state}</button>)}{!history.length&&<p className="text-sm text-foreground-500">No attendance history yet.</p>}</div>:<>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Students ({students.length})</h3><button type="button" disabled={!batch.rtoManager} className="rounded-lg border border-background-300 px-3 py-2 text-xs disabled:opacity-50" onClick={()=>setMarks(Object.fromEntries(students.map(s=>[s.enrolmentId,"present" as Mark])))}>Mark all present</button></div>
-            <input className={input+" mb-2"} aria-label="Search students" placeholder="Search students…" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)}/>
-            <div className="max-h-[490px] space-y-2 overflow-y-auto">{students.filter(s=>s.name.toLowerCase().includes(studentSearch.toLowerCase())).map(s=><div key={s.enrolmentId} className="rounded-lg border border-background-200 p-3"><p className="mb-2 text-sm font-semibold">{s.name}</p><div className="flex flex-wrap gap-2">{statuses.map(st=><label key={st} className="flex items-center gap-1 text-xs capitalize"><input type="radio" name={s.enrolmentId} value={st} checked={marks[s.enrolmentId]===st} disabled={!batch.rtoManager||busy} onChange={()=>setMarks(prev=>({...prev,[s.enrolmentId]:st}))}/>{st}</label>)}</div></div>)}</div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-foreground-500">{students.filter(s=>marks[s.enrolmentId]).length} / {students.length} marked · {state==="new"?"Unsaved":state}</span><div className="flex gap-2"><button type="button" disabled={busy||!batch.rtoManager||!unitId} className="rounded-lg border border-primary-500 px-3 py-2 text-sm font-semibold text-primary-600 disabled:opacity-50" onClick={()=>void save("draft")}>Save Draft</button><button type="button" disabled={busy||!batch.rtoManager||!unitId||!students.length} className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={()=>void save("final")}>{busy?"Saving…":"Save Attendance"}</button></div></div>
-          </>}
+          <div className="mt-5 flex gap-5 border-b border-background-200">{(["mark","history"] as const).map(t=><button type="button" key={t} aria-pressed={mode===t} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold "+(mode===t?"border-primary-600 text-primary-700":"border-transparent text-foreground-500 hover:text-foreground-800")} onClick={()=>setMode(t)}>{t==="mark"?"Mark attendance":"History"}</button>)}</div>
+          {mode==="history"?<div className="pt-3">{history.length?<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500"><th className="px-3 py-2">Date</th><th className="px-3 py-2">Unit</th><th className="px-3 py-2">State</th></tr></thead>
+            <tbody>{history.map((h,i)=><tr key={i} className="border-b border-background-100 hover:bg-background-100">
+              <td className="px-3 py-2"><button type="button" className="font-semibold text-primary-700 hover:underline" onClick={()=>{setDate(h.date);setUnitId(h.unitId);setMode("mark");}}>{h.date}</button></td>
+              <td className="px-3 py-2">{units.find(u=>u.intakeUnitId===h.unitId)?.code??"Unit"}</td>
+              <td className="px-3 py-2"><span className={"rounded-full px-2 py-0.5 text-xs font-semibold capitalize "+(h.state==="final"?"bg-green-100 text-green-800":"bg-background-200 text-foreground-600")}>{h.state}</span></td>
+            </tr>)}</tbody></table></div>:<p className="py-10 text-center text-sm text-foreground-500">No attendance history yet.</p>}</div>:<div className="pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="relative min-w-48 flex-1"><span className="sr-only">Search students</span>
+                <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+                <input className={searchClass} aria-label="Search students" placeholder="Search students" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)}/>
+              </label>
+              <button type="button" disabled={!batch.rtoManager} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50" onClick={()=>setMarks(Object.fromEntries(students.map(s=>[s.enrolmentId,"present" as Mark])))}>Mark all present</button>
+            </div>
+            <div className="mt-3 max-h-[490px] overflow-y-auto">{!students.length?<p className="py-10 text-center text-sm text-foreground-500">No active students in this batch.</p>:students.filter(s=>s.name.toLowerCase().includes(studentSearch.toLowerCase())).map(s=><div key={s.enrolmentId} className="flex flex-wrap items-center justify-between gap-2 border-b border-background-100 px-3 py-2 hover:bg-background-100">
+              <p className="min-w-0 truncate text-sm font-semibold text-foreground-950">{s.name}</p>
+              <div className="flex flex-wrap gap-1">{statuses.map(st=><label key={st} className={"cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold capitalize has-[:disabled]:cursor-default has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary-400 "+(marks[s.enrolmentId]===st?markClass[st]+" ring-1":"text-foreground-500 hover:bg-background-200")}><input type="radio" className="sr-only" name={s.enrolmentId} value={st} checked={marks[s.enrolmentId]===st} disabled={!batch.rtoManager||busy} onChange={()=>setMarks(prev=>({...prev,[s.enrolmentId]:st}))}/>{st}</label>)}</div>
+            </div>)}</div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-foreground-500">{markedCount} / {students.length} marked · <span className="capitalize">{state==="new"?"Unsaved":state}</span></span><div className="flex gap-2"><button type="button" disabled={busy||!batch.rtoManager||!unitId} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50" onClick={()=>void save("draft")}>Save draft</button><button type="button" disabled={busy||!batch.rtoManager||!unitId||!students.length} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" onClick={()=>void save("final")}>{busy?"Saving…":"Save attendance"}</button></div></div>
+          </div>}
         </>}
       </section>
     </div>

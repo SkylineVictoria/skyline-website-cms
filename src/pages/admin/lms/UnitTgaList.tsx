@@ -15,7 +15,7 @@ const KINDS: { kind: string; title: string }[] = [
   { kind: "knowledge_evidence", title: "Knowledge evidence" }, { kind: "assessment_condition", title: "Assessment conditions" },
 ];
 
-function UnitDetail({ unitId }: { unitId: string }) {
+export function UnitDetail({ unitId }: { unitId: string }) {
   const [state, setState] = useState<{ info: UnitInfo | null; rows: ElementRow[]; error: string } | null>(null);
   useEffect(() => {
     let live = true;

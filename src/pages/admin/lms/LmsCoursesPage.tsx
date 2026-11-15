@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
-import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
+import { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import CricosBulkSync from "@/pages/admin/components/rto/CricosBulkSync";
-import { Modal } from "@/pages/admin/components/ui";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
 type Tab = "overview" | "cricos" | "tga";
@@ -24,7 +23,7 @@ function describeSync(r: SyncResult) {
   lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} refreshed (prerequisites, usage, groups)` +
     (r.hoursFilled ? `, ${r.hoursFilled} given nominal hours.` : "; units that already had nominal hours were left as they are."));
   const added = (r.coreAdded ?? 0) + (r.electivesAdded ?? 0);
-  if (added) lines.push(`Added ${r.coreAdded ?? 0} core units and ${r.electivesAdded ?? 0} electives (electives are inactive: switch on the ones you deliver in Units).`);
+  if (added) lines.push(`Added ${added} missing core unit${added === 1 ? "" : "s"}. Choose electives with Units › Add Unit.`);
   if (r.detailsSynced || r.elementsAdded) lines.push(`Unit content: details refreshed for ${r.detailsSynced ?? 0} active units; elements, criteria and evidence added for ${r.elementsAdded ?? 0}.`);
   if (r.detailsFailed) lines.push(`${r.detailsFailed} units could not be read from training.gov.au; run Sync again later.`);
   if (r.columnsMissing) lines.push("Unit release and application details need the database update (migration 20261115140000).");
@@ -60,7 +59,6 @@ async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
-  const [addingCourse, setAddingCourse] = useState<null | "choose" | "tga" | "cricos">(null);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [query, setQuery] = useState("");
@@ -162,7 +160,6 @@ export default function LmsCoursesPage() {
   const nominalHours = units.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0);
 
   const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
-  const reloadAfterAdd = (courseId: string) => { setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); void load(courseId); };
   const facts: [string, string][] = selected ? [
     ["Duration", selected.duration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
     ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
@@ -178,28 +175,12 @@ export default function LmsCoursesPage() {
       </div>
       {canEdit ? <div className="flex items-center gap-2">
         <button type="button" onClick={() => setBulkSync(true)} title="Link or create every course registered on CRICOS for your provider code"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync CRICOS</button>
-        <button type="button" onClick={() => setAddingCourse("choose")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
+          className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Sync CRICOS courses</button>
       </div> : null}
     </header>
 
     <CricosBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }} />
-    <Modal open={addingCourse === "choose" && canEdit} title="Add a course" onClose={() => setAddingCourse(null)}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {([
-          { id: "tga", title: "From Training.gov.au", text: "Search a qualification and import its units and packaging rules." },
-          { id: "cricos", title: "From a CRICOS code", text: "Fetch the CRICOS register entry and create a draft course." },
-        ] as const).map(option => <button key={option.id} type="button" onClick={() => setAddingCourse(option.id)}
-          className="rounded-lg border border-background-200 p-4 text-left hover:border-primary-500 hover:bg-primary-50">
-          <span className="block font-semibold text-foreground-950">{option.title}</span>
-          <span className="mt-1 block text-sm text-foreground-600">{option.text}</span></button>)}
-      </div>
-    </Modal>
-    <Modal open={addingCourse === "cricos" && canEdit} title="New course from CRICOS" width="max-w-5xl" onClose={() => setAddingCourse(null)}>
-      <CricosCourseSection courseId={null} onSaved={reloadAfterAdd} />
-    </Modal>
-    {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
 
     <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">

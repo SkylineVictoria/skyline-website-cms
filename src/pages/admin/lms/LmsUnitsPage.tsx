@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
+import AddUnitsFromTga from "./AddUnitsFromTga";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 const inputClass = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
@@ -9,6 +10,7 @@ export default function LmsUnitsPage() {
   const [query, setQuery] = useState("");
   const [courseQuery, setCourseQuery] = useState("");
   const [adding, setAdding] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
   const [drawerTab, setDrawerTab] = useState<"details" | "courses">("details");
   const [courseId, setCourseId] = useState("");
@@ -48,7 +50,12 @@ export default function LmsUnitsPage() {
   const shownCourses = courses.filter(c => (c.code+" "+c.name).toLowerCase().includes(courseQuery.toLowerCase()));
   const uniqueCount = new Set(rows.map(r => r.unit.code.trim().toLowerCase())).size;
   const open = (entry:Entry) => { setSelected(entry); setAdding(false); setDraft({...entry.unit}); setDrawerTab("details"); setNotice(""); };
-  const add = () => { if (!selectedCourse || !canEdit) return; setSelected(null); setAdding(true); setDraft({code:"",name:"",unitType:"core",defaultWeeks:1,nominalHours:null,isActive:true}); setDrawerTab("details"); setNotice(""); };
+  // Units come from the course's Training.gov.au release (core and chosen electives), never typed in by hand.
+  const add = () => { if (!selectedCourse || !canEdit) return; setSelected(null); setDraft(null); setPicking(true); setNotice(""); };
+  const reloadCourse = async (id: string) => {
+    const updated = await rto<CourseDetail>("course_get", { courseId: id });
+    setDetails(old => old.some(d => d.course.id === id) ? old.map(d => d.course.id === id ? updated : d) : [...old, updated]);
+  };
   const chooseCourse = (id:string) => { setCourseId(id); setSelected(null); setDraft(null); setAdding(false); setAdding(false); setPage(1); };
   const save = async () => {
     if ((!selected && !adding) || !draft || !canEdit || busy || !courseId) return;
@@ -59,13 +66,15 @@ export default function LmsUnitsPage() {
     try {
       const units = adding ? [...courseDetail.units, draft] : courseDetail.units.map((u, index) => index === selected?.index ? draft : u);
       await rto("units_save", {courseId, units});
-      const updated = await rto<CourseDetail>("course_get", {courseId:selected.course.id});
+      const updated = await rto<CourseDetail>("course_get", {courseId});
       setDetails(old => old.map(d => d.course.id === updated.course.id ? updated : d));
       setSelected(null); setDraft(null);
     } catch(e) { setNotice(e instanceof Error ? e.message : "Unable to save unit."); }
     finally { setBusy(false); }
   };
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
+    {picking && selectedCourse ? <AddUnitsFromTga course={selectedCourse} units={details.find(d => d.course.id === selectedCourse.id)?.units ?? []}
+      onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)} /> : null}
     <header><p className="text-sm text-foreground-500">LMS / Units</p><div className="mt-2 flex items-center gap-3"><span className="rounded-xl bg-primary-50 p-3 text-2xl text-primary-600"><i className="ri-stack-line" aria-hidden="true" /></span><h1 className="font-heading text-3xl font-bold">Units</h1></div>
       <p className="mt-1 text-sm text-foreground-600">Browse units across courses. Edit the selected course's unit assignment without creating duplicate master records.</p></header>
     {error ? <p role="alert" className="rounded-lg border border-amber-300 p-3 text-sm text-amber-800">{error} <button className="ml-2 underline" onClick={() => void load()}>Retry</button></p> : null}

@@ -94,7 +94,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
 
   function save() {
     if (!review || !canSave || busy) return;
-    void run("Saving draft course…", async () => {
+    void run("Saving course…", async () => {
       const result = await request<{ courseId: string }>({
         action: "save", code: review.code, revision: review.revision, electives: selectedCodes, attested,
       });
@@ -174,6 +174,10 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
           </div>
         </fieldset>
       </div>
+      {review.requiredElectives !== null && <p role="status" className="text-sm font-semibold" aria-live="polite">
+        Electives selected: {selectedCodes.length} / {review.requiredElectives}
+        {selectedCodes.length !== review.requiredElectives && ` — select exactly ${review.requiredElectives} electives to save.`}
+      </p>}
       {!review.canValidate && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
         You can select electives for review, but this release’s packaging rules could not be validated automatically. Saving is unavailable until the official rules are supported; review the rules above.
       </p>}
@@ -183,7 +187,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
       </label>}
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={() => { setReview(null); setError(""); }}>Back to results</button>
-        <button type="button" className={actionClass} disabled={!canSave || Boolean(busy)} onClick={save}>Save as Draft</button>
+        <button type="button" className={actionClass} disabled={!canSave || Boolean(busy)} onClick={save}>Save Course</button>
       </div>
     </>}
   </section>;

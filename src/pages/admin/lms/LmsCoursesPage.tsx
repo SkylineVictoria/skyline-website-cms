@@ -5,6 +5,7 @@ import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import { Modal } from "@/pages/admin/components/ui";
+import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
 type Tab = "overview";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -13,16 +14,40 @@ const icon = (name: string) => <i className={name + " text-xl text-primary-600"}
 interface SyncResult {
   code: string; filled: string[]; unitsUpdated: number; hoursFilled: number; unitsMatched: number; unitCount: number;
   failedSources: string[];
+  cricos: { registered: boolean; providerCode: string; courseCode: string | null } | null;
 }
 function describeSync(r: SyncResult) {
   const lines = [`Synced ${r.code} with Training.gov.au.`];
   lines.push(r.filled.length ? "Filled: " + r.filled.join(", ") + "." : "No empty course fields needed filling.");
   lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} refreshed (prerequisites, usage, groups)` +
     (r.hoursFilled ? `, ${r.hoursFilled} given nominal hours.` : "; units that already had nominal hours were left as they are."));
-  // Sync does not use CRICOS (that is the CRICOS section's Fetch), so a CRICOS source is never a sync failure.
+  // CRICOS is reported on its own line (see fillCricos), never as a failed source.
   const failed = r.failedSources.filter(source => !source.startsWith("CRICOS"));
   if (failed.length) lines.push("Not reachable: " + failed.join("; "));
   return lines;
+}
+
+/** After a sync: fill the CRICOS register entry when the qualification is registered and the course has none yet. */
+async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
+  if (!r.cricos) return "CRICOS: not checked (set the CRICOS provider code in Settings, or the register did not respond).";
+  if (!r.cricos.registered || !r.cricos.courseCode) {
+    return `CRICOS: ${r.code} is not registered on CRICOS for provider ${r.cricos.providerCode}, so there is no CRICOS code to fill.`;
+  }
+  const code = r.cricos.courseCode;
+  try {
+    const current = await loadCricos(courseId);
+    if (current.fetchedAt || current.fields.cricos_course_code) {
+      return `CRICOS: registered as ${code}. The course already has CRICOS details; use Edit › Fetch from CRICOS to compare and update them.`;
+    }
+    const lookup = await lookupCricos(code);
+    await saveCricos(courseId, { fields: lookup.fields, locations: lookup.locations, snapshot: lookup.snapshot, fetchedAt: lookup.fetched_at, edited: [] });
+    const weeks = lookup.fields.cricos_duration_weeks;
+    const detail = await rto<CourseDetail>("course_get", { courseId });
+    if (!detail.course.duration?.trim() && typeof weeks === "number") await rto("course_save", { courseId, duration: `${weeks} weeks` });
+    return `CRICOS: filled from ${code} (fees, duration, institution, locations).` + (lookup.warnings.length ? " " + lookup.warnings.join(" ") : "");
+  } catch (e) {
+    return `CRICOS: registered as ${code}, but it could not be filled automatically (${e instanceof Error ? e.message : "error"}). Use Edit › Fetch from CRICOS.`;
+  }
 }
 
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
@@ -113,7 +138,7 @@ export default function LmsCoursesPage() {
       setDetailError(typeof detail?.error === "string" ? detail.error : "Could not sync with Training.gov.au.");
       return;
     }
-    setSyncNote(describeSync(data));
+    setSyncNote([...describeSync(data), await fillCricos(selectedId, data)]);
     setReloadKey(k => k + 1);
     void load(selectedId);
   }, [canEdit, load, selectedId, syncing]);

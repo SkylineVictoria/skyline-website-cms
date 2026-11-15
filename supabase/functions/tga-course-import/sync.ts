@@ -15,7 +15,7 @@ const HOURS_SOURCE = "NCVER nationally agreed nominal hours (2026)";
  * added or removed; existing units get missing hours, groups, prerequisites and usage. Nothing is ever erased.
  */
 export async function syncCourse(db: SupabaseClient, tenantId: string | null, courseId: string,
-  _providerCode: string | null, hoursLookup: HoursLookup) {
+  providerCode: string | null, hoursLookup: HoursLookup) {
   let query = db.from("cms_courses")
     .select("id,code,career,full_description,entry_requirements,training_package,tga_url").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
@@ -27,7 +27,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
     throw new ImportError("This course has no qualification code that Training.gov.au can look up.", 422);
   }
 
-  const review = await qualificationDetails(code, null, hoursLookup);
+  const review = await qualificationDetails(code, providerCode, hoursLookup);
   const g = review.government;
   const patch: Record<string, unknown> = {};
   const filled: string[] = [];
@@ -62,7 +62,8 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
   fill("tga_url", "training.gov.au link", `https://training.gov.au/training/details/${code}`);
   fill("career", "career outcomes", g.occupations.join(", "));
 
-  // CRICOS details are fetched separately by CRICOS course code (cricos-lookup) and saved with rto_course_cricos_save.
+  // CRICOS: only reported here (registered under the site's provider code or not); the CMS fetches and saves the
+  // full register entry through cricos-lookup and rto_course_cricos_save.
   patch.updated_at = new Date().toISOString();
   let update = db.from("cms_courses").update(patch).eq("id", courseId);
   update = tenantId ? update.eq("tenant_id", tenantId) : update.is("tenant_id", null);
@@ -96,6 +97,8 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
   return reply({
     courseId, code, filled, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
       official.has(String(unit.code ?? "").trim().toUpperCase())).length, unitCount: (units ?? []).length,
+    cricos: review.cricos ? { registered: review.cricos.registered, providerCode: review.cricos.providerCode,
+      courseCode: review.cricos.registered ? review.cricos.courseCode : null } : null,
     failedSources: review.sources.filter(source => !source.ok).map(source => `${source.name}: ${source.detail}`),
   });
 }

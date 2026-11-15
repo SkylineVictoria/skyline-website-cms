@@ -56,7 +56,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const nodes = result?.identity === identity ? menuTree(result.rows) : null;
   return <>
     <div className={`flex-1 overflow-y-auto py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /></> : <>
+      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><EmailManagementNavigation close={close} collapsed={collapsed} /><LmsNavigation close={close} collapsed={collapsed} /></> : <>
         <NavLink to="/admin" end onClick={close} className={linkClass}><i className="ri-dashboard-3-line" aria-hidden="true" />Dashboard</NavLink>
         <p role="status" className="px-3 text-xs text-foreground-500">{failed ? 'Menu unavailable.' : 'Loading menu…'}</p>
         {failed ? <button type="button" onClick={() => setAttempt(v => v + 1)} className={linkClass}>Retry menu</button> : null}
@@ -92,4 +92,14 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
       </li>)}
     </ul> : null}
   </div>;
+}
+
+/** Shared-service entry until a dedicated Administration menu row is migrated. */
+function EmailManagementNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
+  return <NavLink to="/admin/email-management" onClick={close}
+    title={collapsed ? "Email Management" : undefined}
+    className={linkClass + (collapsed ? " justify-center px-0" : "")}>
+    <i className="ri-mail-settings-line text-lg" aria-hidden="true" />
+    {collapsed ? <span className="sr-only">Email Management</span> : <span>Email Management</span>}
+  </NavLink>;
 }

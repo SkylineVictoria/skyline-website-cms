@@ -169,7 +169,23 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   const section = (heading: string) => part(topics.find(topic =>
     value(part(topic, "Headings"), "PrintHeading").toLowerCase() === heading), "Text");
   const packaging = section("packaging rules");
-  const lines = children(packaging, undefined, authorIt).map(content).filter(Boolean);
+  // Author-it releases nest paragraphs, tables and unit lists inside formatting
+  // elements. Reading only direct children loses those units (often showing 0/0).
+  // Extract text from leaf blocks while retaining the document's order.
+  const lines: string[] = [];
+  function collectLines(node: Element | undefined) {
+    if (!node) return;
+    const elements = Array.from(node.childNodes).filter(
+      (item): item is Element => item.nodeType === 1,
+    );
+    if (!elements.length) {
+      const line = content(node);
+      if (line) lines.push(line);
+      return;
+    }
+    for (const element of elements) collectLines(element);
+  }
+  collectLines(packaging);
   const coreStart = lines.findIndex(line => /^core units:?$/i.test(line));
   const electiveStart = lines.findIndex(line => /^elective units:?$/i.test(line));
   const unitPattern = /^([A-Z][A-Z0-9]{4,19})\s+(.+)$/;

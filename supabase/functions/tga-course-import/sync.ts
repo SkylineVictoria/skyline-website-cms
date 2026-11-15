@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
 import { type HoursLookup, ImportError, qualificationDetails } from "./tga.ts";
+import { unitDetails } from "./units.ts";
 
 const headers = {
   "Access-Control-Allow-Origin": "*", "Content-Type": "application/json", "Cache-Control": "no-store",
@@ -11,8 +12,8 @@ const HOURS_SOURCE = "NCVER nationally agreed nominal hours (2026)";
 /**
  * Re-reads Training.gov.au and NCVER hours for an existing course and fills what is missing (CRICOS: cricos-lookup).
  * Register data columns (tga_*) are refreshed; fields people edit (code, name,
- * career, description, entry requirements, training package, link) are only filled when empty. Units are never
- * removed; a course without units gets the core units; existing units get missing hours, groups, prerequisites and usage. Nothing is ever erased.
+ * career, description, entry requirements, training package, link) are only filled when empty. Missing units of the
+ * release are added (core active, electives inactive); active units get their training.gov.au content. Nothing is erased.
  */
 export async function syncCourse(db: SupabaseClient, tenantId: string | null, courseId: string,
   providerCode: string | null, hoursLookup: HoursLookup) {
@@ -72,7 +73,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
 
   // Existing units: fill hours and groups, refresh prerequisites and usage from the register.
   const { data: units } = await db.from("cms_course_units")
-    .select("id,code,nominal_hours,has_prerequisites,usage_recommendation,elective_groups").eq("course_id", courseId);
+    .select("id,code,sort,nominal_hours,has_prerequisites,usage_recommendation,elective_groups").eq("course_id", courseId);
   const official = new Map([...review.core, ...review.electives].map(unit => [unit.code.toUpperCase(), unit]));
   const changes: { id: string; patch: Record<string, unknown> }[] = [];
   let hoursFilled = 0;
@@ -88,26 +89,73 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
     if (blank(unit.elective_groups) && source.groups.length) next.elective_groups = source.groups.join(", ");
     if (Object.keys(next).length) changes.push({ id: unit.id, patch: next });
   }
-  // A course with no units yet (e.g. created from CRICOS) gets the release's core units; electives stay a choice.
-  let coreAdded = 0;
-  if (!(units ?? []).length && review.core.length) {
-    const { error: insertError } = await db.from("cms_course_units").insert(review.core.map((unit, index) => ({
-      id: "unit-" + crypto.randomUUID().replaceAll("-", ""), course_id: courseId, code: unit.code, name: unit.name,
-      category: "Core", unit_type: "core", sort: index + 1, nominal_hours: unit.nominalHours,
-      nominal_hours_source: unit.nominalHours === null ? null : HOURS_SOURCE, has_prerequisites: unit.hasPrerequisites,
-      usage_recommendation: unit.usageRecommendation || null,
-    })));
-    if (insertError) return reply({ error: "The core units could not be added." }, 500);
-    coreAdded = review.core.length;
-  }
   for (let index = 0; index < changes.length; index += 20) {
     const results = await Promise.all(changes.slice(index, index + 20).map(change =>
       db.from("cms_course_units").update(change.patch).eq("id", change.id).eq("course_id", courseId)));
     if (results.some((result: { error: unknown }) => result.error)) return reply({ error: "Some units could not be updated." }, 500);
   }
 
+  // Every unit of the release is on the course: missing core units active, missing electives inactive (switch on the
+  // electives you deliver). Existing units, their order and their active state are never changed.
+  const have = new Set((units ?? []).map((unit: { code: unknown }) => String(unit.code ?? "").trim().toUpperCase()));
+  let sort = Math.max(0, ...(units ?? []).map((unit: { sort?: unknown }) => Number(unit.sort) || 0));
+  const missing = [...review.core.map(unit => ({ unit, core: true })), ...review.electives.map(unit => ({ unit, core: false }))]
+    .filter(item => !have.has(item.unit.code.toUpperCase()));
+  if (missing.length) {
+    const { error: insertError } = await db.from("cms_course_units").insert(missing.map(({ unit, core }) => ({
+      id: "unit-" + crypto.randomUUID().replaceAll("-", ""), course_id: courseId, code: unit.code, name: unit.name,
+      category: core ? "Core" : "Elective", unit_type: core ? "core" : "elective", is_active: core, sort: ++sort,
+      nominal_hours: unit.nominalHours, nominal_hours_source: unit.nominalHours === null ? null : HOURS_SOURCE,
+      has_prerequisites: unit.hasPrerequisites, usage_recommendation: unit.usageRecommendation || null,
+      elective_groups: unit.groups.length ? unit.groups.join(", ") : null,
+    })));
+    if (insertError) return reply({ error: "The missing units could not be added." }, 500);
+  }
+  const coreAdded = missing.filter(item => item.core).length;
+  const electivesAdded = missing.length - coreAdded;
+
+  // Active units get their training.gov.au details; elements and evidence only where the unit has none yet.
+  const { data: activeUnits } = await db.from("cms_course_units").select("id,code").eq("course_id", courseId).eq("is_active", true).limit(80);
+  const active = (activeUnits ?? []) as { id: string; code: string }[];
+  const { data: existingElements } = active.length
+    ? await db.from("asm_unit_elements").select("unit_id").in("unit_id", active.map(unit => unit.id)) : { data: [] };
+  const withElements = new Set(((existingElements ?? []) as { unit_id: string }[]).map(row => row.unit_id));
+  let detailsSynced = 0, elementsAdded = 0, detailsFailed = 0, columnsMissing = false;
+  const queue = [...active];
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    for (let unit = queue.shift(); unit; unit = queue.shift()) {
+      const details = await unitDetails(unit.code.trim().toUpperCase()).catch(() => null);
+      if (!details) { detailsFailed++; continue; }
+      if (!columnsMissing) {
+        const { error } = await db.from("cms_course_units").update({
+          tga_release_number: details.releaseNumber, tga_release_date: details.releaseDate, tga_application: details.application,
+          tga_unit_sector: details.sector, tga_prerequisites: details.prerequisites, tga_supersedes_code: details.supersedesCode,
+          tga_supersedes_title: details.supersedesTitle, tga_supersedes_equivalent: details.supersedesEquivalent,
+          tga_developer: details.developer, tga_companion_url: details.companionUrl, tga_synced_at: new Date().toISOString(),
+          ...(details.usage ? { usage_recommendation: details.usage } : {}),
+        }).eq("id", unit.id);
+        // Before migration 20261115140000 the detail columns do not exist; elements are still saved.
+        if (error && (error.code === "42703" || error.code === "PGRST204")) columnsMissing = true;
+        else if (!error) detailsSynced++;
+      }
+      if (withElements.has(unit.id) || !details.elements.length) continue;
+      const ids = new Map<string, string>();
+      const top = details.elements.filter(row => row.kind !== "performance_criterion").map((row, index) => {
+        const id = crypto.randomUUID();
+        if (row.kind === "element") ids.set(row.code, id);
+        return { id, unit_id: unit.id, kind: row.kind, code: row.code.slice(0, 40), text: row.text, sort: index + 1 };
+      });
+      const criteria = details.elements.filter(row => row.kind === "performance_criterion").map((row, index) => ({
+        unit_id: unit.id, kind: row.kind, code: row.code.slice(0, 40), text: row.text, sort: index + 1, parent_id: ids.get(row.parent ?? "") ?? null,
+      }));
+      const { error: topError } = await db.from("asm_unit_elements").insert(top);
+      const { error: criteriaError } = topError || !criteria.length ? { error: topError } : await db.from("asm_unit_elements").insert(criteria);
+      if (!topError && !criteriaError) elementsAdded++;
+    }
+  }));
+
   return reply({
-    courseId, code, filled, coreAdded, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
+    courseId, code, filled, coreAdded, electivesAdded, detailsSynced, detailsFailed, elementsAdded, columnsMissing, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
       official.has(String(unit.code ?? "").trim().toUpperCase())).length, unitCount: (units ?? []).length,
     cricos: review.cricos ? { registered: review.cricos.registered, providerCode: review.cricos.providerCode,
       courseCode: review.cricos.registered ? review.cricos.courseCode : null } : null,

@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
+import UnitTgaList from "./UnitTgaList";
 import type { RtoUnit } from "@/pages/admin/lib/rto";
 
 interface Qualification {
@@ -331,10 +332,12 @@ export function SavedTrainingGovDetails({ courseId, units }: { courseId: string;
     return () => controller.abort();
   }, [courseId]);
 
-  if (!details) return null;
-  return <details open className="rounded-lg border border-background-200 p-3 text-sm">
-    <summary className="cursor-pointer font-semibold">Training.gov.au release and imported units</summary>
-    <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+  if (!details) return <div className="space-y-4 text-sm">
+    <p className="text-foreground-500">No Training.gov.au details yet. Use ⋯ › Sync to fetch them.</p>
+    <UnitTgaList units={units} />
+  </div>;
+  return <div className="space-y-5 text-sm">
+    <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
       {Object.entries({
         "Package code": details.tga_training_package_code, "National status": details.tga_national_status,
         "Release": details.tga_release_number, "Release date": details.tga_release_date,
@@ -348,16 +351,13 @@ export function SavedTrainingGovDetails({ courseId, units }: { courseId: string;
         "Imported": details.tga_imported_at,
         "Description": details.full_description, "Entry requirements": details.entry_requirements,
       }).map(([label, value]) => [label, show(value)] as const).filter(([, value]) => value).map(([label, value]) =>
-        <div key={label}><dt className="font-semibold">{label}</dt><dd className="whitespace-pre-line break-words">{value}</dd></div>)}
+        <div key={label} className={label === "Description" || label === "Entry requirements" ? "sm:col-span-2" : ""}>
+          <dt className="text-xs text-foreground-500">{label}</dt><dd className="whitespace-pre-line break-words font-medium text-foreground-950">{value}</dd></div>)}
     </dl>
-    <ul className="my-3 space-y-1">
-      {units.map(unit => <li key={unit.id ?? unit.code}>
-        <strong>{unit.code}</strong> {unit.name} · {unit.unitType === "core" ? "Core" : "Elective"}
-      </li>)}
-    </ul>
+    <UnitTgaList units={units} />
     {details.tga_packaging_rules && <details>
-      <summary className="cursor-pointer font-semibold">Official packaging rules</summary>
+      <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Official packaging rules</summary>
       <p className="mt-2 max-h-72 overflow-auto whitespace-pre-line">{details.tga_packaging_rules}</p>
     </details>}
-  </details>;
+  </div>;
 }

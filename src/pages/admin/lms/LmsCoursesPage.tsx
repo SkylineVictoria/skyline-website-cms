@@ -15,6 +15,7 @@ const icon = (name: string) => <i className={name + " text-xl text-primary-600"}
 interface SyncResult {
   code: string; filled: string[]; unitsUpdated: number; hoursFilled: number; unitsMatched: number; unitCount: number;
   failedSources: string[];
+  coreAdded?: number; electivesAdded?: number; detailsSynced?: number; detailsFailed?: number; elementsAdded?: number; columnsMissing?: boolean;
   cricos: { registered: boolean; providerCode: string; courseCode: string | null } | null;
 }
 function describeSync(r: SyncResult) {
@@ -22,6 +23,11 @@ function describeSync(r: SyncResult) {
   lines.push(r.filled.length ? "Filled: " + r.filled.join(", ") + "." : "No empty course fields needed filling.");
   lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} refreshed (prerequisites, usage, groups)` +
     (r.hoursFilled ? `, ${r.hoursFilled} given nominal hours.` : "; units that already had nominal hours were left as they are."));
+  const added = (r.coreAdded ?? 0) + (r.electivesAdded ?? 0);
+  if (added) lines.push(`Added ${r.coreAdded ?? 0} core units and ${r.electivesAdded ?? 0} electives (electives are inactive: switch on the ones you deliver in Units).`);
+  if (r.detailsSynced || r.elementsAdded) lines.push(`Unit content: details refreshed for ${r.detailsSynced ?? 0} active units; elements, criteria and evidence added for ${r.elementsAdded ?? 0}.`);
+  if (r.detailsFailed) lines.push(`${r.detailsFailed} units could not be read from training.gov.au; run Sync again later.`);
+  if (r.columnsMissing) lines.push("Unit release and application details need the database update (migration 20261115140000).");
   // CRICOS is reported on its own line (see fillCricos), never as a failed source.
   const failed = r.failedSources.filter(source => !source.startsWith("CRICOS"));
   if (failed.length) lines.push("Not reachable: " + failed.join("; "));
@@ -151,7 +157,8 @@ export default function LmsCoursesPage() {
     (c.label + " " + c.code).toLowerCase().includes(query.trim().toLowerCase())
   ), [courses, query, campus, activeOnly]);
   const selected = courses.find(c => c.id === selectedId);
-  const units = detail?.units ?? [];
+  // Inactive units (electives not delivered) do not count toward the course.
+  const units = (detail?.units ?? []).filter(unit => unit.isActive);
   const nominalHours = units.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0);
 
   const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };

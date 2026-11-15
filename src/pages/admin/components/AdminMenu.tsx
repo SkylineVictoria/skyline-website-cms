@@ -95,12 +95,36 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
   </div>;
 }
 
-/** Always available even if database-driven menu loading fails. */
+/** Email Management subpages live in the sidebar, not a page-level tab menu. */
+const emailSections = [
+  { id: "accounts", label: "Email Accounts", icon: "ri-inbox-line" },
+  { id: "create", label: "Create Email", icon: "ri-user-add-line" },
+  { id: "automation", label: "Automation Rules", icon: "ri-git-branch-line" },
+  { id: "settings", label: "Microsoft 365 Settings", icon: "ri-settings-3-line" },
+  { id: "audit", label: "Audit Logs", icon: "ri-history-line" },
+] as const;
 function EmailManagementNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
-  return <NavLink to="/admin/email-management" onClick={close}
-    title={collapsed ? "Email Management" : undefined}
-    className={linkClass + (collapsed ? " justify-center px-0" : "")}>
-    <i className="ri-mail-settings-line text-lg" aria-hidden="true" />
-    {collapsed ? <span className="sr-only">Email Management</span> : <span>Email Management</span>}
-  </NavLink>;
+  const { pathname, search } = useLocation();
+  const active = pathname === "/admin/email-management";
+  const [expanded, setExpanded] = useState(active);
+  useEffect(() => { if (active) setExpanded(true); }, [active]);
+  return <div className="mt-2">
+    <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}
+      title={collapsed ? "Email Management" : undefined}
+      className={linkClass + " w-full " + (collapsed ? "justify-center px-0" : "")}>
+      <i className="ri-mail-settings-line text-lg" aria-hidden="true" />
+      {collapsed ? <span className="sr-only">Email Management</span> : <><span className="flex-1 text-left">Email Management</span><i className={expanded ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
+    </button>
+    {expanded ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
+      {emailSections.map(section => <li key={section.id}>
+        <NavLink to={`/admin/email-management?section=${section.id}`} onClick={close}
+          title={collapsed ? section.label : undefined}
+          aria-current={active && new URLSearchParams(search).get("section") === section.id ? "page" : undefined}
+          className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (active && (new URLSearchParams(search).get("section") || "accounts") === section.id ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
+          <i className={section.icon + " text-lg"} aria-hidden="true" />
+          {collapsed ? <span className="sr-only">{section.label}</span> : <span className="truncate">{section.label}</span>}
+        </NavLink>
+      </li>)}
+    </ul> : null}
+  </div>;
 }

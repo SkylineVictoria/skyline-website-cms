@@ -146,6 +146,38 @@ export async function searchQualifications(query: string) {
   return rows.filter(row => codePattern.test(row.code) && row.name);
 }
 
+
+// NCVER publishes a tab-delimited national reporting dataset, not a live hours API.
+// Unknown and ambiguous unit codes remain null; never manufacture hours.
+const NCVER_HOURS_URL = "https://www.ncver.edu.au/sites/default/files/ncver-documents/Nationally-agreed-hours.txt";
+let hoursCache: { expires: number; values: Map<string, number> } | null = null;
+async function nationallyAgreedHours(): Promise<Map<string, number>> {
+  if (hoursCache && hoursCache.expires > Date.now()) return hoursCache.values;
+  const response = await fetch(NCVER_HOURS_URL, { signal: AbortSignal.timeout(12000) });
+  if (!response.ok) throw new Error("NCVER hours unavailable");
+  const data = await response.text();
+  if (data.length > 3_000_000 || !data.startsWith("Subject Id")) throw new Error("Invalid NCVER hours file");
+  const values = new Map<string, number>();
+  const ambiguous = new Set<string>();
+  for (const line of data.split(/\r?\n/).slice(1)) {
+    const [code, flag, raw] = line.split("\t");
+    const hours = Number(raw);
+    if (!code || !/^[A-Z][A-Z0-9]{4,19}$/.test(code) || !/^[A-Z]$/.test(flag ?? "") ||
+        !Number.isInteger(hours) || hours < 0 || hours > 10000) continue;
+    if (values.has(code) && values.get(code) !== hours) ambiguous.add(code);
+    else values.set(code, hours);
+  }
+  for (const code of ambiguous) values.delete(code);
+  hoursCache = { expires: Date.now() + 86400000, values };
+  return values;
+}
+async function attachNominalHours<T extends { code: string }>(units: T[]): Promise<(T & { nominalHours: number | null; hoursSource: string | null })[]> {
+  let hours: Map<string, number>;
+  try { hours = await nationallyAgreedHours(); } catch { hours = new Map(); }
+  return units.map(unit => ({ ...unit, nominalHours: hours.get(unit.code) ?? null,
+    hoursSource: hours.has(unit.code) ? "NCVER nationally agreed nominal hours (2026)" : null }));
+}
+
 type Unit = { code: string; name: string; groups: string[] };
 const parts = (parent: Element | undefined, name: string) => children(parent, name, authorIt);
 const part = (parent: Element | undefined, name: string) => child(parent, name, authorIt);
@@ -308,7 +340,7 @@ export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDet
     throw new ImportError("Confirm the selected electives meet the qualification's relevance requirements.", 422);
   }
   return [
-    ...review.core.map(unit => ({ code: unit.code, name: unit.name, type: "core" })),
-    ...electives.map(unit => ({ code: unit.code, name: unit.name, type: "elective" })),
+    ...review.core.map(unit => ({ code: unit.code, name: unit.name, type: "core", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
+    ...electives.map(unit => ({ code: unit.code, name: unit.name, type: "elective", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
   ];
 }

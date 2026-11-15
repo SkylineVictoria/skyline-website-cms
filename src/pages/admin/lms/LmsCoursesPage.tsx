@@ -8,6 +8,22 @@ type Tab = "overview";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
+interface SyncResult {
+  code: string; filled: string[]; unitsUpdated: number; hoursFilled: number; unitsMatched: number; unitCount: number;
+  cricos: { registered: boolean; providerCode: string; courseCode: string | null; kept: string | null } | null;
+  failedSources: string[];
+}
+function describeSync(r: SyncResult) {
+  const lines = [`Synced ${r.code} with Training.gov.au.`];
+  lines.push(r.filled.length ? "Filled: " + r.filled.join(", ") + "." : "No empty course fields needed filling.");
+  if (!r.cricos) lines.push("CRICOS: not checked (no CRICOS provider code in Settings, or the register did not respond).");
+  else if (!r.cricos.registered) lines.push(`CRICOS: provider ${r.cricos.providerCode} is not registered for ${r.code}.`);
+  else lines.push(`CRICOS: ${r.cricos.courseCode}` + (r.cricos.kept ? ` (the course keeps its own code ${r.cricos.kept})` : "") + ".");
+  lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} updated, ${r.hoursFilled} got nominal hours.`);
+  if (r.failedSources.length) lines.push("Not reachable: " + r.failedSources.join("; "));
+  return lines;
+}
+
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
@@ -27,6 +43,9 @@ export default function LmsCoursesPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState("");
   const [editing, setEditing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState<string[]>([]);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const load = useCallback(async (courseId?: string) => {
     setLoading(true);
@@ -54,7 +73,7 @@ export default function LmsCoursesPage() {
       .catch(e => { if (current) setDetailError(e instanceof Error ? e.message : "Could not load course units."); })
       .finally(() => { if (current) setDetailLoading(false); });
     return () => { current = false; };
-  }, [selectedId]);
+  }, [selectedId, reloadKey]);
 
   const save = useCallback(async (action: "course_save" | "units_save", data: Record<string, unknown>) => {
     if (!canEdit || !selectedId || saving) return;
@@ -83,6 +102,20 @@ export default function LmsCoursesPage() {
     setSavedAt(""); setSelectedId("");
     void load();
   }, [canEdit, courses, load, saving, selectedId]);
+  const sync = useCallback(async () => {
+    if (!canEdit || !selectedId || syncing) return;
+    setSyncing(true); setDetailError(""); setSyncNote([]);
+    const { data, error: syncError } = await supabase.functions.invoke<SyncResult>("tga-course-import", { body: { action: "sync", courseId: selectedId } });
+    setSyncing(false);
+    if (syncError || !data) {
+      const detail = syncError && "context" in syncError && syncError.context instanceof Response ? await syncError.context.json().catch(() => null) : null;
+      setDetailError(typeof detail?.error === "string" ? detail.error : "Could not sync with Training.gov.au.");
+      return;
+    }
+    setSyncNote(describeSync(data));
+    setReloadKey(k => k + 1);
+    void load(selectedId);
+  }, [canEdit, load, selectedId, syncing]);
   const campuses = useMemo(() => Array.from(new Set(courses.map(c => c.campus).filter((x): x is string => !!x))).sort(), [courses]);
   const visible = useMemo(() => courses.filter(c =>
     (!activeOnly || c.isActive) && (!campus || c.campus === campus) &&
@@ -130,7 +163,7 @@ export default function LmsCoursesPage() {
         <p className="my-4 text-sm font-semibold text-foreground-700">{visible.length} course{visible.length === 1 ? "" : "s"}</p>
         <div className="max-h-[690px] space-y-2 overflow-auto">
           {loading ? <p className="p-3 text-sm text-foreground-500">Loading courses…</p> : visible.length === 0 ? <p className="p-3 text-sm text-foreground-500">No matching courses.</p> : visible.map(c =>
-            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setSavedAt(""); setEditing(false); }}
+            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); }}
               className={"flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors hover:border-primary-500 " + (selectedId === c.id ? "border-primary-400 bg-primary-50" : "border-background-200 bg-background-50")}>
               <span className="rounded-lg bg-background-100 p-2">{icon("ri-graduation-cap-line")}</span>
               <span className="min-w-0 flex-1"><span className="block font-semibold text-foreground-950">{c.code}</span>
@@ -156,6 +189,10 @@ export default function LmsCoursesPage() {
                   <option value="active">Active</option><option value="inactive">Inactive</option>
                 </select>
               </label>
+              <button type="button" onClick={() => void sync()} disabled={syncing || saving}
+                title="Fetch Training.gov.au, CRICOS and nominal hours again and fill in missing details"
+                className="flex items-center gap-1 rounded-xl border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">
+                <i className={"ri-refresh-line" + (syncing ? " animate-spin" : "")} aria-hidden="true" />{syncing ? "Syncing…" : "Sync"}</button>
               <button type="button" onClick={() => setEditing(v => !v)} disabled={!detail} aria-expanded={editing}
                 className={"flex items-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-800 hover:bg-background-100")}>
                 <i className={editing ? "ri-close-line" : "ri-edit-line"} aria-hidden="true" />{editing ? "Close edit" : "Edit"}</button>
@@ -178,6 +215,9 @@ export default function LmsCoursesPage() {
           </div>
           <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
           {editing && canEdit && detail ? <div className="mt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
+          {syncNote.length ? <div role="status" className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+            <ul className="space-y-1">{syncNote.map(line => <li key={line}>{line}</li>)}</ul>
+            <button type="button" aria-label="Dismiss" onClick={() => setSyncNote([])}><i className="ri-close-line" aria-hidden="true" /></button></div> : null}
           {detailError ? <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{detailError}</div> : null}
           <div role="tablist" aria-label="Course sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
             {([{ id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
@@ -185,7 +225,7 @@ export default function LmsCoursesPage() {
                 className={"flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-600" : "border-transparent text-foreground-600")}>
                 <i className={t.glyph} aria-hidden="true" />{t.label}</button>)}
           </div>
-          {tab === "overview" && detail && <SavedTrainingGovDetails key={selectedId} courseId={selectedId} units={detail.units} />}
+          {tab === "overview" && detail && <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />}
           {tab === "overview" && !canEdit ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
             {[["Course code", selected.code], ["Course name", selected.name], ["CRICOS", selected.cricos || "—"], ["Duration", selected.duration || "—"], ["Delivery mode", selected.mode || "—"], ["Campus", selected.campus || "—"], ["Training package", selected.trainingPackage || "—"], ["Category", selected.category || "—"]].map(([label, value]) =>
               <div key={label} className="rounded-xl bg-background-100 p-4"><p className="text-xs text-foreground-500">{label}</p><p className="mt-1 font-semibold">{value}</p></div>)}

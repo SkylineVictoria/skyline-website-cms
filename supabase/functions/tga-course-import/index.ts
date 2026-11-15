@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { ImportError, qualificationDetails, searchQualifications, selectedUnits } from "./tga.ts";
+import { syncCourse } from "./sync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,15 +48,6 @@ Deno.serve(async req => {
       stage = "search";
       return json(await searchQualifications(query));
     }
-    if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
-      return json({ error: "Invalid qualification request." }, 400);
-    }
-    if (input.action === "save" && (!("revision" in input) || typeof input.revision !== "string" ||
-        !("electives" in input) || !Array.isArray(input.electives) || input.electives.length > 200 ||
-        input.electives.some(code => typeof code !== "string"))) {
-      return json({ error: "The approved qualification review is required." }, 400);
-    }
-    stage = "review";
     const db = createClient(url, service, { auth });
     // The tenant's CRICOS provider code (Settings), else the site-wide one, to look up its CRICOS registration.
     const { data: settings } = await db.from("cms_settings").select("tenant_id,cricos")
@@ -67,6 +59,20 @@ Deno.serve(async req => {
       if (error) throw error;
       return new Map((data ?? []).map(row => [row.unit_code as string, row.hours as number]));
     };
+    if (input.action === "sync") {
+      if (!("courseId" in input) || typeof input.courseId !== "string" || !input.courseId) return json({ error: "Choose a course to sync." }, 400);
+      stage = "sync";
+      return await syncCourse(db, scope.tenantId ?? null, input.courseId, providerCode, hoursLookup);
+    }
+    if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
+      return json({ error: "Invalid qualification request." }, 400);
+    }
+    if (input.action === "save" && (!("revision" in input) || typeof input.revision !== "string" ||
+        !("electives" in input) || !Array.isArray(input.electives) || input.electives.length > 200 ||
+        input.electives.some(code => typeof code !== "string"))) {
+      return json({ error: "The approved qualification review is required." }, 400);
+    }
+    stage = "review";
     const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup);
     if (input.action === "details") return json(review);
     if (!("revision" in input) || input.revision !== review.revision) {

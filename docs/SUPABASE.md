@@ -709,3 +709,6 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 
 ## Course status and delete (COURSE-DELETE 2026-11-15; migration 20261115120000 local, run on hosted by the owner)
 - LMS › Courses: RTO Managers switch a course Active / Inactive (`rto_admin('course_save', {isActive})`) and delete it with `public.rto_course_delete(p_course_id)` (security definer, RTO Manager only). Courses with intakes, applications, assessments or unit outcomes are refused with a message to make them inactive instead; the course's units are deleted with it.
+
+## Course sync with Training.gov.au and CRICOS (TGA-SYNC 2026-11-15; tga-course-import action `sync`, NOT yet deployed, hosted v13)
+- LMS › Courses › Sync calls `tga-course-import` with `{ action: "sync", courseId }` (RTO Manager, same scope check as import). It re-reads Training.gov.au, CRICOS (provider code from Settings) and `tga_nominal_hours`, refreshes the `tga_*` / `cricos_*` columns, and fills `cricos`, `duration`, `career`, description, entry requirements, training package and the training.gov.au link only when empty. Existing units get missing hours and elective groups and current prerequisite / usage flags; units are never added or removed and nothing is erased. No migration.

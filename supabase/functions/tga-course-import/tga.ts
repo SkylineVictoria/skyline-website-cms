@@ -270,7 +270,7 @@ async function cricosCourse(code: string, providerCode: string | null, sources: 
   const rows = await attempt(sources, "CRICOS register", () => search(CRICOS_COURSES, { "CRICOS Provider Code": providerCode, "VET National Code": code }));
   if (!rows) return null;
   const row = rows.find(entry => entry.Expired !== "Yes") ?? rows[0];
-  if (!row) return { registered: false, providerCode };
+  if (!row) return { registered: false as const, providerCode };
   const courseCode = String(row["CRICOS Course Code"] ?? "");
   const locations = await attempt(sources, "CRICOS locations", () =>
     search(CRICOS_COURSE_LOCATIONS, { "CRICOS Provider Code": providerCode, "CRICOS Course Code": courseCode }));
@@ -278,7 +278,7 @@ async function cricosCourse(code: string, providerCode: string | null, sources: 
     ? [row["Work Component Total Hours"] && `${row["Work Component Total Hours"]} hours`, row["Work Component Weeks"] && `${row["Work Component Weeks"]} weeks`].filter(Boolean).join(", ") || "Yes"
     : "No";
   return {
-    registered: true, providerCode, courseCode, courseName: text(row["Course Name"]),
+    registered: true as const, providerCode, courseCode, courseName: text(row["Course Name"]),
     durationWeeks: Number.isInteger(Number(row["Duration (Weeks)"])) ? Number(row["Duration (Weeks)"]) : null,
     tuitionFee: money(row["Tuition Fee"]), nonTuitionFee: money(row["Non Tuition Fee"]), totalCost: money(row["Estimated Total Course Cost"]),
     courseLevel: text(row["Course Level"]),

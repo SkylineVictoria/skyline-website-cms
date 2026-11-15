@@ -58,8 +58,6 @@ interface Review extends Qualification {
   revision: string;
 }
 
-const aud = (value: number | null | undefined) => value === null || value === undefined || Number.isNaN(value) ? ""
-  : value.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 const prereq = (unit: Unit) => unit.hasPrerequisites ? " · Has prerequisites" : "";
 
 const actionClass = "rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50";
@@ -267,7 +265,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 /** Everything the public registers returned, shown before saving so it can be checked. */
 function GovernmentData({ review }: { review: Review }) {
   const g = review.government;
-  const c = review.cricos;
   const failed = review.sources.filter(source => !source.ok);
   return <section className="space-y-3 rounded-lg border border-background-200 p-3 text-sm" aria-label="Government data">
     <h4 className="font-semibold">Government data to verify</h4>
@@ -288,21 +285,7 @@ function GovernmentData({ review }: { review: Review }) {
         <a className="text-primary-700 underline" href={doc.url} target="_blank" rel="noreferrer">{doc.name}</a></span>) : "—"}
         {g.companionUrl && <> · <a className="text-primary-700 underline" href={g.companionUrl} target="_blank" rel="noreferrer">Companion volume</a></>}</Field>
     </dl>
-    <h4 className="pt-1 font-semibold">CRICOS{c?.providerCode ? ` (provider ${c.providerCode})` : ""}</h4>
-    {!c ? <p className="text-foreground-600">The CRICOS register could not be checked.</p>
-      : !c.registered ? <p className="text-foreground-600">This provider has no CRICOS registration for {review.code}, so the CRICOS code stays empty.</p>
-      : <dl className="grid gap-3 sm:grid-cols-2">
-        <Field label="CRICOS course code">{c.courseCode}{c.expired ? " (expired)" : ""}</Field>
-        <Field label="Duration">{c.durationWeeks ? `${c.durationWeeks} weeks` : "—"}</Field>
-        <Field label="Tuition fee">{aud(c.tuitionFee) || "—"}</Field>
-        <Field label="Non-tuition fee">{aud(c.nonTuitionFee) || "—"}</Field>
-        <Field label="Estimated total cost">{aud(c.totalCost) || "—"}</Field>
-        <Field label="Course level">{c.courseLevel || "—"}</Field>
-        <Field label="Field of education">{c.fieldOfEducation || "—"}</Field>
-        <Field label="Work component">{c.workComponent || "—"}</Field>
-        <Field label="Language">{c.language || "—"}{c.dualQualification ? " · Dual qualification" : ""}</Field>
-        <Field label="Locations">{c.locations?.map(item => [item.name, item.city, item.state].filter(Boolean).join(", ")).join("; ") || "—"}</Field>
-      </dl>}
+    <p className="text-xs text-foreground-500">CRICOS details (fees, duration, institution, locations) are fetched by CRICOS course code on the course after it is saved.</p>
   </section>;
 }
 
@@ -318,14 +301,12 @@ interface SavedDetails {
 }
 
 const SAVED_COLUMNS = "tga_training_package_code,tga_national_status,tga_release_number,tga_release_date,tga_packaging_rules,full_description,entry_requirements,"
-  + "cricos,duration,career,tga_anzsco_code,tga_anzsco_title,tga_field_of_education_code,tga_field_of_education,tga_qualification_level,tga_developer,"
+  + "career,tga_anzsco_code,tga_anzsco_title,tga_field_of_education_code,tga_field_of_education,tga_qualification_level,tga_developer,"
   + "tga_usage_recommendation,tga_supersedes_code,tga_supersedes_title,tga_specialisation_title,tga_core_units,tga_elective_units,tga_industry_sectors,"
-  + "tga_imported_at,cricos_provider_code,cricos_registered,cricos_duration_weeks,cricos_tuition_fee,cricos_non_tuition_fee,cricos_total_cost,"
-  + "cricos_course_level,cricos_field_of_education,cricos_work_component,cricos_language,cricos_locations,cricos_checked_at";
+  + "tga_imported_at";
 const show = (value: unknown): string => value === null || value === undefined ? ""
   : Array.isArray(value) ? value.map(item => typeof item === "object" && item ? Object.values(item).filter(Boolean).join(", ") : String(item)).join("; ")
   : typeof value === "boolean" ? (value ? "Yes" : "No") : String(value);
-const money = (value: unknown) => value === null || value === undefined ? "" : aud(Number(value));
 
 export function SavedTrainingGovDetails({ courseId, units }: { courseId: string; units: RtoUnit[] }) {
   const [details, setDetails] = useState<SavedDetails | null>(null);
@@ -355,13 +336,7 @@ export function SavedTrainingGovDetails({ courseId, units }: { courseId: string;
         "Qualification level": details.tga_qualification_level, "Usage recommendation": details.tga_usage_recommendation,
         "Developer": details.tga_developer, "Supersedes": [details.tga_supersedes_code, details.tga_supersedes_title].map(show).filter(Boolean).join(" "),
         "Industry sectors": details.tga_industry_sectors, "Occupations (career)": details.career,
-        "CRICOS provider": details.cricos_provider_code, "CRICOS registered": details.cricos_registered,
-        "CRICOS course code": details.cricos, "Duration": details.duration,
-        "CRICOS tuition fee": money(details.cricos_tuition_fee), "CRICOS non-tuition fee": money(details.cricos_non_tuition_fee),
-        "CRICOS total cost": money(details.cricos_total_cost),
-        "CRICOS course level": details.cricos_course_level, "CRICOS field of education": details.cricos_field_of_education,
-        "Work component": details.cricos_work_component, "Language": details.cricos_language, "CRICOS locations": details.cricos_locations,
-        "Imported": details.tga_imported_at, "CRICOS checked": details.cricos_checked_at,
+        "Imported": details.tga_imported_at,
         "Description": details.full_description, "Entry requirements": details.entry_requirements,
       }).map(([label, value]) => [label, show(value)] as const).filter(([, value]) => value).map(([label, value]) =>
         <div key={label}><dt className="font-semibold">{label}</dt><dd className="whitespace-pre-line break-words">{value}</dd></div>)}

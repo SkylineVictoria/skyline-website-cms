@@ -9,15 +9,15 @@ const blank = (value: unknown) => value === null || value === undefined || Strin
 const HOURS_SOURCE = "NCVER nationally agreed nominal hours (2026)";
 
 /**
- * Re-reads Training.gov.au, CRICOS and NCVER hours for an existing course and fills what is missing.
- * Register data columns (tga_*, cricos_*) are refreshed; fields people edit (code, name, CRICOS code, duration,
+ * Re-reads Training.gov.au and NCVER hours for an existing course and fills what is missing (CRICOS: cricos-lookup).
+ * Register data columns (tga_*) are refreshed; fields people edit (code, name,
  * career, description, entry requirements, training package, link) are only filled when empty. Units are never
  * added or removed; existing units get missing hours, groups, prerequisites and usage. Nothing is ever erased.
  */
 export async function syncCourse(db: SupabaseClient, tenantId: string | null, courseId: string,
-  providerCode: string | null, hoursLookup: HoursLookup) {
+  _providerCode: string | null, hoursLookup: HoursLookup) {
   let query = db.from("cms_courses")
-    .select("id,code,cricos,duration,career,full_description,entry_requirements,training_package,tga_url").eq("id", courseId);
+    .select("id,code,career,full_description,entry_requirements,training_package,tga_url").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
   const { data: course, error: courseError } = await query.maybeSingle();
   if (courseError) return reply({ error: "The course could not be read." }, 500);
@@ -27,7 +27,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
     throw new ImportError("This course has no qualification code that Training.gov.au can look up.", 422);
   }
 
-  const review = await qualificationDetails(code, providerCode, hoursLookup);
+  const review = await qualificationDetails(code, null, hoursLookup);
   const g = review.government;
   const patch: Record<string, unknown> = {};
   const filled: string[] = [];
@@ -62,22 +62,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
   fill("tga_url", "training.gov.au link", `https://training.gov.au/training/details/${code}`);
   fill("career", "career outcomes", g.occupations.join(", "));
 
-  const cricos = review.cricos;
-  if (cricos) {
-    patch.cricos_provider_code = cricos.providerCode;
-    patch.cricos_registered = cricos.registered;
-    patch.cricos_checked_at = new Date().toISOString();
-    if (cricos.registered) {
-      set("cricos_duration_weeks", cricos.durationWeeks); set("cricos_tuition_fee", cricos.tuitionFee);
-      set("cricos_non_tuition_fee", cricos.nonTuitionFee); set("cricos_total_cost", cricos.totalCost);
-      set("cricos_course_level", cricos.courseLevel); set("cricos_field_of_education", cricos.fieldOfEducation);
-      set("cricos_work_component", cricos.workComponent); set("cricos_language", cricos.language);
-      patch.cricos_dual_qualification = cricos.dualQualification;
-      set("cricos_locations", cricos.locations);
-      fill("cricos", "CRICOS code", cricos.courseCode);
-      fill("duration", "duration", cricos.durationWeeks ? `${cricos.durationWeeks} weeks` : null);
-    }
-  }
+  // CRICOS details are fetched separately by CRICOS course code (cricos-lookup) and saved with rto_course_cricos_save.
   patch.updated_at = new Date().toISOString();
   let update = db.from("cms_courses").update(patch).eq("id", courseId);
   update = tenantId ? update.eq("tenant_id", tenantId) : update.is("tenant_id", null);
@@ -111,8 +96,6 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
   return reply({
     courseId, code, filled, unitsUpdated: changes.length, hoursFilled, unitsMatched: (units ?? []).filter((unit: { code: unknown }) =>
       official.has(String(unit.code ?? "").trim().toUpperCase())).length, unitCount: (units ?? []).length,
-    cricos: cricos ? { registered: cricos.registered, providerCode: cricos.providerCode, courseCode: cricos.registered ? cricos.courseCode : null,
-      kept: cricos.registered && !blank(course.cricos) && String(course.cricos).trim().toUpperCase() !== cricos.courseCode.toUpperCase() ? course.cricos : null } : null,
     failedSources: review.sources.filter(source => !source.ok).map(source => `${source.name}: ${source.detail}`),
   });
 }

@@ -7,6 +7,7 @@ import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { ErrorNote, FeesEditor, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
 import { CourseFacts, UnitsTab, WebsiteTab } from "@/pages/admin/components/rto/CourseSteps";
 import IntakesStep from "@/pages/admin/components/rto/IntakesStep";
+import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import CourseAssessmentsStep from "@/pages/admin/components/rto/CourseAssessmentsStep";
 import { DEPOSIT_LIMIT_CENTS, money, rto, shortDate, stepPath, todayIso, type CourseDetail, type CourseStep, type RtoCourse } from "@/pages/admin/lib/rto";
 
@@ -116,7 +117,10 @@ export default function CourseWizardPage() {
       {notes[current.id].length ? <div className="mb-3 overflow-hidden rounded-md border border-background-200"><WizardNotice tone="warn">Needs attention: {notes[current.id].join(" · ")}</WizardNotice></div> : null}
       {!canEdit && current.id !== "website" ? <div className="mb-3"><ReadOnlyNote>{role.admin ? "You can view this course and enrol students into existing batches. Only an RTO Manager changes it." : "Read only."}</ReadOnlyNote></div> : null}
 
-      {current.id === "details" ? <CourseFacts course={c} readOnly={!canEdit} busy={busy} autosave onSave={(data) => void save("course_save", data)} /> : null}
+      {current.id === "details" ? <div className="space-y-5">
+        <CourseFacts course={c} readOnly={!canEdit} busy={busy} autosave onSave={(data) => void save("course_save", data)} />
+        <CricosCourseSection courseId={c.id} readOnly={!canEdit} />
+      </div> : null}
       {current.id === "timetable" ? <UnitsTab units={detail.units} readOnly={!canEdit} busy={busy} autosave onSave={(units) => void save("units_save", { units })} /> : null}
       {current.id === "fees" ? <Card className="p-5"><FeesEditor items={detail.fees} readOnly={!canEdit} busy={busy} autosave onSave={(items) => void save("fees_save", { items })} /></Card> : null}
       {current.id === "intakes" ? <IntakesStep detail={detail} canEdit={canEdit} canEnrol={role.rtoManager || role.admin} onChanged={() => void load()} /> : null}

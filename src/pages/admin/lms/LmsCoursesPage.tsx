@@ -3,6 +3,8 @@ import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
+import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
+import { Modal } from "@/pages/admin/components/ui";
 
 type Tab = "overview";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -10,15 +12,11 @@ const icon = (name: string) => <i className={name + " text-xl text-primary-600"}
 
 interface SyncResult {
   code: string; filled: string[]; unitsUpdated: number; hoursFilled: number; unitsMatched: number; unitCount: number;
-  cricos: { registered: boolean; providerCode: string; courseCode: string | null; kept: string | null } | null;
   failedSources: string[];
 }
 function describeSync(r: SyncResult) {
   const lines = [`Synced ${r.code} with Training.gov.au.`];
   lines.push(r.filled.length ? "Filled: " + r.filled.join(", ") + "." : "No empty course fields needed filling.");
-  if (!r.cricos) lines.push("CRICOS: not checked (no CRICOS provider code in Settings, or the register did not respond).");
-  else if (!r.cricos.registered) lines.push(`CRICOS: provider ${r.cricos.providerCode} is not registered for ${r.code}.`);
-  else lines.push(`CRICOS: ${r.cricos.courseCode}` + (r.cricos.kept ? ` (the course keeps its own code ${r.cricos.kept})` : "") + ".");
   lines.push(`Units: ${r.unitsMatched} of ${r.unitCount} found in the release, ${r.unitsUpdated} updated, ${r.hoursFilled} got nominal hours.`);
   if (r.failedSources.length) lines.push("Not reachable: " + r.failedSources.join("; "));
   return lines;
@@ -27,7 +25,7 @@ function describeSync(r: SyncResult) {
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
-  const [addingCourse, setAddingCourse] = useState(false);
+  const [addingCourse, setAddingCourse] = useState<null | "choose" | "tga" | "cricos">(null);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [query, setQuery] = useState("");
@@ -132,7 +130,7 @@ export default function LmsCoursesPage() {
         <p className="mt-1 text-sm text-foreground-600">View and edit course information and qualification details. Units are managed separately.</p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
-      {canEdit ? <button type="button" onClick={() => setAddingCourse(true)} className="rounded-xl bg-primary-600 px-4 py-2.5 font-semibold text-white">+ Add New</button> : null}
+      {canEdit ? <button type="button" onClick={() => setAddingCourse("choose")} className="rounded-xl bg-primary-600 px-4 py-2.5 font-semibold text-white">+ Add New</button> : null}
       <label className="flex items-center gap-2 rounded-xl border border-background-200 bg-background-50 px-3 py-2 text-sm">
         {icon("ri-map-pin-line")}<span className="sr-only">Campus</span>
         <select className="max-w-48 bg-transparent outline-none" value={campus} onChange={e => setCampus(e.target.value)}>
@@ -140,9 +138,25 @@ export default function LmsCoursesPage() {
         </select>
       </label></div>
     </header>
-    {addingCourse && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(false)}
+    <Modal open={addingCourse === "choose" && canEdit} title="Add a course" onClose={() => setAddingCourse(null)}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {([
+          { id: "tga", title: "From Training.gov.au", text: "Search a qualification and import its units and packaging rules.", glyph: "ri-government-line" },
+          { id: "cricos", title: "From a CRICOS course code", text: "Fetch the CRICOS register entry (fees, duration, institution, locations) and create a draft course.", glyph: "ri-global-line" },
+        ] as const).map(option => <button key={option.id} type="button" onClick={() => setAddingCourse(option.id)}
+          className="rounded-xl border border-background-200 p-4 text-left hover:border-primary-500 hover:bg-primary-50">
+          {icon(option.glyph)}<span className="mt-2 block font-semibold text-foreground-950">{option.title}</span>
+          <span className="mt-1 block text-sm text-foreground-600">{option.text}</span></button>)}
+      </div>
+    </Modal>
+    <Modal open={addingCourse === "cricos" && canEdit} title="New course from CRICOS" width="max-w-5xl" onClose={() => setAddingCourse(null)}>
+      <CricosCourseSection courseId={null} onSaved={courseId => {
+        setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); void load(courseId);
+      }} />
+    </Modal>
+    {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)}
       onSaved={courseId => {
-        setAddingCourse(false);
+        setAddingCourse(null);
         setQuery("");
         setCampus("");
         setActiveOnly(false);
@@ -214,7 +228,10 @@ export default function LmsCoursesPage() {
             </div>)}
           </div>
           <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
-          {editing && canEdit && detail ? <div className="mt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
+          {editing && canEdit && detail ? <div className="mt-5 space-y-5">
+            <CricosCourseSection key={selectedId + ":edit"} courseId={selectedId} onSaved={() => { setReloadKey(k => k + 1); void load(selectedId); }} />
+            <CourseFacts key={selectedId + ":" + reloadKey} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} />
+          </div> : null}
           {syncNote.length ? <div role="status" className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
             <ul className="space-y-1">{syncNote.map(line => <li key={line}>{line}</li>)}</ul>
             <button type="button" aria-label="Dismiss" onClick={() => setSyncNote([])}><i className="ri-close-line" aria-hidden="true" /></button></div> : null}
@@ -225,6 +242,7 @@ export default function LmsCoursesPage() {
                 className={"flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-600" : "border-transparent text-foreground-600")}>
                 <i className={t.glyph} aria-hidden="true" />{t.label}</button>)}
           </div>
+          {tab === "overview" && detail && !editing ? <div className="mt-5"><CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /></div> : null}
           {tab === "overview" && detail && <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />}
           {tab === "overview" && !canEdit ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
             {[["Course code", selected.code], ["Course name", selected.name], ["CRICOS", selected.cricos || "—"], ["Duration", selected.duration || "—"], ["Delivery mode", selected.mode || "—"], ["Campus", selected.campus || "—"], ["Training package", selected.trainingPackage || "—"], ["Category", selected.category || "—"]].map(([label, value]) =>

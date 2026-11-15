@@ -218,9 +218,20 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
     for (const element of elements) collectLines(element);
   }
   collectLines(packaging);
-  const coreStart = lines.findIndex(line => /^core units:?$/i.test(line));
-  const electiveStart = lines.findIndex(line => /^elective units:?$/i.test(line));
-  const unitPattern = /^([A-Z][A-Z0-9]{4,19})\s+(.+)$/;
+  // Reassemble code/title cells split by Author-it table markup.
+  const normalizedLines: string[] = [];
+  const codeOnly = /^[A-Z]{2,10}[A-Z0-9]*\\d[A-Z0-9]*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (codeOnly.test(line) && i + 1 < lines.length && !codeOnly.test(lines[i + 1]) &&
+        !/^(?:core|elective) units?\\b/i.test(lines[i + 1])) {
+      normalizedLines.push(line + " " + lines[++i]);
+    } else normalizedLines.push(line);
+  }
+  lines.splice(0, lines.length, ...normalizedLines);
+  const coreStart = lines.findIndex(line => /^core units?\\s*(?:\\(\\d+\\))?\\s*:?$/i.test(line));
+  const electiveStart = lines.findIndex(line => /^elective units?\\s*(?:\\(\\d+\\))?\\s*:?$/i.test(line));
+  const unitPattern = /^([A-Z]{2,10}[A-Z0-9]*\\d[A-Z0-9]*)\\s+(.+)$/;
   if (!lines.length) throw new ImportError("The government release XML has no packaging rules.");
 
   const core: Unit[] = [];
@@ -252,6 +263,10 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
       if (group && !existing.groups.includes(group)) existing.groups.push(group);
       electives.set(unit[1], existing);
     }
+  }
+
+  if (core.length === 0 && electives.size === 0) {
+    throw new ImportError("The official packaging rules loaded, but no core or elective units could be extracted from the release XML. Import is blocked to prevent an incomplete course.", 422);
   }
 
   const heading = lines.map(line => /^Total number of units\s*[:=]\s*(\d+)\b/i.exec(line)).find(Boolean);

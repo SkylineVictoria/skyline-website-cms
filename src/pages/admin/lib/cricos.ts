@@ -18,8 +18,8 @@ export const CODE_PATTERN = /^[0-9]{6}[A-Z]$/;
 export const LOCATIONS_KEY = "locations";
 
 const foe = (n: 1 | 2): CricosField[] => (["broad", "narrow", "detailed"] as const).flatMap(level => [
-  { key: `cricos_foe${n}_${level}`, label: `Field ${n}: ${level}`, kind: "text" as const, wide: true },
-  { key: `cricos_foe${n}_${level}_code`, label: `Field ${n}: ${level} code`, kind: "text" as const },
+  { key: `cricos_foe${n}_${level}`, label: `${n === 2 ? "Second " + level : level[0].toUpperCase() + level.slice(1)} field`, kind: "text" as const, wide: true },
+  { key: `cricos_foe${n}_${level}_code`, label: `${n === 2 ? "Second " + level : level[0].toUpperCase() + level.slice(1)} field code`, kind: "text" as const },
 ]);
 
 /** The form's sections, in display order. The CRICOS course code itself sits above them. */

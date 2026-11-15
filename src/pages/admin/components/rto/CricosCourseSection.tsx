@@ -121,8 +121,42 @@ export default function CricosCourseSection({ courseId, readOnly = false, onSave
   }
 
   const codeEdited = edited.has(CODE_FIELD.key);
-  if (loading) return <Card className="p-5"><p className="text-sm text-foreground-500">Loading CRICOS details…</p></Card>;
-  if (readOnly && error) return <Card className="p-5"><p className="text-sm text-foreground-500">{error}</p></Card>;
+  if (loading) return <p className="text-sm text-foreground-500">Loading CRICOS details…</p>;
+  if (readOnly) {
+    // Read-only: only filled values; derived Field of Education codes and "No" flags are left out to keep it short.
+    if (error) return <p className="text-sm text-foreground-500">{error}</p>;
+    if (!hasData(record)) return <p className="text-sm text-foreground-500">No CRICOS details yet. Use Edit › Fetch from CRICOS, or Sync.</p>;
+    const shown = (field: CricosField) => {
+      const value = record.fields[field.key];
+      if (value === null || value === "" || /^cricos_foe\d_\w+_code$/.test(field.key)) return false;
+      return !(field.kind === "boolean" && value === false && field.key !== "cricos_has_work_component");
+    };
+    const badge = (key: string) => edited.has(key) ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">edited</span> : null;
+    return <div className="space-y-5 text-sm">
+      <p className="text-xs text-foreground-500">CRICOS {display(CODE_FIELD.key, record.fields.cricos_course_code)}{badge(CODE_FIELD.key)}
+        {record.fetchedAt ? ` · fetched from the register ${when(record.fetchedAt)}` : ""}</p>
+      {CRICOS_SECTIONS.map(section => {
+        const fields = section.fields.filter(shown);
+        if (!fields.length) return null;
+        return <section key={section.title}>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">{section.title}</h4>
+          <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
+            {fields.map(field => <div key={field.key} className={field.wide ? "sm:col-span-2" : ""}>
+              <dt className="text-xs text-foreground-500">{field.label}{badge(field.key)}</dt>
+              <dd className="font-medium text-foreground-950">{display(field.key, record.fields[field.key])}</dd>
+            </div>)}
+          </dl>
+        </section>;
+      })}
+      {record.locations.length ? <section>
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Locations{badge(LOCATIONS_KEY)}</h4>
+        <ul className="space-y-1">{record.locations.map((row, index) => <li key={index}>
+          <span className="font-medium text-foreground-950">{row.location_name}</span>
+          <span className="text-foreground-600"> · {[row.address_line_1, row.address_line_2, row.address_line_3, row.address_line_4, row.city, row.state, row.postcode].filter(Boolean).join(", ")}</span>
+        </li>)}</ul>
+      </section> : null}
+    </div>;
+  }
 
   return <Card className="p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">

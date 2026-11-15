@@ -332,7 +332,7 @@ export function SavedTrainingGovDetails({ courseId, units }: { courseId: string;
   }, [courseId]);
 
   if (!details) return null;
-  return <details className="mt-5 rounded-lg border border-background-200 p-3 text-sm">
+  return <details open className="rounded-lg border border-background-200 p-3 text-sm">
     <summary className="cursor-pointer font-semibold">Training.gov.au release and imported units</summary>
     <dl className="mt-3 grid gap-2 sm:grid-cols-2">
       {Object.entries({

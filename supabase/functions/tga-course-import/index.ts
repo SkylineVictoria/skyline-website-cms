@@ -56,20 +56,29 @@ Deno.serve(async req => {
       return json({ error: "The approved qualification review is required." }, 400);
     }
     stage = "review";
-    const review = await qualificationDetails(input.code.trim().toUpperCase());
+    const db = createClient(url, service, { auth });
+    // The tenant's CRICOS provider code (Settings), else the site-wide one, to look up its CRICOS registration.
+    const { data: settings } = await db.from("cms_settings").select("tenant_id,cricos")
+      .or(scope.tenantId ? `tenant_id.eq.${scope.tenantId},tenant_id.is.null` : "tenant_id.is.null");
+    const rows = (settings ?? []) as { tenant_id: string | null; cricos: string | null }[];
+    const providerCode = (rows.find(row => row.tenant_id === scope.tenantId) ?? rows.find(row => row.tenant_id === null))?.cricos?.trim().toUpperCase() || null;
+    const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode);
     if (input.action === "details") return json(review);
     if (!("revision" in input) || input.revision !== review.revision) {
       return json({ error: "The government release details changed. Reopen the qualification to review them again." }, 409);
     }
     stage = "save";
-    const units = selectedUnits(review, "electives" in input ? input.electives : null, "attested" in input && input.attested);
-    const db = createClient(url, service, { auth });
+    const { units, specialisation } = selectedUnits(review, "electives" in input ? input.electives : null,
+      "attested" in input && input.attested, "specialisation" in input ? input.specialisation : null);
     const { data: courseId, error } = await db.rpc("rto_tga_import_save", {
       p_actor: user.id, p_tenant: scope.tenantId, p_course: {
         code: review.code, name: review.name, aqf: review.aqf, packageName: review.packageName,
         description: review.description, entryRequirements: review.entryRequirements,
         packageCode: review.packageCode, status: review.status, releaseNumber: review.releaseNumber,
         releaseDate: review.releaseDate, packagingRules: review.packagingRules,
+        government: review.government, cricos: review.cricos,
+        specialisationCode: specialisation?.code ?? null, specialisationTitle: specialisation?.title ?? null,
+        coreUnits: units.filter(unit => unit.type === "core").length, electiveUnits: units.filter(unit => unit.type === "elective").length,
       }, p_units: units,
     });
     if (error?.code === "23505") return json({ error: "A course with this qualification code already exists, or its course URL is already in use." }, 409);

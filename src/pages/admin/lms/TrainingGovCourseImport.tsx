@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { RtoUnit } from "@/pages/admin/lib/rto";
 
@@ -14,7 +14,26 @@ interface Unit {
   groups: string[];
   nominalHours: number | null;
   hoursSource: string | null;
+  hasPrerequisites: boolean | null;
+  usageRecommendation: string;
 }
+
+interface Government {
+  anzscoCode: string; anzscoTitle: string; fieldOfEducationCode: string; fieldOfEducation: string; qualificationLevel: string;
+  developer: string; developerUrl: string; usageRecommendation: string;
+  supersedesCode: string; supersedesTitle: string; supersedesEquivalent: boolean | null;
+  occupations: string[]; industrySectors: string[]; foundationSkills: string;
+  documents: { name: string; url: string; type: string }[]; companionUrl: string;
+}
+
+interface Cricos {
+  registered: boolean; providerCode: string; courseCode?: string; courseName?: string; durationWeeks?: number | null;
+  tuitionFee?: number | null; nonTuitionFee?: number | null; totalCost?: number | null; courseLevel?: string;
+  fieldOfEducation?: string; workComponent?: string; language?: string; dualQualification?: boolean; expired?: boolean;
+  locations?: { name: string; city: string; state: string }[];
+}
+
+interface Specialisation { code: string; title: string; core: number; elective: number }
 
 interface Review extends Qualification {
   aqf: string;
@@ -32,8 +51,16 @@ interface Review extends Qualification {
   requiredElectives: number | null;
   canValidate: boolean;
   requiresElectiveAttestation: boolean;
+  government: Government;
+  specialisations: Specialisation[];
+  cricos: Cricos | null;
+  sources: { name: string; ok: boolean; detail: string }[];
   revision: string;
 }
+
+const aud = (value: number | null | undefined) => value === null || value === undefined || Number.isNaN(value) ? ""
+  : value.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+const prereq = (unit: Unit) => unit.hasPrerequisites ? " · Has prerequisites" : "";
 
 const actionClass = "rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50";
 const secondaryClass = "rounded-lg border border-background-300 px-4 py-2.5 text-sm font-semibold disabled:opacity-50";
@@ -57,6 +84,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
   const [review, setReview] = useState<Review | null>(null);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [attested, setAttested] = useState(false);
+  const [specialisation, setSpecialisation] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -82,9 +110,19 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
 
   function open(code: string) {
     void run("Loading qualification details…", async () => {
-      setReview(await request<Review>({ action: "details", code }));
+      const data = await request<Review>({ action: "details", code });
+      // An older import service returns no register data; show empty fields rather than failing.
+      setReview({
+        ...data, specialisations: data.specialisations ?? [], sources: data.sources ?? [], cricos: data.cricos ?? null,
+        government: {
+          anzscoCode: "", anzscoTitle: "", fieldOfEducationCode: "", fieldOfEducation: "", qualificationLevel: "", developer: "",
+          developerUrl: "", usageRecommendation: "", supersedesCode: "", supersedesTitle: "", supersedesEquivalent: null,
+          occupations: [], industrySectors: [], foundationSkills: "", documents: [], companionUrl: "", ...data.government,
+        },
+      });
       setSelectedCodes([]);
       setAttested(false);
+      setSpecialisation("");
     });
   }
 
@@ -94,7 +132,11 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
   const minimum = review?.minimumGroup;
   const groupSelected = minimum ? review.electives.filter(unit =>
     unit.groups.includes(minimum.group) && selectedCodes.includes(unit.code)).length : 0;
-  const canSave = !review ? false : review.canValidate
+  const spec = review?.specialisations.find(item => item.code === specialisation) ?? null;
+  const required = spec ? spec.elective : review?.requiredElectives ?? null;
+  const canSave = !review ? false : review.specialisations.length
+    ? Boolean(spec) && selectedCodes.length === spec?.elective && attested
+    : review.canValidate
     ? selectedCodes.length === review.requiredElectives && (!minimum || groupSelected >= minimum.count) && (!review.requiresElectiveAttestation || attested)
     // Rules not checked automatically: the user confirms them; electives must be chosen when the release lists any.
     : attested && (!review.electives.length || selectedCodes.length > 0);
@@ -103,7 +145,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
     if (!review || !canSave || busy) return;
     void run("Saving course…", async () => {
       const result = await request<{ courseId: string }>({
-        action: "save", code: review.code, revision: review.revision, electives: selectedCodes, attested,
+        action: "save", code: review.code, revision: review.revision, electives: selectedCodes, attested, specialisation: spec?.code ?? null,
       });
       onSaved(result.courseId);
     });
@@ -150,29 +192,38 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         }).filter(([, value]) => value).map(([label, value]) =>
           <div key={label}><dt className="font-semibold">{label}</dt><dd className="whitespace-pre-line text-foreground-700">{value}</dd></div>)}
       </dl>
+      <GovernmentData review={review} />
       <details className="rounded-lg border border-background-200 p-3">
         <summary className="cursor-pointer text-sm font-semibold">Official packaging rules</summary>
         <p className="mt-2 max-h-72 overflow-auto whitespace-pre-line text-sm">{review.packagingRules}</p>
       </details>
+      {review.specialisations.length > 0 && <label className="block text-sm">
+        <span className="font-semibold">Specialisation</span>
+        <select className="mt-1 block w-full rounded-lg border border-background-300 bg-background-50 p-2" value={specialisation} disabled={Boolean(busy)}
+          onChange={event => { setSpecialisation(event.target.value); setAttested(false); }}>
+          <option value="">Choose the specialisation this course delivers…</option>
+          {review.specialisations.map(item => <option key={item.code} value={item.code}>{item.title} · {item.core} core + {item.elective} electives</option>)}
+        </select>
+      </label>}
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-background-200 p-3">
           <h4 className="mb-2 text-sm font-semibold">Core units ({review.core.length})</h4>
           <ul className="space-y-2 text-sm">
-            {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}</span></li>)}
+            {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}{prereq(unit)}</span></li>)}
           </ul>
         </div>
         <fieldset disabled={Boolean(busy)} className="min-w-0 rounded-lg border border-background-200 p-3">
-          <legend className="px-1 text-sm font-semibold">Electives ({selectedCodes.length}{review.requiredElectives !== null ? ` of ${review.requiredElectives}` : ""})</legend>
+          <legend className="px-1 text-sm font-semibold">Electives ({selectedCodes.length}{required !== null ? ` of ${required}` : ""})</legend>
           {minimum && <p className="mb-2 text-sm text-foreground-700">Group {minimum.group} · {groupSelected} selected, {minimum.count} required</p>}
           <div className="max-h-80 space-y-1 overflow-auto">
             {review.electives.map(unit => <label key={unit.code} className="flex gap-2 rounded p-2 text-sm hover:bg-background-100">
               <input type="checkbox" className="mt-1 shrink-0 self-start" checked={selectedCodes.includes(unit.code)}
-                disabled={review.canValidate && review.requiredElectives !== null && !selectedCodes.includes(unit.code) && selectedCodes.length >= review.requiredElectives}
+                disabled={(review.canValidate || Boolean(spec)) && required !== null && !selectedCodes.includes(unit.code) && selectedCodes.length >= required}
                 onChange={event => {
                   setAttested(false);
                   setSelectedCodes(previous => event.target.checked ? [...previous, unit.code] : previous.filter(code => code !== unit.code));
                 }} />
-              <span><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}</span>
+              <span><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}{prereq(unit)}</span>
                 {unit.groups.length > 0 && <span className="mt-0.5 block text-xs text-foreground-600">
                   {unit.groups.map(group => `${group} · ${review.groups[group]}`).join(" / ")}
                 </span>}
@@ -181,14 +232,15 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
           </div>
         </fieldset>
       </div>
-      {review.requiredElectives !== null && <p role="status" className="text-sm font-semibold" aria-live="polite">
-        Electives selected: {selectedCodes.length} / {review.requiredElectives}
-        {selectedCodes.length !== review.requiredElectives && (review.canValidate
-          ? ` — select exactly ${review.requiredElectives} electives to save.`
-          : ` — the first rule lists ${review.requiredElectives}; follow the packaging rules for your specialisation.`)}
+      {review.specialisations.length > 0 && !spec ? <p role="status" className="text-sm font-semibold">Choose the specialisation to see how many electives it needs.</p>
+        : required !== null && <p role="status" className="text-sm font-semibold" aria-live="polite">
+        Electives selected: {selectedCodes.length} / {required}
+        {selectedCodes.length !== required && (review.canValidate || spec
+          ? ` — select exactly ${required} electives to save.`
+          : ` — the first rule lists ${required}; follow the packaging rules that apply.`)}
       </p>}
       <p className="text-sm" role="status">Known nominal hours: <strong>{hoursTotal} hrs</strong> across {knownHours.length} of {chosenUnits.length} selected units{knownHours.length !== chosenUnits.length ? " (partial total; missing hours are not counted)" : ""}. Source: NCVER national reporting dataset; confirm Victorian funded hours separately.</p>
-      {!review.canValidate && <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+      {(!review.canValidate || review.specialisations.length > 0) && <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
         <p role="status">This release’s packaging rules (for example specialisations or group minimums) can’t be checked automatically. Check your elective choice against the packaging rules above, then confirm to save.</p>
         <label className="flex gap-2">
           <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
@@ -208,6 +260,52 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
 }
 
 
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="min-w-0"><dt className="font-semibold">{label}</dt><dd className="break-words text-foreground-700">{children}</dd></div>;
+}
+
+/** Everything the public registers returned, shown before saving so it can be checked. */
+function GovernmentData({ review }: { review: Review }) {
+  const g = review.government;
+  const c = review.cricos;
+  const failed = review.sources.filter(source => !source.ok);
+  return <section className="space-y-3 rounded-lg border border-background-200 p-3 text-sm" aria-label="Government data">
+    <h4 className="font-semibold">Government data to verify</h4>
+    {failed.length > 0 && <p role="status" className="rounded bg-amber-50 p-2 text-amber-900">
+      Not loaded: {failed.map(source => `${source.name}${source.detail ? ` (${source.detail})` : ""}`).join("; ")}</p>}
+    <dl className="grid gap-3 sm:grid-cols-2">
+      <Field label="ANZSCO occupation">{[g.anzscoCode, g.anzscoTitle].filter(Boolean).join(" · ") || "—"}</Field>
+      <Field label="Field of education (ASCED)">{[g.fieldOfEducationCode, g.fieldOfEducation].filter(Boolean).join(" · ") || "—"}</Field>
+      <Field label="Qualification level">{g.qualificationLevel || "—"}</Field>
+      <Field label="Usage recommendation">{g.usageRecommendation || "—"}</Field>
+      <Field label="Training package developer">{g.developer ? g.developerUrl
+        ? <a className="text-primary-700 underline" href={g.developerUrl} target="_blank" rel="noreferrer">{g.developer}</a> : g.developer : "—"}</Field>
+      <Field label="Supersedes">{g.supersedesCode ? `${g.supersedesCode} ${g.supersedesTitle}${g.supersedesEquivalent === null ? "" : g.supersedesEquivalent ? " (equivalent)" : " (not equivalent)"}` : "—"}</Field>
+      <Field label="Occupations">{g.occupations.join(", ") || "—"}</Field>
+      <Field label="Industry sectors">{g.industrySectors.join(", ") || "—"}</Field>
+      <Field label="Specialisations">{review.specialisations.length ? review.specialisations.map(item => item.title).join("; ") : "None"}</Field>
+      <Field label="Documents">{g.documents.length ? g.documents.map((doc, index) => <span key={doc.url}>{index > 0 && " · "}
+        <a className="text-primary-700 underline" href={doc.url} target="_blank" rel="noreferrer">{doc.name}</a></span>) : "—"}
+        {g.companionUrl && <> · <a className="text-primary-700 underline" href={g.companionUrl} target="_blank" rel="noreferrer">Companion volume</a></>}</Field>
+    </dl>
+    <h4 className="pt-1 font-semibold">CRICOS{c?.providerCode ? ` (provider ${c.providerCode})` : ""}</h4>
+    {!c ? <p className="text-foreground-600">The CRICOS register could not be checked.</p>
+      : !c.registered ? <p className="text-foreground-600">This provider has no CRICOS registration for {review.code}, so the CRICOS code stays empty.</p>
+      : <dl className="grid gap-3 sm:grid-cols-2">
+        <Field label="CRICOS course code">{c.courseCode}{c.expired ? " (expired)" : ""}</Field>
+        <Field label="Duration">{c.durationWeeks ? `${c.durationWeeks} weeks` : "—"}</Field>
+        <Field label="Tuition fee">{aud(c.tuitionFee) || "—"}</Field>
+        <Field label="Non-tuition fee">{aud(c.nonTuitionFee) || "—"}</Field>
+        <Field label="Estimated total cost">{aud(c.totalCost) || "—"}</Field>
+        <Field label="Course level">{c.courseLevel || "—"}</Field>
+        <Field label="Field of education">{c.fieldOfEducation || "—"}</Field>
+        <Field label="Work component">{c.workComponent || "—"}</Field>
+        <Field label="Language">{c.language || "—"}{c.dualQualification ? " · Dual qualification" : ""}</Field>
+        <Field label="Locations">{c.locations?.map(item => [item.name, item.city, item.state].filter(Boolean).join(", ")).join("; ") || "—"}</Field>
+      </dl>}
+  </section>;
+}
+
 interface SavedDetails {
   tga_training_package_code: string | null;
   tga_national_status: string | null;
@@ -216,14 +314,25 @@ interface SavedDetails {
   tga_packaging_rules: string | null;
   full_description: string;
   entry_requirements: string;
+  [column: string]: unknown;
 }
+
+const SAVED_COLUMNS = "tga_training_package_code,tga_national_status,tga_release_number,tga_release_date,tga_packaging_rules,full_description,entry_requirements,"
+  + "cricos,duration,career,tga_anzsco_code,tga_anzsco_title,tga_field_of_education_code,tga_field_of_education,tga_qualification_level,tga_developer,"
+  + "tga_usage_recommendation,tga_supersedes_code,tga_supersedes_title,tga_specialisation_title,tga_core_units,tga_elective_units,tga_industry_sectors,"
+  + "tga_imported_at,cricos_provider_code,cricos_registered,cricos_duration_weeks,cricos_tuition_fee,cricos_non_tuition_fee,cricos_total_cost,"
+  + "cricos_course_level,cricos_field_of_education,cricos_work_component,cricos_language,cricos_locations,cricos_checked_at";
+const show = (value: unknown): string => value === null || value === undefined ? ""
+  : Array.isArray(value) ? value.map(item => typeof item === "object" && item ? Object.values(item).filter(Boolean).join(", ") : String(item)).join("; ")
+  : typeof value === "boolean" ? (value ? "Yes" : "No") : String(value);
+const money = (value: unknown) => value === null || value === undefined ? "" : aud(Number(value));
 
 export function SavedTrainingGovDetails({ courseId, units }: { courseId: string; units: RtoUnit[] }) {
   const [details, setDetails] = useState<SavedDetails | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     void supabase.from("cms_courses")
-      .select("tga_training_package_code,tga_national_status,tga_release_number,tga_release_date,tga_packaging_rules,full_description,entry_requirements")
+      .select(SAVED_COLUMNS)
       .eq("id", courseId).not("tga_release_number", "is", null)
       .abortSignal(controller.signal).maybeSingle<SavedDetails>()
       .then(({ data, error }) => {
@@ -239,9 +348,23 @@ export function SavedTrainingGovDetails({ courseId, units }: { courseId: string;
       {Object.entries({
         "Package code": details.tga_training_package_code, "National status": details.tga_national_status,
         "Release": details.tga_release_number, "Release date": details.tga_release_date,
+        "Specialisation": details.tga_specialisation_title,
+        "Units": details.tga_core_units === null || details.tga_core_units === undefined ? "" : `${show(details.tga_core_units)} core + ${show(details.tga_elective_units)} electives`,
+        "ANZSCO": [details.tga_anzsco_code, details.tga_anzsco_title].map(show).filter(Boolean).join(" · "),
+        "Field of education": [details.tga_field_of_education_code, details.tga_field_of_education].map(show).filter(Boolean).join(" · "),
+        "Qualification level": details.tga_qualification_level, "Usage recommendation": details.tga_usage_recommendation,
+        "Developer": details.tga_developer, "Supersedes": [details.tga_supersedes_code, details.tga_supersedes_title].map(show).filter(Boolean).join(" "),
+        "Industry sectors": details.tga_industry_sectors, "Occupations (career)": details.career,
+        "CRICOS provider": details.cricos_provider_code, "CRICOS registered": details.cricos_registered,
+        "CRICOS course code": details.cricos, "Duration": details.duration,
+        "CRICOS tuition fee": money(details.cricos_tuition_fee), "CRICOS non-tuition fee": money(details.cricos_non_tuition_fee),
+        "CRICOS total cost": money(details.cricos_total_cost),
+        "CRICOS course level": details.cricos_course_level, "CRICOS field of education": details.cricos_field_of_education,
+        "Work component": details.cricos_work_component, "Language": details.cricos_language, "CRICOS locations": details.cricos_locations,
+        "Imported": details.tga_imported_at, "CRICOS checked": details.cricos_checked_at,
         "Description": details.full_description, "Entry requirements": details.entry_requirements,
-      }).filter(([, value]) => value).map(([label, value]) =>
-        <div key={label}><dt className="font-semibold">{label}</dt><dd className="whitespace-pre-line">{value}</dd></div>)}
+      }).map(([label, value]) => [label, show(value)] as const).filter(([, value]) => value).map(([label, value]) =>
+        <div key={label}><dt className="font-semibold">{label}</dt><dd className="whitespace-pre-line break-words">{value}</dd></div>)}
     </dl>
     <ul className="my-3 space-y-1">
       {units.map(unit => <li key={unit.id ?? unit.code}>

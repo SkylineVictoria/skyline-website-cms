@@ -178,6 +178,113 @@ async function attachNominalHours<T extends { code: string }>(units: T[]): Promi
     hoursSource: hours.has(unit.code) ? "NCVER nationally agreed nominal hours (2026)" : null }));
 }
 
+// Public, unauthenticated registers. Every source is optional: a failure is reported in `sources` and the import continues.
+const TGA_API = "https://training.gov.au/api/";
+const CRICOS_API = "https://data.gov.au/data/api/3/action/datastore_search";
+const CRICOS_COURSES = "48cacf69-2082-415e-9595-f17d0c3a4af0";
+const CRICOS_COURSE_LOCATIONS = "4cd2de02-8ba3-4eb2-bac2-fe272cae3f5f";
+type Json = Record<string, unknown>;
+const text = (value: unknown) => typeof value === "string" ? normalize(value.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")) : "";
+const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is Json => !!item && typeof item === "object") : [];
+
+async function getJson(url: string): Promise<unknown> {
+  const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(12_000), headers: { Accept: "application/json" } });
+  if (!response.ok) { await discardResponse(response); throw new Error(`HTTP ${response.status}`); }
+  const body = await response.text();
+  if (body.length > 3_000_000) throw new Error("response too large");
+  return JSON.parse(body);
+}
+
+export type Source = { name: string; ok: boolean; detail: string };
+async function attempt<T>(sources: Source[], name: string, run: () => Promise<T>): Promise<T | null> {
+  try { const value = await run(); sources.push({ name, ok: true, detail: "" }); return value; }
+  catch (error) { sources.push({ name, ok: false, detail: error instanceof Error ? error.message.slice(0, 120) : "failed" }); return null; }
+}
+const money = (value: unknown) => {
+  const amount = Number(String(value ?? "").replace(/[$,\s]/g, ""));
+  return String(value ?? "").trim() && Number.isFinite(amount) ? amount : null;
+};
+
+/** training.gov.au public API: classification, mapping, developer, occupations, specialisations, unit grid, documents. */
+async function publicQualification(code: string, releaseNumber: string, sources: Source[]) {
+  const base = `${TGA_API}training/${encodeURIComponent(code)}`;
+  const [summary, classes, release, grid] = await Promise.all([
+    attempt(sources, "Training.gov.au qualification", () => getJson(base)),
+    attempt(sources, "Training.gov.au classification", () => getJson(`${base}/classification`)),
+    attempt(sources, "Training.gov.au release", () => getJson(`${base}/releases/${encodeURIComponent(releaseNumber)}?include=All`)),
+    attempt(sources, "Training.gov.au unit grid", () => getJson(`${base}/releases/${encodeURIComponent(releaseNumber)}/unitgrid`)),
+  ]);
+  const main = (summary ?? {}) as Json;
+  const rel = (release ?? {}) as Json;
+  const scheme = (code: string) => list(classes).find(item => item.schemeCode === code);
+  const anzsco = scheme("01"), field = scheme("04"), level = scheme("05");
+  const mapping = list(main.mappingInformation).find(item => item.code === code && item.mapsToCode);
+  const developer = (main.trainingPackageDeveloper ?? {}) as Json;
+  const taxonomy = (main.taxonomy ?? {}) as Json;
+  const overview = list(rel.links).find(link => link.rel === "content-overview")?.href;
+  const bundle = typeof overview === "string" && overview.startsWith(TGA_API)
+    ? await attempt(sources, "Training.gov.au content", () => getJson(overview)) : null;
+  const items = list((bundle as Json | null)?.items);
+  const item = (title: string) => text(items.find(entry => String(entry.title ?? "").toLowerCase() === title)?.content);
+  return {
+    government: {
+      anzscoCode: String(anzsco?.valueCode ?? ""), anzscoTitle: text(anzsco?.valueDescription ?? anzsco?.value),
+      fieldOfEducationCode: String(field?.valueCode ?? ""), fieldOfEducation: text(field?.valueDescription ?? field?.value),
+      qualificationLevel: text(level?.value),
+      developer: text(developer.name), developerUrl: Array.isArray(developer.webAddresses) ? String(developer.webAddresses[0] ?? "") : "",
+      usageRecommendation: text(main.usageRecommendationLabel ?? main.usageRecommendation),
+      supersedesCode: String(mapping?.mapsToCode ?? ""), supersedesTitle: text(mapping?.mapsToTitle),
+      supersedesEquivalent: typeof mapping?.isEquivalent === "boolean" ? mapping.isEquivalent : null,
+      occupations: list(taxonomy.occupations).map(entry => text(entry.occupation)).filter(Boolean),
+      industrySectors: list(taxonomy.industrySectors).map(entry => text(entry.industrySector)).filter(Boolean),
+      foundationSkills: item("foundation skills outcomes"),
+      documents: list(rel.assets).filter(asset => asset.isAvailable !== false && typeof asset.url === "string")
+        .map(asset => ({ name: String(asset.name ?? ""), url: String(asset.url), type: String(asset.type ?? "") })),
+      companionUrl: String(list(rel.externalLinks)[0]?.url ?? ""),
+    },
+    description: item("qualification description"),
+    specialisations: list(rel.specializations).map(entry => {
+      const packaging = (entry.packagingInformation ?? {}) as Json;
+      return { code: String(entry.code ?? ""), title: text(entry.title), core: Number(packaging.core) || 0, elective: Number(packaging.elective) || 0 };
+    }).filter(entry => entry.code && entry.elective > 0),
+    unitGrid: new Map(list(grid).map(unit => [String(unit.code ?? "").toUpperCase(), {
+      title: text(unit.title), essential: unit.isEssential === true, hasPrerequisites: unit.hasPreRequisites === true,
+      usage: text(unit.usageRecommendationLabel ?? unit.usageRecommendation),
+    }])),
+  };
+}
+
+/** CRICOS register (data.gov.au): this provider's registration of the qualification, with fees, duration and locations. */
+async function cricosCourse(code: string, providerCode: string | null, sources: Source[]) {
+  if (!providerCode || !/^[0-9]{5}[A-Z]$/.test(providerCode)) {
+    sources.push({ name: "CRICOS register", ok: false, detail: "No CRICOS provider code in Settings" });
+    return null;
+  }
+  const search = (resource: string, filters: Json) =>
+    getJson(`${CRICOS_API}?resource_id=${resource}&limit=20&filters=${encodeURIComponent(JSON.stringify(filters))}`)
+      .then(data => list(((data as Json).result as Json | undefined)?.records));
+  const rows = await attempt(sources, "CRICOS register", () => search(CRICOS_COURSES, { "CRICOS Provider Code": providerCode, "VET National Code": code }));
+  if (!rows) return null;
+  const row = rows.find(entry => entry.Expired !== "Yes") ?? rows[0];
+  if (!row) return { registered: false, providerCode };
+  const courseCode = String(row["CRICOS Course Code"] ?? "");
+  const locations = await attempt(sources, "CRICOS locations", () =>
+    search(CRICOS_COURSE_LOCATIONS, { "CRICOS Provider Code": providerCode, "CRICOS Course Code": courseCode }));
+  const work = row["Work Component"] === "Yes"
+    ? [row["Work Component Total Hours"] && `${row["Work Component Total Hours"]} hours`, row["Work Component Weeks"] && `${row["Work Component Weeks"]} weeks`].filter(Boolean).join(", ") || "Yes"
+    : "No";
+  return {
+    registered: true, providerCode, courseCode, courseName: text(row["Course Name"]),
+    durationWeeks: Number.isInteger(Number(row["Duration (Weeks)"])) ? Number(row["Duration (Weeks)"]) : null,
+    tuitionFee: money(row["Tuition Fee"]), nonTuitionFee: money(row["Non Tuition Fee"]), totalCost: money(row["Estimated Total Course Cost"]),
+    courseLevel: text(row["Course Level"]),
+    fieldOfEducation: [row["Field of Education 1 Detailed Field"], row["Field of Education 2 Detailed Field"]].map(text).filter(Boolean).join("; "),
+    workComponent: work, language: text(row["Course Language"]), dualQualification: row["Dual Qualification"] === "Yes",
+    expired: row.Expired === "Yes",
+    locations: (locations ?? []).map(entry => ({ name: text(entry["Location Name"]), city: text(entry["Location City"]), state: text(entry["Location State"]) })),
+  };
+}
+
 type Unit = { code: string; name: string; groups: string[] };
 const parts = (parent: Element | undefined, name: string) => children(parent, name, authorIt);
 const part = (parent: Element | undefined, name: string) => child(parent, name, authorIt);
@@ -274,10 +381,6 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
     }
   }
 
-  if (core.length === 0 && electives.size === 0) {
-    throw new ImportError("The official packaging rules loaded, but no core or elective units could be extracted from the release XML. Import is blocked to prevent an incomplete course.", 422);
-  }
-
   const heading = lines.map(line => /^Total number of units\s*[:=]\s*(\d+)\b/i.exec(line)).find(Boolean);
   const coreCount = lines.map(line => /^(\d+)\s+core units?\b/i.exec(line)).find(Boolean);
   const electiveCount = lines.map(line => /^(\d+)\s+elective(?:s|\s+units?)\b/i.exec(line)).find(Boolean);
@@ -312,7 +415,7 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   };
 }
 
-export async function qualificationDetails(code: string) {
+export async function qualificationDetails(code: string, providerCode: string | null = null) {
   if (!codePattern.test(code)) throw new ImportError("Enter a valid qualification code.", 400);
   const result = await soap("GetDetails", `<Code>${code}</Code><InformationRequest>
 <ShowFiles>true</ShowFiles><ShowReleases>true</ShowReleases><ShowUnitGrid>true</ShowUnitGrid></InformationRequest>`);
@@ -339,30 +442,62 @@ export async function qualificationDetails(code: string) {
     throw new ImportError(`The government qualification XML returned HTTP ${response.status}.`);
   }
   const rules = parseRelease(await readXml(response, "The published Training.gov.au qualification XML"), code, releaseNumber);
-  const [core, electives] = await Promise.all([attachNominalHours(rules.core), attachNominalHours(rules.electives)]);
+  const sources: Source[] = [];
+  const [registry, cricos] = await Promise.all([publicQualification(code, releaseNumber, sources), cricosCourse(code, providerCode, sources)]);
+  const grid = registry.unitGrid;
+  // The public unit grid is authoritative for core/elective when the release XML layout could not be read.
+  const fromGrid = (essential: boolean) => [...grid.entries()].filter(([, unit]) => unit.essential === essential)
+    .map(([unitCode, unit]) => ({ code: unitCode, name: unit.title, groups: [] as string[] }));
+  const coreUnits = rules.core.length ? rules.core : fromGrid(true);
+  const electiveUnits = rules.electives.length ? rules.electives : fromGrid(false);
+  if (!coreUnits.length && !electiveUnits.length) {
+    throw new ImportError("The official packaging rules loaded, but no core or elective units could be extracted from the release. Import is blocked to prevent an incomplete course.", 422);
+  }
+  const withGrid = <T extends { code: string }>(units: T[]) => units.map(unit => ({
+    ...unit, hasPrerequisites: grid.get(unit.code)?.hasPrerequisites ?? null, usageRecommendation: grid.get(unit.code)?.usage ?? "",
+  }));
+  const [core, electives] = await Promise.all([attachNominalHours(withGrid(coreUnits)), attachNominalHours(withGrid(electiveUnits))]);
   const review = {
     ...rules, core, electives,
+    description: rules.description || registry.description,
+    // A fallback unit list from the grid has no packaging text to check, so it always needs manual confirmation.
+    canValidate: rules.canValidate && coreUnits === rules.core,
+    government: registry.government, specialisations: registry.specialisations, cricos,
     code, name, packageCode, packageName: field(result, "ParentTitle"),
     status: field(result, "CurrencyStatus"), releaseNumber, releaseDate: field(release, "ReleaseDate"),
   };
+  // Source diagnostics vary between calls, so they are not part of the revision the save is checked against.
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(review)));
   const revision = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
-  return { ...review, revision };
+  return { ...review, sources: sources.sort((a, b) => a.name.localeCompare(b.name)), revision };
 }
 
-export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDetails>>, codes: unknown, attested: unknown) {
+export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDetails>>, codes: unknown, attested: unknown, specialisation: unknown = null) {
   if (!Array.isArray(codes) || new Set(codes).size !== codes.length) throw new ImportError("Select distinct electives.", 422);
   const electives = review.electives.filter(unit => codes.includes(unit.code));
   if (electives.length !== codes.length) throw new ImportError("Select electives listed in this qualification release.", 422);
+  const spec = review.specialisations.find(item => item.code === specialisation) ?? null;
+  if (specialisation && !spec) throw new ImportError("Choose a specialisation listed for this release.", 422);
+  if (review.specialisations.length && !spec) throw new ImportError("Choose the specialisation this course delivers.", 422);
+  const units = () => ({
+    specialisation: spec,
+    units: [
+      ...review.core.map(unit => ({ ...row(unit), type: "core" })),
+      ...electives.map(unit => ({ ...row(unit), type: "elective" })),
+    ],
+  });
+  if (spec) {
+    // Training.gov.au publishes the core and elective counts of each specialisation; group rules are confirmed by the user.
+    if (codes.length !== spec.elective) throw new ImportError(`${spec.title} needs ${spec.elective} electives.`, 422);
+    if (spec.core && review.core.length !== spec.core) throw new ImportError(`${spec.title} needs ${spec.core} core units; the release lists ${review.core.length}.`, 422);
+    if (attested !== true) throw new ImportError("Confirm the selected units meet the official packaging rules.", 422);
+    return units();
+  }
   if (!review.canValidate) {
-    // Rules the importer cannot check (e.g. specialisations with their own group minimums): the RTO Manager reviews them
-    // against the official packaging rules and confirms before the draft course is saved.
+    // Rules the importer cannot check: the RTO Manager reviews them against the official packaging rules and confirms.
     if (review.electives.length && !codes.length) throw new ImportError("Select the electives for this course.", 422);
     if (attested !== true) throw new ImportError("Confirm the selected units meet the official packaging rules.", 422);
-    return [
-      ...review.core.map(unit => ({ code: unit.code, name: unit.name, type: "core", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
-      ...electives.map(unit => ({ code: unit.code, name: unit.name, type: "elective", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
-    ];
+    return units();
   }
   if (codes.length !== review.requiredElectives) throw new ImportError(`Select ${review.requiredElectives} distinct electives.`, 422);
   const minimum = review.minimumGroup;
@@ -372,8 +507,11 @@ export function selectedUnits(review: Awaited<ReturnType<typeof qualificationDet
   if (review.requiresElectiveAttestation && attested !== true) {
     throw new ImportError("Confirm the selected electives meet the qualification's relevance requirements.", 422);
   }
-  return [
-    ...review.core.map(unit => ({ code: unit.code, name: unit.name, type: "core", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
-    ...electives.map(unit => ({ code: unit.code, name: unit.name, type: "elective", nominalHours: unit.nominalHours, hoursSource: unit.hoursSource })),
-  ];
+  return units();
 }
+
+type ReviewUnit = Awaited<ReturnType<typeof qualificationDetails>>["core"][number];
+const row = (unit: ReviewUnit) => ({
+  code: unit.code, name: unit.name, nominalHours: unit.nominalHours, hoursSource: unit.hoursSource,
+  hasPrerequisites: unit.hasPrerequisites, usageRecommendation: unit.usageRecommendation, groups: unit.groups.join(", "),
+});

@@ -339,8 +339,9 @@ export async function qualificationDetails(code: string) {
     throw new ImportError(`The government qualification XML returned HTTP ${response.status}.`);
   }
   const rules = parseRelease(await readXml(response, "The published Training.gov.au qualification XML"), code, releaseNumber);
+  const [core, electives] = await Promise.all([attachNominalHours(rules.core), attachNominalHours(rules.electives)]);
   const review = {
-    ...rules,
+    ...rules, core, electives,
     code, name, packageCode, packageName: field(result, "ParentTitle"),
     status: field(result, "CurrencyStatus"), releaseNumber, releaseDate: field(release, "ReleaseDate"),
   };

@@ -55,3 +55,27 @@ Deno.test("SOAP search decodes UTF-8 and UTF-16 and diagnoses broken streams", a
     }
   }
 });
+
+Deno.test("packaging rules: varied headings, unlabelled groups and prerequisite markers", async () => {
+  const { parseQualificationRelease } = await import("./tga.ts");
+  const assert = (ok: boolean, message: string) => { if (!ok) throw new Error(message); };
+  const xml = (code: string, cells: string[]) => `<?xml version="1.0"?><AuthorIT xmlns="http://www.authorit.com/xml/authorit"><Objects>
+<Book><VariableAssignments><VariableAssignment><Name>Code</Name><Value>${code}</Value></VariableAssignment>
+<VariableAssignment><Name>ReleaseNumber</Name><Value>1</Value></VariableAssignment></VariableAssignments></Book>
+<Topic><Headings><PrintHeading>Packaging Rules</PrintHeading></Headings><Text>${cells.map(cell => `<p>${cell}</p>`).join("")}</Text></Topic>
+</Objects></AuthorIT>`;
+  // RII30926 layout: "Core units of competency", "Electives", "Group A Title" without a dash, "*" in its own cell.
+  const rii = parseQualificationRelease(xml("RII30926", ["Total number of units = 4", "2 core units", "2 elective units",
+    "Core units of competency", "Unit code", "Unit title", "RIIBEF201", "Plan and organise work", "RIIWHS201E Work safely",
+    "Electives", "Group A Asphalt Surfacing", "RIICBS202E Hand spread asphalt", "Group YA General – Asphalt",
+    "RIICBM302E", "*", "Install pre-cast girders"]), "RII30926", "1");
+  assert(rii.core.map(unit => unit.code).join() === "RIIBEF201,RIIWHS201E", "core " + JSON.stringify(rii.core));
+  assert(rii.electives.length === 2 && rii.electives[1].name === "Install pre-cast girders" && rii.electives[1].groups[0] === "YA",
+    "electives " + JSON.stringify(rii.electives));
+  // CPC30220 layout: "Core Units", no electives heading (the first group starts them), "7 electives".
+  const cpc = parseQualificationRelease(xml("CPC30220", ["3 units of competency:", "1 core units", "2 electives",
+    "Core Units", "CPCCCA2002 Use carpentry tools", "Group A - Specialist Electives", "CPCCCA3009 Construct advanced roofs",
+    "Group B - General Electives", "CPCCCA3012 Frame and fit wet area fixtures"]), "CPC30220", "1");
+  assert(cpc.core.length === 1 && cpc.electives.length === 2 && cpc.requiredElectives === 2, "cpc " + JSON.stringify(cpc));
+  assert(cpc.electives[0].groups[0] === "A" && cpc.electives[1].groups[0] === "B", "cpc groups " + JSON.stringify(cpc.groups));
+});

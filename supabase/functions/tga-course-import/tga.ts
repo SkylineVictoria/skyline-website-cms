@@ -220,18 +220,26 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   collectLines(packaging);
   // Reassemble code/title cells split by Author-it table markup.
   const normalizedLines: string[] = [];
-  const codeOnly = /^[A-Z]{2,10}[A-Z0-9]*\\d[A-Z0-9]*$/;
+  const codeOnly = /^[A-Z]{2,10}[A-Z0-9]*\d[A-Z0-9]*$/;
+  // A "*" after the code marks a unit with prerequisites; it can be its own cell between the code and the title.
+  const unmark = (line: string) => line.replace(/\s*\*+$/, "");
+  const cells = lines.filter(line => !/^\*+$/.test(line));
+  lines.splice(0, lines.length, ...cells);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (codeOnly.test(line) && i + 1 < lines.length && !codeOnly.test(lines[i + 1]) &&
-        !/^(?:core|elective) units?\\b/i.test(lines[i + 1])) {
+    const line = unmark(lines[i]);
+    if (codeOnly.test(line) && i + 1 < lines.length && !codeOnly.test(unmark(lines[i + 1])) &&
+        !/^(?:core|elective) units?\b|^electives?\b|^group\s/i.test(lines[i + 1])) {
       normalizedLines.push(line + " " + lines[++i]);
     } else normalizedLines.push(line);
   }
   lines.splice(0, lines.length, ...normalizedLines);
-  const coreStart = lines.findIndex(line => /^core units?\\s*(?:\\(\\d+\\))?\\s*:?$/i.test(line));
-  const electiveStart = lines.findIndex(line => /^elective units?\\s*(?:\\(\\d+\\))?\\s*:?$/i.test(line));
-  const unitPattern = /^([A-Z]{2,10}[A-Z0-9]*\\d[A-Z0-9]*)\\s+(.+)$/;
+  // Headings vary by release: "Core units", "Core units (8):", "Core units of competency"; "Elective units", "Electives".
+  const coreStart = lines.findIndex(line => /^core units?(?: of competency)?\s*(?:\(\d+\))?\s*:?$/i.test(line));
+  const electiveHeading = lines.findIndex(line => /^(?:elective units?(?: of competency)?|electives)\s*(?:\(\d+\))?\s*:?$/i.test(line));
+  // Some releases have no electives heading: the first "Group A …" heading after the core list starts the electives.
+  const electiveStart = electiveHeading >= 0 || coreStart < 0 ? electiveHeading
+    : lines.findIndex((line, index) => index > coreStart && /^Group [A-Z]{1,2}(?:\s*[-–—:]\s*|\s+)\S/.test(line));
+  const unitPattern = /^([A-Z]{2,10}[A-Z0-9]*\d[A-Z0-9]*)\s+(.+)$/;
   if (!lines.length) throw new ImportError("The government release XML has no packaging rules.");
 
   const core: Unit[] = [];
@@ -240,11 +248,12 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   let group = "";
   let complete = coreStart >= 0 && electiveStart > coreStart;
   for (const [index, line] of lines.entries()) {
-    if (index <= coreStart || index === electiveStart || index < coreStart) continue;
+    if (index <= coreStart || index === electiveHeading || index < coreStart) continue;
     // Specialisations and following prose are not part of the unit grid.
     if (index > electiveStart && /^(?:Specialisations|Qualification Mapping|Links|Companion Volumes)$/i.test(line)) break;
-    const heading = /^Group ([A-Z])\s*[-–—:]\s*(.+)$/i.exec(line);
-    if (index > electiveStart && heading) {
+    // "Group A – Title", "Group A: Title" or "Group A Asphalt Surfacing"; specialisation groups can be two letters (YA–YK).
+    const heading = /^Group ([A-Z]{1,2})(?:\s*[-–—:]\s*|\s+)(.+)$/.exec(line);
+    if (index >= electiveStart && heading) {
       group = heading[1].toUpperCase();
       groups[group] = heading[2];
       continue;
@@ -271,7 +280,7 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
 
   const heading = lines.map(line => /^Total number of units\s*[:=]\s*(\d+)\b/i.exec(line)).find(Boolean);
   const coreCount = lines.map(line => /^(\d+)\s+core units?\b/i.exec(line)).find(Boolean);
-  const electiveCount = lines.map(line => /^(\d+)\s+elective units?\b/i.exec(line)).find(Boolean);
+  const electiveCount = lines.map(line => /^(\d+)\s+elective(?:s|\s+units?)\b/i.exec(line)).find(Boolean);
   const total = Number(heading?.[1]);
   const requiredElectives = Number(electiveCount?.[1]);
   const validCounts = total === Number(coreCount?.[1]) + requiredElectives && core.length === Number(coreCount?.[1])

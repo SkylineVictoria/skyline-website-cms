@@ -701,3 +701,8 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 - New columns: `cms_courses.tga_*` (ANZSCO, ASCED field, level, developer, usage, supersedes, specialisation, core/elective counts, occupations, sectors, foundation skills, documents, companion URL, imported_at) and `cricos_*` (provider, registered, duration weeks, tuition / non-tuition / total cost, level, field, work component, language, dual, locations, checked_at); `cms_course_units.has_prerequisites`, `elective_groups`, `usage_recommendation`. `cricos`, `duration` and `career` are filled on import.
 - Specialisations (e.g. RII30926): the user picks one; the save needs exactly its elective count from training.gov.au plus a confirmation of the group rules.
 - Edge Function `tga-course-import` v12 (2026-11-15) DEPLOYED with these changes (verify_jwt on).
+
+## NCVER nominal hours table (TGA-HOURS 2026-11-15; migration 20261115110000 APPLIED hosted)
+- `public.tga_nominal_hours` (unit_code, hours; service role only) holds the NCVER nationally agreed hours; loaded 2026-11-15 with 66,539 units. Ambiguous codes are left out.
+- `tga-course-import` v13 reads hours from this table and downloads the NCVER file only when the table has none (the Edge runtime usually cannot fetch it in time).
+- Refresh (about yearly), in the SQL editor: `select net.http_get('https://www.ncver.edu.au/sites/default/files/ncver-documents/Nationally-agreed-hours.txt', timeout_milliseconds => 60000);` then `select public.tga_nominal_hours_load(<id>);`. Loading also fills empty hours on units of already imported courses; hours entered by hand are never replaced.

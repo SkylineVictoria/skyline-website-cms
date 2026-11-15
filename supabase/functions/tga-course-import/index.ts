@@ -62,7 +62,12 @@ Deno.serve(async req => {
       .or(scope.tenantId ? `tenant_id.eq.${scope.tenantId},tenant_id.is.null` : "tenant_id.is.null");
     const rows = (settings ?? []) as { tenant_id: string | null; cricos: string | null }[];
     const providerCode = (rows.find(row => row.tenant_id === scope.tenantId) ?? rows.find(row => row.tenant_id === null))?.cricos?.trim().toUpperCase() || null;
-    const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode);
+    const hoursLookup = async (codes: string[]) => {
+      const { data, error } = await db.from("tga_nominal_hours").select("unit_code,hours").in("unit_code", [...new Set(codes)]);
+      if (error) throw error;
+      return new Map((data ?? []).map(row => [row.unit_code as string, row.hours as number]));
+    };
+    const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup);
     if (input.action === "details") return json(review);
     if (!("revision" in input) || input.revision !== review.revision) {
       return json({ error: "The government release details changed. Reopen the qualification to review them again." }, 409);

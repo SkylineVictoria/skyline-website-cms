@@ -171,9 +171,13 @@ async function nationallyAgreedHours(): Promise<Map<string, number>> {
   hoursCache = { expires: Date.now() + 86400000, values };
   return values;
 }
-async function attachNominalHours<T extends { code: string }>(units: T[]): Promise<(T & { nominalHours: number | null; hoursSource: string | null })[]> {
-  let hours: Map<string, number>;
-  try { hours = await nationallyAgreedHours(); } catch { hours = new Map(); }
+/** Hours by unit code from the database copy of the NCVER file (public.tga_nominal_hours). */
+export type HoursLookup = (codes: string[]) => Promise<Map<string, number>>;
+async function attachNominalHours<T extends { code: string }>(units: T[], lookup: HoursLookup | null): Promise<(T & { nominalHours: number | null; hoursSource: string | null })[]> {
+  let hours = new Map<string, number>();
+  // The Edge runtime often cannot download the NCVER file in time; the database copy is the primary source.
+  if (lookup && units.length) { try { hours = await lookup(units.map(unit => unit.code)); } catch { /* Fall back to the file. */ } }
+  if (!hours.size) { try { hours = await nationallyAgreedHours(); } catch { hours = new Map(); } }
   return units.map(unit => ({ ...unit, nominalHours: hours.get(unit.code) ?? null,
     hoursSource: hours.has(unit.code) ? "NCVER nationally agreed nominal hours (2026)" : null }));
 }
@@ -415,7 +419,7 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   };
 }
 
-export async function qualificationDetails(code: string, providerCode: string | null = null) {
+export async function qualificationDetails(code: string, providerCode: string | null = null, hoursLookup: HoursLookup | null = null) {
   if (!codePattern.test(code)) throw new ImportError("Enter a valid qualification code.", 400);
   const result = await soap("GetDetails", `<Code>${code}</Code><InformationRequest>
 <ShowFiles>true</ShowFiles><ShowReleases>true</ShowReleases><ShowUnitGrid>true</ShowUnitGrid></InformationRequest>`);
@@ -456,7 +460,7 @@ export async function qualificationDetails(code: string, providerCode: string | 
   const withGrid = <T extends { code: string }>(units: T[]) => units.map(unit => ({
     ...unit, hasPrerequisites: grid.get(unit.code)?.hasPrerequisites ?? null, usageRecommendation: grid.get(unit.code)?.usage ?? "",
   }));
-  const [core, electives] = await Promise.all([attachNominalHours(withGrid(coreUnits)), attachNominalHours(withGrid(electiveUnits))]);
+  const [core, electives] = await Promise.all([attachNominalHours(withGrid(coreUnits), hoursLookup), attachNominalHours(withGrid(electiveUnits), hoursLookup)]);
   const review = {
     ...rules, core, electives,
     description: rules.description || registry.description,

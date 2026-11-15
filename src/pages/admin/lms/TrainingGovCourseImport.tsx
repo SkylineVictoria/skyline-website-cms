@@ -154,13 +154,13 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
             {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name}</li>)}
           </ul>
         </div>
-        <fieldset disabled={Boolean(busy) || !review.canValidate} className="min-w-0 rounded-lg border border-background-200 p-3">
+        <fieldset disabled={Boolean(busy)} className="min-w-0 rounded-lg border border-background-200 p-3">
           <legend className="px-1 text-sm font-semibold">Electives ({selectedCodes.length}{review.requiredElectives !== null ? ` of ${review.requiredElectives}` : ""})</legend>
           {minimum && <p className="mb-2 text-sm text-foreground-700">Group {minimum.group} · {groupSelected} selected, {minimum.count} required</p>}
           <div className="max-h-80 space-y-1 overflow-auto">
             {review.electives.map(unit => <label key={unit.code} className="flex gap-2 rounded p-2 text-sm hover:bg-background-100">
               <input type="checkbox" className="mt-1 shrink-0 self-start" checked={selectedCodes.includes(unit.code)}
-                disabled={!selectedCodes.includes(unit.code) && selectedCodes.length === review.requiredElectives}
+                disabled={review.canValidate && review.requiredElectives !== null && !selectedCodes.includes(unit.code) && selectedCodes.length >= review.requiredElectives}
                 onChange={event => {
                   setAttested(false);
                   setSelectedCodes(previous => event.target.checked ? [...previous, unit.code] : previous.filter(code => code !== unit.code));
@@ -175,7 +175,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         </fieldset>
       </div>
       {!review.canValidate && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-        This release's packaging rules could not be validated automatically. Review the official rules above.
+        You can select electives for review, but this release’s packaging rules could not be validated automatically. Saving is unavailable until the official rules are supported; review the rules above.
       </p>}
       {review.canValidate && review.requiresElectiveAttestation && <label className="flex gap-2 text-sm">
         <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />

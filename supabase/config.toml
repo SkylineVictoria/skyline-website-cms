@@ -88,3 +88,6 @@ verify_jwt = true
 # The "Activate access" link from an invitation email: the one-time token in the request body is the credential (checked by
 # portal_invitation_link_confirm); it answers with a password-setup link for that invitation's email only.
 verify_jwt = false
+
+[functions.tga-course-import]
+verify_jwt = true

@@ -197,7 +197,9 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   let group = "";
   let complete = coreStart >= 0 && electiveStart > coreStart;
   for (const [index, line] of lines.entries()) {
-    if (index <= coreStart || index === electiveStart) continue;
+    if (index <= coreStart || index === electiveStart || index < coreStart) continue;
+    // Specialisations and following prose are not part of the unit grid.
+    if (index > electiveStart && /^(?:Specialisations|Qualification Mapping|Links|Companion Volumes)$/i.test(line)) break;
     const heading = /^Group ([A-Z])\s*[-–—:]\s*(.+)$/i.exec(line);
     if (index > electiveStart && heading) {
       group = heading[1].toUpperCase();
@@ -205,7 +207,11 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
       continue;
     }
     const unit = unitPattern.exec(line);
-    if (!unit) { complete = false; continue; }
+    if (!unit) {
+      // Formatting, headings and prose in the official release are not units.
+      // Do not treat these as corrupt unit records.
+      continue;
+    }
     if (index < electiveStart) {
       core.push({ code: unit[1], name: unit[2], groups: [] });
     } else {
@@ -226,13 +232,13 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
     && electives.size >= requiredElectives;
   let minimumGroup: { group: string; count: number } | null = null;
   // Only enable saving for prose formats whose constraints are fully understood.
-  const plain = coreStart === 3 && !Object.keys(groups).length && !lines[2]?.includes(",");
-  const grouped = /^(\d+) elective units must be selected from Group ([A-Z])$/.exec(lines[3] ?? "");
-  const remaining = /^(?:for the remaining )(\d+) elective units:$/.exec(lines[4] ?? "");
-  const range = /^up to (\d+) units may be selected from Groups ([A-Z]) [–-] ([A-Z])$/.exec(lines[5] ?? "");
-  const outsideRule = /^if not listed, up to \d+ units may be selected from a Certificate IV, Diploma or Advanced Diploma from this or any other currently endorsed Training Package qualification or accredited course\.$/.test(lines[6] ?? "");
-  const relevanceRule = /^Elective units must be relevant to the work environment and the qualification, maintain the integrity of the AQF alignment and contribute to a valid, industry-supported vocational outcome\.$/.test(lines[7] ?? "");
-  if (grouped && remaining && range && outsideRule && relevanceRule && lines[8] === "Specialisations" &&
+  const plain = coreStart >= 0 && !Object.keys(groups).length && !lines.some(line => /\b(?:must be selected from|up to \d+ units|at least \d+ units|specialisation)\b/i.test(line));
+  const grouped = /^(\d+) elective units must be selected from Group ([A-Z])$/i.exec(lines.find(line => /elective units must be selected from Group/i.test(line)) ?? "");
+  const remaining = /^(?:for the remaining )(\d+) elective units:?$/i.exec(lines.find(line => /for the remaining \d+ elective units/i.test(line)) ?? "");
+  const range = /^up to (\d+) units may be selected from Groups ([A-Z]) [–-] ([A-Z])$/i.exec(lines.find(line => /units may be selected from Groups/i.test(line)) ?? "");
+  const outsideRule = lines.some(line => /^if not listed, up to \d+ units may be selected from a Certificate IV, Diploma or Advanced Diploma from this or any other currently endorsed Training Package qualification or accredited course\.$/i.test(line));
+  const relevanceRule = lines.some(line => /^Elective units must be relevant to the work environment and the qualification, maintain the integrity of the AQF alignment and contribute to a valid, industry-supported vocational outcome\.$/i.test(line));
+  if (grouped && remaining && range && outsideRule && relevanceRule &&
       Number(grouped[1]) + Number(remaining[1]) === requiredElectives && Number(range[1]) === Number(remaining[1]) &&
       Object.hasOwn(groups, grouped[2]) && Object.keys(groups).every(key => range[2] <= key && key <= range[3]) &&
       [...electives.values()].every(unit => unit.groups.length > 0)) {

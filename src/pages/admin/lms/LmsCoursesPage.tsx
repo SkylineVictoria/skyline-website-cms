@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
-import { supabase } from "@/pages/admin/lib/supabase";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 
 type Tab = "overview";
@@ -18,11 +17,8 @@ export default function LmsCoursesPage() {
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState("");
   const searchQualifications = async () => {
-    if (!qualificationQuery.trim()) return;
-    setSearchBusy(true); setSearchError(""); setQualification(null);
-    const {data,error} = await supabase.rpc("search_australian_course_catalogue", {p_query:qualificationQuery.trim(),p_limit:20});
-    if (error) setSearchError(error.message);
-    else setCatalogueResults((data ?? []) as CatalogueRow[]);
+    setSearchBusy(true); setQualification(null); setCatalogueResults([]);
+    setSearchError("Live Training.gov.au qualification lookup is not connected. No SLIT catalogue fallback is permitted. Open the official government qualification page to verify this code.");
     setSearchBusy(false);
   };
   const [selectedId, setSelectedId] = useState("");
@@ -106,12 +102,12 @@ export default function LmsCoursesPage() {
       </label></div>
     </header>
     {addingCourse ? <section className={card + " p-5 space-y-4"} aria-label="Import government qualification">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-heading text-xl font-bold">Import government qualification</h2><p className="text-sm text-foreground-600">Search the existing Training.gov.au catalogue by qualification code or name.</p></div><button type="button" className="rounded-lg border px-3 py-2" onClick={()=>setAddingCourse(false)}>Close</button></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-heading text-xl font-bold">Import government qualification</h2><p className="text-sm text-foreground-600">Search the official Training.gov.au service. Local catalogue results are disabled.</p></div><button type="button" className="rounded-lg border px-3 py-2" onClick={()=>setAddingCourse(false)}>Close</button></div>
       <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();void searchQualifications();}}>
         <input aria-label="Qualification code or name" autoFocus className="min-w-[220px] flex-1 rounded-lg border border-background-300 p-3" value={qualificationQuery} onChange={e=>setQualificationQuery(e.target.value)} placeholder="e.g. BSB50120 or Diploma of Business" />
         <button disabled={searchBusy || !qualificationQuery.trim()} type="submit" className="rounded-lg bg-primary-600 px-5 py-2 text-white disabled:opacity-50">{searchBusy?"Searching…":"Search"}</button>
       </form>
-      {searchError ? <p role="alert" className="text-sm text-red-700">{searchError}</p> : null}
+      {searchError ? <div role="alert" className="space-y-2 text-sm text-amber-800"><p>{searchError}</p>{/^[A-Za-z0-9]{5,15}$/.test(qualificationQuery.trim()) ? <a className="underline" target="_blank" rel="noreferrer" href={"https://training.gov.au/training/details/"+encodeURIComponent(qualificationQuery.trim())}>Open qualification on Training.gov.au</a> : null}</div> : null}
       {!qualification ? <div className="max-h-72 space-y-2 overflow-auto">{catalogueResults.map(item=><button type="button" key={item.course_code} onClick={()=>setQualification(item)} className="block w-full rounded-lg border border-background-200 p-3 text-left hover:border-primary-500"><strong>{item.course_code}</strong> — {item.course_name}<span className="ml-2 text-xs text-foreground-500">{item.national_status}</span></button>)}{!searchBusy && qualificationQuery && catalogueResults.length===0 && !searchError ? <p className="text-sm text-foreground-500">Search for a qualification to see matching results.</p>:null}</div> :
       <div className="space-y-3 rounded-xl border border-background-200 p-4">
         <h3 className="font-heading text-lg font-bold">{qualification.course_code} — {qualification.course_name}</h3>

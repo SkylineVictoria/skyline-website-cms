@@ -26,6 +26,7 @@ export default function LmsCoursesPage() {
   const [canEdit, setCanEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const load = useCallback(async (courseId?: string) => {
     setLoading(true);
@@ -129,7 +130,7 @@ export default function LmsCoursesPage() {
         <p className="my-4 text-sm font-semibold text-foreground-700">{visible.length} course{visible.length === 1 ? "" : "s"}</p>
         <div className="max-h-[690px] space-y-2 overflow-auto">
           {loading ? <p className="p-3 text-sm text-foreground-500">Loading courses…</p> : visible.length === 0 ? <p className="p-3 text-sm text-foreground-500">No matching courses.</p> : visible.map(c =>
-            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setSavedAt(""); }}
+            <button key={c.id} type="button" aria-pressed={selectedId === c.id} onClick={() => { setSelectedId(c.id); setTab("overview"); setSavedAt(""); setEditing(false); }}
               className={"flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors hover:border-primary-500 " + (selectedId === c.id ? "border-primary-400 bg-primary-50" : "border-background-200 bg-background-50")}>
               <span className="rounded-lg bg-background-100 p-2">{icon("ri-graduation-cap-line")}</span>
               <span className="min-w-0 flex-1"><span className="block font-semibold text-foreground-950">{c.code}</span>
@@ -155,6 +156,9 @@ export default function LmsCoursesPage() {
                   <option value="active">Active</option><option value="inactive">Inactive</option>
                 </select>
               </label>
+              <button type="button" onClick={() => setEditing(v => !v)} disabled={!detail} aria-expanded={editing}
+                className={"flex items-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-800 hover:bg-background-100")}>
+                <i className={editing ? "ri-close-line" : "ri-edit-line"} aria-hidden="true" />{editing ? "Close edit" : "Edit"}</button>
               <button type="button" onClick={() => void remove()} disabled={saving}
                 className="flex items-center gap-1 rounded-xl border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
                 <i className="ri-delete-bin-line" aria-hidden="true" />Delete</button>
@@ -173,6 +177,7 @@ export default function LmsCoursesPage() {
             </div>)}
           </div>
           <div className="mt-3 text-right text-xs text-foreground-500" role="status">{saving ? "Saving changes…" : savedAt ? "Saved " + savedAt : canEdit ? "Changes autosave" : "Read only"}</div>
+          {editing && canEdit && detail ? <div className="mt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
           {detailError ? <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{detailError}</div> : null}
           <div role="tablist" aria-label="Course sections" className="mt-7 flex flex-wrap gap-6 border-b border-background-200">
             {([{ id: "overview", label: "Overview", glyph: "ri-information-line" }] as const).map(t =>
@@ -181,7 +186,6 @@ export default function LmsCoursesPage() {
                 <i className={t.glyph} aria-hidden="true" />{t.label}</button>)}
           </div>
           {tab === "overview" && detail && <SavedTrainingGovDetails key={selectedId} courseId={selectedId} units={detail.units} />}
-          {tab === "overview" && canEdit && detail ? <div role="tabpanel" className="pt-5"><CourseFacts key={selectedId} course={detail.course} readOnly={false} busy={saving} autosave onSave={data => void save("course_save", data)} /></div> : null}
           {tab === "overview" && !canEdit ? <div role="tabpanel" className="grid gap-4 pt-5 sm:grid-cols-2">
             {[["Course code", selected.code], ["Course name", selected.name], ["CRICOS", selected.cricos || "—"], ["Duration", selected.duration || "—"], ["Delivery mode", selected.mode || "—"], ["Campus", selected.campus || "—"], ["Training package", selected.trainingPackage || "—"], ["Category", selected.category || "—"]].map(([label, value]) =>
               <div key={label} className="rounded-xl bg-background-100 p-4"><p className="text-xs text-foreground-500">{label}</p><p className="mt-1 font-semibold">{value}</p></div>)}

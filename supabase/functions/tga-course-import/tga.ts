@@ -35,15 +35,22 @@ async function readXml(response: Response, source: string) {
   if (!reader) throw new ImportError(`${source} returned an empty response.`);
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let size = 0;
-  let value = "";
+  const chunks: Uint8Array[] = [];
   try {
     for (;;) {
       const { value: bytes, done } = await reader.read();
-      if (done) return parseXml(value + decoder.decode()) ?? undefined;
+      if (done) break;
       size += bytes.byteLength;
       if (size > 5_000_000) throw new ImportError("The government XML response exceeded the import size limit.");
-      value += decoder.decode(bytes, { stream: true });
+      chunks.push(bytes);
     }
+    const data = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return parseXml(decoder.decode(data)) ?? undefined;
   } catch (error) {
     if (error instanceof ImportError) throw error;
     throw new ImportError(`${source} returned a response that could not be read.`);

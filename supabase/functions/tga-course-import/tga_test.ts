@@ -11,6 +11,24 @@ Deno.test("SOAP search decodes UTF-8 and UTF-16 and diagnoses broken streams", a
   try {
     globalThis.fetch = async () => new Response(payload);
     assert((await searchQualifications("BSB50120")).length === 0);
+    // Reproduce a runtime that transfers the previous chunk on the next read.
+    const bytes = new TextEncoder().encode(payload);
+    let reads = 0;
+    globalThis.fetch = async (_url, init) => {
+      assert(new Headers(init?.headers).get("Accept-Encoding") === "identity");
+      return {
+        ok: true, status: 200, headers: new Headers(),
+        body: { getReader: () => ({
+          read: async () => {
+            if (reads++ === 0) return { done: false, value: bytes };
+            structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
+            return { done: true };
+          },
+          cancel: async () => {},
+        }) },
+      } as unknown as Response;
+    };
+    assert((await searchQualifications("BSB50120")).length === 0);
     for (const bigEndian of [false, true]) {
       for (const bom of [false, true]) {
         const data = new Uint8Array(payload.length * 2 + (bom ? 2 : 0));

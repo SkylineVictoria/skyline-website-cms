@@ -42,8 +42,10 @@ async function readXml(response: Response, source: string) {
       if (done) break;
       size += bytes.byteLength;
       if (size > 5_000_000) throw new ImportError("The government XML response exceeded the import size limit.");
-      chunks.push(bytes);
+      // Own the bytes before another read can reuse the runtime buffer.
+      chunks.push(bytes.slice());
     }
+    phase = "assemble";
     const data = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) {
@@ -70,10 +72,16 @@ async function readXml(response: Response, source: string) {
     // Only fixed diagnostics: never log response bodies or credentials.
     const kind = error instanceof Error && ["TypeError", "RangeError", "AbortError", "TimeoutError"].includes(error.name)
       ? error.name : "Error";
-    console.warn("tga-course-import response failure", { phase, bytes: size, status: response.status, kind });
+    const detail = error instanceof Error ? error.message : "";
+    const reason = /detach/i.test(detail) ? "detached-buffer"
+      : /decompress|gzip|brotli|deflate/i.test(detail) ? "compression"
+      : /premature|unexpected.*eof|end of file|incomplete/i.test(detail) ? "incomplete-body"
+      : /abort|timeout/i.test(detail) ? "timeout"
+      : /reset|closed|connection/i.test(detail) ? "connection-closed" : "unclassified";
+    console.warn("tga-course-import response failure", { phase, bytes: size, status: response.status, kind, reason });
     throw new ImportError(phase === "download"
-      ? `${source} response download failed (${kind}; ${size} bytes received).`
-      : `${source} XML ${phase} failed (${kind}; ${size} bytes received).`);
+      ? `${source} response download failed (${kind}; ${reason}; ${size} bytes received).`
+      : `${source} XML ${phase} failed (${kind}; ${reason}; ${size} bytes received).`);
   } finally {
     // Supabase's runtime may close a response stream as soon as it is
     // consumed. Cleanup should never replace the response or original error.
@@ -97,7 +105,7 @@ async function soap(op: "Search" | "GetDetails", request: string) {
 </o:Security></s:Header><s:Body><${op} xmlns="${namespace}"><request>${request}</request></${op}></s:Body></s:Envelope>`;
   const response = await fetch(endpoint, {
     method: "POST", body: envelope, redirect: "error", signal: AbortSignal.timeout(18_000),
-    headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: `"${namespace}ITrainingComponentService/${op}"` },
+    headers: { "Accept-Encoding": "identity", "Content-Type": "text/xml; charset=utf-8", SOAPAction: `"${namespace}ITrainingComponentService/${op}"` },
   }).catch(() => { throw new ImportError(`The Training.gov.au sandbox did not respond to ${op}.`); });
 
   const source = `Training.gov.au sandbox ${op}`;

@@ -95,3 +95,8 @@ verify_jwt = false
 
 [functions.tga-course-import]
 verify_jwt = true
+
+[functions.admin-view-as]
+# Switch view: signs an administrator in to the shared test account of the Student / Agent / Staff workspace. The gateway
+# verifies the JWT; the function requires cms_is_admin and can only ever use the three fixed test accounts.
+verify_jwt = true

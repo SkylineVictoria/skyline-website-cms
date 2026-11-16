@@ -7,11 +7,13 @@ import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
+import LmsTimetablePage from "./LmsTimetablePage";
+import LmsTermBreaksPage from "./LmsTermBreaksPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   // Retired areas stay in the URL space so old links redirect instead of 404ing.
-  const { area } = useParams<{ area?: LmsArea | "dashboard" | "assessment-allocation" | "submissions" | "unit-delivery" | "timetable" }>();
+  const { area } = useParams<{ area?: LmsArea | "dashboard" | "assessment-allocation" | "submissions" | "unit-delivery" }>();
   const selected = LMS_MENU.find(x => x.id === area);
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
@@ -23,7 +25,8 @@ export default function LmsPage() {
   if (area === "batches") return <LmsBatchWorkspacePage />;
   if (area === "batch-allocation") return <LmsBatchAllocationPage />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
-  if (area === "timetable") return <Navigate to="/admin/lms/batches" replace />;
+  if (area === "timetable") return <LmsTimetablePage />;
+  if (area === "term-breaks") return <LmsTermBreaksPage />;
   if (area === "attendance") return <LmsAttendancePage />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { generateClassSessions, loadClassSessions, updateClassSession, type ClassSession, type SessionClash } from "@/pages/admin/lib/rto";
+import { loadClassSessions, updateClassSession, type ClassSession, type SessionClash } from "@/pages/admin/lib/rto";
 
 const DAY = 86_400_000;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -24,14 +24,11 @@ const typeTone: Record<string, string> = {
  * Dated classes generated from the weekly class times, the unit order, SLIT hours, term breaks and public holidays.
  * "Batch calendar" lists one batch week by week; "Room grid" shows every batch's classes for one week by room, like the master timetable.
  */
-export default function ClassSessionsPanel({ batchId, canManage }: { batchId: string; canManage: boolean }) {
-  const [mode, setMode] = useState<"batch" | "rooms">("batch");
+export default function ClassSessionsPanel({ batchId, canManage, reloadKey = 0, mode = "batch" }: { batchId: string; canManage: boolean; reloadKey?: number; mode?: "batch" | "rooms" }) {
   const [weekStart, setWeekStart] = useState(() => monday(new Date(iso(new Date()) + "T00:00:00Z")));
   const [rows, setRows] = useState<ClassSession[]>([]);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [clashes, setClashes] = useState<SessionClash[]>([]);
   const weeks = mode === "batch" ? 12 : 1;
   const from = iso(weekStart), to = iso(addDays(weekStart, weeks * 7 - 1));
@@ -42,22 +39,10 @@ export default function ClassSessionsPanel({ batchId, canManage }: { batchId: st
     try { setRows(await loadClassSessions(mode === "batch" ? batchId : null, from, to)); setError(""); }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load classes"); }
     finally { setLoading(false); }
-  }, [mode, batchId, from, to]);
+  }, [mode, batchId, from, to, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setClashes([]); setNotice(""); }, [batchId]);
+  useEffect(() => { setClashes([]); }, [batchId]);
 
-  const generate = async () => {
-    if (!batchId || busy) return;
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const out = await generateClassSessions(batchId);
-      setClashes(out.clashes);
-      setNotice(`${out.created} classes scheduled from ${fmtDay(out.from)}${out.endDate ? `, last class ${fmtDay(out.endDate)}` : ""}.${out.kept ? ` ${out.kept} earlier or hand-changed classes kept.` : ""}`);
-      setWeekStart(monday(parse(out.from)));
-      if (mode !== "batch") setMode("batch"); else await load();
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to generate classes"); }
-    finally { setBusy(false); }
-  };
   const toggle = async (s: ClassSession) => {
     try {
       const out = await updateClassSession(s.id, { status: s.status === "cancelled" ? "scheduled" : "cancelled" });
@@ -78,18 +63,13 @@ export default function ClassSessionsPanel({ batchId, canManage }: { batchId: st
   return <section className={card + " min-w-0 p-5 print:border-0 print:shadow-none"}>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 className="font-heading text-lg font-bold text-foreground-950">Dated classes</h2>
-        <p className="text-xs text-foreground-500">Built from the weekly class times, unit order and SLIT hours. Term breaks and confirmed public holidays are skipped.</p>
+        <h2 className="font-heading text-lg font-bold text-foreground-950">{mode === "batch" ? "Dated classes" : "Classes by room"}</h2>
+        <p className="text-xs text-foreground-500">{mode === "batch"
+          ? "Filled in from the class timing, unit order and SLIT hours. Term breaks and confirmed public holidays are skipped."
+          : "Every batch's classes for the week, one row per room. Two classes in one room at the same time are outlined in red."}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2 print:hidden">
-        <div className="inline-flex rounded-lg border border-background-300 p-0.5">
-          {([["batch", "Batch calendar"], ["rooms", "Room grid"]] as const).map(([v, label]) => <button key={v} type="button" aria-pressed={mode === v} onClick={() => setMode(v)}
-            className={`rounded-md px-3 py-1.5 text-sm font-semibold ${mode === v ? "bg-primary-600 text-white" : "text-foreground-600 hover:bg-background-100"}`}>{label}</button>)}
-        </div>
         <button type="button" onClick={() => window.print()} className={navButton}>Print</button>
-        {canManage && batchId && <button type="button" disabled={busy} onClick={() => void generate()}
-          title="Rebuilds this batch's classes from today. Earlier classes and classes you changed by hand are kept."
-          className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Generating…" : "Generate classes"}</button>}
       </div>
     </div>
 
@@ -102,7 +82,6 @@ export default function ClassSessionsPanel({ batchId, canManage }: { batchId: st
     </div>
 
     {error && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-    {notice && <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
     {clashes.length > 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
       <strong>{clashes.length} room {clashes.length === 1 ? "clash" : "clashes"}.</strong>{" "}
       {clashes.slice(0, 4).map(c => `${c.room} on ${fmtDay(c.date)} ${fmtTime(c.startTime)} is also booked by ${c.otherBatch}`).join("; ")}{clashes.length > 4 ? "; …" : "."}
@@ -111,7 +90,7 @@ export default function ClassSessionsPanel({ batchId, canManage }: { batchId: st
     <div className="mt-4">
       {loading ? <p className="py-8 text-center text-sm text-foreground-500">Loading…</p>
       : mode === "batch" && !batchId ? <p className="py-8 text-center text-sm text-foreground-500">Select a batch.</p>
-      : !rows.length ? <p className="py-8 text-center text-sm text-foreground-500">{mode === "batch" ? (canManage ? "No classes in these weeks. Set the weekly class times, then Generate classes." : "No classes in these weeks.") : "No classes booked this week."}</p>
+      : !rows.length ? <p className="py-8 text-center text-sm text-foreground-500">{mode === "batch" ? (canManage ? "No classes in these weeks. Set the class timing above and the dates fill in." : "No classes in these weeks.") : "No classes booked this week."}</p>
       : mode === "batch" ? <div className="space-y-4">
         {byWeek.map(([wk, list]) => <div key={wk} className="break-inside-avoid">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-500">Week of {fmtDay(wk)}</h3>

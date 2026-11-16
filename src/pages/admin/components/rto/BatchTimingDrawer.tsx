@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import {
-  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming,
+  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
   type IntakeDetail, type LocationRooms, type RtoBatch, type RtoIntake, type SessionType, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
@@ -13,7 +13,7 @@ type Draft = { key: number; weekday: number; startTime: string; endTime: string;
 let seq = 0;
 const toDraft = (s: BatchSession): Draft => ({ key: ++seq, weekday: s.weekday, startTime: s.startTime.slice(0, 5), endTime: s.endTime.slice(0, 5), type: s.type, roomId: s.roomId ?? "" });
 const toSession = (d: Draft) => ({ weekday: d.weekday, startTime: d.startTime, endTime: d.endTime, type: d.type, roomId: d.roomId || null });
-export type BatchSaved = IntakeDetail & { batchId: string; clashes: Clash[] };
+export type BatchSaved = IntakeDetail & { batchId: string; clashes: Clash[]; generated?: GenerateResult | null };
 
 export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved }: {
   intake: Pick<RtoIntake, "id" | "courseId" | "name">;
@@ -104,7 +104,10 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
         batchId: batch?.id ?? null, intakeId: intake.id, sessions: rows.map(toSession),
         ...(adding ? { name: name.trim() || newName, capacity, trainerIds } : {}),
       });
-      onSaved(out, adding ? undefined : batch?.sessions ?? []);
+      // The dated classes follow the saved timing automatically (term breaks and public holidays skipped).
+      let generated: GenerateResult | null = null;
+      if (rows.length) generated = await generateClassSessions(out.batchId).catch(() => null);
+      onSaved({ ...out, generated }, adding ? undefined : batch?.sessions ?? []);
     } catch (e) { setError(e instanceof Error ? e.message : "Not saved."); }
     finally { setBusy(false); }
   };
@@ -169,12 +172,13 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           {DAYS.map((d, i) => {
             const on = rows.some((r) => r.weekday === i + 1);
             return (
-              <button key={d} type="button" aria-pressed={on} onClick={() => toggleDay(i + 1)}
-                className={`rounded-md border py-2 text-xs font-semibold transition-colors duration-150 ${on ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{d}</button>
+              <button key={d} type="button" aria-pressed={on} onClick={() => toggleDay(i + 1)} title={on ? `Remove ${WEEKDAYS[i]} classes` : `Add a class on ${WEEKDAYS[i]}`}
+                className={`flex cursor-pointer flex-col items-center gap-0.5 rounded-lg border-2 py-2.5 text-sm font-bold shadow-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-primary-300 ${on ? "border-primary-600 bg-primary-600 text-background-50 hover:bg-primary-700" : "border-primary-200 bg-background-50 text-primary-700 hover:border-primary-500 hover:bg-primary-50"}`}>
+                <i className={(on ? "ri-checkbox-circle-fill" : "ri-add-circle-line") + " text-base"} aria-hidden="true" />{d}</button>
             );
           })}
         </div>
-        <p className="mt-1 text-xs text-foreground-500">Tap a day to add or remove its classes.</p>
+        <p className="mt-1.5 text-xs font-medium text-foreground-600">Click a day to add classes on it. Click a ticked day again to remove them.</p>
       </div>
 
       {days.length === 0 ? (

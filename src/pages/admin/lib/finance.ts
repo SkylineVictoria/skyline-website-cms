@@ -11,6 +11,8 @@ export interface FinancePaymentRow {
   request_state: string | null; application_id: string | null; application_reference: string | null; application_status: string | null; student_name: string; student_email: string;
   course_id: string | null; course_code: string | null; course_title: string | null; agency_id: string | null; agency_name: string | null; offer_letter_id: string | null;
   offer_accepted_at: string | null; deposit_paid_at: string | null; tenant_id: string | null;
+  /** OFFER-DEPOSIT: reminders sent for a pending deposit and the letter's automatic-reminder switch. */
+  reminder_count?: number | null; last_reminder_at?: string | null; deposit_auto_remind?: boolean | null;
 }
 export interface FinanceSummary { collectedCents: number; refundedCents: number; paid: number; pending: number; failed: number; refunded: number; total: number }
 export interface FinanceFilters { from?: string; to?: string; status?: string; courseId?: string; agencyId?: string; q?: string; sort?: "date" | "amount" | "student" | "status"; dir?: "asc" | "desc"; page?: number; pageSize?: number }

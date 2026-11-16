@@ -8,7 +8,7 @@ import { isEditableStatus, useApplicationStatuses } from "@/lib/applicationStatu
 import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
-import { AgentMetaEditor, ApplicantStatusBanner, OfferLettersList, StaffReviewBar } from "@/pages/agency/components/ApplicationStatusPanels";
+import { AgentMetaEditor, ApplicantStatusBanner, OfferDepositCard, OfferLettersList, StaffReviewBar } from "@/pages/agency/components/ApplicationStatusPanels";
 import {
   assignApplicationAgent,
   deleteApplicationDocument,
@@ -280,6 +280,8 @@ export default function ApplicationDetailPage() {
       </header>
 
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
+      {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}
+      <OfferDepositCard applicationId={application.id} canRemind={isSlit || role === "agent" || role === "agency_admin"} canConfigure={isSlit} refreshKey={application.status} />
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
         {(paths.area === "cms" ? [...TABS, { id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : TABS).map((item) => (
@@ -402,18 +404,18 @@ export default function ApplicationDetailPage() {
             <ol className="space-y-3">
               {history.map((entry) => (
                 <li key={entry.id} className="flex gap-3 rounded-card border border-background-200 bg-background-50 p-4">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary-100 text-secondary-900">
-                    <i className="ri-arrow-right-circle-line" aria-hidden="true" />
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${entry.actionKey === "deposit_paid" ? "bg-emerald-100 text-emerald-800" : "bg-secondary-100 text-secondary-900"}`}>
+                    <i className={entry.actionKey === "deposit_paid" ? "ri-bank-card-line" : "ri-arrow-right-circle-line"} aria-hidden="true" />
                   </span>
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground-950">
-                      {entry.previousStatus ? `${entry.previousStatus} \u2192 ` : ""}
-                      {entry.newStatus}
+                    <p className="text-sm font-semibold text-foreground-950" data-testid={entry.actionKey === "deposit_paid" ? "history-deposit-paid" : undefined}>
+                      {/* OFFER-DEPOSIT: the deposit row keeps the status; its note is the headline. */}
+                      {entry.actionKey === "deposit_paid" ? entry.note || "Initial deposit paid" : <>{entry.previousStatus ? `${entry.previousStatus} \u2192 ` : ""}{entry.newStatus}</>}
                     </p>
                     <p className="mt-0.5 text-xs text-foreground-500">
                       {entry.actorName || "System"} ({entry.actorRole || "system"}) &middot; {formatDate(entry.createdAt)}
                     </p>
-                    {entry.note ? <p className="mt-1 text-xs text-foreground-600">{entry.note}</p> : null}
+                    {entry.note && entry.actionKey !== "deposit_paid" ? <p className="mt-1 text-xs text-foreground-600">{entry.note}</p> : null}
                   </div>
                 </li>
               ))}

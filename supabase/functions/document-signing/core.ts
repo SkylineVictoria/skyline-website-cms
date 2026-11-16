@@ -475,7 +475,11 @@ export async function drainSigningMail(ports: SigningPorts, limit = 20): Promise
     };
     try {
       const to = job.audience === "admin" ? (job.sender_email || config.adminTo.join(", ")) : job.to;
-      const message = renderSigningEmail(job, job.token ? `${config.siteUrl}/sign#t=${job.token}` : null);
+      // OFFER-DEPOSIT: notify_claim adds `deposit` (amount and a fresh token) to the signer's completion email when the deposit is pending.
+      const raw = (job as Record<string, unknown>).deposit as { label?: unknown; token?: unknown } | null | undefined;
+      const deposit = raw && typeof raw.label === "string" && /^[a-f0-9]{64}$/.test(String(raw.token ?? ""))
+        ? { label: raw.label, link: `${config.siteUrl}/sign#t=${raw.token}` } : null;
+      const message = renderSigningEmail({ ...job, deposit }, job.token ? `${config.siteUrl}/sign#t=${job.token}` : null);
       if (!to || !message) { await result("failed", undefined, !to ? "no recipient address" : "no template"); continue; }
       let attachments: Array<{ name: string; contentType: string; contentBase64: string }> | undefined;
       if (job.kind === "completed") {

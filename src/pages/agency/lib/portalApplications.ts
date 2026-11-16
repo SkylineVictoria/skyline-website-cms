@@ -314,6 +314,8 @@ export interface StatusHistoryRow {
   actorRole: string;
   note: string;
   createdAt: string;
+  /** OFFER-DEPOSIT: "deposit_paid" rows keep the status and carry the note "Initial deposit paid AUD$x". */
+  actionKey: string | null;
 }
 
 export interface DocumentRow {
@@ -417,7 +419,7 @@ export async function listConsents(applicationId: string): Promise<ConsentRow[]>
 export async function listStatusHistory(applicationId: string): Promise<StatusHistoryRow[]> {
   const { data, error } = await supabase
     .from("enrollment_application_status_history")
-    .select("id, previous_status, new_status, actor_name, actor_role, note, created_at")
+    .select("id, previous_status, new_status, actor_name, actor_role, note, created_at, action_key")
     .eq("application_id", applicationId)
     .order("created_at", { ascending: false });
   if (error) return [];
@@ -431,6 +433,7 @@ export async function listStatusHistory(applicationId: string): Promise<StatusHi
       actorRole: str(r.actor_role),
       note: str(r.note),
       createdAt: str(r.created_at),
+      actionKey: typeof r.action_key === "string" ? r.action_key : null,
     };
   });
 }
@@ -711,6 +714,8 @@ export interface OfferPayment {
   id?: string; status?: string; amount_cents?: number; currency?: string; paid_at?: string | null; amount_paid_cents?: number | null; failure_reason?: string | null; livemode?: boolean | null;
   receipt_url?: string | null; stripe_payment_intent_id?: string | null;
   requestedAmountCents: number | null; requestedCurrency: string; requestedDescription: string | null; note: string | null; depositPaidAt: string | null;
+  /** OFFER-DEPOSIT: reminders sent for this deposit and the letter's automatic-reminder switch. */
+  reminder_count?: number | null; last_reminder_at?: string | null; autoRemind?: boolean | null;
 }
 /** "Paid" / "Payment pending" / "Payment failed" and the amount, for the offer letter lists. */
 export function offerPaymentState(payment: OfferPayment | null | undefined): { label: string; tone: "paid" | "pending" | "failed" } | null {
@@ -728,18 +733,32 @@ export interface OfferLetter {
   payment?: OfferPayment | null;
 }
 /**
- * OFFER-PAY-GATE: the one label staff and agents see for a letter's acceptance. A letter with a deposit is "Signed · Payment pending"
- * once signed and "Accepted · Paid" once Stripe verified the deposit; a letter without one is "Signed online" / "Accepted" as before.
+ * OFFER-DEPOSIT: where the letter's initial deposit stands, apart from its acceptance. "Not required" when the letter asked for none
+ * (or staff removed the payment), "Pending" until Stripe verified it, "Paid" with the date after that.
  */
-export function offerAcceptanceState(letter: { acceptedAt: string | null; acceptedVia?: string | null; signedAt?: string | null; payment?: OfferPayment | null }): { label: string; tone: "accepted" | "signed" | "open" } | null {
-  const paid = letter.payment?.status === "paid" || !!letter.payment?.depositPaidAt;
-  if (letter.acceptedAt) {
-    if (letter.acceptedVia === "signing_and_payment" || (letter.acceptedVia === "signing" && paid)) return { label: "Accepted · Paid", tone: "accepted" };
-    return { label: letter.acceptedVia === "signing" ? "Signed online" : "Accepted", tone: "accepted" };
-  }
-  if (letter.signedAt) return { label: paid ? "Signed · Payment received" : "Signed · Payment pending", tone: "signed" };
-  return null;
+export function offerDepositState(payment: OfferPayment | null | undefined): { label: string; tone: "paid" | "pending" | "none" | "failed"; amount: string | null } {
+  if (!payment || (payment.requestedAmountCents == null && !payment.status) || (!payment.status && !payment.depositPaidAt)) return { label: "Not required", tone: "none", amount: null };
+  const cents = payment.status === "paid" && payment.amount_paid_cents != null ? payment.amount_paid_cents : payment.amount_cents ?? payment.requestedAmountCents ?? 0;
+  const amount = `${(payment.currency ?? payment.requestedCurrency ?? "aud").toUpperCase()}$${(cents / 100).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const paidOn = payment.depositPaidAt ?? payment.paid_at ?? null;
+  if (paidOn || payment.status === "paid") return { label: `Paid${paidOn ? ` (${new Date(paidOn).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })})` : ""}`, tone: "paid", amount };
+  if (payment.status === "refunded") return { label: "Refunded", tone: "failed", amount };
+  if (payment.status === "failed") return { label: "Payment failed", tone: "failed", amount };
+  return { label: "Pending", tone: "pending", amount };
 }
+/** "Offer accepted: Yes · Deposit: Pending", the one line staff and agents read on a letter. */
+export function offerAcceptanceLine(letter: { acceptedAt: string | null; payment?: OfferPayment | null }): string {
+  const deposit = offerDepositState(letter.payment);
+  return `Offer accepted: ${letter.acceptedAt ? "Yes" : "No"} · Deposit: ${deposit.label}${deposit.amount && deposit.tone !== "none" ? ` · ${deposit.amount}` : ""}`;
+}
+/** Send payment reminder (staff, or the application's agent): the student gets their personal link again. P0024: one was sent in the last 24 hours (force to send anyway). */
+export async function sendDepositReminder(applicationId: string, force = false): Promise<{ reminderCount: number; lastReminderAt: string | null }> {
+  const { data, error } = await supabase.rpc("offer_deposit_reminder_send", { p_application: applicationId, p_force: force });
+  if (error) throw Object.assign(new Error(error.message), { code: error.code });
+  return data as { reminderCount: number; lastReminderAt: string | null };
+}
+/** Staff: automatic reminders for this offer's deposit (every 3 days, at most 3), default off. */
+export const setDepositAutoRemind = (applicationId: string, on: boolean) => rpcOrThrow<{ autoRemind: boolean }>("offer_deposit_set_auto_remind", { p_application: applicationId, p_on: on });
 
 const rpcOrThrow = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
   const { data, error } = await supabase.rpc(name, args);

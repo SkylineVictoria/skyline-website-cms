@@ -102,7 +102,9 @@ export function checkRecipients(input: unknown): SignRecipientInput[] {
 
 export type SigningMailKind = "invite" | "reminder" | "expired" | "declined" | "voided" | "completed" | "link_requested";
 export interface SigningMailJob { kind: SigningMailKind; audience: "recipient" | "admin"; title: string; reference: string; name?: string | null; role?: string | null; message?: string | null;
-  expires_at?: string | null; reason?: string | null; declined_by?: string | null; signers?: Array<{ name: string; role: string; state: string }> | null }
+  expires_at?: string | null; reason?: string | null; declined_by?: string | null; signers?: Array<{ name: string; role: string; state: string }> | null;
+  /** OFFER-DEPOSIT: the signer's completion email of an offer letter whose initial deposit is pending: the amount and the personal payment link. */
+  deposit?: { label: string; link?: string | null } | null }
 const mailLine = (value: unknown, max = 200) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max); // eslint-disable-line no-control-regex
 const MAIL_SIGN_OFF = "\n\nSkyline Institute of Technology\nThis is an automated message.";
 /** The one-time code that confirms the signer's email before an offer letter is signed. The code is the only thing in it that matters. */
@@ -132,7 +134,9 @@ export function renderSigningEmail(job: SigningMailJob, link: string | null): { 
   }
   if (job.kind === "completed") return job.audience === "admin"
     ? { subject: mailLine(`Completed: ${title}`), text: `Everyone required has signed "${title}" (reference ${ref}). The signed document and its completion certificate are attached.\n\n${people}${MAIL_SIGN_OFF}` }
-    : { subject: mailLine(`Signed copy: ${title}`), text: `${hello}\n\n"${title}" is complete: everyone required has signed. The signed document and its completion certificate are attached for your records. Reference ${ref}.${MAIL_SIGN_OFF}` };
+    : job.deposit?.link
+      ? { subject: mailLine(`Offer accepted: ${title}`), text: `${hello}\n\nThank you. Your offer is accepted: "${title}" is signed, and the signed copy and its completion certificate are attached for your records. Reference ${ref}.\n\nYour initial deposit of ${mailLine(job.deposit.label, 40)} is still to be paid. You can pay it by card in a few minutes, no sign-in needed. Pay your initial deposit: ${job.deposit.link}\n\nThis link is personal to you; please do not forward it.${MAIL_SIGN_OFF}` }
+      : { subject: mailLine(`Signed copy: ${title}`), text: `${hello}\n\n"${title}" is complete: everyone required has signed. The signed document and its completion certificate are attached for your records. Reference ${ref}.${MAIL_SIGN_OFF}` };
   if (job.kind === "declined") return job.audience === "admin"
     ? { subject: mailLine(`Declined: ${title}`), text: `${mailLine(job.declined_by, 80) || "A recipient"} declined to sign "${title}" (reference ${ref}).${job.reason ? `\n\nReason given: ${mailLine(job.reason, 500)}` : ""}\n\nThe request is closed and its links no longer work.${MAIL_SIGN_OFF}` }
     : { subject: mailLine(`Signing cancelled: ${title}`), text: `${hello}\n\n"${title}" (reference ${ref}) will not be completed because another recipient declined to sign. Your signature on it has no effect. The sender will contact you if a new document is needed.${MAIL_SIGN_OFF}` };

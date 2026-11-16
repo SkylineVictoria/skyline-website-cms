@@ -1,5 +1,5 @@
 -- Student Offer Letter: the discount rows of the fee table print only for a course with a discount ({{#if discount}} ... {{/if}},
--- supabase/functions/_shared/letter-variables.ts expandLetterBlocks, released with document-signing v13; version 20261116140000: 20261116120000 (class_sessions_reset) and 20261116130000 (intake_study_load) belong to other sessions of the same day). Applied only to the saved
+-- supabase/functions/_shared/letter-variables.ts expandLetterBlocks, released with document-signing v13; version 20261116130000, the number hosted recorded it under (renamed 2026-11-17 from 20261116140000; intake_study_load moved to 20261116135000 and class_sessions_reset is 20261116120000, both other sessions of the same day). Applied only to the saved
 -- template that still lacks the block and holds each replace target exactly once (checked on hosted 2026-11-16: once each); a new
 -- version row is written like a save from the editor. Additive, data only.
 do $$

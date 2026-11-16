@@ -243,6 +243,9 @@ export function suggestHours(slitHours: number): HoursSplit {
   const practicalHours = Math.round(total * 0.4);
   return { slitHours: total, theoryHours, practicalHours, assessmentHours: total - theoryHours - practicalHours };
 }
+/** A unit's duration from its SLIT hours: 20 hours is one week, rounded up to the half week (0.5 to 104 weeks, as stored). */
+export const HOURS_PER_WEEK = 20;
+export const weeksForHours = (hours: number) => Math.min(104, Math.max(0.5, Math.ceil((hours / HOURS_PER_WEEK) * 2) / 2));
 /** The hours to show: the saved ones once reviewed, otherwise the nominal hours split 40/40/20 (null when there are none). */
 export function shownHours(saved: UnitHours | undefined, nominalHours: number | null): (HoursSplit & { confirmed: boolean }) | null {
   if (saved?.confirmedAt && saved.slitHours !== null) {

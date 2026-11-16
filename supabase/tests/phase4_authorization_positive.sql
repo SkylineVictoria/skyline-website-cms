@@ -1088,7 +1088,7 @@ set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
 select lives_ok($$select public.portal_remove_sms_contact()$$,'the user removes the number');
 reset role;
 select is((select count(*)::int from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and sms_enabled),0,'removing the number turns SMS off everywhere');
--- Communication Hub conversations (migration 20261116180000): admin only; replies only through the service role.
+-- Communication Hub conversations (migration 20261116210000): admin only; replies only through the service role.
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.comm_people('','',10)$$,'42501',null,'a portal user cannot list people in the Communication Hub');

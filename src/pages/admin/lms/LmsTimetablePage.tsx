@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
+import BatchCourseCalendar from "@/pages/admin/lms/BatchCourseCalendar";
 import { rto, rtoFlow, type BatchPageData, type IntakeDetail, type RtoCourse, type RtoIntake, type BatchSession } from "@/pages/admin/lib/rto";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -21,6 +22,7 @@ export default function LmsTimetablePage() {
   const [editor, setEditor] = useState<null | { day?: number; templates?: boolean }>(null);
   const [view, setView] = useState<"week" | "list">("week");
   const [savedNote, setSavedNote] = useState("");
+  const [calendarKey, setCalendarKey] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -146,12 +148,14 @@ export default function LmsTimetablePage() {
         </div>}
       </div>
     </section>
+    {batchId && data && detail?.intake.id === intakeId && <BatchCourseCalendar key={batchId} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
+      hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey} />}
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
       startDay={editor.day} showTemplates={editor.templates}
       onClose={() => setEditor(null)}
       onSaved={out => {
         setEditor(null); setDetail(out); void refreshBatch(); void reload();
-        setSavedNote("Class timing saved.");
+        setSavedNote("Class timing saved."); setCalendarKey(k => k + 1);
       }} />}
   </div>;
 }

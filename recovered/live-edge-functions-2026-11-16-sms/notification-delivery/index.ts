@@ -1,0 +1,101 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { backendConfiguration } from "../_shared/config.ts";
+import { authorizeWorker, dispatchBatch, selectEmailProvider, type ClaimedDelivery, type DeliveryPort } from "../_shared/notification/delivery.ts";
+import { dispatchSmsBatch, selectSmsProvider, type SmsDeliveryPort } from "../_shared/notification/sms.ts";
+
+const url = Deno.env.get("SUPABASE_URL") ?? "";
+const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const providerConfig: Record<string, string> = {};
+for (const name of ["EF_NOTIFICATION_EMAIL_ENABLED", "EF_POSTMARK_SERVER_TOKEN", "EF_NOTIFICATION_SMS_ENABLED", "EF_CLICKSEND_USERNAME", "EF_CLICKSEND_API_KEY", "EF_CLICKSEND_SENDER_ID"]) providerConfig[name] = Deno.env.get(name) ?? "";
+
+const headers = { "Content-Type": "application/json" };
+const reply = (body: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { ...headers, ...extra } });
+const BATCH = 10;
+
+async function worker() {
+  // Nothing is claimed on a channel unless it is enabled and fully configured; values are never echoed. Email and SMS are independent:
+  // with neither configured the reply is the same 503 as before (naming the email variables), so existing monitoring is unchanged.
+  const selection = selectEmailProvider(providerConfig);
+  const smsSelection = selectSmsProvider(providerConfig);
+  if (!selection.provider && !smsSelection.provider) return reply({ error: "Edge Function configuration is unavailable.", code: selection.unavailable.code, variables: selection.unavailable.variables }, 503);
+  const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+  const smsPort: SmsDeliveryPort = {
+    claim: async () => {
+      const { data, error } = await admin.rpc("notification_claim_sms_delivery");
+      if (error) throw new Error("sms claim");
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return null;
+      return { id: String(row.id), leaseToken: String(row.lease_token), phone: String(row.phone ?? ""), body: String(row.body ?? ""), attempt: Number(row.attempt_count ?? 1) };
+    },
+    record: async (d, outcome, messageId, errorCode, retry, delay) => {
+      const { data, error } = await admin.rpc("notification_record_sms_attempt", { p_id: d.id, p_lease: d.leaseToken, p_outcome: outcome, p_message_id: messageId, p_error: errorCode, p_retry: retry, p_delay: delay });
+      if (error) throw new Error("sms record");
+      return data === true;
+    },
+  };
+  const port: DeliveryPort = {
+    claim: async () => {
+      const { data, error } = await admin.rpc("notification_claim_delivery");
+      if (error) throw new Error("claim");
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return null;
+      const sender = row.sender && typeof row.sender === "object" && typeof row.sender.email === "string" && typeof row.sender.name === "string" ? { name: String(row.sender.name), email: String(row.sender.email), replyTo: typeof row.sender.replyTo === "string" ? row.sender.replyTo : undefined } : null;
+      return { id: row.id, leaseToken: row.lease_token, recipientEmail: row.recipient_email, subject: row.subject, body: row.body, sender, attempt: Number(row.attempt_count ?? 1), event: typeof row.event === "string" ? row.event : undefined } satisfies ClaimedDelivery;
+    },
+    submission: async (d) => {
+      const { data, error } = await admin.rpc("notification_delivery_submission", { p_id: d.id, p_lease: d.leaseToken });
+      if (error || !data || typeof data !== "object") return null;
+      const info = data as Record<string, unknown>;
+      return { mode: info.mode === "link" ? "link" : "attach", link: typeof info.link === "string" ? info.link : "", reference: String(info.reference ?? ""), version: Number(info.version ?? 0), institution: String(info.institution ?? ""), submittedAt: typeof info.submittedAt === "string" ? info.submittedAt : null, snapshot: info.snapshot ?? null,
+        host: typeof info.host === "string" ? info.host : null,
+        recipientKind: info.recipientKind === "student" || info.recipientKind === "internal" ? info.recipientKind : "portal",
+        branding: info.branding && typeof info.branding === "object" ? { logo: String((info.branding as Record<string, unknown>).logo ?? ""), primaryColor: typeof (info.branding as Record<string, unknown>).primaryColor === "string" ? String((info.branding as Record<string, unknown>).primaryColor) : null, timezone: typeof (info.branding as Record<string, unknown>).timezone === "string" ? String((info.branding as Record<string, unknown>).timezone) : null } : undefined,
+        documents: Array.isArray(info.documents) ? (info.documents as Record<string, unknown>[]).map((x) => ({ category: String(x.category ?? ""), filename: String(x.filename ?? ""), bucket: String(x.bucket ?? ""), path: String(x.path ?? "") })).filter((x) => x.filename) : [] };
+    },
+    signDocument: async (bucket, path, seconds) => {
+      if (bucket !== "enrollment-documents") return null; // only the private application-document bucket is ever linked
+      const { data, error } = await admin.storage.from(bucket).createSignedUrl(path, seconds);
+      return error ? null : data?.signedUrl ?? null;
+    },
+    coeDocument: async (d) => {
+      const { data, error } = await admin.rpc("notification_delivery_coe_document", { p_id: d.id, p_lease: d.leaseToken });
+      if (error) throw new Error("coe");
+      if (!data || typeof data !== "object") return null;
+      const doc = data as Record<string, unknown>;
+      return { kind: doc.kind === "voe" ? "voe" : "coe", sizeBytes: Number(doc.sizeBytes ?? 0), contentBase64: String(doc.contentBase64 ?? ""), reference: String(doc.reference ?? "") };
+    },
+    offerLetter: async (d) => {
+      const { data, error } = await admin.rpc("notification_delivery_offer_letter", { p_id: d.id, p_lease: d.leaseToken });
+      if (error) throw new Error("offer letter");
+      if (!data || typeof data !== "object") return null;
+      const letter = data as Record<string, unknown>;
+      return { fileName: String(letter.fileName ?? "Offer letter.pdf"), sizeBytes: Number(letter.sizeBytes ?? 0), contentBase64: String(letter.contentBase64 ?? "") };
+    },
+    record: async (d, outcome, messageId, errorCode, retry, delay) => {
+      const { data, error } = await admin.rpc("notification_record_attempt", { p_id: d.id, p_lease: d.leaseToken, p_outcome: outcome, p_message_id: messageId, p_error: errorCode, p_retry: retry, p_delay: delay });
+      if (error) throw new Error("record");
+      return data === true;
+    },
+  };
+  try {
+    const email = selection.provider ? await dispatchBatch(port, selection.provider, BATCH) : null;
+    const sms = smsSelection.provider ? await dispatchSmsBatch(smsPort, smsSelection.provider, BATCH) : null;
+    return reply({ ok: true, ...(email ?? { email: "disabled" }), sms: sms ?? "disabled" });
+  } catch {
+    // A claimed delivery whose outcome could not be stored becomes 'unknown' when its lease expires; it is never resent.
+    return reply({ ok: false, error: "Delivery run stopped unexpectedly." }, 500);
+  }
+}
+
+Deno.serve(async (request) => {
+  const configuration = backendConfiguration(url, serviceKey);
+  if (configuration) return reply(configuration, 503);
+  if (request.method !== "POST") return reply({ ok: false, error: "Method not allowed." }, 405);
+  // Postmark callbacks are disabled (410) until they can be authenticated without a shared secret; delivery states stay worker-driven.
+  if (new URL(request.url).pathname.endsWith("/webhook")) return reply({ ok: false, error: "Webhook disabled." }, 410);
+  // Platform authentication: config.toml verify_jwt = true rejects unsigned tokens (authorizeWorker relies on that); only a service_role token of this project may run the worker.
+  const status = await authorizeWorker(request.headers.get("authorization"), url);
+  if (status !== 200) return reply({ ok: false, error: status === 401 ? "Unauthorized." : "Forbidden." }, status);
+  return await worker();
+});

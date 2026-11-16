@@ -36,8 +36,8 @@ export async function loadCourseNeed(courseId: string): Promise<CourseNeed> {
 }
 
 /** Days with no classes from `from` for three years: term breaks and confirmed, non-optional public holidays. */
-export async function loadClosedDays(from: string): Promise<(day: string) => boolean> {
-  const [breaks, holidays] = await Promise.all([listBreaks().catch(() => []), listHolidays(from, addDays(from, 1095)).catch(() => [])]);
+export async function loadClosedDays(from: string, courseId?: string | null): Promise<(day: string) => boolean> {
+  const [breaks, holidays] = await Promise.all([listBreaks(courseId).catch(() => []), listHolidays(from, addDays(from, 1095)).catch(() => [])]);
   const off = new Set(holidays.filter((h) => h.status === "confirmed" && !h.isOptional).map((h) => h.date));
   return (day) => off.has(day) || breaks.some((b) => day >= b.startDate && day <= b.endDate);
 }

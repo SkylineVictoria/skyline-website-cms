@@ -16,7 +16,6 @@ export interface LmsMenuEntry {
 }
 export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "courses", label: "Courses", route: "/admin/lms/courses", icon: "ri-book-open-line", dependencies: [], primaryAction: "Add Course" },
-  { id: "units", label: "Units", route: "/admin/lms/units", icon: "ri-stack-line", dependencies: ["course"] },
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
   { id: "timetable", label: "Batch calendar", route: "/admin/lms/timetable", icon: "ri-calendar-schedule-line", dependencies: ["course", "intake", "batch"], parent: "timetable" },

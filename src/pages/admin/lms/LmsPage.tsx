@@ -6,7 +6,6 @@ import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
-import LmsUnitsPage from "./LmsUnitsPage";
 import LmsTimetablePage from "./LmsTimetablePage";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
@@ -19,7 +18,8 @@ export default function LmsPage() {
   const selected = LMS_MENU.find(x => x.id === area);
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
-  if (area === "units") return <LmsUnitsPage />;
+  // Units are managed inside each course (Courses > Units tab).
+  if (area === "units") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "intakes") return <LmsIntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;

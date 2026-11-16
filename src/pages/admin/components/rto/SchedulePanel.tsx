@@ -35,7 +35,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
   const [popover, setPopover] = useState<number | null>(null);
   const [holidays, setHolidays] = useState<{ date: string; name: string }[]>([]);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
-  useEffect(() => { let live = true; listBreaks().then((b) => { if (live) setBreaks(b); }).catch(() => undefined); return () => { live = false; }; }, []);
+  useEffect(() => { let live = true; listBreaks(detail.intake.courseId).then((b) => { if (live) setBreaks(b); }).catch(() => undefined); return () => { live = false; }; }, [detail.intake.courseId]);
 
   // ---- range and scale
   const first = rows.length ? rows.reduce((m, r) => (r.startDate < m ? r.startDate : m), rows[0].startDate) : detail.intake.startDate;

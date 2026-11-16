@@ -71,7 +71,8 @@ export interface BoardSession {
   startTime: string; endTime: string; type: SessionType; roomId: string | null; batchStart: string; batchEnd: string; trainers: string[];
 }
 export interface RoomsBoardData { locations: LocationRooms[]; sessions: BoardSession[]; batches: { id: string; name: string; courseCode: string; intakeId: string; intakeName: string }[] }
-export interface AcademicBreak { label: string; startDate: string; endDate: string }
+/** A term break; courseId null = every course. */
+export interface AcademicBreak { label: string; startDate: string; endDate: string; courseId: string | null }
 export interface BatchScheduleRow { intakeUnitId: string; code: string; name: string; startDate: string; endDate: string; intakeStartDate: string; intakeEndDate: string; overridden: boolean }
 export interface ScheduleRow { id: string; unitId: string; code: string; name: string; unitType: string; startDate: string; endDate: string; hours: number | null }
 export interface CourseDetail { course: RtoCourse; units: RtoUnit[]; fees: FeeItem[]; intakes: RtoIntake[]; batches: RtoBatch[] }
@@ -199,11 +200,16 @@ export function timingShort(b: Pick<RtoBatch, "sessions" | "classDays" | "startT
   const rooms = [...new Set(s.map((x) => x.room).filter(Boolean))].join(", ");
   return [days, timeRange(start, end), rooms].filter(Boolean).join(" · ");
 }
-/** Term breaks (the academic calendar); public holidays come from HR. */
-export async function listBreaks(): Promise<AcademicBreak[]> {
-  const { data, error } = await supabase.from("academic_breaks").select("label, start_date, end_date").order("start_date");
-  if (error) throw new Error(error.message);
-  return (data ?? []).map((b: { label: string; start_date: string; end_date: string }) => ({ label: b.label, startDate: b.start_date, endDate: b.end_date }));
+/** Term breaks (the academic calendar); public holidays come from HR. With a course: its own breaks and the breaks for every course. */
+export async function listBreaks(courseId?: string | null): Promise<AcademicBreak[]> {
+  type Row = { label: string; start_date: string; end_date: string; course_id?: string | null };
+  let res: { data: unknown[] | null; error: { message: string } | null } =
+    await supabase.from("academic_breaks").select("label, start_date, end_date, course_id").order("start_date");
+  // Before the COURSE-BREAKS update (migration 20261116140000) there is no course_id: every break is for every course.
+  if (res.error && /course_id/i.test(res.error.message)) res = await supabase.from("academic_breaks").select("label, start_date, end_date").order("start_date");
+  if (res.error) throw new Error(res.error.message);
+  return ((res.data ?? []) as Row[]).map(b => ({ label: b.label, startDate: b.start_date, endDate: b.end_date, courseId: b.course_id ?? null }))
+    .filter(b => !courseId || !b.courseId || b.courseId === courseId);
 }
 /** "52 Weeks" -> 52 (the course's registered duration), else null. */
 export const registeredWeeks = (duration: string | null | undefined) => { const m = /(\d+)\s*weeks?/i.exec(duration ?? ""); return m ? Number(m[1]) : null; };

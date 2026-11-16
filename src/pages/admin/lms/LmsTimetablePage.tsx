@@ -130,7 +130,7 @@ export default function LmsTimetablePage() {
         {canManage && selectClassButton("Edit class timing")}
       </div>}
     </section>
-    {batchId && data && sessions.length > 0 && detail?.intake.id === intakeId && <BatchCourseCalendar key={`calendar-${batchId}`} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
+    {batchId && data && sessions.length > 0 && detail?.intake.id === intakeId && <BatchCourseCalendar key={`calendar-${batchId}`} batchId={batchId} courseId={detail.intake.courseId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
       hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey}
       onRemoved={async () => {
         await rtoFlow("batch_setup", { batchId, intakeId, sessions: [] });

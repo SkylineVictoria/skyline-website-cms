@@ -11,8 +11,8 @@ const tone: Record<string, string> = { theory: "bg-sky-50 ring-sky-200", practic
  * The batch's whole course, month by month from the intake start: every class with its time, unit, room and trainer.
  * Term-break days are greyed out. Classes come from the saved class timing (generated when the timing is saved).
  */
-export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, onRemoved }: {
-  batchId: string; intakeStart: string; intakeEnd: string | null; hasSlots: boolean; canManage: boolean; reloadKey: number;
+export default function BatchCourseCalendar({ batchId, courseId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, onRemoved }: {
+  batchId: string; courseId: string; intakeStart: string; intakeEnd: string | null; hasSlots: boolean; canManage: boolean; reloadKey: number;
   /** After Remove calendar: clears the weekly class timing too, so the batch starts again from scratch. */
   onRemoved?: () => Promise<void>;
 }) {
@@ -42,7 +42,7 @@ export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, h
     finally { setResetting(false); }
   };
 
-  useEffect(() => { listBreaks().then(setBreaks).catch(() => undefined); }, []);
+  useEffect(() => { listBreaks(courseId).then(setBreaks).catch(() => undefined); }, [courseId]);
   useEffect(() => {
     let live = true;
     setLoading(true); setError("");

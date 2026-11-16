@@ -76,7 +76,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       setLocations(l); setTimings(t); setStaff(s);
       if (d) {
         setIntakeDates({ start: d.intake.startDate, end: d.intake.endDate }); if (!given) setBatches(d.batches);
-        void loadClosedDays(d.intake.startDate).then((f) => { if (live) setClosed(() => f); });
+        void loadClosedDays(d.intake.startDate, intake.courseId).then((f) => { if (live) setClosed(() => f); });
       }
     }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Rooms and timing did not load."); });
     void loadCourseNeed(intake.courseId).then((n) => { if (live) setNeed(n); }).catch(() => undefined);

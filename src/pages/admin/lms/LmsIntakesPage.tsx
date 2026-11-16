@@ -52,7 +52,8 @@ export default function LmsIntakesPage() {
   const courseIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
   const filtered = courseIntakes.filter(i => (i.name + " " + i.startDate).toLowerCase().includes(search.toLowerCase()));
   const taken = useMemo(() => new Set(courseIntakes.filter(i => i.id !== selectedId).map(i => i.startDate)), [courseIntakes, selectedId]);
-  const inBreak = breaks.find(b => start >= b.startDate && start <= b.endDate);
+  const courseBreaks = breaks.filter(b => !b.courseId || b.courseId === (detail?.intake.courseId ?? courseId));
+  const inBreak = courseBreaks.find(b => start >= b.startDate && start <= b.endDate);
   const close = () => { setSelectedId(""); setProblem(""); };
 
   const save = async () => {
@@ -172,7 +173,7 @@ export default function LmsIntakesPage() {
             {canEdit ? <div className="space-y-2">
               <p className="text-sm font-medium text-foreground-800">Start date</p>
               <p className="text-sm font-semibold text-foreground-900">{start ? longDate(start) : "Pick a day"}</p>
-              <BreakDatePicker value={start} onChange={setStart} breaks={breaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
+              <BreakDatePicker value={start} onChange={setStart} breaks={courseBreaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
               {start !== detail.intake.startDate ? <p className="text-xs text-foreground-600">Saving a new start date lays the unit timeline out again and moves the batches' classes.</p> : null}
             </div> : null}
             {problem ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{problem}</p> : null}

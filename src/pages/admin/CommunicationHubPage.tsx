@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CommunicationTemplates from "@/pages/admin/components/CommunicationTemplates";
 import CommunicationInbox from "@/pages/admin/components/CommunicationInbox";
+import CommunicationTeams from "@/pages/admin/components/CommunicationTeams";
 
 type Notice = { id: string; title: string | null; message: string | null; event: string | null; created_at: string | null; application_id: string | null };
-const sections = ["Conversations", "Templates", "Activity", "Channels"] as const;
+const sections = ["Conversations", "Teams", "Templates", "Activity", "Channels"] as const;
 type Section = typeof sections[number];
 
 export default function CommunicationHubPage() {
@@ -34,7 +35,7 @@ export default function CommunicationHubPage() {
     <nav className="flex flex-wrap gap-2" aria-label="Communication sections">{sections.map(s =>
       <button key={s} type="button" onClick={() => setSection(s)} aria-current={section === s ? "page" : undefined}
         className={`rounded-lg px-4 py-2 text-sm font-semibold ${section === s ? "bg-primary-500 text-white" : "border border-background-200 bg-background-50 text-foreground-700"}`}>{s}</button>)}</nav>
-    {section === "Conversations" ? <CommunicationInbox /> : section === "Activity" ? <section className="space-y-4">
+    {section === "Conversations" ? <CommunicationInbox /> : section === "Teams" ? <CommunicationTeams /> : section === "Activity" ? <section className="space-y-4">
       <div className="rounded-xl border border-background-200 bg-background-50 p-4">
         <h2 className="font-semibold">Portal notification activity</h2>
         <p className="mt-1 text-sm text-foreground-600">Read-only events from the existing portal notification system. This is not yet a two-way email or WhatsApp inbox.</p>

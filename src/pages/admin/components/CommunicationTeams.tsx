@@ -3,10 +3,11 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, EmptyState, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 
-type TeamRow = { id: string; name: string; description: string; archived: boolean; memberCount: number; isMember: boolean; lastAt: string | null; last: { author: string; text: string } | null; unread: number };
+type TeamRow = { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; memberCount: number; isMember: boolean; lastAt: string | null; last: { author: string; text: string } | null; unread: number };
 type Staff = { id: string; name: string; email: string; role: string };
-type Thread = { team: { id: string; name: string; description: string; archived: boolean }; me: string | null; members: { id: string; name: string; email: string }[];
-  messages: { id: string; authorId: string | null; author: string; body: string; at: string }[] };
+type Thread = { team: { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; microsoftHost?: string | null }; me: string | null; members: { id: string; name: string; email: string }[];
+  messages: { id: string; authorId: string | null; author: string; body: string; at: string; microsoft?: "sent" | "failed" | "sending" | null }[] };
+type Editing = { id: string | null; name: string; description: string; memberIds: string[]; microsoft: boolean; microsoftHost: string | null };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
@@ -18,7 +19,7 @@ export default function CommunicationTeams() {
   const [error, setError] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: string | null; name: string; description: string; memberIds: string[] } | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
 
   const load = useCallback(async () => {
     const { data, error } = await supabase.rpc("comm_teams_list", { p_include_archived: showArchived });
@@ -34,7 +35,7 @@ export default function CommunicationTeams() {
     <section className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
       <div className={`flex min-h-[60vh] flex-col rounded-xl border border-background-200 bg-background-50 ${activeId ? "hidden lg:flex" : "flex"}`}>
         <div className="space-y-2 border-b border-background-200 p-3">
-          <Button icon="ri-team-line" className="w-full" onClick={() => setEditing({ id: null, name: "", description: "", memberIds: [] })}>New team</Button>
+          <Button icon="ri-team-line" className="w-full" onClick={() => setEditing({ id: null, name: "", description: "", memberIds: [], microsoft: false, microsoftHost: null })}>New team</Button>
           <label className="flex items-center gap-2 text-xs text-foreground-600">
             <input type="checkbox" className="h-4 w-4" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived teams
           </label>
@@ -47,7 +48,7 @@ export default function CommunicationTeams() {
               <li key={t.id}>
                 <button type="button" onClick={() => setActiveId(t.id)} className={`w-full border-b border-background-100 px-3 py-2.5 text-left hover:bg-background-100 ${activeId === t.id ? "bg-primary-50" : ""} ${t.archived ? "opacity-60" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-medium text-foreground-950"><i className="ri-team-line mr-1.5 text-primary-600" aria-hidden="true" />{t.name}</span>
+                    <span className="truncate font-medium text-foreground-950"><i className="ri-team-line mr-1.5 text-primary-600" aria-hidden="true" />{t.name}{t.microsoft ? <i className="ri-microsoft-line ml-1.5 text-foreground-500" title="Copied to Microsoft Teams" aria-label="Connected to Microsoft Teams" /> : null}</span>
                     {t.unread > 0 ? <span className="rounded-full bg-primary-500 px-2 text-xs font-semibold text-white">{t.unread}</span> : <span className="text-xs text-foreground-500">{when(t.lastAt)}</span>}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-foreground-600">
@@ -61,7 +62,7 @@ export default function CommunicationTeams() {
       <div className={activeId ? "block" : "hidden lg:block"}>
         {active ? (active.isMember
           ? <TeamChat id={active.id} onBack={() => setActiveId(null)} onChanged={() => void load()}
-              onManage={(t) => setEditing({ id: t.team.id, name: t.team.name, description: t.team.description, memberIds: t.members.map((m) => m.id) })} />
+              onManage={(t) => setEditing({ id: t.team.id, name: t.team.name, description: t.team.description, memberIds: t.members.map((m) => m.id), microsoft: !!t.team.microsoft, microsoftHost: t.team.microsoftHost ?? null })} />
           : <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 rounded-xl border border-background-200 bg-background-50 p-6 text-center">
               <EmptyState icon="ri-lock-line" title={`You're not in ${active.name}`} description="Only members can read and post in a team. Add yourself to join." />
               <Button variant="outline" onClick={() => setActiveId(null)} className="lg:hidden">Back</Button>
@@ -107,7 +108,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
       <header className="flex flex-wrap items-center gap-3 border-b border-background-200 p-3">
         <button type="button" onClick={onBack} className="rounded-md p-1 text-foreground-600 hover:bg-background-100 lg:hidden" aria-label="Back to teams"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold text-foreground-950">{thread.team.name}{thread.team.archived ? <span className="ml-2 rounded bg-background-200 px-1.5 text-xs font-normal">Archived</span> : null}</h2>
+          <h2 className="truncate font-semibold text-foreground-950">{thread.team.name}{thread.team.archived ? <span className="ml-2 rounded bg-background-200 px-1.5 text-xs font-normal">Archived</span> : null}{thread.team.microsoft ? <span className="ml-2 rounded bg-primary-50 px-1.5 text-xs font-normal text-primary-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Copied to Microsoft Teams</span> : null}</h2>
           <p className="truncate text-xs text-foreground-600" title={thread.members.map((m) => m.name).join(", ")}>{thread.team.description ? `${thread.team.description} · ` : ""}{thread.members.map((m) => m.name).join(", ")}</p>
         </div>
         <Button size="sm" variant="outline" icon="ri-settings-3-line" onClick={() => onManage(thread)}>Manage</Button>
@@ -121,6 +122,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
               <article className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${mine ? "bg-primary-500 text-white" : "border border-background-200 bg-white text-foreground-900"}`}>
                 <p className={`mb-0.5 text-xs ${mine ? "text-white/80" : "text-foreground-500"}`}>{mine ? "You" : m.author} · {when(m.at)}</p>
                 <p className="whitespace-pre-wrap">{m.body}</p>
+                {m.microsoft ? <p className={`mt-1 text-[11px] ${mine ? "text-white/80" : "text-foreground-500"}`}><i className="ri-microsoft-line mr-1" aria-hidden="true" />{m.microsoft === "sent" ? "Copied to Microsoft Teams" : m.microsoft === "failed" ? "Could not copy to Microsoft Teams" : "Copying to Microsoft Teams…"}</p> : null}
               </article>
             </div>
           );
@@ -139,7 +141,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
   );
 }
 
-function TeamEditor({ initial, archived, onClose, onSaved }: { initial: { id: string | null; name: string; description: string; memberIds: string[] }; archived: boolean; onClose: () => void; onSaved: (id: string) => void }) {
+function TeamEditor({ initial, archived, onClose, onSaved }: { initial: Editing; archived: boolean; onClose: () => void; onSaved: (id: string) => void }) {
   const { push } = useToast();
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
@@ -188,7 +190,57 @@ function TeamEditor({ initial, archived, onClose, onSaved }: { initial: { id: st
           </div>
           <p className="mt-1 text-xs text-foreground-500">Members are your staff who sign in to the admin area. Only Admins can open the Communication Hub today.</p>
         </fieldset>
+        {initial.id ? <MicrosoftTeamsLink teamId={initial.id} connected={initial.microsoft} host={initial.microsoftHost} disabled={archived} onChanged={() => onSaved(initial.id as string)} /> : null}
       </div>
     </Modal>
+  );
+}
+
+/** Links a hub team to a Microsoft Teams channel (one-way copy). The link is stored privately and never shown again. */
+function MicrosoftTeamsLink({ teamId, connected, host, disabled, onChanged }: { teamId: string; connected: boolean; host: string | null; disabled: boolean; onChanged: () => void }) {
+  const { push } = useToast();
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [help, setHelp] = useState(false);
+  const setLink = async (value: string) => {
+    setBusy(true);
+    const { error } = await supabase.rpc("comm_team_microsoft_set", { p_team: teamId, p_webhook_url: value });
+    if (!error && value) await supabase.rpc("comm_team_microsoft_test", { p_team: teamId });
+    setBusy(false);
+    if (error) { push(error.message, "error"); return; }
+    push(value ? "Connected. A test message was sent to the Teams channel." : "Disconnected from Microsoft Teams.");
+    setUrl("");
+    onChanged();
+  };
+  const test = async () => {
+    setBusy(true);
+    const { error } = await supabase.rpc("comm_team_microsoft_test", { p_team: teamId });
+    setBusy(false);
+    push(error ? error.message : "Test message sent. Check the Teams channel.", error ? "error" : "success");
+  };
+  return (
+    <fieldset disabled={disabled || busy} className="rounded-lg border border-background-200 p-3">
+      <legend className="px-1 text-label font-medium text-foreground-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Microsoft Teams</legend>
+      {connected ? (
+        <div className="space-y-2">
+          <p className="text-sm text-foreground-700">Connected{host ? <span className="text-foreground-500"> ({host})</span> : null}. New messages in this team are copied to the Teams channel.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => void test()}>Send test message</Button>
+            <Button size="sm" variant="ghost" onClick={() => void setLink("")}>Disconnect</Button>
+          </div>
+          <p className="text-xs text-foreground-500">To use a different channel, paste its link below.</p>
+        </div>
+      ) : <p className="mb-2 text-sm text-foreground-600">Copy this team's messages into a Microsoft Teams channel so staff can follow them in the Teams app. Replies in Teams don't come back here.</p>}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <TextInput type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste the Teams channel link (https://…)" aria-label="Microsoft Teams channel link" className="min-w-0 flex-1" />
+        <Button size="sm" disabled={!url.trim()} onClick={() => void setLink(url.trim())}>{connected ? "Replace link" : "Connect"}</Button>
+      </div>
+      <button type="button" className="mt-2 text-xs font-medium text-primary-700 underline" onClick={() => setHelp(!help)}>{help ? "Hide" : "How do I get the link?"}</button>
+      {help ? <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-foreground-600">
+        <li>In Microsoft Teams, open the channel, click the <b>…</b> next to its name and choose <b>Workflows</b>.</li>
+        <li>Pick <b>“Post to a channel when a webhook request is received”</b> and follow the steps.</li>
+        <li>Copy the link Teams shows at the end and paste it here.</li>
+      </ol> : null}
+    </fieldset>
   );
 }

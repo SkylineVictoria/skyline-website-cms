@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(585);
+select plan(588);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1142,6 +1142,13 @@ set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.comm_teams_list(false)$$,'42501',null,'a portal user cannot list staff teams');
 select throws_ok($$select public.comm_team_post(gen_random_uuid(),'x')$$,'42501',null,'a portal user cannot post to a staff team');
 select throws_ok($$select * from public.comm_team_messages$$,'42501',null,'a portal user cannot read team messages');
+reset role;
+-- Microsoft Teams channel link for staff teams (migration 20261116224113): admin only; the link table is never readable.
+select ok(public.comm_team_microsoft_host_ok('https://prod-1.au.logic.azure.com:443/workflows/w') and not public.comm_team_microsoft_host_ok('https://logic.azure.com@evil.test/x'),'only Microsoft webhook hosts are accepted');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_team_microsoft_set(gen_random_uuid(),'')$$,'42501',null,'a portal user cannot link a Teams channel');
+select throws_ok($$select * from public.comm_team_microsoft$$,'42501',null,'the Teams link table is not readable');
 reset role;
 select * from finish();
 rollback;

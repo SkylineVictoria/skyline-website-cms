@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { rto } from "@/pages/admin/lib/rto";
+import { generateClassSessions, loadClassSessions, rto, type RtoIntake } from "@/pages/admin/lib/rto";
 
 interface BreakRow { id: string; label: string; startDate: string; endDate: string }
 type Draft = { id: string | null; label: string; startDate: string; endDate: string };
@@ -39,6 +39,21 @@ export default function LmsTermBreaksPage() {
   const overlaps = (r: { id: string | null; startDate: string; endDate: string }) =>
     rows.filter(o => o.id !== r.id && o.startDate <= r.endDate && r.startDate <= o.endDate);
 
+  /** Re-plans every batch that has classes from today on, or class times in an intake still running, so they follow the breaks. */
+  const replanClasses = async () => {
+    const until = new Date(parse(today).getTime() + 399 * DAY).toISOString().slice(0, 10);
+    const [upcoming, intakes] = await Promise.all([
+      loadClassSessions(null, today, until).catch(() => []),
+      rto<RtoIntake[]>("intake_list").catch(() => [] as RtoIntake[]),
+    ]);
+    const ids = new Set(upcoming.map(s => s.batchId));
+    for (const i of intakes) if (!i.endDate || i.endDate >= today) for (const b of i.batchList ?? []) if (b.isActive && b.days.length) ids.add(b.id);
+    let done = 0;
+    for (const id of ids) { try { await generateClassSessions(id); done += 1; } catch { /* a batch without class times has nothing to plan */ } }
+    return done;
+  };
+  const replanNote = (n: number) => n ? ` Classes updated for ${n} batch${n === 1 ? "" : "es"}.` : "";
+
   const draftProblem = !draft ? "" : !draft.label.trim() ? "Enter a name."
     : draft.label.trim().length > 80 ? "The name can be at most 80 characters."
     : !draft.startDate || !draft.endDate ? "Enter the first and last day."
@@ -55,7 +70,9 @@ export default function LmsTermBreaksPage() {
         : await supabase.from("academic_breaks").insert(values);
       if (e) throw new Error(e.message);
       await load();
-      setNotice(`${values.label} saved. Regenerate the classes of batches running in these dates so they skip the break.`);
+      const touchesFuture = values.end_date >= today || rows.some(r => r.id === draft.id && r.endDate >= today);
+      const n = touchesFuture ? await replanClasses() : 0;
+      setNotice(`${values.label} saved.${replanNote(n)}`);
       setDraft(null);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to save the break"); }
     finally { setBusy(false); }
@@ -67,7 +84,8 @@ export default function LmsTermBreaksPage() {
       const { error: e } = await supabase.from("academic_breaks").delete().eq("id", r.id);
       if (e) throw new Error(e.message);
       await load();
-      setNotice(`${r.label} deleted. Regenerate the classes of batches running in these dates to use the days.`);
+      const n = r.endDate >= today ? await replanClasses() : 0;
+      setNotice(`${r.label} deleted.${replanNote(n)}`);
       if (draft?.id === r.id) setDraft(null);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to delete the break"); }
     finally { setBusy(false); }
@@ -79,7 +97,7 @@ export default function LmsTermBreaksPage() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Term breaks</h1>
-        <p className="mt-2 text-sm text-foreground-600">No classes are generated on these days. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
+        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. When you add, change or delete a break, every running batch's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
       </div>
       {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "" }); setNotice(""); }}
         className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add break</button>}
@@ -106,7 +124,7 @@ export default function LmsTermBreaksPage() {
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" onClick={() => setDraft(null)} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">Cancel</button>
         <button type="button" disabled={busy || !!draftProblem} onClick={() => void save()}
-          className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Saving…" : draft.id ? "Save break" : "Add break"}</button>
+          className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Saving and updating classes…" : draft.id ? "Save break" : "Add break"}</button>
       </div>
     </section>}
 

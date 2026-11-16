@@ -21,6 +21,8 @@ export default function LmsTimetablePage() {
   const [canEdit, setCanEdit] = useState(false);
   const [editor, setEditor] = useState(false);
   const [view, setView] = useState<"week" | "list">("week");
+  const [savedKey, setSavedKey] = useState(0);
+  const [savedNote, setSavedNote] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -74,17 +76,20 @@ export default function LmsTimetablePage() {
   const sessions = ordered(data?.batch.sessions ?? []);
   const canManage = canEdit && !!data && !!detail && detail.intake.id === intakeId;
   const selectClass = () => { if (canManage) setEditor(true); };
-  const selectClassButton = (label: string) => <button type="button" disabled={!canManage} onClick={selectClass} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50">{label}</button>;
+  const selectClassButton = (label: string) => <button type="button" disabled={!canManage} onClick={selectClass}
+    className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:cursor-not-allowed disabled:opacity-50">
+    <i className="ri-time-line text-lg" aria-hidden="true" />{label}</button>;
   const inputClass = "mt-1 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
   const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
-        <p className="text-sm text-foreground-500">Set a batch's weekly class times once; the dated classes below are generated from them.</p>
+        <p className="text-sm text-foreground-500">Set a batch's weekly class times. The dated classes below fill in by themselves, skipping term breaks and public holidays.</p>
       </div>
-      {canManage && <button type="button" onClick={selectClass} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Edit class times</button>}
+      {canManage && sessions.length > 0 && selectClassButton("Edit class timing")}
     </header>
+    {savedNote && <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{savedNote}</p>}
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button type="button" className="ml-3 underline" onClick={() => { void reload(); void refreshBatch(); }}>Retry</button></div>}
     <div className={card + " grid gap-3 p-3 md:grid-cols-3"}>
       <label className="block text-xs font-semibold text-foreground-500">Course
@@ -111,7 +116,7 @@ export default function LmsTimetablePage() {
       <div className="mt-4">
         {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p> : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p> : !sessions.length ? <div className="py-10 text-center">
           <p className="text-sm text-foreground-500">No class times saved for this batch.</p>
-          {canManage && <div className="mt-3">{selectClassButton("Set class timing")}</div>}
+          {canManage ? <div className="mt-4">{selectClassButton("Set class timing")}</div> : <p className="mt-1 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
         </div> : view === "week" ? <div className="overflow-x-auto">
           <div className="grid min-w-[760px] grid-cols-7 divide-x divide-background-200 rounded-lg border border-background-200">
             {DAYS.map((day, i) => <section key={day} className="min-h-44 p-2">
@@ -136,9 +141,13 @@ export default function LmsTimetablePage() {
         </div>}
       </div>
     </section>
-    <ClassSessionsPanel batchId={batchId} canManage={canManage} />
+    <ClassSessionsPanel batchId={batchId} canManage={canManage} reloadKey={savedKey} />
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
       onClose={() => setEditor(false)}
-      onSaved={out => { setEditor(false); setDetail(out); void refreshBatch(); void reload(); }} />}
+      onSaved={out => {
+        setEditor(false); setDetail(out); void refreshBatch(); void reload(); setSavedKey(k => k + 1);
+        const g = out.generated;
+        setSavedNote(g ? `Class timing saved. ${g.created} classes scheduled${g.endDate ? `, last class ${new Date(g.endDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}` : ""}.` : "Class timing saved.");
+      }} />}
   </div>;
 }

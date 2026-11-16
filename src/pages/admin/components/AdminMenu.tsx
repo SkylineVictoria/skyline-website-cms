@@ -56,8 +56,8 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const nodes = result?.identity === identity ? menuTree(result.rows) : null;
   return <>
     <div className={`flex-1 overflow-y-auto py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      <EmailManagementNavigation close={close} collapsed={collapsed} />
-      {nodes ? <><ul>{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><LmsNavigation close={close} collapsed={collapsed} /></> : <>
+      <LmsNavigation close={close} collapsed={collapsed} />
+      {nodes ? <><ul className="mt-3 border-t border-background-200 pt-3">{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><EmailManagementNavigation close={close} collapsed={collapsed} /></> : <>
         <NavLink to="/admin" end onClick={close} className={linkClass}><i className="ri-dashboard-3-line" aria-hidden="true" />Dashboard</NavLink>
         <p role="status" className="px-3 text-xs text-foreground-500">{failed ? 'Menu unavailable.' : 'Loading menu…'}</p>
         {failed ? <button type="button" onClick={() => setAttempt(v => v + 1)} className={linkClass}>Retry menu</button> : null}
@@ -75,7 +75,17 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
   const { pathname } = useLocation();
   const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));
   useEffect(() => { if (pathname.startsWith("/admin/lms")) setExpanded(true); }, [pathname]);
-  return <div className="mt-3 border-t border-background-200 pt-3">
+  const timetableOpen = LMS_MENU.some(i => i.parent === "timetable" && i.route === pathname);
+  const [timetable, setTimetable] = useState(timetableOpen);
+  useEffect(() => { if (timetableOpen) setTimetable(true); }, [timetableOpen]);
+  const link = (item: (typeof LMS_MENU)[number]) => <NavLink to={item.route} end onClick={close}
+    title={collapsed ? item.label : undefined}
+    className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (pathname === item.route ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
+    <i className={item.icon + " text-lg"} aria-hidden="true" />
+    {collapsed ? <span className="sr-only">{item.label}</span> : <span className="truncate">{item.label}</span>}
+  </NavLink>;
+  const firstChild = LMS_MENU.findIndex(i => i.parent === "timetable");
+  return <div>
     <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}
       title={collapsed ? "Learning Management" : undefined}
       className={linkClass + " w-full " + (collapsed ? "justify-center px-0" : "")}>
@@ -83,14 +93,16 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
       {collapsed ? <span className="sr-only">Learning Management</span> : <><span className="flex-1 text-left">Learning Management</span><i className={expanded ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
     </button>
     {expanded ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
-      {LMS_MENU.map(item => <li key={item.id}>
-        <NavLink to={item.route} end onClick={close}
-          title={collapsed ? item.label : undefined}
-          className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (pathname === item.route ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
-          <i className={item.icon + " text-lg"} aria-hidden="true" />
-          {collapsed ? <span className="sr-only">{item.label}</span> : <span className="truncate">{item.label}</span>}
-        </NavLink>
-      </li>)}
+      {LMS_MENU.map((item, index) => item.parent ? (index === firstChild ? <li key="timetable-group">
+        <button type="button" aria-expanded={timetable} onClick={() => setTimetable(v => !v)} title={collapsed ? "Timetable" : undefined}
+          className={linkClass + " w-full " + (collapsed ? "justify-center px-0 " : "") + (timetableOpen && !timetable ? "text-primary-600" : "text-foreground-700 hover:bg-background-100")}>
+          <i className="ri-calendar-2-line text-lg" aria-hidden="true" />
+          {collapsed ? <span className="sr-only">Timetable</span> : <><span className="flex-1 truncate text-left">Timetable</span><i className={timetable ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
+        </button>
+        {timetable ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
+          {LMS_MENU.filter(i => i.parent === "timetable").map(child => <li key={child.id}>{link(child)}</li>)}
+        </ul> : null}
+      </li> : null) : <li key={item.id}>{link(item)}</li>)}
     </ul> : null}
   </div>;
 }
@@ -108,7 +120,7 @@ function EmailManagementNavigation({ close, collapsed }: { close: () => void; co
   const active = pathname === "/admin/email-management";
   const [expanded, setExpanded] = useState(active);
   useEffect(() => { if (active) setExpanded(true); }, [active]);
-  return <div className="mt-2">
+  return <div className="mt-3 border-t border-background-200 pt-3">
     <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}
       title={collapsed ? "Email Management" : undefined}
       className={linkClass + " w-full " + (collapsed ? "justify-center px-0" : "")}>

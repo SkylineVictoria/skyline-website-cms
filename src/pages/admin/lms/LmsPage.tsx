@@ -9,6 +9,7 @@ import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
 import LmsTimetablePage from "./LmsTimetablePage";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
+import ClassSessionsPanel from "./ClassSessionsPanel";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
@@ -27,6 +28,10 @@ export default function LmsPage() {
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "timetable") return <LmsTimetablePage />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
+  if (area === "room-grid") return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
+    <h1 className="font-heading text-2xl font-bold text-foreground-950">Room grid</h1>
+    <ClassSessionsPanel batchId="" canManage={false} mode="rooms" />
+  </div>;
   if (area === "attendance") return <LmsAttendancePage />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],

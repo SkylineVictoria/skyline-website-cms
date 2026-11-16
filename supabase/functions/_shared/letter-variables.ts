@@ -43,7 +43,9 @@ export const EACH_COURSES = "#each courses";
 export const IF_MULTIPLE = "#if multiple_courses";
 export const EACH_CHARGES = "#each other_fees";
 export const IF_GST = "#if gst";
-const BLOCK_MARKER = /^\s*(#each courses|#each other_fees|\/each|#if multiple_courses|#if gst|\/if)\s*$/i;
+/** {{#if discount}} ... {{/if}}: inside {{#each courses}} printed only for a course with a discount; outside, when any course has one. */
+export const IF_DISCOUNT = "#if discount";
+const BLOCK_MARKER = /^\s*(#each courses|#each other_fees|\/each|#if multiple_courses|#if gst|#if discount|\/if)\s*$/i;
 export const isBlockMarker = (inner: string) => BLOCK_MARKER.test(inner);
 /** A course variable of the n-th course after the first is written key#n (course.name#1 is the second course's name). */
 export const baseKey = (key: string) => key.split("#")[0];
@@ -87,8 +89,29 @@ function nextMarker(html: string, from: number, name: RegExp): { at: number; len
  * fee variables of the n-th course written key#n), {{#if multiple_courses}} blocks kept only for more than one course. With one course
  * (or none) the letter reads exactly as without the blocks.
  */
-export function expandLetterBlocks(html: string, courseCount: number, extras: { charges?: number; gst?: boolean } = {}): string {
+export interface LetterBlockExtras {
+  charges?: number; gst?: boolean;
+  /** Per course, in order: whether it has a discount ({{#if discount}}); absent = no discount. */
+  discounts?: readonly boolean[];
+}
+const CLOSE_IF = /\{\{\s*\/if\s*\}\}/gi;
+/** Every {{#if <name>}} ... {{/if}} of `html` kept (without its markers) or removed, their rows / paragraphs with them. */
+function resolveIf(html: string, open: RegExp, keep: boolean): string {
+  let out = html;
+  for (let guard = 0; guard < 200; guard++) {
+    const start = nextMarker(out, 0, open);
+    if (!start) break;
+    const close = nextMarker(out, start.at + start.length, CLOSE_IF);
+    if (!close) { out = out.slice(0, start.at) + out.slice(start.at + start.length); continue; }
+    const a = markerSpan(out, start.at, start.length), b = markerSpan(out, close.at, close.length);
+    out = out.slice(0, a.start) + (keep ? out.slice(a.end, b.start) : "") + out.slice(b.end);
+  }
+  return out;
+}
+const OPEN_DISCOUNT = /\{\{\s*#if discount\s*\}\}/gi;
+export function expandLetterBlocks(html: string, courseCount: number, extras: LetterBlockExtras = {}): string {
   const count = Math.max(1, Math.floor(courseCount) || 1);
+  const discounts = extras.discounts ?? [];
   let out = String(html ?? "");
   const openEach = /\{\{\s*#each courses\s*\}\}/gi, closeEach = /\{\{\s*\/each\s*\}\}/gi;
   for (let guard = 0; guard < 50; guard++) {
@@ -98,10 +121,16 @@ export function expandLetterBlocks(html: string, courseCount: number, extras: { 
     if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
     const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
     const inner = out.slice(a.end, b.start);
-    const copies = Array.from({ length: count }, (_, n) => (n === 0 ? inner : inner.replace(/\{\{\s*([a-z]+\.[a-z_]+)(\s*\|[^{}]*)?\s*\}\}/g,
-      (whole, key: string, mod: string | undefined) => (isCourseKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole))));
+    // The n-th copy keeps its {{#if discount}} rows only when the n-th course has a discount (settled here, before the generic {{/if}} passes).
+    const copies = Array.from({ length: count }, (_, n) => {
+      const own = resolveIf(inner, OPEN_DISCOUNT, discounts[n] === true);
+      return n === 0 ? own : own.replace(/\{\{\s*([a-z]+\.[a-z_]+)(\s*\|[^{}]*)?\s*\}\}/g,
+        (whole, key: string, mod: string | undefined) => (isCourseKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole));
+    });
     out = out.slice(0, a.start) + copies.join("") + out.slice(b.end);
   }
+  // {{#if discount}} outside a courses block: kept when any course has a discount.
+  out = resolveIf(out, OPEN_DISCOUNT, discounts.some(Boolean));
   // {{#each other_fees}}: once per row (none: the block goes); the n-th copy's charges.* variables are written key#n.
   const rows = Math.max(0, Math.floor(extras.charges ?? 1));
   const openCharges = /\{\{\s*#each other_fees\s*\}\}/gi;
@@ -116,25 +145,9 @@ export function expandLetterBlocks(html: string, courseCount: number, extras: { 
       (whole, key: string, mod: string | undefined) => (isChargeKey(key) ? `{{${key}#${n}${mod ?? ""}}}` : whole))));
     out = out.slice(0, a.start) + copies.join("") + out.slice(b.end);
   }
-  // {{#if gst}}: kept only when a fee line is taxable.
-  const openGst = /\{\{\s*#if gst\s*\}\}/gi, closeAnyIf = /\{\{\s*\/if\s*\}\}/gi;
-  for (let guard = 0; guard < 200; guard++) {
-    const open = nextMarker(out, 0, openGst);
-    if (!open) break;
-    const close = nextMarker(out, open.at + open.length, closeAnyIf);
-    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
-    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
-    out = out.slice(0, a.start) + (extras.gst ? out.slice(a.end, b.start) : "") + out.slice(b.end);
-  }
-  const openIf = /\{\{\s*#if multiple_courses\s*\}\}/gi, closeIf = /\{\{\s*\/if\s*\}\}/gi;
-  for (let guard = 0; guard < 50; guard++) {
-    const open = nextMarker(out, 0, openIf);
-    if (!open) break;
-    const close = nextMarker(out, open.at + open.length, closeIf);
-    if (!close) { out = out.slice(0, open.at) + out.slice(open.at + open.length); continue; }
-    const a = markerSpan(out, open.at, open.length), b = markerSpan(out, close.at, close.length);
-    out = out.slice(0, a.start) + (count > 1 ? out.slice(a.end, b.start) : "") + out.slice(b.end);
-  }
+  // {{#if gst}}: kept only when a fee line is taxable; {{#if multiple_courses}}: only for more than one course.
+  out = resolveIf(out, /\{\{\s*#if gst\s*\}\}/gi, extras.gst === true);
+  out = resolveIf(out, /\{\{\s*#if multiple_courses\s*\}\}/gi, count > 1);
   return out;
 }
 /** The values with the 2nd, 3rd... row of Settings › Other fees and charges added as charges.label#1, charges.amount#1... */

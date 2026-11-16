@@ -310,7 +310,7 @@ export default function ApplicationsTable({
                           <span className="text-xs text-foreground-400">Not selected</span>
                         ) : (
                           <span className="text-xs text-foreground-700">
-                            {row.courses.map((c) => c.code).join(", ")}
+                            {row.courses.map((c) => (c.discountPercent ? `${c.code} (${c.discountPercent}% discount)` : c.code)).join(", ")}
                           </span>
                         )}
                         <p className="mt-1 text-xs text-foreground-500">Intake: {row.intake || "\u2014"}</p>

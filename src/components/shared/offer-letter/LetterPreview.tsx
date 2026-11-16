@@ -54,15 +54,23 @@ export default function LetterPreview({ input, onBuilt, onMark, testId = "letter
 }
 
 /** Variable check: each variable the template uses, its value for this application, where it comes from and whether it is filled. */
-export function VariableCheck({ html, registry, values, manual = [], testId = "variable-check" }: {
+export function VariableCheck({ html, registry, values, manual = [], courses, testId = "variable-check" }: {
   html: string; registry: readonly LetterVariable[]; values: Record<string, LetterValue>; manual?: readonly ManualFill[]; testId?: string;
+  /** The application's courses (letter values per course): the discount each one carries is listed above the table. */
+  courses?: ReadonlyArray<Record<string, LetterValue>>;
 }) {
   const byKey = new Map(registry.map((v) => [v.key, v]));
   const fills = new Map(manual.map((m) => [m.key, m]));
   const keys = letterKeys(html).filter((k) => byKey.get(baseKey(k))?.sourceKind !== "render");
+  const discounted = (courses ?? []).map((c, n) => ({ n, meta: c as unknown as Record<string, unknown>, course: c })).filter(({ meta }) => meta._discount === true);
   if (!keys.length) return <p className="text-sm text-foreground-500">The template uses no variables.</p>;
   return (
     <div className="overflow-x-auto rounded-lg border border-background-200" data-testid={testId}>
+      <p className="border-b border-background-200 bg-emerald-50/60 px-2 py-1.5 text-xs text-foreground-800" data-testid="variable-check-discount">
+        {discounted.length
+          ? <>Discount: {discounted.map(({ n, meta, course }) => `${course["fees.discount_percent"]?.value || "?"} on ${String(meta._title ?? course["course.name"]?.value ?? `course ${n + 1}`)}${course["fees.discount_amount"]?.value ? ` (${course["fees.discount_amount"].value})` : ""}`).join("; ")}. Fee totals are shown after the discount; {"{{#if discount}}"} rows print for these courses only.</>
+          : <>No discount on this application: {"{{#if discount}}"} rows are left out.</>}
+      </p>
       <table className="w-full min-w-[520px] text-left text-xs">
         <thead className="bg-background-100 text-foreground-600"><tr><th className="px-2 py-1.5 font-medium">Variable</th><th className="px-2 py-1.5 font-medium">Value</th><th className="px-2 py-1.5 font-medium">Source</th></tr></thead>
         <tbody className="divide-y divide-background-200">

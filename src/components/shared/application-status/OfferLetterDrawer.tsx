@@ -6,10 +6,10 @@ import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import LetterPreview, { VariableCheck, type BuiltLetter } from "@/components/shared/offer-letter/LetterPreview";
 import RichTextEditor from "@/pages/admin/components/RichTextEditor";
 import {
-  expandFor, issueTemplateLetter, letterValues, loadLetterRegistry, loadLetterTemplates, saveLetterValueToSource, toBase64,
-  type LetterTemplate, type LetterValues,
+  applicationCourses, courseMeta, expandFor, issueTemplateLetter, letterValues, loadLetterRegistry, loadLetterTemplates, saveLetterValueToSource, setCourseDiscount, toBase64,
+  type ApplicationCourse, type LetterTemplate, type LetterValues,
 } from "@/lib/offerLetters";
-import { baseKey, blockingDetails, formatTyped, missingDetails, withChargeValues, withCourseValues, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
+import { baseKey, blockingDetails, formatTyped, missingDetails, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
@@ -61,13 +61,37 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   const cc = useCcDefault(application.id);
   const [ccOn, setCcOn] = useState(true);
   const [finalCheck, setFinalCheck] = useState(false);
+  // The application's course rows, for the discount each one carries into the letter (saved with application_course_discount_set).
+  const [appCourses, setAppCourses] = useState<ApplicationCourse[] | null>(null);
+  const [discountDraft, setDiscountDraft] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void offerLetterRecipient(application.id).then(setRecipient, (e: Error) => setError(e.message));
     void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message));
     void letterValues(application.id).then(setValues, (e: Error) => setError(e.message));
+    void applicationCourses(application.id).then(setAppCourses, () => setAppCourses([]));
     reloadTemplates();
   }, [application.id]);
+  /** The application course row behind the n-th course of the letter values (by its id, else by order). */
+  const courseRowFor = (course: Record<string, LetterValue>, n: number): ApplicationCourse | undefined => {
+    const id = String(courseMeta(course)._courseId ?? "");
+    return appCourses?.find((r) => r.id === id || r.courseId === id) ?? appCourses?.[n];
+  };
+  const saveDiscount = async (row: ApplicationCourse) => {
+    const typed = discountDraft[row.id];
+    if (typed === undefined) return;
+    const percent = Number(typed);
+    if (!typed.trim() || !Number.isFinite(percent) || percent < 0 || percent > 100) { setError("Enter a discount between 0 and 100 percent."); return; }
+    if (Math.abs(percent - row.discountPercent) < 0.001) { setDiscountDraft((d) => { const next = { ...d }; delete next[row.id]; return next; }); return; }
+    setBusy(`discount-${row.id}`); setError("");
+    try {
+      await setCourseDiscount(row.id, percent);
+      const [rows, next] = await Promise.all([applicationCourses(application.id), letterValues(application.id)]);
+      setAppCourses(rows); setValues(next); setLetter(null);
+      setDiscountDraft((d) => { const draft = { ...d }; delete draft[row.id]; return draft; });
+    } catch (e) { setError(e instanceof Error ? e.message : "The discount could not be saved."); }
+    finally { setBusy(""); }
+  };
   /** Keep the selected template if it is still available. */
   function reloadTemplates() {
     setTemplates(null);
@@ -225,6 +249,38 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                 </div>
               )}
 
+              {template && values?.courses?.length ? (
+                <section className="rounded-lg border border-background-200 bg-background-100/60 p-3" data-testid="offer-courses" aria-label="Courses and fees">
+                  <p className="text-sm font-semibold text-foreground-950">Courses and fees</p>
+                  <p className="mb-2 mt-0.5 text-xs text-foreground-600">A discount is taken off the course's tuition in the letter; the deposit stays as it is.</p>
+                  <ul className="space-y-2">
+                    {values.courses.map((course, n) => {
+                      const meta = courseMeta(course);
+                      const row = courseRowFor(course, n);
+                      const title = String(meta._title ?? course["course.name"]?.value ?? `Course ${n + 1}`);
+                      const percent = course["fees.discount_percent"]?.value;
+                      return (
+                        <li key={row?.id ?? n} className="flex flex-wrap items-center gap-2 rounded-md border border-background-200 bg-background-50 px-2.5 py-2" data-testid="offer-course" data-discount={row?.discountPercent ?? 0}>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-foreground-900">{title}</p>
+                            <p className="text-xs text-foreground-600">Total {course["fees.total"]?.value || "not set"}{meta._discount === true ? <span className="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800" data-testid="offer-course-discount">{percent || `${row?.discountPercent ?? 0}%`} discount</span> : null}</p>
+                          </div>
+                          <label className="flex items-center gap-1.5 text-xs text-foreground-700">Discount %
+                            <input type="number" min={0} max={100} step={0.5} inputMode="decimal" disabled={!row || busy.startsWith("discount")} data-testid={`course-discount-${n}`}
+                              value={row ? discountDraft[row.id] ?? String(row.discountPercent) : ""}
+                              onChange={(e) => { if (row) setDiscountDraft((d) => ({ ...d, [row.id]: e.target.value })); }}
+                              onBlur={() => { if (row) void saveDiscount(row); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                              className="w-20 rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-sm focus:border-primary-500 focus:outline-none" />
+                          </label>
+                          {busy === `discount-${row?.id}` ? <i className="ri-loader-4-line animate-spin text-foreground-500" aria-label="Saving" /> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null}
+
               {template && registry && values ? (
                 <section className={`rounded-lg border p-3 ${blocking.length ? "border-amber-300 bg-amber-50/60" : "border-emerald-200 bg-emerald-50/50"}`} data-testid="needs-input" aria-label="Needs your input">
                   <p className="text-sm font-semibold text-foreground-950">
@@ -322,7 +378,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                     {showCheck ? "Hide variable check" : "Variable check"}
                   </button>
                 </div>
-                {showCheck ? <VariableCheck html={usedHtml} registry={registry} values={flat} manual={manual} /> : null}
+                {showCheck ? <VariableCheck html={usedHtml} registry={registry} values={flat} manual={manual} courses={values.courses} /> : null}
                 <LetterPreview input={{ template: used, registry, values: values.values, courses: values.courses, charges: values.charges, gst: Boolean(values.context.gst), manual, conditions }} onBuilt={(made) => setLetter(made)} onMark={focusInput} testId="offer-letter-preview" />
               </>
             ) : (

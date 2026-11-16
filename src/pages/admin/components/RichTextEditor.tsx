@@ -12,6 +12,8 @@ import { rehostImagesIn, uploadTemplateAsset } from "@/lib/offerLetters";
 
 /* Offer letter variables: {{key}} text is shown as a chip (edited as one piece) and saved back as the text token. */
 const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** The logo from Website Settings as a picture variable; inserted as {{institute.logo|h60}} (60 pt high). */
+const LOGO_KEY = "institute.logo";
 function chipElement(raw: string, registry: readonly LetterVariable[]): HTMLSpanElement {
   const chip = document.createElement("span");
   chip.className = "var-chip";
@@ -799,6 +801,7 @@ export default function RichTextEditor({
             onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ""; }} className="text-xs" />
           {imgError ? <span role="alert" className="text-xs text-red-700">{imgError}</span>
             : <span className="text-xs text-foreground-500">{uploading ? "Uploading…" : storageImages ? "Uploaded to the template's picture store (PNG / JPEG; other formats are converted)." : "PNG or JPEG, stored inside the template."}</span>}
+          {letter && !uploading ? <span className="text-xs text-foreground-700" data-testid={testId ? `${testId}-logo-hint` : undefined}>For the SLIT logo use <strong>Institute · Logo</strong> under Insert variable: it comes from Website Settings.</span> : null}
         </div>
       ) : null}
       {imgOpen && !doc ? (
@@ -916,18 +919,29 @@ export default function RichTextEditor({
           <aside className="border-t border-background-200 bg-background-100 p-2 lg:border-l lg:border-t-0" aria-label="Insert variable" data-testid={testId ? `${testId}-variables` : undefined}>
             <p className="text-label font-semibold text-foreground-900">Insert variable</p>
             <p className="mb-1.5 text-2xs text-foreground-600">Click to insert at the cursor. Saved as {"{{group.key}}"}; add |upper or |raw in the source view.</p>
-            <button type="button" onMouseDown={stop} data-testid="letter-course-block"
-              onClick={() => { const range = savedRange.current; insertAt("<p>{{#each courses}}</p><p>{{course.code_and_name}}: {{fees.total}}</p><p>{{/each}}</p>", range); }}
-              title="Everything between the two markers is printed once per course of the application (packaged offers); course and fee variables are that course's"
-              className="mb-2 flex w-full items-center gap-1.5 rounded border border-dashed border-primary-300 bg-primary-50 px-2 py-1.5 text-left text-xs font-medium text-primary-800 hover:bg-primary-100">
-              <i className="ri-repeat-line" aria-hidden="true" />Course block (repeats per course)
-            </button>
+            <p className="mb-1 text-2xs font-bold uppercase tracking-wide text-foreground-500">Blocks</p>
+            <div className="mb-2 space-y-1">
+              <button type="button" onMouseDown={stop} data-testid="letter-course-block"
+                onClick={() => { const range = savedRange.current; insertAt("<p>{{#each courses}}</p><p>{{course.code_and_name}}: {{fees.total}}</p><p>{{/each}}</p>", range); }}
+                title="Everything between the two markers is printed once per course of the application (packaged offers); course and fee variables are that course's"
+                className="flex w-full items-center gap-1.5 rounded border border-dashed border-primary-300 bg-primary-50 px-2 py-1.5 text-left text-xs font-medium text-primary-800 hover:bg-primary-100">
+                <i className="ri-repeat-line" aria-hidden="true" />Course block (repeats per course)
+              </button>
+              <button type="button" onMouseDown={stop} data-testid="letter-discount-block"
+                onClick={() => { const range = savedRange.current; insertAt("<p>{{#if discount}}</p><p>Discount {{fees.discount_percent}}: {{fees.discount_amount}} (tuition after discount {{fees.tuition_after_discount}})</p><p>{{/if}}</p>", range); }}
+                title="Everything between the two markers is printed only for a course with a discount (inside a course block), or when any course has one"
+                className="flex w-full items-center gap-1.5 rounded border border-dashed border-primary-300 bg-primary-50 px-2 py-1.5 text-left text-xs font-medium text-primary-800 hover:bg-primary-100">
+                <i className="ri-percent-line" aria-hidden="true" />If discount (per course)
+              </button>
+            </div>
             <input type="search" value={varSearch} onChange={(e) => setVarSearch(e.target.value)} placeholder="Search variables" aria-label="Search variables"
               className="mb-2 h-8 w-full rounded border border-background-300 bg-background-50 px-2 text-xs focus:border-primary-400 focus:outline-none" />
             <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
               {registry.length === 0 ? <p className="text-xs text-foreground-500">Loading variables…</p> : LETTER_GROUPS.map((group) => {
                 const q = varSearch.trim().toLowerCase();
-                const list = registry.filter((v) => v.group === group && (!q || `${v.label} ${v.key} ${v.group}`.toLowerCase().includes(q)));
+                const list = registry.filter((v) => v.group === group && (!q || `${v.label} ${v.key} ${v.group}`.toLowerCase().includes(q)))
+                  // The logo from Website Settings comes first in Institute: it is what a header needs most.
+                  .sort((a, b) => Number(b.key === LOGO_KEY) - Number(a.key === LOGO_KEY));
                 if (!list.length) return null;
                 return (
                   <div key={group}>
@@ -935,7 +949,7 @@ export default function RichTextEditor({
                     <ul className="space-y-1">
                       {list.map((v) => (
                         <li key={v.key}>
-                          <button type="button" onMouseDown={stop} onClick={() => insertVariable(v.key)} title={`{{${v.key}}} · ${v.source}${v.required ? " · required" : ""}. Example: ${v.sample}`}
+                          <button type="button" onMouseDown={stop} onClick={() => insertVariable(v.key === LOGO_KEY ? `${LOGO_KEY}|h60` : v.key)} title={`{{${v.key}}} · ${v.source}${v.required ? " · required" : ""}. Example: ${v.sample}`}
                             data-testid={`letter-var-${v.key}`}
                             className="flex w-full items-center justify-between gap-1 rounded border border-background-300 bg-background-50 px-2 py-1 text-left text-xs hover:border-primary-300 hover:bg-primary-50">
                             <span className="truncate text-foreground-900">{v.label}</span>

@@ -112,6 +112,15 @@ export const SIGNING_STATUS: Record<string, { label: string; tone: "primary" | "
   draft: { label: "Draft", tone: "muted" }, sent: { label: "Pending", tone: "warn" }, viewed: { label: "Viewed", tone: "secondary" }, partial: { label: "Partially signed", tone: "secondary" },
   signed: { label: "Completed", tone: "success" }, declined: { label: "Declined", tone: "primary" }, expired: { label: "Expired", tone: "muted" }, void: { label: "Voided", tone: "muted" },
 };
+/**
+ * Fields the server fills when the signer signs (the offer's answer and the payment): the signer sees them greyed and sends no value.
+ * Matched on the field label, case-insensitive and trimmed.
+ */
+export const AUTO_FIELDS: ReadonlyArray<{ label: string; type: "checkbox" | "text" }> = [
+  { label: "Offer accepted", type: "checkbox" }, { label: "Payment made", type: "checkbox" }, { label: "Payment not made", type: "checkbox" },
+  { label: "Payment date", type: "text" }, { label: "Amount paid", type: "text" },
+];
+export const isAutoField = (label: string | null | undefined) => { const key = String(label ?? "").trim().toLowerCase(); return AUTO_FIELDS.some((f) => f.label.toLowerCase() === key); };
 export const RECIPIENT_STATE: Record<string, string> = { pending: "Waiting for their turn", sent: "Invited", viewed: "Opened", signed: "Signed", declined: "Declined", skipped: "Not needed" };
 export const signingStatus = (status: string) => SIGNING_STATUS[status] ?? { label: status.replaceAll("_", " "), tone: "muted" as const };
 export const signedCount = (request: SigningRequest) => `${request.recipients.filter((r) => r.state === "signed").length} of ${request.recipients.filter((r) => r.required).length || request.recipients.length} signed`;

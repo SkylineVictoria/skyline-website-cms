@@ -2618,3 +2618,23 @@ test("offer letter PDF: logo and office details in the header and the footer on 
   assert.deepEqual([sample.missing, sample.marks.length], [[], 0]);
   assert.ok((await pdfText(sample.bytes)).map((t) => t.text).join(" ").includes("Ms Asha Rani Patel 0101234"), "sample values print");
 });
+
+const letterBlocks = await load.import<typeof import("../supabase/functions/_shared/letter-variables.ts")>("../supabase/functions/_shared/letter-variables.ts");
+test("letter {{#if discount}} rows print only for the courses that have a discount", () => {
+  const html = "<table><tr><td>{{#each courses}}</td></tr><tr><td>{{course.name}}</td></tr><tr><td>{{#if discount}}</td></tr><tr><td>Discount {{fees.discount_percent}}</td></tr><tr><td>{{/if}}</td></tr><tr><td>{{/each}}</td></tr></table>";
+  const two = letterBlocks.expandLetterBlocks(html, 2, { discounts: [true, false] });
+  assert.ok(two.includes("Discount {{fees.discount_percent}}"), "the first course keeps its discount row");
+  assert.ok(!two.includes("{{fees.discount_percent#1}}"), "the second course has no discount row");
+  assert.ok(two.includes("{{course.name#1}}"), "the second course's own variables are still numbered");
+  assert.ok(!/#if discount|\{\{\s*\/if\s*\}\}/.test(two), "no markers are left");
+  assert.equal((two.match(/<tr>/g) ?? []).length, 3);
+  const none = letterBlocks.expandLetterBlocks(html, 2, {});
+  assert.ok(!none.includes("Discount"), "without discount information nothing prints");
+  assert.equal((none.match(/<tr>/g) ?? []).length, 2);
+  const outside = "<p>{{#if discount}}</p><p>Less discount</p><p>{{/if}}</p><p>Total</p>";
+  assert.equal(letterBlocks.expandLetterBlocks(outside, 2, { discounts: [false, true] }), "<p>Less discount</p><p>Total</p>");
+  assert.equal(letterBlocks.expandLetterBlocks(outside, 1, { discounts: [false] }), "<p>Total</p>");
+  assert.ok(letterBlocks.isBlockMarker("#if discount"));
+  // Other blocks still resolve on their own after a discount block.
+  assert.equal(letterBlocks.expandLetterBlocks("<p>{{#if discount}}</p><p>D</p><p>{{/if}}</p><p>{{#if gst}}</p><p>G</p><p>{{/if}}</p>", 1, { discounts: [true], gst: false }), "<p>D</p>");
+});

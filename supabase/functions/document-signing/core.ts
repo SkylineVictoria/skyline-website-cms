@@ -33,6 +33,8 @@ export interface SigningPorts {
   /** Any other RPC as the caller (the staff record's letter variables, hr_admin_template_values: Admin only in the database). */
   // deno-lint-ignore no-explicit-any
   callerRpc?(name: string, args: Record<string, unknown>): Promise<any>;
+  /** The template-assets bucket (pictures linked from a template's header, body or footer): read only, by the path after /template-assets/. */
+  assets?: { download(path: string): Promise<Uint8Array | null> };
   storage: {
     download(path: string): Promise<Uint8Array | null>;
     upload(path: string, bytes: Uint8Array): Promise<boolean>;
@@ -63,6 +65,21 @@ const letterPdfModule = () => import("../_shared/offer-letter-pdf.ts");
 const offerPdfModule = () => import("../_shared/offer-pdf.ts");
 const signingPdfModule = () => import("../_shared/signing-pdf.ts");
 const documentPdfModule = () => import("../_shared/document-pdf.ts");
+const ASSET_PATH = /\/template-assets\/([^?#]+)/;
+/** The bytes of each template-assets picture by its public URL (one that cannot be read is left out, and the PDF prints without it). */
+export async function templateAssetImages(ports: Pick<SigningPorts, "assets">, urls: readonly string[]): Promise<Record<string, Uint8Array>> {
+  const images: Record<string, Uint8Array> = {};
+  if (!ports.assets || !urls.length) return images;
+  await Promise.all(urls.map(async (url) => {
+    const path = ASSET_PATH.exec(url)?.[1];
+    if (!path) return;
+    try {
+      const bytes = await ports.assets!.download(decodeURIComponent(path));
+      if (bytes?.length) images[url] = bytes;
+    } catch { /* left out */ }
+  }));
+  return images;
+}
 const safeName = (title: string) => (title.replace(/[^A-Za-z0-9 ._-]/g, "").trim().slice(0, 80) || "document");
 
 export async function handleSigning(call: SigningCall, ports: SigningPorts): Promise<unknown> {
@@ -235,7 +252,10 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           bodyHtml = editedHtml;
         }
         const doc = await documentPdfModule();
-        const made = await doc.buildDocumentPdf({ title, header: fillHtml(template.header_html), body: bodyHtml, footer: fillHtml(template.footer_html), values: strings, brackets: template.bracket_variables === true, sample });
+        const headerHtml = fillHtml(template.header_html), footerHtml = fillHtml(template.footer_html);
+        // Pictures uploaded from the editor live in template-assets and are linked by URL: their bytes are read here so the PDF can embed them.
+        const images = await templateAssetImages(ports, doc.linkedImages(headerHtml, bodyHtml, footerHtml));
+        const made = await doc.buildDocumentPdf({ title, header: headerHtml, body: bodyHtml, footer: footerHtml, values: strings, brackets: template.bracket_variables === true, sample, images });
         if (!sample && made.missing.length) {
           const names = made.missing.map((n) => `[${n}]`).join(", ");
           throw new SigningError(`The document cannot be made yet: ${names} ${made.missing.length === 1 ? "has" : "have"} no value. Add ${made.missing.length === 1 ? "it" : "them"} on the record, type ${made.missing.length === 1 ? "it" : "them"} here, or change the template.`);

@@ -42,6 +42,8 @@ export interface ApplicationCourseRow {
   variant: string;
   /** The chosen intake of this course (INT-01, course_intakes.id). */
   intakeId?: string;
+  /** Discount on this course's fees in the offer letter, 0 to 100 (enrollment_application_courses.discount_percent). */
+  discountPercent?: number;
 }
 
 export interface ApplicationListRow {
@@ -144,19 +146,21 @@ async function fetchCoursesByApplication(appIds: string[]): Promise<Map<string, 
   if (appIds.length === 0) return map;
   const { data, error } = await supabase
     .from("enrollment_application_courses")
-    .select("application_id, course_id, course_code, course_title, variant, intake_id")
+    .select("application_id, course_id, course_code, course_title, variant, intake_id, discount_percent")
     .in("application_id", appIds);
   if (error) return map;
   for (const row of data ?? []) {
     const r = row as Record<string, unknown>;
     const key = str(r.application_id);
     const list = map.get(key) ?? [];
+    const discount = Number(r.discount_percent ?? 0) || 0;
     list.push({
       courseId: str(r.course_id),
       code: str(r.course_code),
       title: str(r.course_title),
       variant: str(r.variant),
       ...(r.intake_id ? { intakeId: str(r.intake_id) } : {}),
+      ...(discount > 0 ? { discountPercent: discount } : {}),
     });
     map.set(key, list);
   }

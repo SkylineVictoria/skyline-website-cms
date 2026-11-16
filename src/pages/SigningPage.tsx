@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { Button, Field, TextArea, TextInput } from "@/pages/admin/components/ui";
 import PdfPages from "@/components/signing/PdfPages";
 import LegacySignPage from "@/components/signing/LegacySignPage";
-import { formatMoney, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type PaymentView, type SigningView } from "@/lib/signingApi";
+import { formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type PaymentView, type SigningView } from "@/lib/signingApi";
+const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 
@@ -219,8 +220,11 @@ export default function SigningPage() {
   const afterSigning = pay?.payment?.timing === "after_sign";
   // A payment due after signing is offered once this signer has signed; one due before, straight away.
   const showPay = !!pay?.canPay && (!afterSigning || mine || complete);
-  const missing = canSign ? view.fields.filter((f) => f.required && ((f.type === "text" && !(values[f.id] ?? "").trim()) || (f.type === "checkbox" && values[f.id] !== "true")
+  // Fields the server fills at signing (offer accepted, payment made, payment date...) are shown greyed and never asked for or sent.
+  const auto = (f: { label: string; type: string }) => (f.type === "text" || f.type === "checkbox") && isAutoField(f.label);
+  const missing = canSign ? view.fields.filter((f) => f.required && !auto(f) && ((f.type === "text" && !(values[f.id] ?? "").trim()) || (f.type === "checkbox" && values[f.id] !== "true")
     || (f.type === "choice" && !values[f.id]))) : [];
+  const sentValues = () => Object.fromEntries(Object.entries(values).filter(([id]) => !view?.fields.some((f) => f.id === id && auto(f))));
   const signatureReady = method === "typed" ? name.trim().length >= 2 : !!picture;
   const offer = view?.offer ?? null;
   const choices = canSign ? view.fields.filter((f) => f.type === "choice") : [];
@@ -241,7 +245,7 @@ export default function SigningPage() {
     if (!view || busy || !ready) return;
     setBusy(true); setError("");
     try {
-      await signWithRetry({ action: "sign", token, name, agreed, signatureKind: method, signatureImage: method === "typed" ? null : picture, values, documentHash: view.documentHash, codeSession });
+      await signWithRetry({ action: "sign", token, name, agreed, signatureKind: method, signatureImage: method === "typed" ? null : picture, values: sentValues(), documentHash: view.documentHash, codeSession });
       setJustSigned(true); await load(); window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Please try again.";
@@ -291,6 +295,9 @@ export default function SigningPage() {
             const style = { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
             const lacking = missing.some((m) => m.id === f.id);
             const frame = `absolute rounded-sm border-2 ${lacking ? "border-red-500 bg-red-50/80" : "border-primary-500 bg-primary-50/80"}`;
+            if (auto(f)) return <div key={f.id} data-field={f.id} data-auto-field="true" title={AUTO_TITLE} aria-label={`${f.label}: ${AUTO_TITLE}`}
+              className="absolute flex cursor-not-allowed items-center gap-1 overflow-hidden rounded-sm border-2 border-dashed border-background-400 bg-background-200/80 px-1 text-2xs text-foreground-500 sm:text-xs" style={style}>
+              {f.type === "checkbox" ? <input type="checkbox" disabled aria-hidden="true" className="h-3 w-3" /> : null}<span className="truncate">{f.label}</span></div>;
             if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
               onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} />;
             if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>

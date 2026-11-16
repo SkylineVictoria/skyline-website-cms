@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import PdfPages from "./PdfPages";
-import type { SignFieldType } from "@/lib/signingApi";
+import { AUTO_FIELDS, type SignFieldType } from "@/lib/signingApi";
 
 export interface EditorField { key: string; type: SignFieldType; owner: string; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value?: string }
 /** Who a field belongs to: a signer (or a signer role on a template), or the sender for printed text. */
@@ -86,6 +86,14 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
     const kind = FIELD_KINDS[current.textOnly ? "text" : type];
     const field: EditorField = { key: newKey(), type: current.textOnly ? "text" : type, owner: current.id, page, w: kind.w, h: kind.h, x: clamp(fx - kind.w / 2, 0, 1 - kind.w), y: clamp(fy - kind.h / 2, 0, 1 - kind.h),
       required: true, label: "", ...(current.textOnly ? { value: "" } : {}) };
+    onChange([...latest.current, field]); setSelected(field.key); setArmed(null);
+  };
+  /** An automatic field (filled by the server at signing) for the selected signer: placed in a stack near the foot of the current page, ready to drag. */
+  const placePreset = (type: SignFieldType, label: string, slot: number) => {
+    if (!current || current.textOnly) return;
+    const kind = FIELD_KINDS[type];
+    const page = chosen?.page ?? latest.current[latest.current.length - 1]?.page ?? 1;
+    const field: EditorField = { key: newKey(), type, owner: current.id, page, w: kind.w, h: kind.h, x: 0.08, y: clamp(0.68 + slot * (kind.h + 0.012), 0, 1 - kind.h), required: false, label };
     onChange([...latest.current, field]); setSelected(field.key); setArmed(null);
   };
   const click = (event: ReactMouseEvent<HTMLDivElement>, page: number) => {
@@ -293,6 +301,15 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
           className={`flex cursor-grab touch-none select-none items-center gap-2 rounded-md border px-3 py-2 text-left text-sm ${armed === type ? "border-primary-500 bg-primary-50" : "border-background-300 bg-background-50 hover:bg-background-100"}`}>
           <i className={`${FIELD_KINDS[type].icon} text-base`} aria-hidden="true" />{current?.textOnly ? "Printed text" : FIELD_KINDS[type].label}</button>)}
       </div>
+      {!current?.textOnly && <div className="space-y-1" data-testid="auto-field-presets">
+        <p className="text-xs font-semibold text-foreground-700">Automatic</p>
+        <p className="text-2xs text-foreground-500">Filled by the server when {current?.label ?? "the signer"} signs; the signer sees them greyed. Click one to place it, then drag it where it goes.</p>
+        <div className="grid grid-cols-2 gap-1 lg:grid-cols-1">
+          {AUTO_FIELDS.map((preset, i) => <button key={preset.label} type="button" data-testid={`auto-field-${preset.label.replace(/\s+/g, "-").toLowerCase()}`} onClick={() => placePreset(preset.type, preset.label, i)}
+            className="flex items-center gap-2 rounded-md border border-dashed border-background-300 bg-background-50 px-3 py-1.5 text-left text-sm hover:bg-background-100">
+            <i className={`${FIELD_KINDS[preset.type].icon} text-base text-foreground-500`} aria-hidden="true" />{preset.label}</button>)}
+        </div>
+      </div>}
       <p className="text-xs text-foreground-600">{armed ? "Now click the place on the page where it goes." : "Drag a field onto a page, or choose one and then click the page. Drag a placed field to move it (also to another page) and its corner to resize it. Arrow keys nudge the selected field; Delete removes it."}</p>
       {chosen && <div className="space-y-3 rounded-md border border-background-300 p-3 text-sm" data-testid="field-details">
         <p className="font-semibold">{FIELD_KINDS[chosen.type].label} · page {chosen.page}</p>

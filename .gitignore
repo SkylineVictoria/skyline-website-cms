@@ -73,3 +73,10 @@ playwright-report/
 
 # Schema/data dumps taken before a hosted migration (brief 11.2); never committed
 backups/
+
+# Blank offer letter PDFs at the repo root are working files, never committed
+/Offer_Letter_Template_Blank.pdf
+/*.pdf
+
+# Environment files (the .env.example placeholders stay tracked)
+*.env

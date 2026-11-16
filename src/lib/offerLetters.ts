@@ -37,9 +37,23 @@ export interface LetterValues {
  * per row of Settings › Other fees and charges (one sample row when not known), {{#if gst}} when a fee line is taxable.
  */
 export const expandFor = (html: string | null | undefined, courses: LetterValues["courses"], charges?: LetterValues["charges"], gst = false) =>
-  expandLetterBlocks(html ?? "", courses?.length ?? 1, { charges: charges ? charges.length : 1, gst });
+  expandLetterBlocks(html ?? "", courses?.length ?? 1, { charges: charges ? charges.length : 1, gst, discounts: courseDiscounts(courses) });
+/** Per course of the application, whether it has a discount: application_letter_course puts `_discount` beside the course's variables. */
+export const courseDiscounts = (courses: LetterValues["courses"]): boolean[] => (courses ?? []).map((c) => (c as Record<string, unknown>)._discount === true);
+/** The course's own markers in its letter values (`_courseId`, `_title`, `_total`...), beside the {{variables}}. */
+export const courseMeta = (course: Record<string, LetterValue>) => course as unknown as Record<string, unknown>;
 /** The issue drawer: an application's values (staff reviewers). */
 export const letterValues = (applicationId: string) => rpc<LetterValues>("portal_letter_values", { p_application: applicationId });
+/** The application's course rows (enrollment_application_courses), with the discount each one carries into its letter. */
+export interface ApplicationCourse { id: string; courseId: string; title: string; discountPercent: number }
+export async function applicationCourses(applicationId: string): Promise<ApplicationCourse[]> {
+  const { data, error } = await supabase.from("enrollment_application_courses").select("id, course_id, course_title, discount_percent").eq("application_id", applicationId).order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({ id: String(r.id), courseId: String(r.course_id ?? ""), title: String(r.course_title ?? ""), discountPercent: Number(r.discount_percent ?? 0) || 0 }));
+}
+/** A discount on one course of an application (CMS / SLIT admins); the letter's fee variables then subtract it. */
+export const setCourseDiscount = (applicationCourseId: string, percent: number) =>
+  rpc<{ id: string; discount_percent: number }>("application_course_discount_set", { p_course: applicationCourseId, p_percent: percent });
 /** Template editor, "Test with application" (CMS admins). */
 export const testLetterValues = (applicationId: string) => rpc<LetterValues>("letter_test_values", { p_application: applicationId });
 export const testApplications = (search = "") =>

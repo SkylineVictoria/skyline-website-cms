@@ -94,7 +94,7 @@ export interface ApplicationRow {
   studentId: string;
   agentId: string | null;
   agentName: string;
-  courses: Array<{ code: string; title: string }>;
+  courses: Array<{ code: string; title: string; discountPercent?: number }>;
 }
 
 /** Migration 116: students per student status (the search and business/agent filters apply; the status tab does not). */

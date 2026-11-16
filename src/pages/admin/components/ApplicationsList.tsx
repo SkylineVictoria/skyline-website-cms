@@ -23,7 +23,7 @@ export default function ApplicationsList({ rows, showAgent = false }: { rows: Ap
         {rows.map((a) => (
           <tr key={a.id}>
             <td className="tabular-nums"><Link to={`/admin/applications/${a.id}`} className="font-medium text-primary-700 hover:underline">{a.reference || "Draft"}</Link></td>
-            <td>{a.courses.length ? a.courses.map((c) => <p key={c.code}><b className="text-foreground-900">{c.code}</b> {c.title}</p>) : <span className="text-xs text-foreground-500">No course yet</span>}</td>
+            <td>{a.courses.length ? a.courses.map((c) => <p key={c.code}><b className="text-foreground-900">{c.code}</b> {c.title}{c.discountPercent ? <span className="ml-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800" data-testid="course-discount">{c.discountPercent}% discount</span> : null}</p>) : <span className="text-xs text-foreground-500">No course yet</span>}</td>
             <td>{a.intake || <span className="text-xs text-foreground-500">Not set</span>}</td>
             {showAgent ? <td>{a.agentId ? <Link to={`/admin/agents/${a.agentId}`} className="hover:text-primary-700">{a.agentName}</Link> : <span className="text-xs text-foreground-500">Not assigned</span>}</td> : null}
             <td><CompletionBar value={a.completion} /></td>

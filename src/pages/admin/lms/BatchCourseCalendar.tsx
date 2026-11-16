@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { addDays, generateClassSessions, listBreaks, loadClassSessions, rtoFlow, shortDate, updateClassSession, type AcademicBreak, type ClassSession, type LocationRooms } from "@/pages/admin/lib/rto";
+import { addDays, generateClassSessions, listBreaks, loadClassSessions, resetClassSessions, rtoFlow, shortDate, updateClassSession, type AcademicBreak, type ClassSession, type LocationRooms } from "@/pages/admin/lib/rto";
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const parse = (s: string) => new Date(s + "T00:00:00Z");
@@ -21,6 +21,22 @@ export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, h
   const [editing, setEditing] = useState<ClassSession | null>(null);
   const [version, setVersion] = useState(0);
   const [notice, setNotice] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  const reset = async (regenerate: boolean) => {
+    const changed = rows.filter(r => r.manual).length;
+    const ask = regenerate
+      ? `Recreate the whole course calendar from ${shortDate(intakeStart)} using the weekly class timing?${changed ? ` The ${changed} class${changed === 1 ? "" : "es"} you changed by hand will be lost.` : ""}`
+      : `Remove all ${rows.length} classes from this batch's calendar? The weekly class timing stays; recreate the calendar any time.`;
+    if (!window.confirm(ask)) return;
+    setResetting(true); setError(""); setNotice("");
+    try {
+      const out = await resetClassSessions(batchId, regenerate);
+      setNotice(regenerate ? `Calendar recreated: ${out.created ?? 0} classes${out.endDate ? `, last class ${shortDate(out.endDate)}` : ""}.` : `Calendar removed (${out.removed} classes).`);
+      setRemoved(!regenerate); setVersion(v => v + 1);
+    } catch (e) { setError(e instanceof Error ? e.message : "The calendar was not changed."); }
+    finally { setResetting(false); }
+  };
 
   useEffect(() => { listBreaks().then(setBreaks).catch(() => undefined); }, []);
   useEffect(() => {
@@ -39,12 +55,12 @@ export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, h
     (async () => {
       let list = await read();
       // Timing saved before classes were generated automatically: generate them once.
-      if (!list.length && hasSlots && canManage) { await generateClassSessions(batchId).catch(() => null); list = await read(); }
+      if (!list.length && hasSlots && canManage && !removed) { await generateClassSessions(batchId).catch(() => null); list = await read(); }
       if (live) setRows(list);
     })().catch(e => { if (live) setError(e instanceof Error ? e.message : "Unable to load the classes."); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [batchId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, version]);
+  }, [batchId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, version, removed]);
 
   const byDate = useMemo(() => {
     const m = new Map<string, ClassSession[]>();
@@ -69,13 +85,21 @@ export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, h
         <p className="text-sm text-foreground-600">From {shortDate(intakeStart)}{last ? ` to the last class on ${shortDate(last)}` : ""}{intakeEnd ? ` · intake ends ${shortDate(intakeEnd)}` : ""}
           {scheduled.length ? ` · ${scheduled.length} classes · ${Math.round(hours)} hours` : ""}</p>
       </div>
-      <button type="button" onClick={() => window.print()} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100 print:hidden">Print</button>
+      <div className="flex flex-wrap gap-2 print:hidden">
+        {canManage && hasSlots && <button type="button" disabled={resetting || loading} onClick={() => void reset(true)} title="Delete every class and build the calendar again from the intake start"
+          className="inline-flex items-center gap-1 rounded-lg border border-primary-300 bg-primary-50 px-3 py-1.5 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:opacity-50">
+          <i className="ri-refresh-line" aria-hidden="true" />{resetting ? "Working…" : "Recreate calendar"}</button>}
+        {canManage && rows.length > 0 && <button type="button" disabled={resetting || loading} onClick={() => void reset(false)}
+          className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+          <i className="ri-delete-bin-line" aria-hidden="true" />Remove calendar</button>}
+        <button type="button" onClick={() => window.print()} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Print</button>
+      </div>
     </div>
     {notice && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
     {canManage && rows.length > 0 && <p className="mt-2 text-xs text-foreground-500 print:hidden">Click a class to change its date, time or room, or to cancel it. Changed classes stay as you set them when the timing is saved again.</p>}
     {error && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading the course calendar…</p>
-    : !rows.length ? <p className="py-10 text-center text-sm text-foreground-500">{hasSlots ? "No classes yet. Open Edit class timing and click Save timing to fill the calendar." : "Set the class timing to fill the calendar."}</p>
+    : !rows.length ? <p className="py-10 text-center text-sm text-foreground-500">{hasSlots && removed ? "The calendar was removed. Click Recreate calendar to build it again from the intake start." : hasSlots ? "No classes yet. Open Edit class timing and click Save timing to fill the calendar." : "Set the class timing to fill the calendar."}</p>
     : <div className="mt-4 space-y-6">
       <div className="flex flex-wrap gap-3 text-xs text-foreground-600">
         {(["theory", "practical", "assessment"] as const).map(t => <span key={t} className="inline-flex items-center gap-1 capitalize"><span className={`inline-block h-3 w-3 rounded ring-1 ${tone[t]}`} />{t}</span>)}

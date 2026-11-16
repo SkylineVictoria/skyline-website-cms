@@ -728,6 +728,8 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 ## Dated class sessions (CLASS-SESSIONS 2026-11-16; migration 20261116110000 APPLIED hosted 2026-11-16 via the SQL editor)
 `public.class_sessions` holds dated classes generated from a batch's weekly `batch_sessions`, the intake's unit order and each unit's SLIT theory / practical / assessment hours (else 40 / 40 / 20 of nominal hours). Term breaks (`academic_breaks`) and confirmed public holidays (`hr.public_holidays`) are skipped; weekends are teaching days. RPCs: `rto_class_sessions_generate(batch)` (RTO Manager; reruns keep past and manual sessions and rebuild from today), `rto_class_sessions_list(batch or null, from, to)` (staff; null = every batch, used by the room grid), `rto_class_session_update(id, jsonb)` (RTO Manager; marks the session manual), `rto_class_session_clashes(batch)`. Tests: CLS block in `supabase/tests/assessment_management.sql`.
 
+- CLASS-SESSIONS-RESET (migration 20261116120000, LOCAL ONLY until applied): `rto_class_sessions_reset(batch, regenerate)` (RTO Manager) deletes every dated class of a batch and, with regenerate, rebuilds from the intake start; weekly `batch_sessions` untouched. Tests: CLS block in `supabase/tests/assessment_management.sql` (plan 355).
+
 ## SLIT unit hours (UNIT-HOURS 2026-11-16; migration 20261116100000 APPLIED hosted 2026-11-16)
 - `cms_course_units` gains `slit_hours`, `theory_hours`, `practical_hours`, `assessment_hours` (the three parts must add up to `slit_hours`) and `hours_confirmed_at` / `hours_confirmed_by`.
 - `rto_unit_hours_list(course_id)` (any CMS staff) and `rto_unit_hours_save(unit_id, slit, theory, practical, assessment)` (RTO Manager only; marks the unit reviewed).

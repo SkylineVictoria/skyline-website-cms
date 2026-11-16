@@ -19,7 +19,7 @@ export default function LmsTimetablePage() {
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [data, setData] = useState<BatchPageData | null>(null);
   const [canEdit, setCanEdit] = useState(false);
-  const [editor, setEditor] = useState<null | { day?: number; templates?: boolean }>(null);
+  const [editor, setEditor] = useState<null | { day?: number; templates?: boolean; manual?: boolean }>(null);
   const [savedNote, setSavedNote] = useState("");
   const [calendarKey, setCalendarKey] = useState(0);
   const [error, setError] = useState("");
@@ -109,7 +109,14 @@ export default function LmsTimetablePage() {
         <i className="ri-calendar-schedule-line text-4xl text-primary-500" aria-hidden="true" />
         <h2 className="mt-2 font-heading text-lg font-bold text-foreground-950">No class timing for {data.batch.name} yet</h2>
         <p className="mx-auto mt-1 max-w-xl text-sm text-foreground-600">Add the days, times, rooms and trainer, or start from a course template. The full course calendar then fills in below, from the intake start to the last class.</p>
-        {canManage ? <div className="mt-4">{selectClassButton("Add class timing")}</div> : <p className="mt-2 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
+        {canManage ? <div className="mt-4 flex flex-wrap justify-center gap-3">
+          <button type="button" onClick={() => setEditor({ templates: true })}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700">
+            <i className="ri-file-copy-2-line text-lg" aria-hidden="true" />Use a course template</button>
+          <button type="button" onClick={() => setEditor({ manual: true })}
+            className="inline-flex items-center gap-2 rounded-lg border-2 border-primary-300 bg-background-50 px-5 py-3 text-base font-semibold text-primary-700 hover:border-primary-500 hover:bg-primary-50">
+            <i className="ri-edit-2-line text-lg" aria-hidden="true" />Set the hours myself</button>
+        </div> : <p className="mt-2 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
       </div>
       : <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
@@ -126,7 +133,7 @@ export default function LmsTimetablePage() {
     {batchId && data && detail?.intake.id === intakeId && <BatchCourseCalendar key={batchId} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
       hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey} />}
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
-      startDay={editor.day} showTemplates={editor.templates}
+      startDay={editor.day} showTemplates={editor.templates} startManual={editor.manual}
       onClose={() => setEditor(null)}
       onSaved={out => {
         setEditor(null); setDetail(out); void refreshBatch(); void reload();

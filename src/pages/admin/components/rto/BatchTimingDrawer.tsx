@@ -28,7 +28,7 @@ const withClass = (list: Draft[], weekday: number): Draft[] => {
 };
 export type BatchSaved = IntakeDetail & { batchId: string; clashes: Clash[]; generated?: GenerateResult | null };
 
-export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved, startDay, showTemplates = false }: {
+export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved, startDay, showTemplates = false, startManual = false }: {
   intake: Pick<RtoIntake, "id" | "courseId" | "name">;
   /** The intake's batches (to copy timing from and to name a new batch); loaded when not given. */
   batches?: RtoBatch[];
@@ -41,6 +41,8 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   startDay?: number;
   /** Opens with the course timetables list showing. */
   showTemplates?: boolean;
+  /** Opens straight on the days and times, skipping the template / by hand choice. */
+  startManual?: boolean;
 }) {
   const adding = !batch;
   const [batches, setBatches] = useState<RtoBatch[]>(given ?? []);
@@ -58,7 +60,9 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [menu, setMenu] = useState<"" | "timetable" | "copy">(showTemplates ? "timetable" : "");
+  const [menu, setMenu] = useState<"" | "timetable" | "copy">("");
+  // An empty timing first asks how to set the hours: from a template, or by hand.
+  const [manual, setManual] = useState(!!startManual && !showTemplates);
 
   useEffect(() => {
     let live = true;
@@ -221,6 +225,32 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
         </Field>
       )}
 
+      {rows.length === 0 && !manual ? (
+        <div className="space-y-3">
+          <p className="text-label font-medium text-foreground-800">How do you want to set the class hours?</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border-2 border-primary-200 p-4">
+              <p className="flex items-center gap-2 font-heading text-base font-bold text-foreground-950"><i className="ri-file-copy-2-line text-xl text-primary-600" aria-hidden="true" />Use a course template</p>
+              <p className="mt-1 text-xs text-foreground-600">Copy the days, times, rooms and trainer from a saved template of this course.</p>
+              {timings.length ? <div className="mt-3 space-y-2">
+                {timings.map((t) => (
+                  <button key={t.id} type="button" onClick={() => applyTiming(t)}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-left text-sm hover:border-primary-500 hover:bg-primary-100">
+                    <span className="font-semibold text-foreground-900">{t.name}</span>
+                    <span className="truncate text-xs text-foreground-600">{t.sessions.length} classes{fitHint(t.sessions)}</span>
+                  </button>
+                ))}
+              </div> : <p className="mt-3 rounded-lg bg-background-100 px-3 py-2 text-xs text-foreground-600">No template for this course yet. Create one under Timetable → Templates, or set the hours yourself.</p>}
+            </div>
+            <button type="button" onClick={() => setManual(true)} className="rounded-xl border-2 border-primary-200 p-4 text-left hover:border-primary-500 hover:bg-primary-50">
+              <p className="flex items-center gap-2 font-heading text-base font-bold text-foreground-950"><i className="ri-edit-2-line text-xl text-primary-600" aria-hidden="true" />Set the hours myself</p>
+              <p className="mt-1 text-xs text-foreground-600">Choose the days, then each class's time, type (theory, practical or assessment) and room.</p>
+              <span className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white">Start<i className="ri-arrow-right-line" aria-hidden="true" /></span>
+            </button>
+          </div>
+          {copyFrom.length ? <p className="text-xs text-foreground-600">Or copy another batch: {copyFrom.map((b) => <button key={b.id} type="button" className="ml-1 font-semibold text-primary-700 hover:underline" onClick={() => { copyTiming(b); }}>{b.name}</button>)}</p> : null}
+        </div>
+      ) : <>
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-label font-medium text-foreground-800">Days and times</p>
@@ -272,7 +302,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       </div>
 
       {days.length === 0 ? (
-        <p className="rounded-md border border-dashed border-background-300 px-4 py-6 text-center text-sm text-foreground-500">No classes yet. Tap a day above, or use the course timetable.</p>
+        <p className="rounded-md border border-dashed border-background-300 px-4 py-6 text-center text-sm text-foreground-500">No classes yet. Click a day above, or use a course template.</p>
       ) : days.map((d) => (
         <div key={d} className="rounded-md border border-background-200">
           <div className="flex items-center justify-between border-b border-background-200 bg-background-100/60 px-3 py-1.5">
@@ -312,6 +342,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           </div>
         </div>
       ))}
+      </>}
 
       {invalid ? <p role="alert" className="text-sm text-primary-800">A class on {WEEKDAYS[invalid.weekday - 1]} ends before it starts.</p> : null}
       {overlap && !invalid ? <p role="alert" className="text-sm text-primary-800">Two classes on {WEEKDAYS[overlap.weekday - 1]} overlap ({timeRange(overlap.startTime, overlap.endTime)}).</p> : null}

@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(351);
+select plan(355);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -680,6 +680,16 @@ select is(jsonb_array_length(public.rto_class_sessions_list('f5000000-0000-0000-
 select pg_temp.as_postgres();
 select is((select count(*)::int from public.class_sessions where session_date = date '2026-01-26'), 0, 'CLS a confirmed public holiday is skipped');
 select is((select max(session_date) from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011'), date '2026-03-02', 'CLS the holiday pushes the last theory class a week later');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true)$$, '42501', null, 'CLS an editor who is not an RTO Manager cannot reset a calendar');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select public.rto_class_session_update((select id from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' order by session_date limit 1), '{"status": "cancelled"}'::jsonb);
+select is((public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true))->>'created', '16', 'CLS recreate builds the whole calendar again from the intake start');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and (is_manual or status = 'cancelled')), 0, 'CLS recreate drops hand-changed and cancelled classes');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', false))->>'removed', '16', 'CLS remove deletes every dated class of the batch');
+select pg_temp.as_postgres();
 
 select * from finish();
 rollback;

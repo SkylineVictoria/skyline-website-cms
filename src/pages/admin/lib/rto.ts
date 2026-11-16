@@ -286,6 +286,13 @@ export async function loadClassSessions(batchId: string | null, from: string, to
   if (error) throw new Error(error.message);
   return (data ?? []) as ClassSession[];
 }
+/** Deletes every dated class of the batch (past, cancelled and changed ones too) and, with `regenerate`, builds the calendar again from the intake start. */
+export async function resetClassSessions(batchId: string, regenerate: boolean): Promise<Partial<GenerateResult> & { removed: number }> {
+  const { data, error } = await supabase.rpc("rto_class_sessions_reset", { p_batch: batchId, p_regenerate: regenerate });
+  if (error) throw new Error(/rto_class_sessions_reset|schema cache|does not exist/i.test(error.message)
+    ? "Removing and recreating a calendar needs the database update CLASS-SESSIONS-RESET (migration 20261116120000) first." : error.message);
+  return data as Partial<GenerateResult> & { removed: number };
+}
 export async function generateClassSessions(batchId: string): Promise<GenerateResult> {
   const { data, error } = await supabase.rpc("rto_class_sessions_generate", { p_batch: batchId });
   if (error) throw new Error(error.message);

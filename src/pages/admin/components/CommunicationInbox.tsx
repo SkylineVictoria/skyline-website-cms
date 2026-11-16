@@ -119,7 +119,8 @@ export default function CommunicationInbox() {
   );
 }
 
-function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => void; onSent: () => void }) {
+/** One person's whole communication log with a composer (email / SMS / WhatsApp / note). Also used by the Message button on person pages. */
+export function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => void; onSent: () => void }) {
   const { push } = useToast();
   const [thread, setThread] = useState<Thread | null>(null);
   const [error, setError] = useState("");

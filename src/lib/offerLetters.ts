@@ -64,23 +64,28 @@ export const issueTemplateLetter = (input: {
 
 /* ------------------------------------------------------------------ pictures */
 /** A picture as PNG or JPEG bytes: PNG / JPEG as they are, anything else a browser can draw (GIF, WebP, SVG, BMP) redrawn as PNG. */
+/** Pictures wider than this are scaled down before upload: a page is about 800 px wide at 96 dpi, so 1200 px prints sharp and stays small. */
+export const MAX_ASSET_WIDTH = 1200;
 async function asPngOrJpeg(blob: Blob): Promise<Blob> {
   const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
   const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
   const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
-  if (png) return blob.type === "image/png" ? blob : new Blob([blob], { type: "image/png" });
-  if (jpeg) return blob.type === "image/jpeg" ? blob : new Blob([blob], { type: "image/jpeg" });
-  if (!/^image\//.test(blob.type) && blob.type !== "") throw new Error("That is not a picture.");
+  if (!png && !jpeg && !/^image\//.test(blob.type) && blob.type !== "") throw new Error("That is not a picture.");
   const url = URL.createObjectURL(blob);
   try {
     const img = new Image();
     img.src = url;
     await img.decode();
+    const width = img.naturalWidth || 600, height = img.naturalHeight || 200;
+    // A PNG or JPEG that already fits goes up as it is (no re-encoding, no quality loss).
+    if ((png || jpeg) && width <= MAX_ASSET_WIDTH) return blob.type === (png ? "image/png" : "image/jpeg") ? blob : new Blob([blob], { type: png ? "image/png" : "image/jpeg" });
+    const scale = Math.min(1, MAX_ASSET_WIDTH / width);
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.min(3000, img.naturalWidth || 600));
-    canvas.height = Math.max(1, Math.min(3000, img.naturalHeight || 200));
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.min(3000, Math.round(height * scale)));
     canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The picture could not be converted."))), "image/png"));
+    const type = jpeg ? "image/jpeg" : "image/png";
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The picture could not be converted."))), type, 0.9));
   } finally { URL.revokeObjectURL(url); }
 }
 

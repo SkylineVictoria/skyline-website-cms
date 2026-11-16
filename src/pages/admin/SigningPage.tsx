@@ -4,6 +4,7 @@ import { Badge, Button, EmptyState, Field, PageHeader, SectionTabs, Select, Text
 import ComposeRequest from "./components/signing/ComposeRequest";
 import RequestDetail from "./components/signing/RequestDetail";
 import PaymentBadge from "./components/signing/PaymentBadge";
+import PresetsManager from "./components/signing/PresetsManager";
 import TemplateEditor from "./components/signing/TemplateEditor";
 import LegacySigningPage from "./components/signing/LegacySigningPage";
 import { signedCount, signingAction, signingAdmin, signingStatus, signingUpgraded, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
@@ -70,6 +71,7 @@ function EnvelopeSigningPage() {
   const [compose, setCompose] = useState(false); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string; lockCategory?: boolean } | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [presets, setPresets] = useState(false);
   const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
   const [unitStep, setUnitStep] = useState<{ templateId: string | null; initial: { courseId: string; unitId: string } | null } | null>(null);
@@ -103,6 +105,7 @@ function EnvelopeSigningPage() {
     <div className="flex flex-wrap gap-3">
       {tab === "requests" && <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>}
       {tab === "templates" && <Button icon="ri-file-add-line" onClick={() => setChoosing(true)} data-testid="new-template">New template</Button>}
+      {tab === "templates" && <Button variant="outline" icon="ri-layout-top-2-line" onClick={() => setPresets(true)} data-testid="manage-presets">Header &amp; footer presets</Button>}
       <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh</Button>
       {tab === "requests" && <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>}
     </div>
@@ -178,6 +181,7 @@ function EnvelopeSigningPage() {
         if (unit && id) void unitDocuments("link_set", { templateId: id, ...unit }).then(loadLinks).then(() => setNotice(`${message} It is linked to the unit; send it from Batch Allocation › Assessments.`)).catch((e: Error) => setError(`${message} Linking it to the unit failed: ${e.message}`));
         void load();
       }} />}
+    {presets && <PresetsManager onClose={() => setPresets(false)} />}
     {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </div>;
 }

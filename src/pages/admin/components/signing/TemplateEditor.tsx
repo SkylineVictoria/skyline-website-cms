@@ -356,7 +356,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
       {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}
       {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError}
-        {...(loo ? { letterVariables: registry ?? [], storageImages: true } : {})} />
+        storageImages {...(loo ? { letterVariables: registry ?? [] } : {})} />
       : draft.kind !== "pdf" ? <div className="space-y-2">
         <RichTextEditor key={draft.id ?? `new-${draft.kind}`} value={draft.body_html} onChange={(body_html) => setDraft((d) => ({ ...d, body_html }))} placeholders={placeholders} />
         <div className="flex flex-wrap items-center gap-4 text-xs text-foreground-600">

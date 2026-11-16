@@ -1,5 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
-import WhatsAppLink from "@/components/base/WhatsAppLink";
+import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
@@ -161,7 +161,7 @@ export default function AgentsPage() {
                 {loading && !counts ? <tr><td colSpan={5} className="py-10 text-center text-foreground-500">Loading agents…</td></tr> : sorted.map((r) => (
                   <tr key={r.key} className={inactiveBusiness(r) ? "bg-background-100/70 text-foreground-500 opacity-60" : ""} title={inactiveBusiness(r) ? "This agent's business is inactive" : undefined}>
                     <td>
-                      <Link to={`/admin/agents/${r.key}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link><WhatsAppLink phone={r.phone} name={r.name} />
+                      <Link to={`/admin/agents/${r.key}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link><PersonMessageIcon phone={r.phone} name={r.name} email={r.email} />
                       <p className="mt-0.5 text-xs text-foreground-500">
                         {[r.marn ? `MARN ${r.marn}` : null, r.role === "agency_admin" ? "Business admin agent" : null, r.email].filter(Boolean).join(", ")}
                       </p>

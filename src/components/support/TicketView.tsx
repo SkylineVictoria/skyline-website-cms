@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import WhatsAppLink from "@/components/base/WhatsAppLink";
+import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import {
   CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, replyTicket, ticketRequesterPhone, updateTicket, uploadTicketFiles,
   type TicketDetail, type TicketPriority, type TicketStatus,
@@ -56,9 +56,9 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
         <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-foreground-700">
           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[t.status]}`}>{STATUS_LABEL[t.status]}</span>
           <span>{CATEGORY_LABEL[t.category]}</span><span aria-hidden="true">&middot;</span><span>Priority {PRIORITY_LABEL[t.priority]}</span>
-          <span aria-hidden="true">&middot;</span><span>Raised by {t.requesterName}{t.requesterRole === "student" ? " (student)" : t.agencyName ? ` (${t.agencyName})` : ""}{data.isHandler ? <WhatsAppLink phone={phone} name={t.requesterName} /> : null}</span>
+          <span aria-hidden="true">&middot;</span><span>Raised by {t.requesterName}{t.requesterRole === "student" ? " (student)" : t.agencyName ? ` (${t.agencyName})` : ""}{data.isHandler ? <PersonMessageIcon phone={phone} name={t.requesterName} email={t.requesterEmail} /> : null}</span>
           {t.studentName && t.requesterRole !== "student" ? <><span aria-hidden="true">&middot;</span><span>About {t.studentName}</span></> : null}
-          {data.isHandler && t.requesterEmail ? <><span aria-hidden="true">&middot;</span><a className="underline" href={`mailto:${t.requesterEmail}`}>{t.requesterEmail}</a></> : null}
+          {data.isHandler && t.requesterEmail ? <><span aria-hidden="true">&middot;</span><span>{t.requesterEmail}</span></> : null}
         </p>
         {data.isHandler ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">

@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(611);
+select plan(613);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1205,5 +1205,11 @@ select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-
 select throws_ok($$select * from public.admin_view_accounts$$,'42501',null,'test accounts are not readable');
 reset role;
 select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')$$,'42501',null,'switch view refuses an account that is not the fixed test account');
+-- Messages popup (migration 20261117024731): finding a contact and sharing into a team are admin only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_find_or_open('x','x@example.test',null)$$,'42501',null,'a portal user cannot look people up in the Communication Hub');
+select throws_ok($$select public.comm_send_to_team(gen_random_uuid(),gen_random_uuid(),'x')$$,'42501',null,'a portal user cannot share into a staff team');
+reset role;
 select * from finish();
 rollback;

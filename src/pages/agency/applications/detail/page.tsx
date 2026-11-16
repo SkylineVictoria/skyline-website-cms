@@ -242,7 +242,7 @@ export default function ApplicationDetailPage() {
             {canManageAssignment ? (
               <AgentMetaEditor agentId={application.agentId} agentName={application.agentName} agents={agents} busy={busy} onAssign={(profileId) => void handleReassign(profileId)} />
             ) : application.agentName ? <span>Agent: <span className="font-medium text-foreground-800">{application.agentName}</span></span> : null}
-            {isSlit && application.agentEmail ? <a href={`mailto:${application.agentEmail}`} className="hover:text-primary-700 hover:underline">{application.agentEmail}</a> : null}
+            {isSlit && application.agentEmail ? <span>{application.agentEmail}</span> : null}
             {isSlit && application.agentPhone ? <span>{formatPhone(application.agentPhone)}</span> : null}
             <span>Created {formatDate(application.createdAt)}</span>
             <span>Updated {formatDate(application.updatedAt)}</span>

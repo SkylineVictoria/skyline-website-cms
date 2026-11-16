@@ -7,7 +7,7 @@ import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { loadClosedDays, loadCourseNeed, planCourse, splitText, typeLabel, weeklyHoursNeeded, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
-  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, shortDate, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
+  DAYS, LOAD_HOURS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, loadIntakeLoads, shortDate, type StudyLoad, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
   type IntakeDetail, type LocationRooms, type RtoBatch, type RtoIntake, type SessionType, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
@@ -51,6 +51,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [intakeDates, setIntakeDates] = useState<{ start: string; end: string | null } | null>(null);
   const [need, setNeed] = useState<CourseNeed | null>(null);
+  const [studyLoad, setStudyLoad] = useState<StudyLoad>("coe");
   const [closed, setClosed] = useState<((day: string) => boolean) | null>(null);
   const [rows, setRows] = useState<Draft[]>(() => { const base = (batch?.sessions ?? []).map(toDraft); return startDay ? withClass(base, startDay) : base; });
   const [name, setName] = useState(batch?.name ?? "");
@@ -79,6 +80,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       }
     }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Rooms and timing did not load."); });
     void loadCourseNeed(intake.courseId).then((n) => { if (live) setNeed(n); }).catch(() => undefined);
+    void loadIntakeLoads(intake.courseId).then((m) => { if (live) setStudyLoad(m[intake.id] ?? "coe"); }).catch(() => undefined);
     return () => { live = false; };
   }, [intake.id, intake.courseId, given]);
 
@@ -146,11 +148,15 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const perWeek = ready && intakeDates.end ? weeklyHoursNeeded(intakeDates.start, intakeDates.end, need.total, closed) : null;
   const finishesInTime = !!plan && !!plan.lastDate && (!intakeDates?.end || plan.lastDate <= intakeDates.end);
   const extendsIntake = !!plan?.lastDate && !!intakeDates?.end && plan.lastDate > intakeDates.end;
-  const short = !!plan && rows.length > 0 && !plan.lastDate;
+  const minHours = LOAD_HOURS[studyLoad];
+  const weekHours = plan?.weeklyTotal ?? 0;
+  const tooFewHours = rows.length > 0 && weekHours < minHours;
+  const short = (!!plan && rows.length > 0 && !plan.lastDate) || tooFewHours;
   const planFor = (sessions: BatchSession[]) => (ready ? planCourse(intakeDates.start, sessions, need, closed) : null);
   const fitHint = (sessions: BatchSession[]) => {
     const p = planFor(sessions);
     if (!p) return "";
+    if (p.weeklyTotal < LOAD_HOURS[studyLoad]) return ` · ✗ ${p.weeklyTotal} h a week, ${studyLoad === "voe" ? "VoE" : "CoE"} needs ${LOAD_HOURS[studyLoad]}`;
     return !p.lastDate ? " · ✗ never finishes" : intakeDates?.end && p.lastDate > intakeDates.end ? ` · ⚠ ends ${shortDate(p.lastDate)}, extends the intake` : ` · ✓ ends ${shortDate(p.lastDate)}`;
   };
   const roomOptions = (selected: string) => locations.map((l) => (
@@ -257,6 +263,8 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           })}
         </div>
         <p className="mt-1.5 text-xs font-medium text-foreground-600">Click a day to add classes on it. Click a ticked day again to remove them.</p>
+        {rows.length && tooFewHours ? <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+          <i className="ri-error-warning-line mr-1" aria-hidden="true" />This intake is {studyLoad === "voe" ? "VoE" : "CoE"}: the week needs at least {minHours} class hours. It has {weekHours}; add {minHours - weekHours} more to save.</p> : null}
         {ready && rows.length ? <div role="status" className={`mt-3 rounded-lg border px-3 py-2 text-sm ${finishesInTime ? "border-emerald-200 bg-emerald-50 text-emerald-900" : extendsIntake ? "border-amber-300 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800"}`}>
           <p className="font-semibold"><i className={(finishesInTime ? "ri-checkbox-circle-line" : "ri-error-warning-line") + " mr-1"} aria-hidden="true" />
             {!plan?.lastDate ? "These class times never cover the course hours."

@@ -4,7 +4,7 @@ import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { loadCourseNeed, splitText, weeklyHours, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
-  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, rto, rtoFlow, slotOf,
+  DAYS, SESSION_TYPES, SLOTS, TEMPLATE_MIN_HOURS, WEEKDAYS, rto, rtoFlow, slotOf,
   type CourseTiming, type LocationRooms, type RtoCourse, type SessionType, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
@@ -161,9 +161,12 @@ function TemplateDrawer({ course, template, others, onClose, onSaved, need }: {
   const invalid = rows.find(r => !r.startTime || !r.endTime || r.endTime <= r.startTime);
   const overlap = rows.find((r, i) => rows.some((o, j) => j !== i && o.weekday === r.weekday && o.startTime < r.endTime && r.startTime < o.endTime));
   const days = [...new Set(rows.map(r => r.weekday))].sort((a, b) => a - b);
+  const weekly = weeklyHours(rows);
+  const weekTotal = weekly.theory + weekly.practical + weekly.assessment;
+  const tooFew = weekTotal < TEMPLATE_MIN_HOURS;
 
   const save = async () => {
-    if (busy || !rows.length || invalid || overlap || duplicate || label.length > 40) return;
+    if (busy || !rows.length || invalid || overlap || duplicate || tooFew || label.length > 40) return;
     setBusy(true); setError("");
     const trainer = staff.find(s => s.id === trainerId);
     const values = {
@@ -181,7 +184,7 @@ function TemplateDrawer({ course, template, others, onClose, onSaved, need }: {
 
   return <Drawer open width="max-w-2xl" title={template ? `Edit template · ${template.name}` : `New template · ${course.code}`} onClose={onClose}
     footer={<><Button variant="outline" onClick={onClose}>Cancel</Button>
-      <Button disabled={busy || !rows.length || !!invalid || !!overlap || !!duplicate || label.length > 40} onClick={() => void save()}>{busy ? "Saving…" : "Save template"}</Button></>}>
+      <Button disabled={busy || !rows.length || !!invalid || !!overlap || !!duplicate || tooFew || label.length > 40} onClick={() => void save()}>{busy ? "Saving…" : "Save template"}</Button></>}>
     <ErrorNote text={error} />
     <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
       <Field label="Name" hint="G1, Weekend, Evening …"><TextInput value={name} placeholder={nextName} maxLength={40} onChange={e => setName(e.target.value)} /></Field>
@@ -239,6 +242,7 @@ function TemplateDrawer({ course, template, others, onClose, onSaved, need }: {
     </div>)}
     {rows.length && need?.total ? (() => { const w = weeklyHours(rows); const total = w.theory + w.practical + w.assessment; return <p className="rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-800">
       This week gives <strong>{total} hours</strong> ({splitText(w) || "none"}). The course needs {need.total} SLIT hours, so it takes <strong>about {total ? Math.ceil(need.total / total) : "∞"} teaching weeks</strong>, plus term breaks and public holidays.</p>; })() : null}
+    {rows.length && tooFew ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">A template needs at least {TEMPLATE_MIN_HOURS} class hours a week. This week has {weekTotal}; add {TEMPLATE_MIN_HOURS - weekTotal} more to save it.</p> : null}
     {invalid ? <p role="alert" className="text-sm text-primary-800">A class on {WEEKDAYS[invalid.weekday - 1]} ends before it starts.</p> : null}
     {overlap && !invalid ? <p role="alert" className="text-sm text-primary-800">Two classes on {WEEKDAYS[overlap.weekday - 1]} overlap.</p> : null}
   </Drawer>;

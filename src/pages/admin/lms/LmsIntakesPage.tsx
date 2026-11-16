@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
-import { generateClassSessions, listBreaks, rto, shortDate, todayIso, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
+import { generateClassSessions, listBreaks, loadIntakeLoads, LOAD_HOURS, rto, setIntakeLoad, shortDate, todayIso, type StudyLoad, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const longDate = (d: string) => new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
@@ -18,6 +18,8 @@ export default function LmsIntakesPage() {
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [start, setStart] = useState("");
+  const [loads, setLoads] = useState<Record<string, StudyLoad>>({});
+  const [studyLoad, setStudyLoad] = useState<StudyLoad>("coe");
   const [creating, setCreating] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -29,6 +31,7 @@ export default function LmsIntakesPage() {
     try {
       const [cs, is, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<RtoIntake[]>("intake_list"), rto<{ rtoManager: boolean }>("me")]);
       setCourses(cs); setIntakes(is); setCanEdit(me.rtoManager); setLoadError("");
+      setLoads(await loadIntakeLoads());
       setCourseId(prev => cs.some(c => c.id === prev) ? prev : (cs[0]?.id ?? ""));
     } catch (e) { setLoadError(e instanceof Error ? e.message : "Unable to load intakes."); }
   }, []);
@@ -43,6 +46,7 @@ export default function LmsIntakesPage() {
     return () => { active = false; };
   }, [selectedId]);
 
+  useEffect(() => { if (detail) setStudyLoad(loads[detail.intake.id] ?? "coe"); }, [detail, loads]);
   const chooseCourse = (id: string) => { setCourseId(id); setSelectedId(""); setNotice(""); };
   const selectedCourse = courses.find(c => c.id === courseId);
   const courseIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
@@ -55,10 +59,12 @@ export default function LmsIntakesPage() {
     if (!detail || !canEdit || busy || !start || inBreak || taken.has(start)) return;
     setBusy(true); setProblem("");
     const moved = start !== detail.intake.startDate;
+    const loadChanged = studyLoad !== (loads[detail.intake.id] ?? "coe");
     try {
-      const updated = await rto<IntakeDetail>("intake_save", { id: detail.intake.id, status: "open", ...(moved ? { startDate: start, generate: true } : {}) });
+      let updated = await rto<IntakeDetail>("intake_save", { id: detail.intake.id, status: "open", ...(moved ? { startDate: start, generate: true } : {}) });
+      if (loadChanged) { await setIntakeLoad(detail.intake.id, studyLoad); updated = await rto<IntakeDetail>("intake_get", { intakeId: detail.intake.id }); }
       // A new start date moves the unit timeline, so the batches' dated classes are planned again.
-      if (moved) for (const b of updated.batches) if ((b.sessions ?? []).length) await generateClassSessions(b.id).catch(() => null);
+      if (moved || loadChanged) for (const b of updated.batches) if ((b.sessions ?? []).length) await generateClassSessions(b.id).catch(() => null);
       setIntakes(prev => prev.map(i => i.id === updated.intake.id ? { ...i, ...updated.intake } : i));
       setNotice(`${updated.intake.name} saved.`); close(); void load();
     } catch (e) { setProblem(e instanceof Error ? e.message : "The intake was not saved."); }
@@ -120,9 +126,10 @@ export default function LmsIntakesPage() {
           </div>
           <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm">
             <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
-              {["Intake", "Start date", "End date", ""].map(x => <th key={x || "actions"} className="px-3 py-2">{x}</th>)}</tr></thead>
+              {["Intake", "Students", "Start date", "End date", ""].map(x => <th key={x || "actions"} className="px-3 py-2">{x}</th>)}</tr></thead>
             <tbody>{filtered.map(i => <tr key={i.id} className={"border-b border-background-100 " + (selectedId === i.id ? "bg-primary-50" : "hover:bg-background-100")}>
               <td className="px-3 py-2 font-semibold text-foreground-950">{i.name}</td>
+              <td className="px-3 py-2"><span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold">{(loads[i.id] ?? "coe") === "voe" ? "VoE · 40 h" : "CoE · 20 h"}</span></td>
               <td className="px-3 py-2">{shortDate(i.startDate)}</td>
               <td className="px-3 py-2">{shortDate(i.endDate)}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right">
@@ -153,6 +160,15 @@ export default function LmsIntakesPage() {
                 <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
               </div>)}
             </dl>
+            {canEdit ? <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground-800">Students on</p>
+              <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
+                {(["coe", "voe"] as const).map(l => <button key={l} type="button" role="radio" aria-checked={studyLoad === l} onClick={() => setStudyLoad(l)}
+                  className={`rounded-lg border-2 px-3 py-2 text-left text-sm ${studyLoad === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
+                  <span className="block font-bold">{l === "coe" ? "CoE" : "VoE"}</span><span className="block text-xs text-foreground-600">{LOAD_HOURS[l]} hours a week</span></button>)}
+              </div>
+              {studyLoad !== (loads[detail.intake.id] ?? "coe") ? <p className="text-xs text-foreground-600">Saving lays the unit timeline out again at {LOAD_HOURS[studyLoad]} hours a week and moves the batches' classes.</p> : null}
+            </div> : null}
             {canEdit ? <div className="space-y-2">
               <p className="text-sm font-medium text-foreground-800">Start date</p>
               <p className="text-sm font-semibold text-foreground-900">{start ? longDate(start) : "Pick a day"}</p>

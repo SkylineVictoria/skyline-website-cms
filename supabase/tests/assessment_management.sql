@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(355);
+select plan(360);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -689,6 +689,16 @@ select pg_temp.as_postgres();
 select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and (is_manual or status = 'cancelled')), 0, 'CLS recreate drops hand-changed and cancelled classes');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select is((public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', false))->>'removed', '16', 'CLS remove deletes every dated class of the batch');
+select pg_temp.as_postgres();
+-- INTAKE-STUDY-LOAD: CoE 20 hours a week, VoE 40 hours a week (half the weeks per unit)
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(public.rto_intake_loads('course-asm-test')->>'f5000000-0000-0000-0000-000000000001', 'coe', 'LOAD an intake is CoE unless set');
+select throws_ok($$select public.rto_intake_load_set('f5000000-0000-0000-0000-000000000001', 'part-time')$$, '22023', null, 'LOAD only CoE or VoE');
+select pg_temp.put('coe_end', public.rto_intake_load_set('f5000000-0000-0000-0000-000000000001', 'coe')->>'endDate');
+select is(public.rto_intake_load_set('f5000000-0000-0000-0000-000000000001', 'voe')->>'studyLoad', 'voe', 'LOAD an RTO Manager sets VoE');
+select ok((select end_date from public.course_intakes where id = 'f5000000-0000-0000-0000-000000000001') < (select v from t where k = 'coe_end')::date, 'LOAD a VoE timeline ends sooner than CoE');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_intake_load_set('f5000000-0000-0000-0000-000000000001', 'coe')$$, '42501', null, 'LOAD an editor who is not an RTO Manager cannot change it');
 select pg_temp.as_postgres();
 
 select * from finish();

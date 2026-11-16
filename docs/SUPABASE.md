@@ -730,6 +730,8 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 
 - CLASS-SESSIONS-RESET (migration 20261116120000, APPLIED hosted 2026-11-16 via the SQL editor): `rto_class_sessions_reset(batch, regenerate)` (RTO Manager) deletes every dated class of a batch and, with regenerate, rebuilds from the intake start; weekly `batch_sessions` untouched. Tests: CLS block in `supabase/tests/assessment_management.sql` (plan 355).
 
+- INTAKE-STUDY-LOAD (migration 20261116130000, APPLIED hosted 2026-11-16 via the SQL editor): `course_intakes.study_load` 'coe' (20 class hours a week, default) or 'voe' (40); `intake_generate_schedule` lays VoE units out in half the weeks; `rto_intake_loads(course)` (staff) and `rto_intake_load_set(intake, load)` (RTO Manager, re-lays the timeline). Class timing must give at least the intake's hours a week; templates at least 20. Tests: LOAD block in `supabase/tests/assessment_management.sql` (plan 360).
+
 ## SLIT unit hours (UNIT-HOURS 2026-11-16; migration 20261116100000 APPLIED hosted 2026-11-16)
 - `cms_course_units` gains `slit_hours`, `theory_hours`, `practical_hours`, `assessment_hours` (the three parts must add up to `slit_hours`) and `hours_confirmed_at` / `hours_confirmed_by`.
 - `rto_unit_hours_list(course_id)` (any CMS staff) and `rto_unit_hours_save(unit_id, slit, theory, practical, assessment)` (RTO Manager only; marks the unit reviewed).

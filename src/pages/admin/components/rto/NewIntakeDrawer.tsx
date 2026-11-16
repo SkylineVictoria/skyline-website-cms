@@ -5,7 +5,7 @@ import { Button, Field, Select } from "@/pages/admin/components/ui";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import {
-  addDays, listBreaks, mondayOf, rto, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
+  addDays, listBreaks, mondayOf, rto, setIntakeLoad, LOAD_HOURS, type StudyLoad, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
 } from "@/pages/admin/lib/rto";
 
 /** The first term start (the Monday after a break) at least a week away that the course has no intake on; else next Monday. */
@@ -29,6 +29,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
   const [start, setStart] = useState("");
+  const [load, setLoad] = useState<StudyLoad | "">("");
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState<"" | "create" | "batch">("");
   const [error, setError] = useState("");
@@ -53,10 +54,12 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const clash = start && taken.has(start);
 
   const create = async (addBatch: boolean) => {
-    if (!chosen || !start) { setError("Choose a course and a start date."); return; }
+    if (!chosen || !start || !load) { setError("Choose a course, CoE or VoE, and a start date."); return; }
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      const out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "" });
+      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "" });
+      // VoE: 40 hours a week, so the unit timeline is laid out again at twice the CoE rate.
+      if (load === "voe") { await setIntakeLoad(out.intake.id, "voe"); out = await rto<IntakeDetail>("intake_get", { intakeId: out.intake.id }); }
       onCreated(out, addBatch);
     } catch (e) { setError(e instanceof Error ? e.message : "The intake was not created."); }
     finally { setBusy(""); }
@@ -65,8 +68,8 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   return (
     <Drawer open={open} title="New intake" onClose={onClose}
       footer={<>
-        <Button variant="outline" disabled={!!busy || !chosen || !start || !!clash || !!inBreak} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
-        <Button disabled={!!busy || !chosen || !start || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
+        <Button variant="outline" disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
+        <Button disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (
@@ -77,6 +80,17 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           </Select>
         </Field>
       )}
+      <Field label="Students on" required hint="CoE students have 20 class hours a week; VoE students have 40.">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
+          {(["coe", "voe"] as const).map((l) => (
+            <button key={l} type="button" role="radio" aria-checked={load === l} onClick={() => setLoad(l)}
+              className={`rounded-lg border-2 px-3 py-2.5 text-left text-sm ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
+              <span className="block text-base font-bold">{l === "coe" ? "CoE" : "VoE"}</span>
+              <span className="block text-xs text-foreground-600">{LOAD_HOURS[l]} hours a week</span>
+            </button>
+          ))}
+        </div>
+      </Field>
       <Field label="Start date" required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
         <div className="space-y-2">
           <p className="text-sm font-semibold text-foreground-900">{start ? new Date(start + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "Pick a day below"}</p>

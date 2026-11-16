@@ -286,6 +286,25 @@ export async function loadClassSessions(batchId: string | null, from: string, to
   if (error) throw new Error(error.message);
   return (data ?? []) as ClassSession[];
 }
+/** CoE intakes have 20 class hours a week, VoE intakes 40. */
+export type StudyLoad = "coe" | "voe";
+export const LOAD_HOURS: Record<StudyLoad, number> = { coe: 20, voe: 40 };
+export const LOAD_LABEL: Record<StudyLoad, string> = { coe: "CoE · 20 hours a week", voe: "VoE · 40 hours a week" };
+/** Minimum class hours a week for a course timing template. */
+export const TEMPLATE_MIN_HOURS = 20;
+const missingLoad = (m: string) => /rto_intake_load|study_load|schema cache|does not exist/i.test(m);
+/** Study load per intake ({intakeId: "coe" | "voe"}); every intake reads as CoE until the INTAKE-STUDY-LOAD update is applied. */
+export async function loadIntakeLoads(courseId?: string): Promise<Record<string, StudyLoad>> {
+  const { data, error } = await supabase.rpc("rto_intake_loads", { p_course: courseId ?? null });
+  if (error) { if (missingLoad(error.message)) return {}; throw new Error(error.message); }
+  return (data ?? {}) as Record<string, StudyLoad>;
+}
+/** Sets an intake to CoE or VoE and lays its unit timeline out again at that rate. */
+export async function setIntakeLoad(intakeId: string, load: StudyLoad): Promise<{ endDate: string | null }> {
+  const { data, error } = await supabase.rpc("rto_intake_load_set", { p_intake: intakeId, p_load: load });
+  if (error) throw new Error(missingLoad(error.message) ? "CoE / VoE needs the database update INTAKE-STUDY-LOAD (migration 20261116130000) first." : error.message);
+  return data as { endDate: string | null };
+}
 /** Deletes every dated class of the batch (past, cancelled and changed ones too) and, with `regenerate`, builds the calendar again from the intake start. */
 export async function resetClassSessions(batchId: string, regenerate: boolean): Promise<Partial<GenerateResult> & { removed: number }> {
   const { data, error } = await supabase.rpc("rto_class_sessions_reset", { p_batch: batchId, p_regenerate: regenerate });

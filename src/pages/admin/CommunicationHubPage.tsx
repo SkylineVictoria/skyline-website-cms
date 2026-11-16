@@ -29,7 +29,7 @@ export default function CommunicationHubPage() {
   return <main className="mx-auto max-w-6xl space-y-6 pb-12">
     <header><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Shared services</p>
       <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Communication Hub</h1>
-      <p className="mt-2 text-sm text-foreground-600">Conversations with students, agents, staff and applicants, and staff team chats, are in the <b>Messages</b> popup: the chat button at the bottom right of every page. Templates and activity are managed here.</p>
+      <p className="mt-2 text-sm text-foreground-600">Conversations with students, agents, staff and applicants, and staff team chats, are in the <b>Messages</b> popup: the Messages icon next to your name at the top of every page, or any Message button. Templates and activity are managed here.</p>
       <button type="button" onClick={() => openCommPopup()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"><i className="ri-chat-3-line" aria-hidden="true" />Open messages</button>
     </header>
     <nav className="flex flex-wrap gap-2" aria-label="Communication sections">{sections.map(s =>

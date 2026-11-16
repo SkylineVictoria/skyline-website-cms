@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import PdfPages from "./PdfPages";
 import type { SignFieldType } from "@/lib/signingApi";
 
@@ -58,7 +58,11 @@ interface Drag {
  * requestAnimationFrame loop (no React render per move), scrolls the pages area when the pointer is near its top or bottom edge, and
  * commits the position once, on drop, to the page under the field.
  */
-export default function FieldEditor({ source, owners, fields, onChange }: { source: string | Uint8Array; owners: EditorOwner[]; fields: EditorField[]; onChange: (fields: EditorField[]) => void }) {
+export default function FieldEditor({ source, owners, fields, onChange, panel }: {
+  source: string | Uint8Array; owners: EditorOwner[]; fields: EditorField[]; onChange: (fields: EditorField[]) => void;
+  /** Shown at the foot of the sidebar (the request's payment): not a field, so it changes neither the count nor the PDF. */
+  panel?: ReactNode;
+}) {
   const [owner, setOwner] = useState(owners[0]?.id ?? "");
   const [armed, setArmed] = useState<SignFieldType | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -302,6 +306,7 @@ export default function FieldEditor({ source, owners, fields, onChange }: { sour
         <button type="button" onClick={() => { onChange(fields.filter((f) => f.key !== chosen.key)); setSelected(null); }} className="text-xs font-medium text-red-700 underline">Remove this field</button>
       </div>}
       <p className="text-xs text-foreground-500">{fields.length} field{fields.length === 1 ? "" : "s"} placed.</p>
+      {panel}
     </aside>
     <div ref={scroller} data-testid="field-pages" className={`min-h-[240px] flex-1 overflow-y-auto overscroll-contain rounded-md bg-background-200 p-3 ${armed ? "cursor-crosshair" : ""}`}>
       <PdfPages source={source} maxWidth={820} overlay={(page) => <div className="absolute inset-0" data-testid={`field-page-${page}`} onClick={(e) => click(e, page)}>

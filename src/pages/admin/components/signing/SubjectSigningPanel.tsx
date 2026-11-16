@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card } from "../ui";
 import ComposeRequest from "./ComposeRequest";
 import RequestDetail from "./RequestDetail";
+import PaymentBadge from "./PaymentBadge";
 import { signedCount, signingAdmin, signingStatus, type SigningContext, type SigningRequest } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../../../supabase/functions/_shared/signing";
 
@@ -26,8 +27,8 @@ export default function SubjectSigningPanel({ type, id, name }: { type: "student
       : <ul className="divide-y divide-background-200 text-sm">{requests.map((r) => { const s = signingStatus(r.status); return <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
         <button type="button" className="text-left" onClick={() => setOpenId(r.id)}><span className="font-medium text-primary-700 underline-offset-2 hover:underline">{r.title}</span>
           <span className="block text-xs text-foreground-500">{r.reference} · {SIGN_CATEGORIES[r.category]?.label ?? r.category} · {new Date(r.created_at).toLocaleDateString()}</span></button>
-        <span className="flex items-center gap-2"><span className="text-xs text-foreground-600">{r.state === "draft" ? "Not sent" : signedCount(r)}</span><Badge tone={s.tone}>{s.label}</Badge></span></li>; })}</ul>}
-    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onCreated={(r) => { setTemplates(null); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+        <span className="flex flex-wrap items-center gap-2"><span className="text-xs text-foreground-600">{r.state === "draft" ? "Not sent" : signedCount(r)}</span>{r.payment && <PaymentBadge payment={r.payment} />}<Badge tone={s.tone}>{s.label}</Badge></span></li>; })}</ul>}
+    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onCreated={(r, warning) => { setTemplates(null); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </Card>;
 }

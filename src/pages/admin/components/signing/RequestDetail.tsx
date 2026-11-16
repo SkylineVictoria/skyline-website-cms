@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Modal, TextInput } from "../ui";
 import FieldEditor, { type EditorField } from "@/components/signing/FieldEditor";
-import { RECIPIENT_STATE, signingAction, signingAdmin, signingStatus, type SigningDetail } from "@/lib/signingApi";
+import { formatMoney, paymentEditable, paymentOfRecord, paymentSet, paymentsAction, RECIPIENT_STATE, signingAction, signingAdmin, signingStatus, type SigningDetail } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../../../supabase/functions/_shared/signing";
 import { signingEventLabel } from "./labels";
+import { PaymentPanel, RequestPaymentPanel } from "./PaymentForm";
 
 const time = (value: string | null) => value ? new Date(value).toLocaleString() : "";
 type Check = { ok: boolean; chainOk: boolean; files: Array<{ name: string; ok: boolean; sha256: string }> };
@@ -37,7 +38,8 @@ export default function RequestDetail({ id, onClose, onChanged, startPlacing = f
       await signingAdmin("fields_save", id, { fields: placing.fields.map((f) => ({ recipient_id: f.owner, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label })) }); setPlacing(null);
     }, "Fields saved.")}>Save fields</Button>}>
     {error && <p role="alert" className="mb-3 shrink-0 rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
-    <FieldEditor source={placing.url} owners={detail.recipients.map((r) => ({ id: r.id, label: `${r.role_label}: ${r.name}` }))} fields={placing.fields} onChange={(fields) => setPlacing({ ...placing, fields })} />
+    <FieldEditor source={placing.url} owners={detail.recipients.map((r) => ({ id: r.id, label: `${r.role_label}: ${r.name}` }))} fields={placing.fields} onChange={(fields) => setPlacing({ ...placing, fields })}
+      panel={<RequestPaymentPanel compact requestId={id} title={detail.title} requestStatus={detail.status} onChanged={() => { void load(); onChanged(); }} />} />
   </Modal>;
 
   return <Modal open title={detail.title} width="max-w-4xl" onClose={onClose}>
@@ -64,6 +66,17 @@ export default function RequestDetail({ id, onClose, onChanged, startPlacing = f
       {voiding && <div className="space-y-2 rounded-md border border-background-300 p-3"><p className="font-semibold">Void this request? Every link stops working and reminders stop.</p>
         <TextInput value={reason} maxLength={500} placeholder="Reason (optional, kept in the history)" onChange={(e) => setReason(e.target.value)} />
         <div className="flex gap-2"><Button variant="danger" disabled={busy} onClick={() => void act(async () => { await signingAction({ action: "void", id, reason }); setVoiding(false); }, "Request voided.")}>Void request</Button><Button variant="outline" onClick={() => setVoiding(false)}>Cancel</Button></div></div>}
+      <PaymentPanel key={detail.payment?.updated_at ?? "none"} testId="request-payment" current={paymentOfRecord(detail.payment)} status={detail.payment} title={detail.title} busy={busy}
+        editable={paymentEditable(detail.status, detail.payment)} onSave={async (next) => { await paymentSet(id, next); await load(); onChanged(); }}>
+        {detail.payment && <div className="space-y-1">
+          {detail.payment.payer_email && <p className="text-foreground-600">Payer {detail.payment.payer_email}</p>}
+          {detail.payment.paid_at && <p className="text-foreground-600">Paid {time(detail.payment.paid_at)}{detail.payment.amount_paid_cents != null ? ` (${formatMoney(detail.payment.amount_paid_cents, detail.payment.currency)})` : ""}{detail.payment.amount_refunded_cents ? `, ${formatMoney(detail.payment.amount_refunded_cents, detail.payment.currency)} refunded` : ""}</p>}
+          {detail.payment.failure_reason && <p className="text-red-700">{detail.payment.failure_reason}</p>}
+          {detail.payment.checkout_open && detail.payment.status !== "paid" && <p className="text-foreground-600">A Stripe checkout page is open for the signer.</p>}
+          {detail.payment.livemode === false && <p className="text-xs text-foreground-500">Test mode: made with Stripe test keys, no real money moves.</p>}
+          <Button size="sm" variant="outline" disabled={busy} data-testid="payment-refresh" onClick={() => void act(() => paymentsAction({ action: "refresh", paymentId: detail.payment!.id }), "Payment refreshed from Stripe.")}>Refresh from Stripe</Button>
+        </div>}
+      </PaymentPanel>
       {verified && <div role="status" className={`rounded-md border p-3 ${verified.ok ? "border-green-300 bg-green-50" : "border-red-300 bg-red-50"}`}>
         <p className="font-semibold">{verified.ok ? "Nothing has been changed since it was recorded." : "A change was detected. Do not rely on this record until it is investigated."}</p>
         <ul className="mt-1 list-inside list-disc"><li>History chain: {verified.chainOk ? "intact" : "BROKEN"}</li>{verified.files.map((f) => <li key={f.name}>{f.name}: {f.ok ? "matches its recorded SHA-256" : "DOES NOT match its recorded SHA-256"}</li>)}</ul></div>}

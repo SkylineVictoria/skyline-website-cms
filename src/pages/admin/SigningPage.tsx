@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { Badge, Button, EmptyState, Field, PageHeader, SectionTabs, Select, TextInput } from "./components/ui";
 import ComposeRequest from "./components/signing/ComposeRequest";
 import RequestDetail from "./components/signing/RequestDetail";
+import PaymentBadge from "./components/signing/PaymentBadge";
 import TemplateEditor from "./components/signing/TemplateEditor";
 import LegacySigningPage from "./components/signing/LegacySigningPage";
 import { signedCount, signingAction, signingAdmin, signingStatus, signingUpgraded, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
@@ -118,10 +119,11 @@ function EnvelopeSigningPage() {
       </div>
       {!loaded ? <p role="status">Loading…</p> : !shown.length ? <EmptyState icon="ri-quill-pen-line" title={context.requests.length ? "No request matches these filters" : "No signing requests yet"} description={context.requests.length ? undefined : "Create a template or upload a PDF to send your first document."} />
         : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="request-table">
-          <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Document</th><th className="px-3">Recipients</th><th className="px-3">Status</th><th className="px-3">Progress</th><th className="px-3">Created</th><th className="px-3">Expires</th></tr></thead>
+          <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Document</th><th className="px-3">Recipients</th><th className="px-3">Status</th><th className="px-3">Progress</th><th className="px-3">Payment</th><th className="px-3">Created</th><th className="px-3">Expires</th></tr></thead>
           <tbody>{shown.map((r: SigningRequest) => { const s = signingStatus(r.status); return <tr key={r.id} className="cursor-pointer border-t border-background-200 hover:bg-background-100" onClick={() => setOpenId(r.id)}>
             <td className="px-3 py-2"><button type="button" className="text-left font-medium text-primary-700 underline-offset-2 hover:underline">{r.title}</button><p className="text-xs text-foreground-500">{r.reference} · {SIGN_CATEGORIES[r.category]?.label ?? r.category}{r.subject_type ? ` · ${SUBJECT[r.subject_type]}` : ""}</p></td>
             <td className="px-3">{r.recipients.map((p) => p.name).join(", ")}</td><td className="px-3"><Badge tone={s.tone}>{s.label}</Badge></td><td className="px-3">{r.state === "draft" ? "Not sent" : signedCount(r)}</td>
+            <td className="px-3">{r.payment ? <PaymentBadge payment={r.payment} /> : <span className="text-xs text-foreground-500">None</span>}</td>
             <td className="px-3">{new Date(r.created_at).toLocaleDateString()}</td><td className="px-3">{r.expires_at ? new Date(r.expires_at).toLocaleDateString() : ""}</td></tr>; })}</tbody></table></div>}
     </>}
 
@@ -145,7 +147,7 @@ function EnvelopeSigningPage() {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Delete the template “${t.name}”? Requests already made from it keep their own copy.`)) void act(() => signingAdmin("template_delete", t.id), "Template deleted."); }}>Delete</Button>
           </div></td></tr>)}</tbody></table></div>)}
 
-    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r, warning) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {choosing && <Modal open title="New template: who is it for?" onClose={() => setChoosing(false)}>
       <div className="grid gap-3 sm:grid-cols-2" data-testid="template-audience-choice">
         {([["employee", "Employees", "Contracts, declarations and other staff documents (employee variables).", "employment_contract", "ri-user-star-line"],

@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { integrationRequest, type Snapshot } from './api';
 import { Button, Card } from '@/pages/admin/components/ui';
+import { useToast } from '@/pages/admin/components/toastContext';
+import { paymentsAction } from '@/lib/signingApi';
+import { currentTenantSite } from '@/lib/tenantSite';
 import { Frame } from './shared';
 import { useIntegrations, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
@@ -74,6 +77,9 @@ export default function ConnectionsPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const handled = useRef(false);
+  const { push } = useToast();
+  /** A success shows on the page and as a toast; the page's own snapshot is re-read by `perform` right after. */
+  const announce = (text: string) => { setNotice(text); push(text); };
 
   const connection = state.data?.connections.find(item => item.id === selected);
   const definition = state.data?.definitions.find(item => item.id === connection?.connector_id);
@@ -147,11 +153,12 @@ export default function ConnectionsPage() {
     window.location.assign(result.url);
   }
 
+  // Every action, successful or not, is followed by a fresh snapshot so the status line and the list card show the connection as the backend now sees it.
   async function perform(operation: () => Promise<void>) {
     setBusy(true);
     setError('');
     setNotice('');
-    try { await operation(); } catch (problem) { setError(errorMessage(problem)); }
+    try { await operation(); } catch (problem) { const message = errorMessage(problem); setError(message); push(message, 'error'); }
     finally { await load(); setBusy(false); }
   }
 
@@ -229,7 +236,7 @@ export default function ConnectionsPage() {
           }}>{item.id === selected ? 'Close setup' : 'Manage'}</Button>}
           {!isAdmin && item.can_operate && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: item.id });
-            setNotice('Connection verified.');
+            announce('Connection verified.');
           })}>Check connection</Button>}
         </li>)}
       </ul>
@@ -239,6 +246,7 @@ export default function ConnectionsPage() {
         {connection && isAdmin && (disabled ? (
           <Button disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('enable', { connectionId: selected });
+            announce('Connection enabled.');
           })}>Enable connection</Button>
         ) : isOAuth && app ? (
           setup && (wrongDomain ? (
@@ -295,10 +303,12 @@ export default function ConnectionsPage() {
             void perform(async () => {
               await integrationRequest('credential', { connectionId: selected, kind, secret: value });
               if (kind === 'api_key' || connection.credential_configured) {
+                announce(`${definition.name} ${kind === 'api_key' ? 'API key' : 'webhook secret'} saved. Checking the connection…`);
                 await integrationRequest('test', { connectionId: selected });
-                setNotice('Connection verified.');
+                await load();
+                announce(`${definition.name} is connected.`);
               } else {
-                setNotice('Webhook signing secret saved.');
+                announce('Webhook signing secret saved.');
               }
             });
           }}>
@@ -317,8 +327,18 @@ export default function ConnectionsPage() {
         {!pendingApp && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: selected });
-            setNotice('Connection verified.');
+            announce('Connection verified.');
           })}>Retry connection check</Button>
+        )}
+        {definition?.id === 'stripe' && connection.status === 'connected' && !disabled && (
+          <section className="space-y-2 rounded border border-background-300 p-3 text-sm" data-testid="stripe-payment-webhook">
+            <p className="font-semibold">Payments on document signing</p>
+            <p>Payment webhook: {connection.webhook_configured ? 'ready (Stripe tells Skyline when a payment is received, fails or is refunded).' : 'not set up. Stripe payments are only confirmed when a signer returns to the signing page or an administrator refreshes the request.'}</p>
+            <Button variant="outline" disabled={busy} data-testid="stripe-webhook-sync" onClick={() => void perform(async () => {
+              await paymentsAction<{ ok: boolean; created?: boolean; updated?: boolean }>({ action: 'webhook_sync', tenantId: currentTenantSite()?.tenantId ?? null });
+              announce('Payment webhook ready.');
+            })}>{connection.webhook_configured ? 'Update payment webhook' : 'Set up payment webhook'}</Button>
+          </section>
         )}
         {!pendingApp && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
@@ -328,14 +348,14 @@ export default function ConnectionsPage() {
               setSetup(updated);
               setEditing(!updated.configured);
             }
-            setNotice('Connection disconnected.');
+            announce('Connection disconnected.');
           })}>Disconnect</Button>
         )}
         {!disabled && <details>
           <summary className="cursor-pointer text-sm">Connection controls</summary>
           <Button variant="outline" className="mt-2" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('disable', { connectionId: selected });
-            setNotice('Connection disabled.');
+            announce('Connection disabled.');
           })}>Disable connection</Button>
         </details>}
       </Card>}

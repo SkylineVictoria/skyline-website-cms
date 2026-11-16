@@ -5,9 +5,12 @@
  * authentication token is delivered.
  */
 const configured = import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined;
+// A Vercel preview build has no fixed address: Vercel's own build-time system variables name it (also build configuration, not request data).
+const vercelPreview = import.meta.env.VITE_VERCEL_ENV === "preview" && typeof import.meta.env.VITE_VERCEL_URL === "string" && import.meta.env.VITE_VERCEL_URL
+  ? `https://${import.meta.env.VITE_VERCEL_URL}` : "";
 
 export function publicSiteOrigin(): string {
-  const candidate = configured?.trim() || (import.meta.env.DEV ? "http://localhost:3000" : "");
+  const candidate = configured?.trim() || vercelPreview || (import.meta.env.DEV ? `http://localhost:${window.location.port || "3000"}` : "");
   if (!candidate) throw new Error("Password recovery is not configured for this deployment.");
 
   let url: URL;

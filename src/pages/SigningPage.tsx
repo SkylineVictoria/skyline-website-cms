@@ -2,14 +2,49 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { Button, Field, TextArea, TextInput } from "@/pages/admin/components/ui";
 import PdfPages from "@/components/signing/PdfPages";
 import LegacySignPage from "@/components/signing/LegacySignPage";
-import { RECIPIENT_STATE, signingAction, signWithRetry, type SigningView } from "@/lib/signingApi";
+import { formatMoney, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type PaymentView, type SigningView } from "@/lib/signingApi";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 
 function readToken() {
   const token = new URLSearchParams(window.location.hash.slice(1)).get("t");
-  if (token) { sessionStorage.setItem("slit-signing-token", token); history.replaceState(null, "", window.location.pathname); }
+  // The query string stays: Stripe sends the payer back with ?payment=success or ?payment=cancelled.
+  if (token) { sessionStorage.setItem("slit-signing-token", token); history.replaceState(null, "", window.location.pathname + window.location.search); }
   return token ?? sessionStorage.getItem("slit-signing-token") ?? "";
+}
+/** ?payment=success | cancelled, set by the checkout's return address; removed from the address once handled. */
+const readPaymentReturn = () => new URLSearchParams(window.location.search).get("payment");
+function clearPaymentReturn() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("payment")) return;
+  url.searchParams.delete("payment");
+  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const PAYMENT_LABEL: Record<string, string> = { pending: "Not paid yet", open: "Checkout started", processing: "Being processed", paid: "Paid", failed: "Payment failed", refunded: "Refunded" };
+
+/** What the signer owes for this document: the amount, where it is up to, and Pay now when Stripe can take it. */
+function PaymentCard({ pay, note, busy, showPay, afterSigning, onPay }: {
+  pay: PaymentView; note: { tone: "ok" | "warn"; text: string } | null; busy: boolean; showPay: boolean; afterSigning: boolean; onPay: () => void;
+}) {
+  const p = pay.payment;
+  if (!pay.required || !p) return null;
+  const paid = p.status === "paid";
+  return <section className={`space-y-3 rounded-md border p-4 ${paid ? "border-green-300 bg-green-50" : "border-amber-300 bg-amber-50"}`} data-testid="payment-card" data-status={p.status}>
+    <div className="flex flex-wrap items-center gap-2">
+      <i className={`${paid ? "ri-checkbox-circle-line text-green-700" : "ri-bank-card-line text-amber-800"} text-lg`} aria-hidden="true" />
+      <h2 className="font-semibold">{paid ? "Payment received" : "Payment"}</h2>
+      <span className="rounded-full border border-background-300 bg-white px-2 py-0.5 text-xs font-medium">{PAYMENT_LABEL[p.status] ?? p.status}</span>
+      {p.testMode && <span className="rounded border border-amber-400 bg-white px-1.5 text-2xs font-semibold uppercase text-amber-900" data-testid="payment-test-mode">Test mode</span>}
+    </div>
+    <p className="text-sm"><span className="font-medium">{p.description}</span> · <span className="font-semibold" data-testid="payment-amount">{formatMoney(p.amountCents, p.currency)}</span>{paid && p.paidAt ? ` · paid ${new Date(p.paidAt).toLocaleString()}` : p.timing === "before_sign" ? " · due before you sign" : " · due after you sign"}</p>
+    {!paid && p.status === "failed" && p.failureReason && <p className="text-sm text-red-700">{p.failureReason}</p>}
+    {!paid && p.status === "processing" && <p className="text-sm">Your payment is being processed. This page updates once it is confirmed; refresh it in a moment.</p>}
+    {!paid && pay.stripeReady === false && <p className="text-sm">Online payment is not available right now. Please contact us.</p>}
+    {!paid && afterSigning && !showPay && pay.stripeReady !== false && <p className="text-sm">You can pay here once you have signed.</p>}
+    {note && <p role={note.tone === "warn" ? "alert" : "status"} className={`text-sm font-medium ${note.tone === "ok" ? "text-green-800" : "text-red-700"}`} data-testid="payment-note">{note.text}</p>}
+    {showPay && <Button type="button" disabled={busy} onClick={onPay} data-testid="pay-now"><i className="ri-secure-payment-line" aria-hidden="true" />{busy ? "Please wait…" : p.status === "open" ? "Continue to payment" : "Pay now"}</Button>}
+  </section>;
 }
 type Method = "typed" | "drawn" | "uploaded";
 const SIGNATURE_W = 600, SIGNATURE_H = 200;
@@ -116,6 +151,16 @@ export default function SigningPage() {
   const [justSigned, setJustSigned] = useState(false);
   const [legacy, setLegacy] = useState(false);
   const signPanel = useRef<HTMLFormElement>(null);
+  /** Stripe: what is owed on this document (null until known, or when the payments function is unreachable). */
+  const [pay, setPay] = useState<PaymentView | null>(null);
+  const [payNote, setPayNote] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [paying, setPaying] = useState(false);
+  const [paymentReturn] = useState(readPaymentReturn);
+  const returnHandled = useRef(false);
+  const paymentCard = useRef<HTMLDivElement>(null);
+  const loadPay = useCallback(async () => {
+    try { setPay(await paymentsAction<PaymentView>({ action: "status", token })); } catch { /* the document still shows; signing answers if a payment is due */ }
+  }, [token]);
   const load = useCallback(async () => {
     setError("");
     try {
@@ -123,20 +168,64 @@ export default function SigningPage() {
       // The released first-stage function answers without the recipient and fields: its own page handles that version.
       if (!next.recipient) { setLegacy(true); return; }
       setView(next); setName((current) => current || next.recipient.name);
+      await loadPay();
     } catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
-  }, [token]);
+  }, [token, loadPay]);
   useEffect(() => { void load(); }, [load]);
+  // Back from Stripe Checkout: confirm the session (a card payment can take a moment to settle), then drop ?payment= from the address.
+  useEffect(() => {
+    if (!paymentReturn || !token || returnHandled.current) return;
+    returnHandled.current = true;
+    if (paymentReturn !== "success") {
+      if (paymentReturn === "cancelled") setPayNote({ tone: "warn", text: "Payment cancelled. You can pay when you are ready." });
+      clearPaymentReturn();
+      return;
+    }
+    void (async () => {
+      setPaying(true);
+      try {
+        let result: PaymentView | null = null;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          result = await paymentsAction<PaymentView>({ action: "confirm", token });
+          if (!["open", "processing"].includes(result.payment?.status ?? "")) break;
+          if (attempt < 4) await wait(2000);
+        }
+        if (result) setPay(result);
+        const status = result?.payment?.status;
+        if (status === "paid") setPayNote({ tone: "ok", text: "Payment received. Thank you." });
+        else if (status === "open" || status === "processing") setPayNote({ tone: "warn", text: "Your payment is still being confirmed. Refresh this page in a moment." });
+        else setPayNote({ tone: "warn", text: result?.payment?.failureReason || "The payment was not completed. You can try again." });
+      } catch (e) { setPayNote({ tone: "warn", text: e instanceof Error ? e.message : "The payment could not be confirmed. Refresh this page in a moment." }); }
+      finally { setPaying(false); clearPaymentReturn(); }
+    })();
+  }, [paymentReturn, token]);
+  const payNow = async () => {
+    if (paying) return;
+    setPaying(true); setPayNote(null);
+    try {
+      const back = new URL(window.location.href); back.searchParams.delete("payment");
+      const result = await paymentsAction<{ url?: string; alreadyPaid?: boolean }>({ action: "checkout", token, returnUrl: back.href });
+      if (result.url) { window.location.assign(result.url); return; }
+      await loadPay();
+      setPayNote(result.alreadyPaid ? { tone: "ok", text: "This payment has already been received." } : { tone: "warn", text: "The payment page could not be opened. Please try again." });
+    } catch (e) { setPayNote({ tone: "warn", text: e instanceof Error ? e.message : "The payment page could not be opened." }); }
+    finally { setPaying(false); }
+  };
 
   const mine = view?.recipient.state === "signed";
   const complete = view?.state === "signed";
   const canSign = !!view && !mine && !complete;
+  const payFirst = canSign && !!pay?.mustPayBeforeSigning;
+  const afterSigning = pay?.payment?.timing === "after_sign";
+  // A payment due after signing is offered once this signer has signed; one due before, straight away.
+  const showPay = !!pay?.canPay && (!afterSigning || mine || complete);
   const missing = canSign ? view.fields.filter((f) => f.required && ((f.type === "text" && !(values[f.id] ?? "").trim()) || (f.type === "checkbox" && values[f.id] !== "true")
     || (f.type === "choice" && !values[f.id]))) : [];
   const signatureReady = method === "typed" ? name.trim().length >= 2 : !!picture;
   const offer = view?.offer ?? null;
   const choices = canSign ? view.fields.filter((f) => f.type === "choice") : [];
   const setChoice = (id: string, answer: "YES" | "NO") => setValues((current) => ({ ...current, [id]: answer }));
-  const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length && (!view.requireCode || !!codeSession);
+  const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length && (!view.requireCode || !!codeSession) && !payFirst;
   const goTo = (id: string) => document.querySelector(`[data-field="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   // TPL-02: a [token] of the template is one question, however often it appears; its answer fills every copy of it.
   const tokenLabels = canSign ? [...new Set(view.fields.filter((f) => f.type === "text" && isTokenFieldLabel(f.label)).map((f) => f.label))] : [];
@@ -154,7 +243,12 @@ export default function SigningPage() {
     try {
       await signWithRetry({ action: "sign", token, name, agreed, signatureKind: method, signatureImage: method === "typed" ? null : picture, values, documentHash: view.documentHash, codeSession });
       setJustSigned(true); await load(); window.scrollTo({ top: 0, behavior: "smooth" });
-    } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); } finally { setBusy(false); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Please try again.";
+      setError(message);
+      // The server asks for the payment first: show the payment card with Pay now (its status may have changed since the page opened).
+      if (/payment is required/i.test(message)) { await loadPay(); setPayNote({ tone: "warn", text: message }); paymentCard.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    } finally { setBusy(false); }
   };
   const decline = async () => {
     if (!view || busy) return;
@@ -187,6 +281,7 @@ export default function SigningPage() {
           It will be complete when everyone required has signed, and a copy will be emailed to you then.</p>
           : offer ? <p className="text-sm">Hello {view.recipient.name}. Read every page of your offer letter. Your initials go on every page, your signature and the date in the signature block, and you answer whether you elect to pay more than the required pre-paid fee. Then confirm the code we email you and sign at the bottom.</p>
           : <p>Hello {view.recipient.name}. You are signing as <strong>{view.recipient.role}</strong>. Read the complete document, fill in the highlighted fields, then sign at the bottom.</p>}
+        {pay?.required && pay.payment && <div ref={paymentCard}><PaymentCard pay={pay} note={payNote} busy={paying} showPay={showPay} afterSigning={afterSigning} onPay={() => void payNow()} /></div>}
         {view.message && !mine && !complete && <p className="whitespace-pre-wrap rounded-md border border-background-300 bg-background-50 p-3 text-sm"><span className="font-semibold">Message from the sender: </span>{view.message}</p>}
         {view.signers.length > 1 && <ol className="flex flex-wrap gap-2 text-xs" aria-label="Signers">{view.signers.map((s, i) => <li key={i} className={`rounded-full border px-3 py-1 ${s.me ? "border-primary-500 font-semibold" : "border-background-300"}`}>
           {s.role}: {s.me ? "you" : s.name} · {RECIPIENT_STATE[s.state] ?? s.state}{s.required ? "" : " (optional)"}</li>)}</ol>}
@@ -251,8 +346,10 @@ export default function SigningPage() {
           {view.requireCode && (codeSession
             ? <p role="status" className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 p-3 text-sm" data-testid="code-verified"><i className="ri-shield-check-line text-base text-green-700" aria-hidden="true" />Your email is confirmed. You can sign now.</p>
             : <CodeCheck token={token} to={view.codeTo} onVerified={setCodeSession} />)}
+          {payFirst && <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm" data-testid="pay-first">This document needs the payment of {formatMoney(pay!.payment!.amountCents, pay!.payment!.currency)} before it can be signed.{" "}
+            <button type="button" className="font-semibold underline" onClick={() => paymentCard.current?.scrollIntoView({ behavior: "smooth", block: "center" })}>Go to the payment</button></p>}
           <div className="hidden flex-wrap gap-3 sm:flex">
-            <Button type="submit" disabled={busy || !ready} data-testid="sign-submit">{busy ? "Please wait…" : offer ? "Sign and accept offer" : "Sign document"}</Button>
+            <Button type="submit" disabled={busy || !ready} data-testid="sign-submit">{busy ? "Please wait…" : payFirst ? "Pay first to sign" : offer ? "Sign and accept offer" : "Sign document"}</Button>
             {!offer && <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)}>Decline to sign</Button>}
           </div>
           {offer && <p className="text-xs text-foreground-500">Questions about your offer, or want to decline it? Reply to the offer email to contact our admissions team.</p>}
@@ -268,6 +365,7 @@ export default function SigningPage() {
     {/* Phone: the two actions stay in reach at the bottom of the screen. */}
     {canSign && !declined && !declining && <div className="fixed inset-x-0 bottom-0 z-10 flex gap-2 border-t border-background-300 bg-white p-3 sm:hidden">
       {ready ? <Button type="button" className="flex-1" disabled={busy} onClick={() => void sign()}>{busy ? "Please wait…" : offer ? "Sign and accept" : "Sign document"}</Button>
+        : payFirst ? <Button type="button" className="flex-1" disabled={paying} onClick={() => showPay ? void payNow() : paymentCard.current?.scrollIntoView({ behavior: "smooth", block: "center" })}>{paying ? "Please wait…" : showPay ? "Pay now to sign" : "Pay first to sign"}</Button>
         : <Button type="button" className="flex-1" onClick={() => missing.length ? goTo(missing[0].id) : signPanel.current?.scrollIntoView({ behavior: "smooth" })}>{missing.length ? `Fill in ${missing.length} field${missing.length === 1 ? "" : "s"}` : "Go to signature"}</Button>}
       {!offer && <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)}>Decline</Button>}
     </div>}

@@ -12,6 +12,62 @@ export interface SigningTemplate {
   header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
   kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
   version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
+  /** Stripe: requests made from the template ask the signer for this payment (hr.sign_templates payment_* columns). */
+  payment_enabled?: boolean; payment_amount_cents?: number | null; payment_currency?: string | null; payment_description?: string | null; payment_timing?: PaymentTiming | null;
+}
+export type PaymentTiming = "before_sign" | "after_sign";
+/** The Stripe payment on a request as signing_admin `list` and `detail` return it (null when the request has none). */
+export interface SigningPayment {
+  id: string; amount_cents: number; currency: string; description: string; timing: PaymentTiming; status: string; paid_at: string | null; amount_paid_cents: number | null;
+  amount_refunded_cents?: number | null; failure_reason: string | null; livemode: boolean | null; checkout_open: boolean; payer_email?: string | null; updated_at?: string;
+}
+/** What the `payments` function tells a link holder (status / checkout / confirm) and an administrator (refresh). */
+export interface PaymentView {
+  required: boolean; stripeReady?: boolean; mustPayBeforeSigning?: boolean; canPay?: boolean; alreadyPaid?: boolean;
+  payment: { id: string; description: string; amountCents: number; currency: string; timing: PaymentTiming; status: string; paidAt: string | null; amountPaidCents: number | null; failureReason: string | null; testMode: boolean } | null;
+}
+/** The amount, currency, description and timing an administrator sets on a template or a request (amount in dollars). */
+export interface PaymentInput { amount: number; currency: string; description: string; timing: PaymentTiming }
+export const PAYMENT_TIMING: Record<PaymentTiming, string> = { before_sign: "Before signing", after_sign: "After signing" };
+export const PAYMENT_STATUS: Record<string, { label: string; tone: "primary" | "secondary" | "success" | "muted" | "warn" }> = {
+  pending: { label: "Pending", tone: "warn" }, open: { label: "Checkout open", tone: "secondary" }, processing: { label: "Processing", tone: "secondary" },
+  paid: { label: "Paid", tone: "success" }, failed: { label: "Failed", tone: "primary" }, refunded: { label: "Refunded", tone: "muted" }, canceled: { label: "Cancelled", tone: "muted" },
+};
+export const paymentStatus = (status: string) => PAYMENT_STATUS[status] ?? { label: status.replaceAll("_", " "), tone: "muted" as const };
+/** 12345 cents in "aud" as "$123.45" (the browser's locale rules for that currency). */
+export function formatMoney(cents: number, currency: string): string {
+  const code = (currency || "AUD").toUpperCase();
+  try { return new Intl.NumberFormat("en-AU", { style: "currency", currency: code }).format(cents / 100); }
+  catch { return `${code} ${(cents / 100).toFixed(2)}`; }
+}
+/** The payment as typed into the shared form (amount in dollars as text). */
+export interface PaymentDraft { amount: string; currency: string; description: string; timing: PaymentTiming }
+export const paymentDraft = (input: PaymentInput | null | undefined, description = ""): PaymentDraft => input
+  ? { amount: input.amount.toFixed(2), currency: input.currency.toUpperCase(), description: input.description, timing: input.timing }
+  : { amount: "", currency: "AUD", description, timing: "before_sign" };
+/** A request's payment as the admin edits it (null when the request has none). */
+export const paymentOfRecord = (payment: SigningPayment | null | undefined): PaymentInput | null => payment
+  ? { amount: payment.amount_cents / 100, currency: payment.currency.toUpperCase(), description: payment.description, timing: payment.timing } : null;
+/** The same checks hr.sign_payment_input makes, before the round trip. */
+export function validatePayment(draft: PaymentDraft): PaymentInput {
+  const amount = Number(draft.amount);
+  if (!draft.amount.trim() || !Number.isFinite(amount) || amount < 0.5 || amount > 999999.99) throw new Error("Enter a payment amount between 0.50 and 999,999.99.");
+  const currency = draft.currency.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("Use a 3-letter currency code for the payment, such as AUD.");
+  const description = draft.description.trim();
+  if (description.length > 250) throw new Error("Keep the payment description to 250 characters.");
+  return { amount: Math.round(amount * 100) / 100, currency, description, timing: draft.timing };
+}
+export const samePayment = (a: PaymentInput | null, b: PaymentInput | null) => (!a && !b) || (!!a && !!b
+  && Math.round(a.amount * 100) === Math.round(b.amount * 100) && a.currency.toUpperCase() === b.currency.toUpperCase() && a.description.trim() === b.description.trim() && a.timing === b.timing);
+export const describePayment = (p: PaymentInput) => `${formatMoney(Math.round(p.amount * 100), p.currency)} · ${PAYMENT_TIMING[p.timing].toLowerCase()}${p.description.trim() ? ` · ${p.description.trim()}` : ""}`;
+/** Requests still open for a payment change (payment_set refuses the others); a paid, refunded or closed one is read-only. */
+export const paymentEditable = (requestStatus: string, payment: SigningPayment | null | undefined) =>
+  ["draft", "sent", "viewed", "partial"].includes(requestStatus) && !["paid", "refunded", "processing"].includes(payment?.status ?? "");
+/** The payment a template asks for, as the compose dialog edits it (null when the template has none). */
+export function templatePayment(template: Pick<SigningTemplate, "payment_enabled" | "payment_amount_cents" | "payment_currency" | "payment_description" | "payment_timing"> | null | undefined): PaymentInput | null {
+  if (!template?.payment_enabled || template.payment_amount_cents == null) return null;
+  return { amount: template.payment_amount_cents / 100, currency: (template.payment_currency ?? "aud").toUpperCase(), description: template.payment_description ?? "", timing: template.payment_timing ?? "before_sign" };
 }
 export interface SigningRecipient {
   id: string; role_key: string; role_label: string; name: string; email: string; signing_order: number; required: boolean; state: "pending" | "sent" | "viewed" | "signed" | "declined" | "skipped";
@@ -22,6 +78,7 @@ export interface SigningRequest {
   id: string; reference: string; title: string; state: string; status: string; category: string; signing_mode: "sequential" | "parallel"; subject_type: "student" | "employee" | "agent" | null; subject_id: string | null;
   created_at: string; sent_at: string | null; expires_at: string | null; signed_at: string | null; completed_at: string | null; closed_reason: string | null; message: string | null;
   expiry_days: number; reminder_days: number; original_hash: string; signed_hash: string | null; certificate_hash: string | null; recipients: SigningRecipient[];
+  payment?: SigningPayment | null;
 }
 export interface RequestField { id?: string; recipient_id: string; type: SignFieldType; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value?: string | null }
 export interface SigningEvent { id: number; event: string; at: string; recipient_id: string | null; recipient_name: string | null; detail: Record<string, unknown>; hash: string }
@@ -70,11 +127,21 @@ export async function signingMine<T>(action: "list" | "token", id: string | null
   return result.data as T;
 }
 export async function signingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
+  return invokeFunction<T>("document-signing", body, "The signing request could not be completed.", file);
+}
+/** The `payments` function (Stripe Checkout on a signing request): a link holder sends the signing token, an administrator their session. Errors come back as { error }. */
+export function paymentsAction<T>(body: Record<string, unknown>): Promise<T> {
+  return invokeFunction<T>("payments", body, "The payment request could not be completed.");
+}
+/** Sets (or, with null, removes) the payment on a request that is not sent out yet or not paid yet. */
+export const paymentSet = (requestId: string, payment: PaymentInput | null) =>
+  signingAdmin<{ payment: SigningPayment | null }>("payment_set", requestId, { payment: payment ? { ...payment, currency: payment.currency.trim().toLowerCase() } : null });
+async function invokeFunction<T>(name: string, body: Record<string, unknown>, fallback: string, file?: File): Promise<T> {
   const form = file ? new FormData() : null;
   if (form && file) { form.set("data", JSON.stringify(body)); form.set("file", file); }
-  const { data, error } = await supabase.functions.invoke("document-signing", { body: form ?? body });
+  const { data, error } = await supabase.functions.invoke(name, { body: form ?? body });
   if (error) {
-    let message = "The signing request could not be completed.", code = "";
+    let message = fallback, code = "";
     try {
       const response = await error.context?.json();
       if (typeof response?.error === "string") message = response.error;

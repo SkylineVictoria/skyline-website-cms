@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Modal, Select, TextArea, TextInput } from "../ui";
 import PdfPages from "@/components/signing/PdfPages";
-import { pdfBytes, signingAction, signingAdmin, type SigningRequest, type SigningSubject, type SigningTemplate } from "@/lib/signingApi";
+import { describePayment, paymentSet, pdfBytes, samePayment, signingAction, signingAdmin, templatePayment, type PaymentInput, type SigningRequest, type SigningSubject, type SigningTemplate } from "@/lib/signingApi";
+import { PaymentPanel } from "./PaymentForm";
 import { SIGN_CATEGORIES, signingVariables, templateVariables } from "../../../../../supabase/functions/_shared/signing";
 import { templatePlaceholders, templateValues } from "../../../../../supabase/functions/_shared/hr-template";
 import { templatePerson } from "@/lib/hrTemplatesApi";
@@ -19,7 +20,11 @@ const SUBJECT_LABEL = { student: "Student", employee: "Employee", agent: "Agent"
  * Prepare a signing request: a template (its variables filled from the chosen student, employee or agent) or a ready-made PDF, one or more
  * recipients in order, the signing order, expiry, reminders and a message. It is saved as a draft; nothing is emailed until it is sent.
  */
-export default function ComposeRequest({ templates, preset, onClose, onCreated }: { templates: SigningTemplate[]; preset?: SubjectPreset; onClose: () => void; onCreated: (request: SigningRequest) => void }) {
+export default function ComposeRequest({ templates, preset, onClose, onCreated }: {
+  templates: SigningTemplate[]; preset?: SubjectPreset; onClose: () => void;
+  /** `warning`: the request exists, but something after it (changing its payment) failed. */
+  onCreated: (request: SigningRequest, warning?: string) => void;
+}) {
   const [source, setSource] = useState<"template" | "upload">("template");
   const [templateId, setTemplateId] = useState(""); const [file, setFile] = useState<File | undefined>(); const [title, setTitle] = useState("");
   const [category, setCategory] = useState("other");
@@ -33,6 +38,8 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   /** The text of THIS copy when the administrator edits it (text templates only; the template is untouched); `copyIsHtml` for a rich template. */
   const [copyText, setCopyText] = useState<string | null>(null);
   const [copyIsHtml, setCopyIsHtml] = useState(false);
+  /** Stripe: the payment this request will ask for (the template's to start with, when it has one; added, changed or removed here). */
+  const [payment, setPayment] = useState<PaymentInput | null>(null);
   // Emails are not signed; everything else of the one template table is offered.
   const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && t.category !== "student_offer_letter" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
@@ -61,7 +68,10 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
     if (source !== "template" || !template) return;
     setPeople((rows) => template.roles.map((role, i) => ({ role: role.key, label: role.label, order: role.order, required: role.required, name: rows[i]?.name ?? "", email: rows[i]?.email ?? "" })));
     setMode(template.signing_mode); setExpiry(template.expiry_days); setReminder(template.reminder_days); setTyped({}); setCopyText(null);
+    setPayment(templatePayment(template));
   }, [source, template]);
+  // A request made from a template gets the template's payment by itself; payment_set after create is only for what the administrator added, changed or removed.
+  const asked = source === "template" ? templatePayment(template) : null;
 
   let variables: string[] = [];
   // TPL-02: the [Variables] of a sectioned template (by their record key) and the [tokens] the signer fills in.
@@ -86,6 +96,16 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
     if (source === "upload" && !file) throw new Error("Choose the PDF to send.");
     if (source === "template" && !template) throw new Error("Choose a template.");
     const record = source === "upload" ? await signingAction<SigningRequest>({ action: "create", title, category, ...body() }, file) : await signingAction<SigningRequest>({ action: "create", templateId, values, ...body() });
+    // The function's create does not carry a payment: the database copies the template's; anything else is a second call.
+    if (!samePayment(payment, asked)) {
+      try {
+        const result = await paymentSet(record.id, payment);
+        onCreated({ ...record, payment: result?.payment ?? null });
+      } catch (e) {
+        onCreated(record, `The request was saved ${asked ? `with the template's payment of ${describePayment(asked)}` : "without a payment"}; ${payment ? "setting" : "removing"} the payment failed: ${e instanceof Error ? e.message : "please try again"}.`);
+      }
+      return;
+    }
     onCreated(record);
   });
 
@@ -144,6 +164,9 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         <Field label="Remind every (days)" hint="0 = no reminders"><TextInput type="number" min={0} max={60} value={reminder} onChange={(e) => setReminder(Math.min(60, Math.max(0, Number(e.target.value) || 0)))} /></Field>
       </div>
       <Field label="Message to the recipients" hint="Optional. Included in the invitation email."><TextArea rows={2} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} /></Field>
+      <PaymentPanel key={`${source}:${templateId}`} testId="compose-payment" current={payment} title={(source === "template" ? template?.title : title) || "Payment"} editable busy={busy} onSave={setPayment}>
+        <p className="text-foreground-600">{asked ? `This template asks for ${describePayment(asked)}; a change here applies to this request only.` : "The signer pays by card through Stripe (Integrations › Stripe must be connected)."}</p>
+      </PaymentPanel>
     </div>
   </Modal>;
 }

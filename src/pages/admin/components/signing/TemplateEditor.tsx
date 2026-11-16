@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { Button, Field, Modal, Select, TextInput } from "../ui";
+import { Button, Field, Modal, Select, TextInput, Toggle } from "../ui";
 import FieldEditor, { type EditorField } from "@/components/signing/FieldEditor";
 import PdfPages from "@/components/signing/PdfPages";
 import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
@@ -12,7 +12,8 @@ import { unmappedTokens, type LetterVariable } from "../../../../../supabase/fun
 import { isTemplateAsset } from "../../../../../supabase/functions/_shared/rich-html";
 import { sectionsReport } from "@/lib/templateSections";
 import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
-import { docxText, pdfBytes, signingAction, signingAdmin, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
+import { docxText, paymentDraft, pdfBytes, signingAction, signingAdmin, templatePayment, validatePayment, type PaymentDraft, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
+import { PaymentFields } from "./PaymentForm";
 import { SIGN_CATEGORIES, SUBJECT_VARIABLES, signingVariables } from "../../../../../supabase/functions/_shared/signing";
 import {
   PLACEHOLDERS, TEMPLATE_TYPES, isTemplateType, placeholderLabels, placeholdersFor, sanitizeTemplateHtml, templatePlaceholders, templateText, textToHtml,
@@ -21,13 +22,17 @@ import {
 
 type Kind = "text" | "email" | "pdf";
 type Draft = Pick<SigningTemplate, "name" | "title" | "audience" | "category" | "signing_mode" | "expiry_days" | "reminder_days" | "roles" | "fields">
-  & { id: string | null; kind: Kind; body_html: string; header_html: string; footer_html: string; subject: string; source_pages: number | null; version: number };
+  & { id: string | null; kind: Kind; body_html: string; header_html: string; footer_html: string; subject: string; source_pages: number | null; version: number }
+  /** Stripe payment the signer is asked for (amount typed in dollars). */
+  & { payment_enabled: boolean; payment: PaymentDraft };
+const NO_PAYMENT = { payment_enabled: false, payment: paymentDraft(null) };
+const paymentOf = (template: SigningTemplate) => ({ payment_enabled: Boolean(template.payment_enabled), payment: paymentDraft(templatePayment(template)) });
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const SENDER = "sender";
 const EMAIL_TYPES = TEMPLATE_TYPES.filter((t) => t.kind === "email");
 const blank = (kind: Kind = "text", category = "offer_letter"): Draft => ({
   id: null, name: "", title: "", body_html: "<p></p>", header_html: "", footer_html: "", subject: "", kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
-  signing_mode: "sequential", expiry_days: 14, reminder_days: 3, roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0,
+  signing_mode: "sequential", expiry_days: 14, reminder_days: 3, roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0, ...NO_PAYMENT,
 });
 const roleKey = (label: string, taken: string[]) => {
   const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^[^a-z]+|_+$/g, "").slice(0, 30) || "signer";
@@ -138,7 +143,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   separateLetterTitle?: boolean;
 }) {
   const [draft, setDraft] = useState<Draft>(() => template
-    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : "") }
+    ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), ...paymentOf(template) }
     : { ...blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")), ...(audience ? { audience } : {}) });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -204,6 +209,15 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     });
   };
   const signed = draft.kind !== "email" && !loo;
+  // Stripe: every document template (text or PDF, students, agents or units) can ask for a payment; HRMS letters and emails cannot.
+  const payable = draft.kind !== "email" && !hrms;
+  const paymentSection = (compact: boolean) => <section className="space-y-3 rounded-md border border-background-300 p-3" data-testid="template-payment">
+    <div className={`flex gap-3 ${compact ? "flex-col" : "flex-wrap items-center justify-between"}`}>
+      <div className="text-sm"><p className="font-semibold">Payment</p>{!compact && <p className="text-foreground-600">Ask the signer to pay by card through Stripe (Integrations › Stripe must be connected). Each request made from this template starts with this payment; it can be changed or removed per request.</p>}</div>
+      <Toggle checked={draft.payment_enabled} label="Require payment" onChange={(payment_enabled) => set({ payment_enabled })} />
+    </div>
+    {draft.payment_enabled && <PaymentFields compact={compact} testId="template-payment" value={draft.payment} onChange={(payment) => set({ payment })} />}
+  </section>;
   // A document template (not an HRMS letter or email, not a PDF) has a header, a body and a footer, and [Variable] tokens.
   const sections = draft.kind === "text" && !hrms;
   const html = sections ? sanitizeRichHtml(draft.body_html) : sanitizeTemplateHtml(draft.body_html);
@@ -217,6 +231,10 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : sections ? richPlainText(html).slice(0, 200000) || null : templateText(html), kind: draft.kind,
     ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: !loo } : {}), audience: loo ? "student" : draft.audience, category: draft.category,
     signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [],
+    // Stripe: { enabled: false } switches the payment off; absent would leave the saved settings unchanged.
+    payment: payable && draft.payment_enabled
+      ? { enabled: true, amount: Number(draft.payment.amount), currency: draft.payment.currency.trim().toLowerCase(), description: draft.payment.description.trim(), timing: draft.payment.timing }
+      : { enabled: false },
   });
   /** The same checks the database makes (hr.template_problem for letters and emails; the signing variable rules for the rest). */
   const check = () => {
@@ -225,6 +243,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     if (draft.kind === "pdf") { if (!draft.id && !file) throw new Error("Choose the PDF for this template."); }
     else if (sections ? !richPlainText(html).trim() : !html.replace(/<[^>]*>|&nbsp;|\s/g, "")) throw new Error("The template has no text yet.");
     if (signed && draft.roles.some((r) => !r.label.trim())) throw new Error("Give every signer a role name.");
+    if (payable && draft.payment_enabled) validatePayment(draft.payment);
     const text = draft.kind === "pdf" ? "" : html;
     if (hrms && spec) {
       const allowed = new Set([...placeholdersFor(draft.category as TemplateType).map((p) => p.key), ...(draft.kind === "email" ? [] : recordPlaceholders(draft.audience).map((p) => p.key))]);
@@ -271,7 +290,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
 
   if (placing) return <Modal open fill title={`Place fields: ${draft.name || "template"}`} width="max-w-6xl" onClose={() => setPlacing(null)} footer={<Button onClick={() => setPlacing(null)}>Done placing fields</Button>}>
     {draft.kind === "text" && <p className="mb-3 shrink-0 text-sm text-foreground-600">The sample shows [variable] where a value will go. Long values can move text, so place signature fields near the end of the document, and check the preview of each request.</p>}
-    <FieldEditor source={placing} owners={owners} fields={editorFields} onChange={(fields) => set({ fields: fromEditor(fields) })} />
+    <FieldEditor source={placing} owners={owners} fields={editorFields} onChange={(fields) => set({ fields: fromEditor(fields) })} panel={payable ? paymentSection(true) : undefined} />
   </Modal>;
   if (preview) return <Modal open title="Template preview (PDF)" width="max-w-4xl" onClose={() => setPreview(null)}><PdfPages source={preview} /></Modal>;
   if (confirming) {
@@ -370,6 +389,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
           <Button variant="outline" disabled={busy} onClick={() => void run(async () => { check(); setPlacing(await documentSource()); })} data-testid="place-fields">Place fields on the document</Button>
         </section>
       </>}
+      {payable && paymentSection(false)}
       {versions && versions.length > 0 && <section><h3 className="mb-2 font-semibold">Versions</h3>
         <ul className="space-y-1 text-sm">{versions.map((v) => <li key={v.version} className="flex flex-wrap items-center gap-3">Version {v.version} · {new Date(v.created_at).toLocaleString()} · {v.name}
           {v.version !== draft.version && <button type="button" className="text-primary-700 underline" disabled={busy} onClick={() => void run(async () => { await signingAdmin("template_restore", draft.id, { version: v.version }); onSaved(`Version ${v.version} restored as a new version.`); })}>Restore</button>}</li>)}</ul></section>}

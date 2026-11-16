@@ -120,7 +120,7 @@ export default function CommunicationInbox() {
 }
 
 /** One person's whole communication log with a composer (email / SMS / WhatsApp / note). Also used by the Message button on person pages. */
-export function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => void; onSent: () => void }) {
+export function ConversationView({ id, onBack, onSent, compact = false }: { id: string; onBack: () => void; onSent: () => void; compact?: boolean }) {
   const { push } = useToast();
   const [thread, setThread] = useState<Thread | null>(null);
   const [error, setError] = useState("");
@@ -191,16 +191,16 @@ export function ConversationView({ id, onBack, onSent }: { id: string; onBack: (
   const sms = channel === "sms" ? smsInfo(body) : null;
 
   return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-background-200 bg-background-50">
+    <div className={compact ? "flex h-full min-h-0 flex-col bg-background-50" : "flex min-h-[60vh] flex-col rounded-xl border border-background-200 bg-background-50"}>
       <header className="flex flex-wrap items-center gap-3 border-b border-background-200 p-3">
-        <button type="button" onClick={onBack} className="rounded-md p-1 text-foreground-600 hover:bg-background-100 lg:hidden" aria-label="Back to the list"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
+        <button type="button" onClick={onBack} className={`rounded-md p-1 text-foreground-600 hover:bg-background-100 ${compact ? "" : "lg:hidden"}`} aria-label="Back to the list"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-semibold text-foreground-950">{c.name} <span className="ml-1 rounded bg-background-200 px-1.5 text-xs font-normal">{KIND_LABELS[c.kind]}</span></h2>
           <p className="truncate text-xs text-foreground-600">{[c.email ?? "No email", c.phone ?? "No phone"].join(" · ")}</p>
         </div>
       </header>
 
-      <div className="max-h-[55vh] flex-1 space-y-3 overflow-y-auto bg-background-100/40 p-3">
+      <div className={`${compact ? "min-h-0" : "max-h-[55vh]"} flex-1 space-y-3 overflow-y-auto bg-background-100/40 p-3`}>
         {thread.items.length === 0 ? <p className="py-8 text-center text-sm text-foreground-600">Nothing yet. Send the first message below.</p> : thread.items.map((m) => {
           const mine = m.direction === "out";
           const auto = m.source === "automatic";
@@ -256,7 +256,7 @@ export function ConversationView({ id, onBack, onSent }: { id: string; onBack: (
   );
 }
 
-function NewPersonDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (id: string) => void }) {
+export function NewPersonDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (id: string) => void }) {
   const { push } = useToast();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");

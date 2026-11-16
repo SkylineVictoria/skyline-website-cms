@@ -56,7 +56,6 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [name, setName] = useState(batch?.name ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
   const [trainerIds, setTrainerIds] = useState<string[]>(() => (batch?.trainers ?? []).map((t) => t.id));
-  const [templateNote, setTemplateNote] = useState("");
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -97,29 +96,6 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
     setRows(t.sessions.map(toDraft)); setMenu("");
     if (t.trainerStaffId && trainerIds.length === 0) setTrainerIds([t.trainerStaffId]);
   };
-  /** Saves these days, times, rooms and the first trainer as a course timetable that any batch of the course can start from. */
-  const saveTemplate = async () => {
-    const entered = window.prompt("Name of this course timetable (e.g. G1, Weekend, Evening):", shownName);
-    const label = entered?.trim();
-    if (!label) return;
-    if (label.length > 40) { setError("The name can be at most 40 characters."); return; }
-    const existing = timings.find((t) => t.name.toLowerCase() === label.toLowerCase());
-    if (existing && !window.confirm(`Replace the course timetable "${existing.name}"?`)) return;
-    setBusy(true); setError(""); setTemplateNote("");
-    try {
-      const trainer = staff.find((s) => s.id === trainerIds[0]);
-      const values = {
-        course_id: intake.courseId, name: existing?.name ?? label, trainer_staff_id: trainer?.id ?? null, trainer_name: trainer?.name ?? null,
-        sessions: rows.map((r) => ({ weekday: r.weekday, slot: slotOf(r.startTime), start: r.startTime, end: r.endTime, type: r.type, roomId: r.roomId || null })),
-        source: "Saved from batch class timing",
-      };
-      const { error: e } = await supabase.from("course_timing_templates").upsert(values, { onConflict: "course_id,name" });
-      if (e) throw new Error(e.message);
-      setTimings(await rtoFlow<CourseTiming[]>("timing_list", { courseId: intake.courseId }));
-      setTemplateNote(`Saved as course timetable "${values.name}". Any batch of this course can now use it.`);
-    } catch (e) { setError(e instanceof Error ? e.message : "The course timetable was not saved."); }
-    finally { setBusy(false); }
-  };
   const deleteTemplate = async (t: CourseTiming) => {
     if (!window.confirm(`Delete the course timetable "${t.name}"? Batches already using its times keep them.`)) return;
     const { error: e } = await supabase.from("course_timing_templates").delete().eq("id", t.id);
@@ -153,6 +129,8 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       });
       const before = (batch?.trainers ?? []).map((t) => t.id).sort().join();
       if (!adding && before !== [...trainerIds].sort().join()) await rtoFlow("batch_trainers_set", { batchId: out.batchId, trainerIds });
+      // Classes that run past the intake end move the intake end to the last class (into the next year if needed).
+      if (extendsIntake && plan?.lastDate) await rto("intake_save", { id: intake.id, endDate: plan.lastDate });
       // The dated classes follow the saved timing automatically (term breaks and public holidays skipped).
       let generated: GenerateResult | null = null;
       if (rows.length) generated = await generateClassSessions(out.batchId).catch(() => null);
@@ -167,12 +145,13 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const plan = ready ? planCourse(intakeDates.start, rows, need, closed) : null;
   const perWeek = ready && intakeDates.end ? weeklyHoursNeeded(intakeDates.start, intakeDates.end, need.total, closed) : null;
   const finishesInTime = !!plan && !!plan.lastDate && (!intakeDates?.end || plan.lastDate <= intakeDates.end);
-  const short = !!plan && rows.length > 0 && !finishesInTime;
+  const extendsIntake = !!plan?.lastDate && !!intakeDates?.end && plan.lastDate > intakeDates.end;
+  const short = !!plan && rows.length > 0 && !plan.lastDate;
   const planFor = (sessions: BatchSession[]) => (ready ? planCourse(intakeDates.start, sessions, need, closed) : null);
   const fitHint = (sessions: BatchSession[]) => {
     const p = planFor(sessions);
     if (!p) return "";
-    return !p.lastDate ? " · ✗ never finishes" : intakeDates?.end && p.lastDate > intakeDates.end ? ` · ✗ ends ${shortDate(p.lastDate)}, after the intake` : ` · ✓ ends ${shortDate(p.lastDate)}`;
+    return !p.lastDate ? " · ✗ never finishes" : intakeDates?.end && p.lastDate > intakeDates.end ? ` · ⚠ ends ${shortDate(p.lastDate)}, extends the intake` : ` · ✓ ends ${shortDate(p.lastDate)}`;
   };
   const roomOptions = (selected: string) => locations.map((l) => (
     <optgroup key={l.id ?? "other"} label={l.name}>
@@ -258,24 +237,13 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
             <div className="relative">
               <Button size="sm" variant="outline" icon="ri-calendar-check-line"
                 onClick={() => setMenu((m) => (m === "timetable" ? "" : "timetable"))}>
-                Use course timetable{timings.length ? ` (${timings.length})` : ""}
+                Use a course template{timings.length ? ` (${timings.length})` : ""}
               </Button>
               {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name + (t.id === ownTiming?.id ? " ★" : ""), hint: `${t.sessions.length} classes${t.trainerName ? " · " + t.trainerName : ""}${fitHint(t.sessions)}` }))}
-                empty="No template for this course yet. Create one under Timetable → Templates, or set the days below and click Save as course timetable."
+                empty="No template for this course yet. Create one under Timetable → Templates."
                 onPick={(id) => { const t = timings.find((x) => x.id === id); if (t) applyTiming(t); }}
                 onDelete={(id) => { const t = timings.find((x) => x.id === id); if (t) void deleteTemplate(t); }} onClose={() => setMenu("")} /> : null}
             </div>
-            <Button size="sm" variant="outline" icon="ri-save-3-line" disabled={busy || !rows.length || !!invalid || !!overlap} onClick={() => void saveTemplate()}>
-              Save as course timetable
-            </Button>
-            {copyFrom.length ? (
-              <div className="relative">
-                <Button size="sm" variant="outline" icon="ri-file-copy-line" onClick={() => (copyFrom.length === 1 ? copyTiming(copyFrom[0]) : setMenu((m) => (m === "copy" ? "" : "copy")))}>
-                  Copy timing from {copyFrom.length === 1 ? copyFrom[0].name : "…"}
-                </Button>
-                {menu === "copy" ? <PickList items={copyFrom.map((b) => ({ id: b.id, label: b.name, hint: "" }))} onPick={(id) => { const b = copyFrom.find((x) => x.id === id); if (b) copyTiming(b); }} onClose={() => setMenu("")} /> : null}
-              </div>
-            ) : null}
           </div>
         </div>
         <div className="grid grid-cols-7 gap-1" role="group" aria-label="Class days">
@@ -289,16 +257,15 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           })}
         </div>
         <p className="mt-1.5 text-xs font-medium text-foreground-600">Click a day to add classes on it. Click a ticked day again to remove them.</p>
-        {ready && rows.length ? <div role="status" className={`mt-3 rounded-lg border px-3 py-2 text-sm ${finishesInTime ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800"}`}>
+        {ready && rows.length ? <div role="status" className={`mt-3 rounded-lg border px-3 py-2 text-sm ${finishesInTime ? "border-emerald-200 bg-emerald-50 text-emerald-900" : extendsIntake ? "border-amber-300 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800"}`}>
           <p className="font-semibold"><i className={(finishesInTime ? "ri-checkbox-circle-line" : "ri-error-warning-line") + " mr-1"} aria-hidden="true" />
             {!plan?.lastDate ? "These class times never cover the course hours."
               : finishesInTime ? `Covers the full course: last class ${shortDate(plan.lastDate)}${intakeDates.end ? `, intake ends ${shortDate(intakeDates.end)}` : ""}.`
-              : `Not enough class time: the last class would be ${shortDate(plan.lastDate)}, after the intake ends on ${shortDate(intakeDates.end)}.`}</p>
+              : `Runs past the intake end: the last class is ${shortDate(plan.lastDate)}, the intake ends ${shortDate(intakeDates.end)}. Saving extends the intake to ${shortDate(plan.lastDate)}${plan.lastDate.slice(0, 4) !== (intakeDates.end ?? "").slice(0, 4) ? `, into ${plan.lastDate.slice(0, 4)}` : ""}.`}</p>
           <p className="mt-0.5">Course: {need.total} SLIT hours ({splitText(need)}) over {need.units} units. This week: {plan?.weeklyTotal ?? 0} hours ({splitText(plan?.weekly ?? { theory: 0, practical: 0, assessment: 0 }) || "none"}).
-            {perWeek ? ` To finish by the intake end you need about ${perWeek} hours a week.` : ""}</p>
+            {perWeek && extendsIntake ? ` To finish by ${shortDate(intakeDates.end)} instead, you need about ${perWeek} hours a week.` : ""}</p>
           {plan?.folded.map((f) => <p key={f.from} className="mt-0.5 text-xs">No {typeLabel(f.from)} class in the week, so its hours are taught in the {typeLabel(f.into)} classes.</p>)}
         </div> : null}
-        {templateNote ? <p role="status" className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{templateNote}</p> : null}
       </div>
 
       {days.length === 0 ? (

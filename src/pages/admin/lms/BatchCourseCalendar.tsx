@@ -11,8 +11,10 @@ const tone: Record<string, string> = { theory: "bg-sky-50 ring-sky-200", practic
  * The batch's whole course, month by month from the intake start: every class with its time, unit, room and trainer.
  * Term-break days are greyed out. Classes come from the saved class timing (generated when the timing is saved).
  */
-export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey }: {
+export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, onRemoved }: {
   batchId: string; intakeStart: string; intakeEnd: string | null; hasSlots: boolean; canManage: boolean; reloadKey: number;
+  /** After Remove calendar: clears the weekly class timing too, so the batch starts again from scratch. */
+  onRemoved?: () => Promise<void>;
 }) {
   const [rows, setRows] = useState<ClassSession[]>([]);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
@@ -27,13 +29,15 @@ export default function BatchCourseCalendar({ batchId, intakeStart, intakeEnd, h
     const changed = rows.filter(r => r.manual).length;
     const ask = regenerate
       ? `Recreate the whole course calendar from ${shortDate(intakeStart)} using the weekly class timing?${changed ? ` The ${changed} class${changed === 1 ? "" : "es"} you changed by hand will be lost.` : ""}`
-      : `Remove all ${rows.length} classes from this batch's calendar? The weekly class timing stays; recreate the calendar any time.`;
+      : `Remove this batch's course calendar (${rows.length} classes) and its weekly class timing? You then start again from scratch with a template or by hand.`;
     if (!window.confirm(ask)) return;
     setResetting(true); setError(""); setNotice("");
     try {
       const out = await resetClassSessions(batchId, regenerate);
       setNotice(regenerate ? `Calendar recreated: ${out.created ?? 0} classes${out.endDate ? `, last class ${shortDate(out.endDate)}` : ""}.` : `Calendar removed (${out.removed} classes).`);
-      setRemoved(!regenerate); setVersion(v => v + 1);
+      setRemoved(!regenerate);
+      if (!regenerate && onRemoved) { await onRemoved(); return; }
+      setVersion(v => v + 1);
     } catch (e) { setError(e instanceof Error ? e.message : "The calendar was not changed."); }
     finally { setResetting(false); }
   };

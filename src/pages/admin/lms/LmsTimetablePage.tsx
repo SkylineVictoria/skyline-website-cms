@@ -130,9 +130,14 @@ export default function LmsTimetablePage() {
         {canManage && selectClassButton("Edit class timing")}
       </div>}
     </section>
-    {batchId && data && detail?.intake.id === intakeId && <BatchCourseCalendar key={batchId} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
-      hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey} />}
-    {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
+    {batchId && data && sessions.length > 0 && detail?.intake.id === intakeId && <BatchCourseCalendar key={`calendar-${batchId}`} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
+      hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey}
+      onRemoved={async () => {
+        await rtoFlow("batch_setup", { batchId, intakeId, sessions: [] });
+        await refreshBatch(); void reload();
+        setSavedNote("Course calendar and weekly class timing removed. Start again with a course template or by hand.");
+      }} />}
+    {editor && detail && data && canManage && <BatchTimingDrawer key={`timing-${batchId}`} intake={detail.intake} batches={detail.batches} batch={data.batch}
       startDay={editor.day} showTemplates={editor.templates} startManual={editor.manual}
       onClose={() => setEditor(null)}
       onSaved={out => {

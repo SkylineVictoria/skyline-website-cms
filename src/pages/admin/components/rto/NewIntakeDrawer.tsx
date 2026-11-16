@@ -40,7 +40,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const [error, setError] = useState("");
 
   useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); } }, [open, courseId]);
-  useEffect(() => { if (open) listBreaks().then(setBreaks).catch(() => undefined); }, [open]);
+  useEffect(() => { if (open) listBreaks(chosen || null).then(setBreaks).catch(() => undefined); }, [open, chosen]);
   useEffect(() => {
     if (!open || !chosen) { setCourse(null); return; }
     let live = true;

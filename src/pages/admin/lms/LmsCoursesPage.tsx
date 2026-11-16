@@ -4,11 +4,11 @@ import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovC
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
-import CricosBulkSync from "@/pages/admin/components/rto/CricosBulkSync";
-import { Modal } from "@/pages/admin/components/ui";
+import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
+import LmsUnitsPage from "./LmsUnitsPage";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
-type Tab = "overview" | "cricos" | "tga";
+type Tab = "overview" | "units" | "cricos" | "tga";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
@@ -60,7 +60,7 @@ async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
-  const [addingCourse, setAddingCourse] = useState<null | "choose" | "tga" | "cricos">(null);
+  const [addingCourse, setAddingCourse] = useState<null | "tga">(null);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [unitHours, setUnitHours] = useState<Record<string, UnitHours>>({});
@@ -183,7 +183,7 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }] as const;
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
@@ -193,28 +193,14 @@ export default function LmsCoursesPage() {
         <p className="text-sm text-foreground-500">Qualifications, their CRICOS registration and units.</p>
       </div>
       {canEdit ? <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setBulkSync(true)} title="Link or create every course registered on CRICOS for your provider code"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync CRICOS courses</button>
-        <button type="button" onClick={() => setAddingCourse("choose")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
+        <button type="button" onClick={() => setBulkSync(true)} title="Create every qualification on SLIT's Training.gov.au scope of registration that is not in the CMS yet"
+          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
+        <button type="button" onClick={() => setAddingCourse("tga")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
       </div> : null}
     </header>
 
-    <CricosBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
+    <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }} />
-    <Modal open={addingCourse === "choose" && canEdit} title="Add a course" onClose={() => setAddingCourse(null)}>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {([
-          { id: "tga", title: "From Training.gov.au", text: "Search a qualification and import its units and packaging rules." },
-          { id: "cricos", title: "From a CRICOS code", text: "Fetch the CRICOS register entry and create a draft course." },
-        ] as const).map(option => <button key={option.id} type="button" onClick={() => setAddingCourse(option.id)}
-          className="rounded-lg border border-background-200 p-4 text-left hover:border-primary-500 hover:bg-primary-50">
-          <span className="block font-semibold text-foreground-950">{option.title}</span>
-          <span className="mt-1 block text-sm text-foreground-600">{option.text}</span></button>)}
-      </div>
-    </Modal>
-    <Modal open={addingCourse === "cricos" && canEdit} title="New course from CRICOS" width="max-w-5xl" onClose={() => setAddingCourse(null)}>
-      <CricosCourseSection courseId={null} onSaved={reloadAfterAdd} />
-    </Modal>
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
 
@@ -306,6 +292,7 @@ export default function LmsCoursesPage() {
                     <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
                   </div>)}
               </dl> : null}
+              {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "cricos" && detail ? <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /> : null}
               {tab === "tga" && detail ? <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /> : null}
             </div>

@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(566);
+select plan(582);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1107,5 +1107,34 @@ select is(has_function_privilege('anon','public.offer_letter_accept_apply(uuid,t
 select is(has_function_privilege('authenticated','public.offer_letter_deposit_paid(uuid,uuid)','execute')::text||has_function_privilege('authenticated','public.payment_apply_stripe(uuid,text,jsonb)','execute')::text,'falsefalse','nothing a student or agent calls can mark a deposit paid');
 select ok(not exists(select 1 from pg_policies where schemaname='public' and tablename='payments' and cmd in ('INSERT','UPDATE','ALL')),'payments has no write policy for signed-in users');
 
+-- SMS opt-in (migration 20261116160000): only a portal user with a saved number and SMS on for the event gets an SMS; the queue is service_role only.
+insert into auth.users(id,email) values ('3a000000-0000-0000-0000-0000000000a1','sms-user@example.test');
+select is(public.notification_normalize_phone('0412 345 678'),'+61412345678','an Australian mobile normalises to E.164');
+select is(public.notification_normalize_phone('03 9123 4567'),null,'a landline is refused');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
+select throws_ok($$select public.portal_set_sms_preference('offer_accepted',true)$$,'22023',null,'SMS cannot be turned on before a number is saved');
+select throws_ok($$select public.portal_set_sms_contact('12')$$,'22023',null,'an invalid number is refused');
+select is(public.portal_set_sms_contact('0412 345 678'),'+61412345678','a number is saved with consent');
+select lives_ok($$select public.portal_set_sms_preference('offer_accepted',true)$$,'SMS is turned on for an event');
+select throws_ok($$select * from public.notification_claim_sms_delivery()$$,'42501',null,'a portal user cannot claim SMS deliveries');
+select throws_ok($$select * from public.notification_sms_deliveries$$,'42501',null,'a portal user cannot read the SMS queue');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select is((select count(*)::int from public.notification_sms_contacts),0,'another user cannot read that number');
+reset role;
+select is((select count(*)::int from public.notification_sms_contacts where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and phone_e164='+61412345678' and consent_text<>''),1,'the number and consent wording are stored');
+select is((select sms_enabled and email_enabled from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and event='offer_accepted'),true,'turning SMS on keeps email on');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
+select lives_ok($$select public.portal_remove_sms_contact()$$,'the user removes the number');
+reset role;
+select is((select count(*)::int from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and sms_enabled),0,'removing the number turns SMS off everywhere');
+-- Communication Hub conversations (migration 20261116210000): admin only; replies only through the service role.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_people('','',10)$$,'42501',null,'a portal user cannot list people in the Communication Hub');
+select throws_ok($$select * from public.comm_messages$$,'42501',null,'a portal user cannot read hub messages');
+select throws_ok($$select public.comm_record_inbound('email','x@example.test','X','s','b',null)$$,'42501',null,'a portal user cannot record a fake reply');
+reset role;
 select * from finish();
 rollback;

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { generateClassSessions, loadClassSessions, rto, type RtoIntake } from "@/pages/admin/lib/rto";
+import { generateClassSessions, loadClassSessions, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
-interface BreakRow { id: string; label: string; startDate: string; endDate: string }
-type Draft = { id: string | null; label: string; startDate: string; endDate: string };
+/** courseId null: the break applies to every course. */
+interface BreakRow { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
+type Draft = { id: string | null; label: string; startDate: string; endDate: string; courseId: string | null };
 
 const DAY = 86_400_000;
 const parse = (s: string) => new Date(s + "T00:00:00Z");
@@ -23,21 +24,33 @@ export default function LmsTermBreaksPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [showPast, setShowPast] = useState(false);
 
+  const [courses, setCourses] = useState<RtoCourse[]>([]);
+  const [perCourse, setPerCourse] = useState(true);
+  const [filter, setFilter] = useState("");
   const load = useCallback(async () => {
-    const { data, error: e } = await supabase.from("academic_breaks").select("id, label, start_date, end_date").order("start_date");
-    if (e) throw new Error(e.message);
-    setRows((data ?? []).map((b: { id: string; label: string; start_date: string; end_date: string }) => ({ id: b.id, label: b.label, startDate: b.start_date, endDate: b.end_date })));
+    type Row = { id: string; label: string; start_date: string; end_date: string; course_id?: string | null };
+    let res: { data: unknown[] | null; error: { message: string } | null } =
+      await supabase.from("academic_breaks").select("id, label, start_date, end_date, course_id").order("start_date");
+    // Before the COURSE-BREAKS update (migration 20261116140000) every break is for every course.
+    if (res.error && /course_id/i.test(res.error.message)) {
+      setPerCourse(false);
+      res = await supabase.from("academic_breaks").select("id, label, start_date, end_date").order("start_date");
+    }
+    if (res.error) throw new Error(res.error.message);
+    setRows(((res.data ?? []) as Row[]).map(b => ({ id: b.id, label: b.label, startDate: b.start_date, endDate: b.end_date, courseId: b.course_id ?? null })));
   }, []);
   useEffect(() => {
-    Promise.all([load(), rto<{ rtoManager: boolean }>("me").then(me => setCanEdit(me.rtoManager))])
+    Promise.all([load(), rto<{ rtoManager: boolean }>("me").then(me => setCanEdit(me.rtoManager)), rto<RtoCourse[]>("course_list").then(setCourses)])
       .catch(e => setError(e instanceof Error ? e.message : "Unable to load term breaks"))
       .finally(() => setLoading(false));
   }, [load]);
 
-  const shown = useMemo(() => showPast ? rows : rows.filter(r => r.endDate >= today), [rows, showPast]);
+  const courseLabel = (id: string | null) => !id ? "All courses" : (courses.find(c => c.id === id)?.code ?? "Course");
+  const shown = useMemo(() => rows.filter(r => (showPast || r.endDate >= today) && (!filter || !r.courseId || r.courseId === filter)), [rows, showPast, filter]);
   const pastCount = rows.length - rows.filter(r => r.endDate >= today).length;
-  const overlaps = (r: { id: string | null; startDate: string; endDate: string }) =>
-    rows.filter(o => o.id !== r.id && o.startDate <= r.endDate && r.startDate <= o.endDate);
+  // Only breaks that apply to the same courses can overlap.
+  const overlaps = (r: { id: string | null; startDate: string; endDate: string; courseId: string | null }) =>
+    rows.filter(o => o.id !== r.id && o.startDate <= r.endDate && r.startDate <= o.endDate && (!o.courseId || !r.courseId || o.courseId === r.courseId));
 
   /** Re-plans every batch that has classes from today on, or class times in an intake still running, so they follow the breaks. */
   const replanClasses = async () => {
@@ -63,7 +76,7 @@ export default function LmsTermBreaksPage() {
   const save = async () => {
     if (!draft || draftProblem || busy) return;
     setBusy(true); setError(""); setNotice("");
-    const values = { label: draft.label.trim(), start_date: draft.startDate, end_date: draft.endDate };
+    const values = { label: draft.label.trim(), start_date: draft.startDate, end_date: draft.endDate, ...(perCourse ? { course_id: draft.courseId } : {}) };
     try {
       const { error: e } = draft.id
         ? await supabase.from("academic_breaks").update(values).eq("id", draft.id)
@@ -97,9 +110,9 @@ export default function LmsTermBreaksPage() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Term breaks</h1>
-        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. When you add, change or delete a break, every running batch's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
+        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. A break can apply to every course or to one course. When you add, change or delete a break, every running batch's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
       </div>
-      {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "" }); setNotice(""); }}
+      {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "", courseId: filter || null }); setNotice(""); }}
         className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add break</button>}
     </div>
 
@@ -108,6 +121,11 @@ export default function LmsTermBreaksPage() {
 
     {draft && <section className={card + " p-5"} aria-label={draft.id ? "Edit break" : "Add break"}>
       <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.id ? "Edit break" : "Add break"}</h2>
+      {perCourse && <label className="mt-3 block text-sm font-medium text-foreground-800">Applies to
+        <select className={inputClass + " mt-1"} value={draft.courseId ?? ""} onChange={e => setDraft(d => d && { ...d, courseId: e.target.value || null })}>
+          <option value="">All courses</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
+        </select></label>}
       <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px_180px]">
         <label className="block text-sm font-medium text-foreground-800">Name
           <input autoFocus maxLength={80} placeholder="e.g. Term 1 break" className={inputClass + " mt-1"} value={draft.label} onChange={e => setDraft(d => d && { ...d, label: e.target.value })} /></label>
@@ -131,6 +149,10 @@ export default function LmsTermBreaksPage() {
     <section className={card + " min-w-0 p-5"}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-heading text-lg font-bold text-foreground-950">{showPast ? "All breaks" : "Current and upcoming breaks"}</h2>
+        {perCourse && <select aria-label="Show breaks for" className="rounded-lg border border-background-300 bg-background-50 px-3 py-1.5 text-sm" value={filter} onChange={e => setFilter(e.target.value)}>
+          <option value="">Every course</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
+        </select>}
         {pastCount > 0 && <label className="flex items-center gap-2 text-sm text-foreground-600">
           <input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)} />Show {pastCount} past</label>}
       </div>
@@ -138,7 +160,7 @@ export default function LmsTermBreaksPage() {
       : !shown.length ? <p className="py-8 text-center text-sm text-foreground-500">{canEdit ? "No breaks yet. Add the term breaks for the year." : "No breaks set."}</p>
       : <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm">
         <thead><tr className="border-b border-background-200 text-xs uppercase tracking-wide text-foreground-500">
-          <th className="px-2 py-2 font-semibold">Break</th><th className="px-2 py-2 font-semibold">First day</th><th className="px-2 py-2 font-semibold">Last day</th>
+          <th className="px-2 py-2 font-semibold">Break</th><th className="px-2 py-2 font-semibold">Applies to</th><th className="px-2 py-2 font-semibold">First day</th><th className="px-2 py-2 font-semibold">Last day</th>
           <th className="px-2 py-2 text-right font-semibold">Days</th><th className="px-2 py-2" /></tr></thead>
         <tbody>{shown.map(r => {
           const clash = overlaps(r);
@@ -147,6 +169,7 @@ export default function LmsTermBreaksPage() {
             <td className="px-2 py-2 font-semibold text-foreground-900">{r.label}
               {now && <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">Now</span>}
               {clash.length > 0 && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800" title={clash.map(o => o.label).join(", ")}>Overlaps</span>}</td>
+            <td className="px-2 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${r.courseId ? "bg-primary-50 text-primary-800" : "bg-background-200 text-foreground-700"}`} title={r.courseId ? courses.find(c => c.id === r.courseId)?.name : undefined}>{courseLabel(r.courseId)}</span></td>
             <td className="px-2 py-2">{fmt(r.startDate)}</td>
             <td className="px-2 py-2">{fmt(r.endDate)}</td>
             <td className="px-2 py-2 text-right">{days(r.startDate, r.endDate)}</td>

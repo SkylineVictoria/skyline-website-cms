@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(360);
+select plan(363);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -700,6 +700,16 @@ select ok((select end_date from public.course_intakes where id = 'f5000000-0000-
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.rto_intake_load_set('f5000000-0000-0000-0000-000000000001', 'coe')$$, '42501', null, 'LOAD an editor who is not an RTO Manager cannot change it');
 select pg_temp.as_postgres();
+-- COURSE-BREAKS: a break can belong to one course; other courses keep teaching
+insert into public.academic_breaks(label, start_date, end_date, course_id) values ('ASM test course break', date '2026-01-12', date '2026-01-18', 'course-asm-test');
+select set_config('rto.course', 'some-other-course', true);
+select ok(not public.rto_break_on(date '2026-01-13'), 'BRK a break of another course does not stop this course');
+select set_config('rto.course', 'course-asm-test', true);
+select ok(public.rto_break_on(date '2026-01-13'), 'BRK the course''s own break applies');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true);
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and session_date between date '2026-01-12' and date '2026-01-18'), 0, 'BRK no classes are generated in the course''s break');
 
 select * from finish();
 rollback;

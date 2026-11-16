@@ -958,3 +958,159 @@ test("pdf: qualifications list is printed once, single fields only fill in when 
   assert.deepEqual(rows({ values: { academic_institution: "Uni C", academic_qualification: "Diploma", academic_year: "2019" }, academicQualifications: [] }), ["Qualification: Diploma, Uni C, 2019"]);
   assert.equal(rows({ values: { academic_institution: "Typed", academic_qualification: "Own" }, academicQualifications: [{ institution: "Uni B", qualification: "MSc", documentIds: ["d2"] }] }).length, 2);
 });
+
+// ---- SMS transport: ClickSend adapter (mock-only; injected fake fetch, global fetch stays forbidden) ----
+import { CLICKSEND_API, MAX_SMS_BODY_CHARS, cleanSmsBody, createClickSendProvider, createMockSmsProvider, normalizePhoneNumber, selectSmsProvider, type SmsMessage } from "../supabase/functions/_shared/notification/sms.ts";
+
+const CS_USER = "synthetic-user@example.test";
+const CS_KEY = "SYNTHETIC-CLICKSEND-KEY-0001";
+const smsMessage: SmsMessage = { deliveryId: "s-1", to: "0412 345 678", body: "Application 42000000 is now under review." };
+type CsCall = { url: string; method: string; headers: Record<string, string>; body: Record<string, unknown> };
+function csHarness(respond: (call: CsCall) => Response | Error, senderId?: string) {
+  const calls: CsCall[] = [];
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const call: CsCall = { url: String(url), method: init?.method ?? "GET", headers: { ...(init?.headers ?? {}) as Record<string, string> }, body: JSON.parse(String(init?.body ?? "{}")) };
+    calls.push(call);
+    const result = respond(call);
+    if (result instanceof Error) throw result;
+    return result;
+  }) as typeof fetch;
+  return { provider: createClickSendProvider({ username: CS_USER, apiKey: CS_KEY, senderId, fetch: fetchImpl }), calls };
+}
+const csReply = (status: string, messageId = "BF7AD270-0DE2-418B-B606-71D527D9C1AE", http = 200) => new Response(JSON.stringify({ http_code: http, response_code: "SUCCESS", data: { messages: [{ status, message_id: messageId }] } }), { status: http });
+
+test("sms: phone numbers normalise to E.164 (Australian by default) and anything else is refused", () => {
+  assert.equal(normalizePhoneNumber("0412 345 678"), "+61412345678");
+  assert.equal(normalizePhoneNumber("412345678"), "+61412345678");
+  assert.equal(normalizePhoneNumber("61412345678"), "+61412345678");
+  assert.equal(normalizePhoneNumber("+61 (412) 345-678"), "+61412345678");
+  assert.equal(normalizePhoneNumber("0064 21 123 4567"), "+64211234567");
+  for (const bad of ["", "abc", "12345", "+0412345678", "03 9123 4567", "+61412345678; DROP", "+1234567890123456"]) assert.equal(normalizePhoneNumber(bad), null, bad);
+});
+
+test("sms: bodies lose control characters and are capped", () => {
+  assert.equal(cleanSmsBody(" a\u0000b\tc\r\n\n\n\nd "), "a b c\n\nd");
+  assert.equal(cleanSmsBody("x".repeat(MAX_SMS_BODY_CHARS + 50)).length, MAX_SMS_BODY_CHARS);
+});
+
+test("sms: ClickSend request is one Basic-auth JSON send with the normalised number and delivery id", async () => {
+  const { provider, calls } = csHarness(() => csReply("SUCCESS"), "Skyline");
+  assert.deepEqual(await provider.send(smsMessage), { kind: "accepted", messageId: "BF7AD270-0DE2-418B-B606-71D527D9C1AE" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${CLICKSEND_API}/sms/send`);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].headers.Authorization, `Basic ${btoa(`${CS_USER}:${CS_KEY}`)}`);
+  assert.deepEqual(calls[0].body, { messages: [{ source: "skyline", to: "+61412345678", body: smsMessage.body, custom_string: "s-1", from: "Skyline" }] });
+});
+
+test("sms: invalid input is refused before any request", async () => {
+  const { provider, calls } = csHarness(() => csReply("SUCCESS"));
+  assert.deepEqual(await provider.send({ ...smsMessage, to: "not a number" }), { kind: "failed", code: "invalid_recipient" });
+  assert.deepEqual(await provider.send({ ...smsMessage, body: " \u0000 " }), { kind: "failed", code: "empty_body" });
+  assert.deepEqual(await provider.send({ ...smsMessage, from: "Way-too-long-sender" }), { kind: "failed", code: "sender_rejected" });
+  assert.equal(calls.length, 0);
+});
+
+test("sms: only definitive refusals are retryable; an ambiguous outcome is never retried", async () => {
+  const expectOutcome = async (respond: (call: CsCall) => Response | Error, expected: unknown) => assert.deepEqual(await csHarness(respond).provider.send(smsMessage), expected);
+  await expectOutcome(() => new Response("{}", { status: 429 }), { kind: "retry", code: "rate_limit" });
+  await expectOutcome(() => new Response("{}", { status: 502 }), { kind: "retry", code: "provider" });
+  await expectOutcome(() => new Response("{}", { status: 401 }), { kind: "failed", code: "unauthorized" });
+  await expectOutcome(() => new Response("{}", { status: 400 }), { kind: "failed", code: "rejected" });
+  await expectOutcome(() => Object.assign(new Error("slow"), { name: "TimeoutError" }), { kind: "unknown", code: "timeout" });
+  await expectOutcome(() => new Error("socket closed"), { kind: "unknown", code: "network" });
+  await expectOutcome(() => new Response("not json", { status: 200 }), { kind: "unknown", code: "schema" });
+  await expectOutcome(() => csReply("SUCCESS", "bad id!"), { kind: "unknown", code: "schema" });
+  await expectOutcome(() => csReply("INVALID_RECIPIENT"), { kind: "failed", code: "invalid_recipient" });
+  await expectOutcome(() => csReply("INSUFFICIENT_CREDIT"), { kind: "failed", code: "insufficient_credit" });
+  await expectOutcome(() => csReply("COUNTRY_NOT_ENABLED"), { kind: "failed", code: "country_not_enabled" });
+  await expectOutcome(() => csReply("SOMETHING_NEW"), { kind: "failed", code: "rejected" });
+});
+
+test("sms: provider is selected only when explicitly enabled and fully configured; errors name variables, never values", () => {
+  const off = selectSmsProvider({ EF_CLICKSEND_USERNAME: CS_USER, EF_CLICKSEND_API_KEY: CS_KEY });
+  assert.deepEqual(off.unavailable, { code: "configuration_unavailable", variables: ["EF_NOTIFICATION_SMS_ENABLED"] });
+  const missing = selectSmsProvider({ EF_NOTIFICATION_SMS_ENABLED: "true", EF_CLICKSEND_SENDER_ID: "Bad_Sender!" });
+  assert.deepEqual(missing.unavailable?.variables, ["EF_CLICKSEND_USERNAME", "EF_CLICKSEND_API_KEY", "EF_CLICKSEND_SENDER_ID"]);
+  assert.ok(!JSON.stringify(missing).includes("Bad_Sender"));
+  assert.equal(selectSmsProvider({ EF_NOTIFICATION_SMS_ENABLED: "yes", EF_CLICKSEND_USERNAME: CS_USER, EF_CLICKSEND_API_KEY: CS_KEY }).provider, null);
+  const on = selectSmsProvider({ EF_NOTIFICATION_SMS_ENABLED: "true", EF_CLICKSEND_USERNAME: CS_USER, EF_CLICKSEND_API_KEY: CS_KEY, EF_CLICKSEND_SENDER_ID: "Skyline" });
+  assert.equal(on.provider?.id, "clicksend");
+});
+
+test("sms: mock provider records sends and replays its script", async () => {
+  const mock = createMockSmsProvider([{ kind: "retry", code: "rate_limit" }, { kind: "accepted", messageId: "mock-0001" }]);
+  assert.deepEqual(await mock.send(smsMessage), { kind: "retry", code: "rate_limit" });
+  assert.deepEqual(await mock.send(smsMessage), { kind: "accepted", messageId: "mock-0001" });
+  assert.deepEqual(await mock.send(smsMessage), { kind: "accepted", messageId: "mock-0001" });
+  assert.equal(mock.sent.length, 3);
+});
+
+import { dispatchSmsBatch, type ClaimedSms, type SmsDeliveryPort } from "../supabase/functions/_shared/notification/sms.ts";
+function smsPort(queue: ClaimedSms[], storeOk = true) {
+  const recorded: { id: string; outcome: string; messageId: string | null; code: string | null; retry: boolean; delay: number }[] = [];
+  const port: SmsDeliveryPort = {
+    claim: async () => queue.shift() ?? null,
+    record: async (d, outcome, messageId, code, retry, delay) => { recorded.push({ id: d.id, outcome, messageId, code, retry, delay }); return storeOk; },
+  };
+  return { port, recorded };
+}
+const claimedSms = (id: string, attempt = 1): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt });
+
+test("sms dispatch: each outcome is recorded once with the right retry decision", async () => {
+  const { port, recorded } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c", 3), claimedSms("d"), claimedSms("e")]);
+  const provider = createMockSmsProvider([
+    { kind: "accepted", messageId: "MSG-00000001" }, { kind: "retry", code: "rate_limit" }, { kind: "retry", code: "provider" },
+    { kind: "failed", code: "invalid_recipient" }, { kind: "unknown", code: "timeout" },
+  ]);
+  const summary = await dispatchSmsBatch(port, provider, 10);
+  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, stale: 0 });
+  assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}:${r.delay}`), [
+    "a:accepted:null:false:0", "b:failed:rate_limit:true:60", "c:failed:provider:true:240", "d:failed:invalid_recipient:false:0", "e:unknown:timeout:false:0",
+  ]);
+  assert.deepEqual(provider.sent.map((m) => [m.deliveryId, m.to]), [["a", "+61412345678"], ["b", "+61412345678"], ["c", "+61412345678"], ["d", "+61412345678"], ["e", "+61412345678"]]);
+});
+
+test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {
+  const { port } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c")], false);
+  const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);
+  const summary = await dispatchSmsBatch(port, provider, 2);
+  assert.deepEqual([summary.accepted, summary.stale, provider.sent.length], [0, 2, 2]);
+});
+
+// ---- Communication Hub templates: one template, three channels (src/lib/communicationTemplates.ts + migration 20261116200000) ----
+import { readFileSync } from "node:fs";
+import { TEMPLATE_VARIABLES, channelText, renderTemplate, smsInfo, templateKeyFrom, templateVariables } from "../src/lib/communicationTemplates.ts";
+
+test("templates: variables are filled; a missing value stays visible instead of going blank", () => {
+  assert.equal(renderTemplate("Hi {{first_name}}, ref {{ Reference }}", { first_name: "Ann", reference: "R-1" }), "Hi Ann, ref R-1");
+  assert.equal(renderTemplate("Hi {{first_name}} {{unknown}}", { first_name: "" }), "Hi {{first_name}} {{unknown}}");
+  assert.deepEqual(templateVariables("{{a}} {{b}}", "{{A}} {{c_1}} {{ bad-name }}"), ["a", "b", "c_1"]);
+});
+
+test("templates: the same body is used per channel; SMS drops WhatsApp bold/italic marks, WhatsApp keeps them", () => {
+  const body = "Now *{{status}}* and _soon_.";
+  assert.equal(channelText("email", body, { status: "Approved" }), "Now *Approved* and _soon_.");
+  assert.equal(channelText("whatsapp", body, { status: "Approved" }), "Now *Approved* and _soon_.");
+  assert.equal(channelText("sms", body, { status: "Approved" }), "Now Approved and soon.");
+});
+
+test("templates: SMS size counts GSM-7 and Unicode parts", () => {
+  assert.deepEqual(smsInfo("a".repeat(160)), { encoding: "GSM-7", characters: 160, segments: 1 });
+  assert.deepEqual(smsInfo("a".repeat(161)), { encoding: "GSM-7", characters: 161, segments: 2 });
+  assert.deepEqual(smsInfo("€".repeat(80)), { encoding: "GSM-7", characters: 160, segments: 1 });
+  assert.deepEqual(smsInfo("Hi 👋"), { encoding: "Unicode", characters: 4, segments: 1 });
+  assert.equal(smsInfo("👋".repeat(71)).segments, 2);
+  assert.equal(templateKeyFrom("  Offer Letter — Issued (Agent)! "), "offer_letter_issued_agent");
+});
+
+test("templates: every built-in template uses only known details, has a subject, and has a unique key", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8");
+  const seeds = sql.slice(sql.indexOf(") values\n"));
+  const known = new Set(TEMPLATE_VARIABLES.map((v) => v.name));
+  const used = templateVariables(seeds).filter((n) => !known.has(n));
+  assert.deepEqual(used, [], "unknown variables in seeds");
+  const keys = [...seeds.matchAll(/^\s*\('([a-z0-9_]+)',/gm)].map((m) => m[1]);
+  assert.equal(keys.length, 67);
+  assert.equal(new Set(keys).size, keys.length, "duplicate keys");
+});

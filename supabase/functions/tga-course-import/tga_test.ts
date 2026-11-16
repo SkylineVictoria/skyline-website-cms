@@ -79,3 +79,18 @@ Deno.test("packaging rules: varied headings, unlabelled groups and prerequisite 
   assert(cpc.core.length === 1 && cpc.electives.length === 2 && cpc.requiredElectives === 2, "cpc " + JSON.stringify(cpc));
   assert(cpc.electives[0].groups[0] === "A" && cpc.electives[1].groups[0] === "B", "cpc groups " + JSON.stringify(cpc.groups));
 });
+
+Deno.test("RTO scope lists current qualifications whatever the field names", async () => {
+  const { scopeQualifications } = await import("./tga.ts");
+  const assert = (ok: boolean, message: string) => { if (!ok) throw new Error(message); };
+  const body = { scope: { qualifications: [
+    { trainingComponent: { code: "ICT60220", title: "Advanced Diploma of Information Technology" }, endDate: "2030-01-01" },
+    { code: "CPC30220", title: "Certificate III in Carpentry", scopeEndDate: "2020-01-01" },
+    { nrtCode: "AUR30620", trainingComponentTitle: "Certificate III in Light Vehicle Mechanical Technology", status: "Current" },
+    { code: "BSBWHS521", title: "A unit, not a qualification" },
+  ] } };
+  const items = scopeQualifications(body, "2026-11-16");
+  assert(items.map(i => i.code).join() === "AUR30620,CPC30220,ICT60220", "codes " + items.map(i => i.code).join());
+  assert(items.find(i => i.code === "CPC30220")?.current === false, "ended scope is not current");
+  assert(items.find(i => i.code === "ICT60220")?.current === true, "nested component inherits the parent end date");
+});

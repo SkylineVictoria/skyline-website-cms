@@ -16,14 +16,12 @@ export interface LmsMenuEntry {
 }
 export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "courses", label: "Courses", route: "/admin/lms/courses", icon: "ri-book-open-line", dependencies: [], primaryAction: "Add Course" },
-  { id: "units", label: "Units", route: "/admin/lms/units", icon: "ri-stack-line", dependencies: ["course"] },
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
   { id: "timetable", label: "Batch calendar", route: "/admin/lms/timetable", icon: "ri-calendar-schedule-line", dependencies: ["course", "intake", "batch"], parent: "timetable" },
   { id: "timetable-templates", label: "Templates", route: "/admin/lms/timetable-templates", icon: "ri-file-copy-2-line", dependencies: ["course"], parent: "timetable" },
   { id: "term-breaks", label: "Term breaks", route: "/admin/lms/term-breaks", icon: "ri-calendar-close-line", dependencies: [], parent: "timetable" },
   { id: "locations", label: "Locations & rooms", route: "/admin/lms/locations", icon: "ri-building-line", dependencies: [], parent: "timetable" },
-  { id: "batch-allocation", label: "Batch Allocation", route: "/admin/lms/batch-allocation", icon: "ri-user-follow-line", dependencies: ["course", "intake", "batch"] },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "batch", "session"], primaryAction: "Mark Attendance" },
   { id: "assessments", label: "Assessments", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Assessment" },
 ] as const;

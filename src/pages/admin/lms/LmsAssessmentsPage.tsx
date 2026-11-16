@@ -75,7 +75,7 @@ export default function LmsAssessmentsPage() {
       let message=`"${name}" created as a draft.`;
       if(source!=="blank"){
         const pub=await asmAdmin<{ok:boolean;errors?:{message:string}[]}>("version_publish",{assessmentId:result.id});
-        message=pub.ok?`"${name}" created and published. Assign it under Batch Allocation › Assessments.`:`"${name}" created as a draft but not published: ${pub.errors?.map(e=>e.message).join(" ")??""} Open it to fix and publish.`;
+        message=pub.ok?`"${name}" created and published. Assign it under Batches › Assessments.`:`"${name}" created as a draft but not published: ${pub.errors?.map(e=>e.message).join(" ")??""} Open it to fix and publish.`;
       }
       closeCreate();setNotice(message);
       await load();

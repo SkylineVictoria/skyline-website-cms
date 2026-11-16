@@ -122,7 +122,7 @@ export default function LmsTimetablePage() {
         <div className="min-w-0 flex-1">
           <h2 className="font-heading text-lg font-bold text-foreground-950">Weekly class timing</h2>
           <p className="mt-0.5 text-sm text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{trainerNames || "No trainer"}
-            <Link className="ml-3 text-xs font-semibold text-primary-700 hover:underline" to="/admin/lms/batch-allocation">Batch allocation</Link></p>
+            <Link className="ml-3 text-xs font-semibold text-primary-700 hover:underline" to="/admin/lms/batches">Batches</Link></p>
           <ul className="mt-3 flex flex-wrap gap-2">{sessions.map((s, i) => <li key={s.id ?? i} className="rounded-lg bg-primary-50 px-3 py-1.5 text-sm text-foreground-900 ring-1 ring-primary-200">
             <strong>{dayName(s.weekday).slice(0, 3)}</strong> {shortTime(s.startTime)}–{shortTime(s.endTime)} · <span className="capitalize">{s.type}</span> · {s.room || "No room"}
           </li>)}</ul>
@@ -130,7 +130,7 @@ export default function LmsTimetablePage() {
         {canManage && selectClassButton("Edit class timing")}
       </div>}
     </section>
-    {batchId && data && sessions.length > 0 && detail?.intake.id === intakeId && <BatchCourseCalendar key={`calendar-${batchId}`} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
+    {batchId && data && sessions.length > 0 && detail?.intake.id === intakeId && <BatchCourseCalendar key={`calendar-${batchId}`} batchId={batchId} courseId={detail.intake.courseId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
       hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey}
       onRemoved={async () => {
         await rtoFlow("batch_setup", { batchId, intakeId, sessions: [] });

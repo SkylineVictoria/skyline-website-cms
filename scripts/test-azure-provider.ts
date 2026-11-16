@@ -1077,3 +1077,40 @@ test("sms dispatch: stops at the batch limit and counts fenced (stale) records",
   const summary = await dispatchSmsBatch(port, provider, 2);
   assert.deepEqual([summary.accepted, summary.stale, provider.sent.length], [0, 2, 2]);
 });
+
+// ---- Communication Hub templates: one template, three channels (src/lib/communicationTemplates.ts + migration 20261116170000) ----
+import { readFileSync } from "node:fs";
+import { TEMPLATE_VARIABLES, channelText, renderTemplate, smsInfo, templateKeyFrom, templateVariables } from "../src/lib/communicationTemplates.ts";
+
+test("templates: variables are filled; a missing value stays visible instead of going blank", () => {
+  assert.equal(renderTemplate("Hi {{first_name}}, ref {{ Reference }}", { first_name: "Ann", reference: "R-1" }), "Hi Ann, ref R-1");
+  assert.equal(renderTemplate("Hi {{first_name}} {{unknown}}", { first_name: "" }), "Hi {{first_name}} {{unknown}}");
+  assert.deepEqual(templateVariables("{{a}} {{b}}", "{{A}} {{c_1}} {{ bad-name }}"), ["a", "b", "c_1"]);
+});
+
+test("templates: the same body is used per channel; SMS drops WhatsApp bold/italic marks, WhatsApp keeps them", () => {
+  const body = "Now *{{status}}* and _soon_.";
+  assert.equal(channelText("email", body, { status: "Approved" }), "Now *Approved* and _soon_.");
+  assert.equal(channelText("whatsapp", body, { status: "Approved" }), "Now *Approved* and _soon_.");
+  assert.equal(channelText("sms", body, { status: "Approved" }), "Now Approved and soon.");
+});
+
+test("templates: SMS size counts GSM-7 and Unicode parts", () => {
+  assert.deepEqual(smsInfo("a".repeat(160)), { encoding: "GSM-7", characters: 160, segments: 1 });
+  assert.deepEqual(smsInfo("a".repeat(161)), { encoding: "GSM-7", characters: 161, segments: 2 });
+  assert.deepEqual(smsInfo("€".repeat(80)), { encoding: "GSM-7", characters: 160, segments: 1 });
+  assert.deepEqual(smsInfo("Hi 👋"), { encoding: "Unicode", characters: 4, segments: 1 });
+  assert.equal(smsInfo("👋".repeat(71)).segments, 2);
+  assert.equal(templateKeyFrom("  Offer Letter — Issued (Agent)! "), "offer_letter_issued_agent");
+});
+
+test("templates: every built-in template uses only known details, has a subject, and has a unique key", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261116170000_communication_templates.sql", import.meta.url), "utf8");
+  const seeds = sql.slice(sql.indexOf(") values\n"));
+  const known = new Set(TEMPLATE_VARIABLES.map((v) => v.name));
+  const used = templateVariables(seeds).filter((n) => !known.has(n));
+  assert.deepEqual(used, [], "unknown variables in seeds");
+  const keys = [...seeds.matchAll(/^\s*\('([a-z0-9_]+)',/gm)].map((m) => m[1]);
+  assert.equal(keys.length, 67);
+  assert.equal(new Set(keys).size, keys.length, "duplicate keys");
+});

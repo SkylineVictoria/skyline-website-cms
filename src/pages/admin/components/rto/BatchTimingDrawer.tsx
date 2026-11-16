@@ -212,7 +212,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
                 Use course timetable{timings.length ? ` (${timings.length})` : ""}
               </Button>
               {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name + (t.id === ownTiming?.id ? " ★" : ""), hint: `${t.sessions.length} classes${t.trainerName ? " · " + t.trainerName : ""}` }))}
-                empty="No course timetable yet. Set the days below, then click Save as course timetable."
+                empty="No template for this course yet. Create one under Timetable → Templates, or set the days below and click Save as course timetable."
                 onPick={(id) => { const t = timings.find((x) => x.id === id); if (t) applyTiming(t); }}
                 onDelete={(id) => { const t = timings.find((x) => x.id === id); if (t) void deleteTemplate(t); }} onClose={() => setMenu("")} /> : null}
             </div>

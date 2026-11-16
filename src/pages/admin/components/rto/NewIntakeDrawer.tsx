@@ -56,7 +56,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
     if (!chosen || !start) { setError("Choose a course and a start date."); return; }
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      const out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "draft", generate: true, campus: course?.course.campus ?? "" });
+      const out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "" });
       onCreated(out, addBatch);
     } catch (e) { setError(e instanceof Error ? e.message : "The intake was not created."); }
     finally { setBusy(""); }
@@ -88,7 +88,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
       {course ? (
         <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">
           {units.length
-            ? <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It starts as a draft; open it when you are ready to take students.</>
+            ? <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It is active as soon as it is created.</>
             : <>This course has no units yet, so the intake starts without a timeline. Add the units in the course’s Units &amp; Timetable step.</>}
         </p>
       ) : chosen ? <p className="text-sm text-foreground-500">Loading the course…</p> : null}

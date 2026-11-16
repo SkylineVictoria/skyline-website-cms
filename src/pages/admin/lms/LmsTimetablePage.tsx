@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
-import ClassSessionsPanel from "@/pages/admin/lms/ClassSessionsPanel";
 import { rto, rtoFlow, type BatchPageData, type IntakeDetail, type RtoCourse, type RtoIntake, type BatchSession } from "@/pages/admin/lib/rto";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -21,7 +20,6 @@ export default function LmsTimetablePage() {
   const [canEdit, setCanEdit] = useState(false);
   const [editor, setEditor] = useState<null | { day?: number; templates?: boolean }>(null);
   const [view, setView] = useState<"week" | "list">("week");
-  const [savedKey, setSavedKey] = useState(0);
   const [savedNote, setSavedNote] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -86,12 +84,9 @@ export default function LmsTimetablePage() {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
-        <p className="text-sm text-foreground-500">Set a batch's weekly class times. The dated classes below fill in by themselves, skipping term breaks and public holidays.</p>
+        <p className="text-sm text-foreground-500">Set a batch's weekly class times, trainer and rooms. Term breaks and public holidays are skipped automatically.</p>
       </div>
       {canManage && <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setEditor({ templates: true })} title="Start this batch from a saved course timetable, or save this batch's timing as one"
-          className="inline-flex items-center gap-2 rounded-lg border-2 border-primary-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-primary-700 hover:border-primary-500 hover:bg-primary-50">
-          <i className="ri-calendar-check-line text-lg" aria-hidden="true" />Course timetable</button>
         {selectClassButton(sessions.length ? "Edit class timing" : "Set class timing")}
       </div>}
     </header>
@@ -151,14 +146,12 @@ export default function LmsTimetablePage() {
         </div>}
       </div>
     </section>
-    <ClassSessionsPanel batchId={batchId} canManage={canManage} reloadKey={savedKey} />
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
       startDay={editor.day} showTemplates={editor.templates}
       onClose={() => setEditor(null)}
       onSaved={out => {
-        setEditor(null); setDetail(out); void refreshBatch(); void reload(); setSavedKey(k => k + 1);
-        const g = out.generated;
-        setSavedNote(g ? `Class timing saved. ${g.created} classes scheduled${g.endDate ? `, last class ${new Date(g.endDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}` : ""}.` : "Class timing saved.");
+        setEditor(null); setDetail(out); void refreshBatch(); void reload();
+        setSavedNote("Class timing saved.");
       }} />}
   </div>;
 }

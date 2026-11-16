@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
+import CommunicationTemplates from "@/pages/admin/components/CommunicationTemplates";
 
 type Notice = { id: string; title: string | null; message: string | null; event: string | null; created_at: string | null; application_id: string | null };
 const sections = ["Inbox", "Templates", "Automations", "Channels"] as const;
@@ -45,9 +46,9 @@ export default function CommunicationHubPage() {
         <p className="mt-2 whitespace-pre-wrap text-sm text-foreground-700">{n.message || "No message text"}</p>
         {n.application_id ? <Link className="mt-2 inline-block text-sm font-medium text-primary-600 underline" to={`/admin/applications/${n.application_id}`}>View application</Link> : null}
       </article>)}</div>}
-    </section> : <section className="rounded-xl border border-background-200 bg-background-50 p-6">
+    </section> : section === "Templates" ? <CommunicationTemplates /> : <section className="rounded-xl border border-background-200 bg-background-50 p-6">
       <h2 className="text-lg font-semibold">{section}</h2>
-      <p className="mt-2 text-sm text-foreground-600">{section === "Channels" ? "Microsoft 365 email, WhatsApp Business and SMS require provider credentials, permissions and consent controls before activation." : section === "Templates" ? "Message templates will be available after the outbound channel integration and approval workflow are configured." : "Automated outbound messages will be enabled only after channels, consent rules and delivery tracking are configured."}</p>
+      <p className="mt-2 text-sm text-foreground-600">{section === "Channels" ? "Microsoft 365 email, WhatsApp Business and SMS require provider credentials, permissions and consent controls before activation." : "Automated outbound messages will be enabled only after channels, consent rules and delivery tracking are configured."}</p>
       <p className="mt-3 text-xs text-foreground-500">Not configured — no messages will be sent from this screen.</p>
     </section>}
   </main>;

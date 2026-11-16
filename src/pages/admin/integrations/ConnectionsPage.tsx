@@ -8,6 +8,7 @@ import { currentTenantSite } from '@/lib/tenantSite';
 import { Frame } from './shared';
 import { useIntegrations, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
+import CommConnectionForm, { COMM_CONNECTORS } from './CommConnectionForm';
 
 type OAuthSetup = {
   callbackUrl: string;
@@ -177,6 +178,8 @@ export default function ConnectionsPage() {
   const disabled = connection?.status === 'disabled';
   // Apps whose connector is not built yet: their details can be stored, but there is nothing to test or disconnect.
   const pendingApp = definition?.availability === 'requires_approval' && Object.hasOwn(australianEducationApps, definition.id);
+  // Communication Hub accounts (ClickSend, WhatsApp Business, Microsoft Teams channels): saved here, used by the hub.
+  const commApp = !!definition && (COMM_CONNECTORS as readonly string[]).includes(definition.id);
   const wrongDomain = setup && new URL(setup.callbackUrl).origin !== window.location.origin;
   const available = state.data?.definitions.filter(provider =>
     provider.availability !== 'requires_approval' &&
@@ -234,7 +237,7 @@ export default function ConnectionsPage() {
             setAdding(false);
             selectConnection(item.id === selected ? '' : item.id);
           }}>{item.id === selected ? 'Close setup' : 'Manage'}</Button>}
-          {!isAdmin && item.can_operate && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
+          {!isAdmin && item.can_operate && !(COMM_CONNECTORS as readonly string[]).includes(item.connector_id) && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: item.id });
             announce('Connection verified.');
           })}>Check connection</Button>}
@@ -290,6 +293,8 @@ export default function ConnectionsPage() {
               <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Update app credentials</Button>
             </div>
           ))
+        ) : commApp && definition ? (
+          <CommConnectionForm key={connection.id} connectionId={connection.id} connectorId={definition.id} busy={busy} perform={perform} onNotice={announce} />
         ) : pendingApp && definition ? (
           <PendingCredentialsForm key={connection.id} connectionId={connection.id} name={definition.name} saved={connection.credential_configured}
             busy={busy} perform={perform} onNotice={setNotice} />
@@ -324,7 +329,7 @@ export default function ConnectionsPage() {
             <Button type="submit" disabled={busy || !secret.trim()}>{kind === 'api_key' ? 'Save & Connect' : 'Save'}</Button>
           </form>
         ))}
-        {!pendingApp && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
+        {!pendingApp && !commApp && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: selected });
             announce('Connection verified.');
@@ -340,7 +345,7 @@ export default function ConnectionsPage() {
             })}>{connection.webhook_configured ? 'Update payment webhook' : 'Set up payment webhook'}</Button>
           </section>
         )}
-        {!pendingApp && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
+        {!pendingApp && !commApp && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('revoke', { connectionId: selected });
             if (isOAuth) {

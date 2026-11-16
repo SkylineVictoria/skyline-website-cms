@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, EmptyState, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -108,7 +109,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
       <header className="flex flex-wrap items-center gap-3 border-b border-background-200 p-3">
         <button type="button" onClick={onBack} className="rounded-md p-1 text-foreground-600 hover:bg-background-100 lg:hidden" aria-label="Back to teams"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold text-foreground-950">{thread.team.name}{thread.team.archived ? <span className="ml-2 rounded bg-background-200 px-1.5 text-xs font-normal">Archived</span> : null}{thread.team.microsoft ? <span className="ml-2 rounded bg-primary-50 px-1.5 text-xs font-normal text-primary-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Copied to Microsoft Teams</span> : null}</h2>
+          <h2 className="truncate font-semibold text-foreground-950">{thread.team.name}{thread.team.archived ? <span className="ml-2 rounded bg-background-200 px-1.5 text-xs font-normal">Archived</span> : null}{thread.team.microsoft ? <span className="ml-2 rounded bg-primary-50 px-1.5 text-xs font-normal text-primary-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Copied to Microsoft Teams{thread.team.microsoftHost ? ` · ${thread.team.microsoftHost}` : ""}</span> : null}</h2>
           <p className="truncate text-xs text-foreground-600" title={thread.members.map((m) => m.name).join(", ")}>{thread.team.description ? `${thread.team.description} · ` : ""}{thread.members.map((m) => m.name).join(", ")}</p>
         </div>
         <Button size="sm" variant="outline" icon="ri-settings-3-line" onClick={() => onManage(thread)}>Manage</Button>
@@ -196,20 +197,20 @@ function TeamEditor({ initial, archived, onClose, onSaved }: { initial: Editing;
   );
 }
 
-/** Links a hub team to a Microsoft Teams channel (one-way copy). The link is stored privately and never shown again. */
+/** Links a hub team to one of the Microsoft Teams channels saved in Integrations › Connections (one-way copy). No links are entered here. */
 function MicrosoftTeamsLink({ teamId, connected, host, disabled, onChanged }: { teamId: string; connected: boolean; host: string | null; disabled: boolean; onChanged: () => void }) {
   const { push } = useToast();
-  const [url, setUrl] = useState("");
+  const [channels, setChannels] = useState<string[] | null>(null);
+  const [choice, setChoice] = useState(host ?? "");
   const [busy, setBusy] = useState(false);
-  const [help, setHelp] = useState(false);
+  useEffect(() => { void supabase.rpc("comm_team_microsoft_channels").then(({ data }) => setChannels((data ?? []) as string[])); }, []);
   const setLink = async (value: string) => {
     setBusy(true);
-    const { error } = await supabase.rpc("comm_team_microsoft_set", { p_team: teamId, p_webhook_url: value });
+    const { error } = await supabase.rpc("comm_team_microsoft_set", { p_team: teamId, p_channel_name: value });
     if (!error && value) await supabase.rpc("comm_team_microsoft_test", { p_team: teamId });
     setBusy(false);
     if (error) { push(error.message, "error"); return; }
-    push(value ? "Connected. A test message was sent to the Teams channel." : "Disconnected from Microsoft Teams.");
-    setUrl("");
+    push(value ? "Linked. A test message was sent to the Teams channel." : "Unlinked from Microsoft Teams.");
     onChanged();
   };
   const test = async () => {
@@ -221,26 +222,20 @@ function MicrosoftTeamsLink({ teamId, connected, host, disabled, onChanged }: { 
   return (
     <fieldset disabled={disabled || busy} className="rounded-lg border border-background-200 p-3">
       <legend className="px-1 text-label font-medium text-foreground-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Microsoft Teams</legend>
-      {connected ? (
-        <div className="space-y-2">
-          <p className="text-sm text-foreground-700">Connected{host ? <span className="text-foreground-500"> ({host})</span> : null}. New messages in this team are copied to the Teams channel.</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => void test()}>Send test message</Button>
-            <Button size="sm" variant="ghost" onClick={() => void setLink("")}>Disconnect</Button>
-          </div>
-          <p className="text-xs text-foreground-500">To use a different channel, paste its link below.</p>
+      <p className="mb-2 text-sm text-foreground-600">Copy this team's messages into a Microsoft Teams channel. Channels are added in <Link className="font-medium text-primary-700 underline" to="/admin/integrations">Integrations › Microsoft Teams channels</Link>. Replies in Teams don't come back here.</p>
+      {channels === null ? <p className="text-sm text-foreground-500">Loading channels…</p> : channels.length === 0 ? (
+        <p className="text-sm text-foreground-700">No Microsoft Teams channels are connected yet. Add them in Integrations first.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <select value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Microsoft Teams channel"
+            className="min-w-0 flex-1 rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm">
+            <option value="">Not linked</option>
+            {channels.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <Button size="sm" disabled={(choice || "") === (host ?? "")} onClick={() => void setLink(choice)}>{choice ? "Link channel" : "Unlink"}</Button>
+          {connected ? <Button size="sm" variant="outline" onClick={() => void test()}>Send test message</Button> : null}
         </div>
-      ) : <p className="mb-2 text-sm text-foreground-600">Copy this team's messages into a Microsoft Teams channel so staff can follow them in the Teams app. Replies in Teams don't come back here.</p>}
-      <div className="mt-2 flex flex-wrap gap-2">
-        <TextInput type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste the Teams channel link (https://…)" aria-label="Microsoft Teams channel link" className="min-w-0 flex-1" />
-        <Button size="sm" disabled={!url.trim()} onClick={() => void setLink(url.trim())}>{connected ? "Replace link" : "Connect"}</Button>
-      </div>
-      <button type="button" className="mt-2 text-xs font-medium text-primary-700 underline" onClick={() => setHelp(!help)}>{help ? "Hide" : "How do I get the link?"}</button>
-      {help ? <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-foreground-600">
-        <li>In Microsoft Teams, open the channel, click the <b>…</b> next to its name and choose <b>Workflows</b>.</li>
-        <li>Pick <b>“Post to a channel when a webhook request is received”</b> and follow the steps.</li>
-        <li>Copy the link Teams shows at the end and paste it here.</li>
-      </ol> : null}
+      )}
     </fieldset>
   );
 }

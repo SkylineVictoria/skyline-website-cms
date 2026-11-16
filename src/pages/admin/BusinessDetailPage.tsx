@@ -1,4 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -93,6 +94,7 @@ export default function BusinessDetailPage() {
         actions={
           <>
             <AgencyStatusBadge status={business.status} />
+            <MessagePersonButton kind="agency" refId={agency.id} name={business.name} />
             {business.status === "Active"
               ? <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate business</Button>
               : <Button disabled={busy || !business.onboarding?.agreementReady} title={business.onboarding?.agreementReady ? undefined : "Needs the signed agent agreement"}

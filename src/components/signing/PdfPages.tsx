@@ -8,8 +8,10 @@ type PdfPage = { getViewport(o: { scale: number }): { width: number; height: num
  * A PDF drawn page by page at the width of its container (so it reads on a phone without zooming), with room for an overlay on every
  * page: the fields a signer fills, or the boxes an administrator places. `overlay` gets the page number and its drawn size in CSS pixels.
  */
-export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900 }: {
+export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900, zoom = 1 }: {
   source: string | Uint8Array; overlay?: (page: number, size: { width: number; height: number }) => ReactNode; onLoaded?: (pages: number) => void; maxWidth?: number;
+  /** 1 fits the container; above 1 the pages grow past it and scroll sideways (the signing page's zoom buttons). */
+  zoom?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<PdfDocument | null>(null);
@@ -41,13 +43,13 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900 }: 
 
   useEffect(() => {
     const element = host.current; if (!element) return;
-    const measure = () => setWidth(Math.min(element.clientWidth, maxWidth));
+    const measure = () => setWidth(Math.round(Math.min(element.clientWidth, maxWidth) * Math.max(zoom, 0.25)));
     measure();
     const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
-  }, [maxWidth]);
+  }, [maxWidth, zoom]);
 
-  return <div ref={host} className="w-full">
+  return <div ref={host} className={`w-full ${zoom > 1 ? "overflow-x-auto" : ""}`}>
     {error && <p role="alert" className="rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
     {!error && !pages.length && <p role="status" className="p-6 text-center text-sm text-foreground-600">Loading the document…</p>}
     {doc && width > 0 && pages.map((page) => {

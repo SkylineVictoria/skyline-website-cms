@@ -21,10 +21,20 @@ export interface SigningPayment {
   id: string; amount_cents: number; currency: string; description: string; timing: PaymentTiming; status: string; paid_at: string | null; amount_paid_cents: number | null;
   amount_refunded_cents?: number | null; failure_reason: string | null; livemode: boolean | null; checkout_open: boolean; payer_email?: string | null; updated_at?: string;
 }
+/**
+ * OFFER-PAY-GATE: the offer letter's own state as the payments function reports it (public.offer_signing_state). `offer` false for a
+ * document that is not an offer letter. `paymentRequired`: a deposit is printed on the letter, a live Stripe payment exists and Stripe has
+ * not verified it yet; the server accepts the offer only once it has (acceptedAt, acceptedVia 'signing_and_payment').
+ */
+export interface OfferSigningState {
+  offer: boolean; institution?: { name: string | null; logo: string | null } | null;
+  letterId?: string; signedAt?: string | null; acceptedAt?: string | null; acceptedVia?: string | null; depositPaidAt?: string | null;
+  paymentAmountCents?: number | null; paymentCurrency?: string; paymentRequired?: boolean; hasPayment?: boolean; mismatch?: boolean; applicationStatus?: string;
+}
 /** What the `payments` function tells a link holder (status / checkout / confirm) and an administrator (refresh). */
 export interface PaymentView {
-  required: boolean; stripeReady?: boolean; mustPayBeforeSigning?: boolean; canPay?: boolean; alreadyPaid?: boolean;
-  payment: { id: string; description: string; amountCents: number; currency: string; timing: PaymentTiming; status: string; paidAt: string | null; amountPaidCents: number | null; failureReason: string | null; testMode: boolean } | null;
+  required: boolean; stripeReady?: boolean; mustPayBeforeSigning?: boolean; canPay?: boolean; alreadyPaid?: boolean; offer?: OfferSigningState | null;
+  payment: { id: string; description: string; amountCents: number; currency: string; timing: PaymentTiming; status: string; paidAt: string | null; amountPaidCents: number | null; failureReason: string | null; testMode: boolean; receiptUrl?: string | null } | null;
 }
 /** The amount, currency, description and timing an administrator sets on a template or a request (amount in dollars). */
 export interface PaymentInput { amount: number; currency: string; description: string; timing: PaymentTiming }

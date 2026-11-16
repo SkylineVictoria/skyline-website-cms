@@ -4,7 +4,7 @@ import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { actionsFor, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
-import { acceptOffer, currentOfferLetter, offerLetterList, offerPaymentState, openOfferLetter, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
+import { acceptOffer, currentOfferLetter, offerAcceptanceState, offerLetterList, offerPaymentState, openOfferLetter, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 
@@ -93,10 +93,17 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
               <i className="ri-file-pdf-2-line" aria-hidden="true" />View letter
             </button>
           ) : null}
-          <button type="button" onClick={() => setConfirming("accept")} data-testid="accept-offer"
-            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
-            <i className="ri-check-line" aria-hidden="true" />{accept.label}
-          </button>
+          {/* OFFER-PAY-GATE: a letter with a deposit is accepted by the verified Stripe payment on the signing page; the server refuses this button then. */}
+          {letter?.payment && offerPaymentState(letter.payment)?.tone !== "paid" ? (
+            <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900" data-testid="accept-offer-after-payment">
+              {offerAcceptanceState(letter)?.tone === "signed" ? "Signed · Payment pending" : "Sign and pay the deposit on the signing page to accept"}
+            </span>
+          ) : (
+            <button type="button" onClick={() => setConfirming("accept")} data-testid="accept-offer"
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
+              <i className="ri-check-line" aria-hidden="true" />{accept.label}
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
@@ -188,8 +195,8 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
             <i className="ri-file-pdf-2-line text-base text-foreground-500" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate font-medium text-foreground-900">{letter.fileName}</span>
             <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}{letter.templateName ? <> &middot; {letter.templateName} v{letter.templateVersion}</> : null}</span>
-            <span data-testid="offer-letter-state" className={`rounded-full px-2 py-0.5 text-2xs font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>
-              {letter.acceptedAt ? `${letter.acceptedVia === "signing" ? "Signed online" : "Accepted"} ${formatDate(letter.acceptedAt)}` : letter.signing ? signingState(letter.signing) : "Awaiting acceptance"}</span>
+            {(() => { const state = offerAcceptanceState(letter); return <span data-testid="offer-letter-state" data-state={state?.tone ?? "open"} className={`rounded-full px-2 py-0.5 text-2xs font-medium ${state?.tone === "accepted" ? "bg-emerald-50 text-emerald-800" : state?.tone === "signed" ? "bg-amber-50 text-amber-900" : "bg-background-100 text-foreground-600"}`}>
+              {state ? `${state.label} ${formatDate(letter.acceptedAt ?? letter.signedAt ?? letter.issuedAt)}` : letter.signing ? signingState(letter.signing) : "Awaiting acceptance"}</span>; })()}
             {(() => { const pay = offerPaymentState(letter.payment); return pay ? <span data-testid="offer-letter-payment" className={`rounded-full px-2 py-0.5 text-2xs font-medium ${pay.tone === "paid" ? "bg-emerald-50 text-emerald-800" : pay.tone === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900"}`}>{pay.label}{letter.payment?.livemode === false ? " (test)" : ""}</span> : null; })()}
             {letter.payment?.receipt_url ? <a href={letter.payment.receipt_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Receipt</a> : null}
             {letter.prepaidMore ? <span className="text-xs text-foreground-500">Pays more than the pre-paid fee: {letter.prepaidMore}</span> : null}

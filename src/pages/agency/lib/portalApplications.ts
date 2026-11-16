@@ -724,8 +724,21 @@ export function offerPaymentState(payment: OfferPayment | null | undefined): { l
 }
 export interface OfferLetter {
   id: string; fileName: string; sizeBytes: number; source: string; message: string; recipientKind: "agent" | "student"; recipientName: string; recipientEmail: string;
-  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | null;
+  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | "signing" | "signing_and_payment" | null;
   payment?: OfferPayment | null;
+}
+/**
+ * OFFER-PAY-GATE: the one label staff and agents see for a letter's acceptance. A letter with a deposit is "Signed · Payment pending"
+ * once signed and "Accepted · Paid" once Stripe verified the deposit; a letter without one is "Signed online" / "Accepted" as before.
+ */
+export function offerAcceptanceState(letter: { acceptedAt: string | null; acceptedVia?: string | null; signedAt?: string | null; payment?: OfferPayment | null }): { label: string; tone: "accepted" | "signed" | "open" } | null {
+  const paid = letter.payment?.status === "paid" || !!letter.payment?.depositPaidAt;
+  if (letter.acceptedAt) {
+    if (letter.acceptedVia === "signing_and_payment" || (letter.acceptedVia === "signing" && paid)) return { label: "Accepted · Paid", tone: "accepted" };
+    return { label: letter.acceptedVia === "signing" ? "Signed online" : "Accepted", tone: "accepted" };
+  }
+  if (letter.signedAt) return { label: paid ? "Signed · Payment received" : "Signed · Payment pending", tone: "signed" };
+  return null;
 }
 
 const rpcOrThrow = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {

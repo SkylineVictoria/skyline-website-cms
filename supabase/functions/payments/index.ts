@@ -1,5 +1,6 @@
 // payments: Stripe Checkout for things people pay for in Skyline (signing requests today, the offer letter's initial deposit among them).
 // Saved into the repo 2026-11-16 from the hosted v1 (deployed by the payments backend session) with the receipt URL additions.
+// OFFER-PAY-GATE (2026-11-16): status / confirm / checkout also answer `offer` (offer_signing_state): signed, deposit verified, accepted.
 // verify_jwt = true. A link holder (signer, no account) calls with the anon key plus the token of their emailed signing link, exactly like
 // document-signing. Administrators call with their session.
 // Actions
@@ -95,10 +96,16 @@ Deno.serve(async (req) => {
     if (error) throw new Fail("The payment could not be loaded.", 500);
     return data as Payment | null;
   };
-  const view = (p: Payment | null, ready: boolean, signState?: string) => {
-    if (!p || p.status === "canceled") return { required: false, payment: null };
+  // OFFER-PAY-GATE: what the signing page may know about an offer letter's own state (signed, deposit verified, accepted) and the
+  // institution's name and logo. Service-role RPC; the link holder proved the signing token first. Null when the database has not got it yet.
+  const offerState = async (requestId: string) => {
+    const r = await db.rpc("offer_signing_state", { p_request: requestId });
+    return r.error || !r.data || typeof r.data !== "object" ? null : r.data as Record<string, unknown>;
+  };
+  const view = (p: Payment | null, ready: boolean, signState?: string, offer: Record<string, unknown> | null = null) => {
+    if (!p || p.status === "canceled") return { required: false, payment: null, offer };
     const paid = p.status === "paid";
-    return { required: true, stripeReady: ready,
+    return { required: true, stripeReady: ready, offer,
       mustPayBeforeSigning: p.timing === "before_sign" && !paid,
       canPay: ready && PAYABLE.includes(p.status) && (signState === undefined || ["sent", "viewed", "partial", "signed"].includes(signState)),
       payment: { id: p.id, description: p.description, amountCents: p.amount_cents, currency: p.currency.toUpperCase(), timing: p.timing, status: p.status,
@@ -135,16 +142,17 @@ Deno.serve(async (req) => {
       let p = await loadPayment("subject_id", record.id);
       const connection = p ? await stripeConnection(p.tenant_id) : null;
 
-      if (action === "status") return json(view(p, !!connection, record.state));
+      if (action === "status") return json(view(p, !!connection, record.state, await offerState(record.id)));
       if (!p || p.status === "canceled") throw new Fail("There is nothing to pay for this document.", 404);
 
       if (action === "confirm") {
+        // Reading the session back applies it through payment_apply_stripe, so a verified deposit accepts the signed offer here too.
         p = await syncFromStripe(p);
-        return json(view(p, !!connection, record.state));
+        return json(view(p, !!connection, record.state, await offerState(record.id)));
       }
 
       // checkout
-      if (p.status === "paid") return json({ ...view(p, !!connection, record.state), alreadyPaid: true });
+      if (p.status === "paid") return json({ ...view(p, !!connection, record.state, await offerState(record.id)), alreadyPaid: true });
       if (p.status === "processing") throw new Fail("Your payment is being processed. Check back shortly.", 409);
       if (!connection) throw new Fail("Online payment is not set up yet. Please contact us.", 503);
       if (!["sent", "viewed", "partial", "signed"].includes(record.state)) throw new Fail("This document is not open for payment.", 409);

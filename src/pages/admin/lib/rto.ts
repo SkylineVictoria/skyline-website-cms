@@ -246,6 +246,11 @@ export function suggestHours(slitHours: number): HoursSplit {
 /** A unit's duration from its SLIT hours: 20 hours is one week, rounded up to the half week (0.5 to 104 weeks, as stored). */
 export const HOURS_PER_WEEK = 20;
 export const weeksForHours = (hours: number) => Math.min(104, Math.max(0.5, Math.ceil((hours / HOURS_PER_WEEK) * 2) / 2));
+/** A course's duration from its units' total SLIT hours: 20 hours a week, rounded up to the half week ("13.5 weeks"). */
+export const courseWeeksLabel = (hours: number) => {
+  const weeks = Math.ceil((hours / HOURS_PER_WEEK) * 2) / 2;
+  return `${weeks} week${weeks === 1 ? "" : "s"}`;
+};
 /** The hours to show: the saved ones once reviewed, otherwise the nominal hours split 40/40/20 (null when there are none). */
 export function shownHours(saved: UnitHours | undefined, nominalHours: number | null): (HoursSplit & { confirmed: boolean }) | null {
   if (saved?.confirmedAt && saved.slitHours !== null) {

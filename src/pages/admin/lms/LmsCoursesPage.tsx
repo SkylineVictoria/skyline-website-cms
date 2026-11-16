@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
+import { courseWeeksLabel, HOURS_PER_WEEK, loadUnitHours, rto, shownHours, type CourseDetail, type RtoCourse, type UnitHours } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -63,6 +63,7 @@ export default function LmsCoursesPage() {
   const [addingCourse, setAddingCourse] = useState<null | "choose" | "tga" | "cricos">(null);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
+  const [unitHours, setUnitHours] = useState<Record<string, UnitHours>>({});
   const [query, setQuery] = useState("");
   const [campus, setCampus] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
@@ -107,6 +108,16 @@ export default function LmsCoursesPage() {
       .then(result => { if (current) setDetail(result); })
       .catch(e => { if (current) setDetailError(e instanceof Error ? e.message : "Could not load course units."); })
       .finally(() => { if (current) setDetailLoading(false); });
+    return () => { current = false; };
+  }, [selectedId, reloadKey]);
+  // SLIT hours per unit (accepted, or the nominal hours until accepted) give the course duration.
+  useEffect(() => {
+    setUnitHours({});
+    if (!selectedId) return;
+    let current = true;
+    loadUnitHours(selectedId)
+      .then(list => { if (current) setUnitHours(Object.fromEntries(list.map(h => [h.unitId, h]))); })
+      .catch(() => { /* without saved hours the nominal hours are used */ });
     return () => { current = false; };
   }, [selectedId, reloadKey]);
 
@@ -160,12 +171,17 @@ export default function LmsCoursesPage() {
   // Inactive units (electives not delivered) do not count toward the course.
   const units = (detail?.units ?? []).filter(unit => unit.isActive);
   const nominalHours = units.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0);
+  const slit = units.map(u => shownHours(u.id ? unitHours[u.id] : undefined, u.nominalHours));
+  const slitHours = slit.reduce((sum, h) => sum + (h?.slitHours ?? 0), 0);
+  const slitPending = slit.some(h => h && !h.confirmed);
+  const slitDuration = detail && slitHours > 0 ? courseWeeksLabel(slitHours) : "";
 
   const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
   const reloadAfterAdd = (courseId: string) => { setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); void load(courseId); };
   const facts: [string, string][] = selected ? [
-    ["Duration", selected.duration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
+    ["Duration", detailLoading ? "…" : slitDuration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
     ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
+    ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
   const tabs = [{ id: "overview", label: "Overview" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
@@ -258,7 +274,7 @@ export default function LmsCoursesPage() {
             </div> : null}
           </div>
 
-          <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
+          <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-6 sm:divide-x sm:divide-background-200">
             {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
               <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
             </div>)}
@@ -281,7 +297,9 @@ export default function LmsCoursesPage() {
             <div role="tabpanel" className="pt-4">
               {tab === "overview" ? <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 {([["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code], ["CRICOS code", selected.cricos],
-                  ["Category", selected.category], ["Training package", selected.trainingPackage], ["Duration", selected.duration], ["Delivery mode", selected.mode],
+                  ["Category", selected.category], ["Training package", selected.trainingPackage],
+                  ["Duration", slitDuration ? `${slitDuration} (${slitHours.toLocaleString()} SLIT hrs ÷ ${HOURS_PER_WEEK} a week)` : ""],
+                  ["CRICOS registered duration", selected.duration], ["Delivery mode", selected.mode],
                   ["Campus", selected.campus ?? ""], ["Open intakes", selected.openIntakes ? String(selected.openIntakes) : ""], ["training.gov.au", selected.tgaUrl ?? ""]] as [string, string][])
                   .filter(([, value]) => value && value.trim()).map(([label, value]) => <div key={label}>
                     <dt className="text-xs text-foreground-500">{label}</dt>

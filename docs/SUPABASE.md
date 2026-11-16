@@ -732,6 +732,8 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 
 - INTAKE-STUDY-LOAD (migration 20261116130000, APPLIED hosted 2026-11-16 via the SQL editor): `course_intakes.study_load` 'coe' (20 class hours a week, default) or 'voe' (40); `intake_generate_schedule` lays VoE units out in half the weeks; `rto_intake_loads(course)` (staff) and `rto_intake_load_set(intake, load)` (RTO Manager, re-lays the timeline). Class timing must give at least the intake's hours a week; templates at least 20. Tests: LOAD block in `supabase/tests/assessment_management.sql` (plan 360).
 
+- TGA-SCOPE (2026-11-16): `tga-course-import` v19 DEPLOYED hosted (JWT on) with actions `scope` (qualifications on the RTO scope of Settings > RTO code, from the training.gov.au public API; tries organisation/{rto}/scope, then organisation/{rto}) and `create_core` (draft course with core units via rto_tga_import_save). The CMS calls it in ap-southeast-2 because training.gov.au refuses non-Australian traffic. LMS > Courses > Sync from Training.gov.au replaces the CRICOS bulk sync button.
+
 ## SLIT unit hours (UNIT-HOURS 2026-11-16; migration 20261116100000 APPLIED hosted 2026-11-16)
 - `cms_course_units` gains `slit_hours`, `theory_hours`, `practical_hours`, `assessment_hours` (the three parts must add up to `slit_hours`) and `hours_confirmed_at` / `hours_confirmed_by`.
 - `rto_unit_hours_list(course_id)` (any CMS staff) and `rto_unit_hours_save(unit_id, slit, theory, practical, assessment)` (RTO Manager only; marks the unit reviewed).

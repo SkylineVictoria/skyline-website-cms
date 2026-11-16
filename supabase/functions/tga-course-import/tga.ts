@@ -519,3 +519,71 @@ const row = (unit: ReviewUnit) => ({
   code: unit.code, name: unit.name, nominalHours: unit.nominalHours, hoursSource: unit.hoursSource,
   hasPrerequisites: unit.hasPrerequisites, usageRecommendation: unit.usageRecommendation, groups: unit.groups.join(", "),
 });
+
+// ---- An RTO's scope of registration (training.gov.au public API): the qualifications it may deliver.
+export type ScopeQualification = { code: string; title: string; status: string; endDate: string; current: boolean };
+const QUALIFICATION_CODE = /^[A-Z]{3}\d{5}$/;
+const CODE_KEYS = ["code", "trainingComponentCode", "nrtCode", "componentCode"];
+const TITLE_KEYS = ["title", "name", "trainingComponentTitle", "componentTitle"];
+const END_KEYS = ["endDate", "scopeEndDate", "extentEndDate", "registrationEndDate"];
+const STATUS_KEYS = ["status", "scopeStatus", "currencyStatus", "usageRecommendation"];
+const firstString = (item: Json, keys: string[]) => {
+  for (const key of keys) { const v = item[key]; if (typeof v === "string" && v.trim()) return v.trim(); }
+  return "";
+};
+
+/** Every qualification found anywhere in a scope response (field names vary between API versions). */
+export function scopeQualifications(body: unknown, today = new Date().toISOString().slice(0, 10)): ScopeQualification[] {
+  const found = new Map<string, ScopeQualification>();
+  const walk = (value: unknown, inherited: { endDate: string; status: string }, depth: number) => {
+    if (depth > 8 || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) { for (const item of value) walk(item, inherited, depth + 1); return; }
+    const item = value as Json;
+    const endDate = firstString(item, END_KEYS).slice(0, 10) || inherited.endDate;
+    const status = firstString(item, STATUS_KEYS) || inherited.status;
+    const code = firstString(item, CODE_KEYS).toUpperCase();
+    const title = text(firstString(item, TITLE_KEYS));
+    if (QUALIFICATION_CODE.test(code) && title) {
+      const current = (!endDate || endDate >= today) && !/superseded|deleted|expired|non.?current/i.test(status);
+      const prev = found.get(code);
+      if (!prev || (current && !prev.current)) found.set(code, { code, title, status, endDate, current });
+    }
+    for (const nested of Object.values(item)) walk(nested, { endDate, status }, depth + 1);
+  };
+  walk(body, { endDate: "", status: "" }, 0);
+  return [...found.values()].sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** A short description of a response with no qualifications, so the endpoint can be adjusted. */
+function shape(body: unknown) {
+  if (Array.isArray(body)) return `array of ${body.length}${body[0] && typeof body[0] === "object" ? ` (${Object.keys(body[0] as Json).slice(0, 12).join(", ")})` : ""}`;
+  if (body && typeof body === "object") return `object (${Object.keys(body as Json).slice(0, 12).join(", ")})`;
+  return typeof body;
+}
+
+export async function rtoScope(rtoCode: string) {
+  const code = rtoCode.trim();
+  if (!/^\d{4,6}$/.test(code)) throw new ImportError("Set the RTO code (4 to 6 digits) in Settings first.", 422);
+  const urls = [
+    `${TGA_API}organisation/${code}/scope`,
+    `${TGA_API}organisation/${code}/scope?includeImplicit=false`,
+    `${TGA_API}organisation/${code}`,
+  ];
+  const tried: string[] = [];
+  for (const url of urls) {
+    try {
+      const body = await getJson(url);
+      const items = scopeQualifications(body);
+      if (items.length) return { rto: code, source: url, items };
+      tried.push(`${url.replace(TGA_API, "")}: no qualifications (${shape(body)})`);
+    } catch (error) {
+      tried.push(`${url.replace(TGA_API, "")}: ${error instanceof Error ? error.message : "failed"}`);
+    }
+  }
+  throw new ImportError(`Training.gov.au did not return the scope of RTO ${code}. ${tried.join("; ")}`.slice(0, 600), 502);
+}
+
+/** Core units of a release, ready for rto_tga_import_save (electives are chosen later on the course). */
+export function coreUnits(review: Awaited<ReturnType<typeof qualificationDetails>>) {
+  return review.core.map((unit) => ({ ...row(unit), type: "core" }));
+}

@@ -4,7 +4,7 @@ import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovC
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
-import CricosBulkSync from "@/pages/admin/components/rto/CricosBulkSync";
+import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
 import { Modal } from "@/pages/admin/components/ui";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
@@ -193,13 +193,13 @@ export default function LmsCoursesPage() {
         <p className="text-sm text-foreground-500">Qualifications, their CRICOS registration and units.</p>
       </div>
       {canEdit ? <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setBulkSync(true)} title="Link or create every course registered on CRICOS for your provider code"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync CRICOS courses</button>
+        <button type="button" onClick={() => setBulkSync(true)} title="Create every qualification on SLIT's Training.gov.au scope of registration that is not in the CMS yet"
+          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
         <button type="button" onClick={() => setAddingCourse("choose")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
       </div> : null}
     </header>
 
-    <CricosBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
+    <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }} />
     <Modal open={addingCourse === "choose" && canEdit} title="Add a course" onClose={() => setAddingCourse(null)}>
       <div className="grid gap-3 sm:grid-cols-2">

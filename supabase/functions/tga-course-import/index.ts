@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-import { ImportError, qualificationDetails, searchQualifications, selectedUnits } from "./tga.ts";
+import { coreUnits, ImportError, qualificationDetails, rtoScope, searchQualifications, selectedUnits } from "./tga.ts";
 import { addUnits, syncCourse } from "./sync.ts";
 
 const corsHeaders = {
@@ -50,15 +50,45 @@ Deno.serve(async req => {
     }
     const db = createClient(url, service, { auth });
     // The tenant's CRICOS provider code (Settings), else the site-wide one, to look up its CRICOS registration.
-    const { data: settings } = await db.from("cms_settings").select("tenant_id,cricos")
+    const { data: settings } = await db.from("cms_settings").select("tenant_id,cricos,rto")
       .or(scope.tenantId ? `tenant_id.eq.${scope.tenantId},tenant_id.is.null` : "tenant_id.is.null");
-    const rows = (settings ?? []) as { tenant_id: string | null; cricos: string | null }[];
-    const providerCode = (rows.find(row => row.tenant_id === scope.tenantId) ?? rows.find(row => row.tenant_id === null))?.cricos?.trim().toUpperCase() || null;
+    const rows = (settings ?? []) as { tenant_id: string | null; cricos: string | null; rto: string | null }[];
+    const siteSettings = rows.find(row => row.tenant_id === scope.tenantId) ?? rows.find(row => row.tenant_id === null);
+    const providerCode = siteSettings?.cricos?.trim().toUpperCase() || null;
     const hoursLookup = async (codes: string[]) => {
       const { data, error } = await db.from("tga_nominal_hours").select("unit_code,hours").in("unit_code", [...new Set(codes)]);
       if (error) throw error;
       return new Map((data ?? []).map(row => [row.unit_code as string, row.hours as number]));
     };
+    if (input.action === "scope") {
+      // The qualifications on the site's RTO scope (Settings > RTO code), for the bulk Training.gov.au sync.
+      stage = "scope";
+      return json(await rtoScope(siteSettings?.rto ?? ""));
+    }
+    if (input.action === "create_core") {
+      // A draft course for one qualification with its core units; electives are added later on the course.
+      if (!("code" in input) || typeof input.code !== "string" || !/^[A-Z]{3}\d{5}$/.test(input.code.trim().toUpperCase())) {
+        return json({ error: "Choose a qualification code." }, 400);
+      }
+      stage = "create_core";
+      const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup);
+      const units = coreUnits(review);
+      const { data: courseId, error } = await db.rpc("rto_tga_import_save", {
+        p_actor: user.id, p_tenant: scope.tenantId, p_course: {
+          code: review.code, name: review.name, aqf: review.aqf, packageName: review.packageName,
+          description: review.description, entryRequirements: review.entryRequirements,
+          packageCode: review.packageCode, status: review.status, releaseNumber: review.releaseNumber,
+          releaseDate: review.releaseDate, packagingRules: review.packagingRules,
+          government: review.government, cricos: review.cricos,
+          specialisationCode: null, specialisationTitle: null,
+          coreUnits: units.length, electiveUnits: 0,
+        }, p_units: units,
+      });
+      if (error?.code === "23505") return json({ error: "A course with this qualification code already exists." }, 409);
+      if (error?.code === "42501") return json({ error: "RTO Manager access is required for this site." }, 403);
+      if (error || !courseId) return json({ error: "The draft course could not be saved." }, 500);
+      return json({ courseId, coreUnits: units.length, electives: review.electives.length }, 201);
+    }
     if (input.action === "sync") {
       if (!("courseId" in input) || typeof input.courseId !== "string" || !input.courseId) return json({ error: "Choose a course to sync." }, 400);
       stage = "sync";

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
+import { loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import { UnitDetail } from "./UnitTgaList";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 const inputClass = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+const HOUR_PARTS = [["theoryHours", "Theory hrs", "40%"], ["practicalHours", "Practical hrs", "40%"], ["assessmentHours", "Assessment hrs", "20%"]] as const;
 export default function LmsUnitsPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [details, setDetails] = useState<CourseDetail[]>([]);
@@ -13,7 +14,11 @@ export default function LmsUnitsPage() {
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "courses">("content");
+  const [drawerTab, setDrawerTab] = useState<"content" | "hours" | "details" | "courses">("content");
+  const [hours, setHours] = useState<Record<string, UnitHours>>({});
+  const [hoursError, setHoursError] = useState("");
+  const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
+  const [hoursBusy, setHoursBusy] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [type, setType] = useState("all");
   const [status, setStatus] = useState("all");
@@ -39,6 +44,20 @@ export default function LmsUnitsPage() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  const refreshHours = useCallback(async (id: string) => {
+    if (!id) return;
+    try {
+      const list = await loadUnitHours(id);
+      setHours(old => { const next = { ...old }; for (const h of list) next[h.unitId] = h; return next; });
+      setHoursError("");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "";
+      setHoursError(/rto_unit_hours_list|function/i.test(message)
+        ? "SLIT hours need the database update (migration 20261116100000). Suggested hours are shown but cannot be saved yet."
+        : message || "Unable to load SLIT hours.");
+    }
+  }, []);
+  useEffect(() => { void refreshHours(courseId); }, [courseId, refreshHours]);
   const rows = useMemo(() => details.flatMap(d => d.units.map((unit, index) => ({course:d.course,unit,index}))), [details]);
   const filtered = rows.filter(r => (!courseId || r.course.id === courseId) &&
     (type === "all" || r.unit.unitType === type) && (status === "all" || (r.unit.isActive ? "active" : "inactive") === status) &&
@@ -51,7 +70,38 @@ export default function LmsUnitsPage() {
   const selectedCourse = courses.find(c => c.id === courseId);
   const shownCourses = courses.filter(c => (c.code+" "+c.name).toLowerCase().includes(courseQuery.toLowerCase()));
   const uniqueCount = new Set(rows.map(r => r.unit.code.trim().toLowerCase())).size;
-  const open = (entry:Entry) => { setSelected(entry); setAdding(false); setDraft({...entry.unit}); setDrawerTab(entry.unit.id ? "content" : "details"); setNotice(""); };
+  const hoursOf = (u: RtoUnit) => shownHours(u.id ? hours[u.id] : undefined, u.nominalHours);
+  const open = (entry:Entry) => {
+    const shown = hoursOf(entry.unit);
+    setSelected(entry); setAdding(false); setDraft({...entry.unit}); setNotice("");
+    setHoursDraft(shown ? { slitHours: shown.slitHours, theoryHours: shown.theoryHours, practicalHours: shown.practicalHours, assessmentHours: shown.assessmentHours } : null);
+    setDrawerTab(!entry.unit.id ? "details" : canEdit && !shown?.confirmed ? "hours" : "content");
+  };
+  const hoursSum = hoursDraft ? hoursDraft.theoryHours + hoursDraft.practicalHours + hoursDraft.assessmentHours : 0;
+  const hoursValid = !!hoursDraft && [hoursDraft.slitHours, hoursDraft.theoryHours, hoursDraft.practicalHours, hoursDraft.assessmentHours]
+    .every(n => Number.isInteger(n) && n >= 0) && hoursSum === hoursDraft.slitHours;
+  const acceptHours = async () => {
+    if (!draft?.id || !hoursDraft || !hoursValid || !canEdit || hoursBusy) return;
+    setHoursBusy(true); setNotice("");
+    try {
+      const saved = await saveUnitHours(draft.id, hoursDraft);
+      setHours(old => ({ ...old, [saved.unitId]: saved }));
+      setSelected(null); setDraft(null);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Unable to save hours."); }
+    finally { setHoursBusy(false); }
+  };
+  /** Accepts the suggested 40/40/20 split for every active unit of the course that has nominal hours and is not reviewed yet. */
+  const acceptAllSuggested = async (pending: RtoUnit[]) => {
+    if (!canEdit || hoursBusy || !pending.length) return;
+    setHoursBusy(true); setHoursError("");
+    try {
+      for (const u of pending) {
+        const saved = await saveUnitHours(u.id as string, suggestHours(u.nominalHours as number));
+        setHours(old => ({ ...old, [saved.unitId]: saved }));
+      }
+    } catch (e) { setHoursError(e instanceof Error ? e.message : "Unable to accept the suggested hours."); }
+    finally { setHoursBusy(false); }
+  };
   // Units come from the course's Training.gov.au release (core and chosen electives), never typed in by hand.
   const add = () => { if (!selectedCourse || !canEdit) return; setSelected(null); setDraft(null); setPicking(true); setNotice(""); };
   const reloadCourse = async (id: string) => {
@@ -105,14 +155,24 @@ export default function LmsUnitsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
           <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2></div>
-        {canEdit ? <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add units</button> : null}
+        {canEdit ? <div className="flex flex-wrap items-center gap-2">{(() => {
+          const pending = (details.find(d => d.course.id === selectedCourse.id)?.units ?? [])
+            .filter(u => u.isActive && u.id && u.nominalHours !== null && !hours[u.id]?.confirmedAt);
+          return pending.length && !hoursError.includes("migration") ? <button type="button" disabled={hoursBusy} onClick={() => void acceptAllSuggested(pending)}
+            title="Save the suggested 40% theory, 40% practical and 20% assessment split of the nominal hours for every unit not yet reviewed"
+            className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">
+            {hoursBusy ? "Accepting…" : `Accept suggested hours (${pending.length})`}</button> : null;
+        })()}
+          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add units</button></div> : null}
       </div>
       {(() => {
         const units = details.find(d => d.course.id === selectedCourse.id)?.units ?? [];
         const active = units.filter(u => u.isActive);
         const facts: [string, string][] = [["Active units", String(active.length)], ["Core", String(active.filter(u => u.unitType === "core").length)],
-          ["Electives", String(active.filter(u => u.unitType === "elective").length)], ["Nominal hours", active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()]];
-        return <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">
+          ["Electives", String(active.filter(u => u.unitType === "elective").length)], ["Nominal hours", active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()],
+          ["SLIT hours", active.reduce((sum, u) => sum + (hoursOf(u)?.slitHours ?? 0), 0).toLocaleString() +
+            (active.some(u => hoursOf(u) && !hoursOf(u)?.confirmed) ? " (to review)" : "")]];
+        return <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
           {facts.map(([label, value]) => <div key={label} className="px-3 py-2"><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{loading ? "…" : value}</dd></div>)}
         </dl>;
       })()}
@@ -126,12 +186,18 @@ export default function LmsUnitsPage() {
         <select aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
           <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
       </div>
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm">
-        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Hours","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+      {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm">
+        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
           className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
           <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}</td>
           <td className="px-3 py-2 capitalize">{r.unit.unitType}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
+          {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
+            return <>
+              <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>
+              {HOUR_PARTS.map(([key]) => <td key={key} className={cell}>{h ? h[key] : "—"}</td>)}
+            </>; })()}
           <td className="px-3 py-2"><span className={"rounded-full px-2 py-0.5 text-xs font-semibold " + (r.unit.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{r.unit.isActive ? "Active" : "Inactive"}</span></td>
         </tr>)}</tbody></table>
         {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading units…</p> : !filtered.length ? <p className="py-10 text-center text-sm text-foreground-500">{rows.some(r => r.course.id === courseId) ? "No matching units." : "No units yet. Use Add units to pick them from Training.gov.au."}</p> : null}
@@ -155,12 +221,31 @@ export default function LmsUnitsPage() {
           <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div role="tablist" className="flex gap-5 border-b border-background-200 px-6">
-          {([["content","Training.gov.au"],["details","Settings"],["courses","Courses"]] as const).filter(([id]) => id !== "content" || draft.id).map(([id, label]) =>
+          {([["content","Training.gov.au"],["hours","Hours"],["details","Settings"],["courses","Courses"]] as const).filter(([id]) => (id !== "content" && id !== "hours") || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
               className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
+          {drawerTab==="hours" && draft.id ? <div className="space-y-4">
+            {(() => { const shown = hoursOf(draft); return shown && !shown.confirmed ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Suggested from the nominal hours: 40% theory, 40% practical and 20% assessment. Change them if needed, then accept.</p>
+              : shown?.confirmed ? <p className="text-sm text-foreground-600">Reviewed {new Date(hours[draft.id]?.confirmedAt ?? "").toLocaleDateString()}.</p> : null; })()}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="text-sm font-medium text-foreground-800">Nominal hours (Training.gov.au)<p className="mt-1 rounded-lg bg-background-100 px-3 py-2 text-foreground-950">{draft.nominalHours ?? "—"}</p></div>
+              <label className="block text-sm font-medium text-foreground-800">SLIT hours
+                <input disabled={!canEdit} type="number" min="0" step="1" className={inputClass + " mt-1"} value={hoursDraft?.slitHours ?? ""}
+                  onChange={e => { const v = e.target.value; setHoursDraft(v === "" ? null : suggestHours(Number(v))); }} /></label>
+              {HOUR_PARTS.map(([key, label, pct]) => <label key={key} className="block text-sm font-medium text-foreground-800">{label} <span className="font-normal text-foreground-500">(default {pct})</span>
+                <input disabled={!canEdit || !hoursDraft} type="number" min="0" step="1" className={inputClass + " mt-1"} value={hoursDraft?.[key] ?? ""}
+                  onChange={e => { const v = e.target.value === "" ? 0 : Number(e.target.value); setHoursDraft(h => h ? { ...h, [key]: v } : h); }} /></label>)}
+            </div>
+            {hoursDraft ? <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className={hoursSum === hoursDraft.slitHours ? "text-foreground-600" : "font-semibold text-red-700"}>
+                Theory + practical + assessment = {hoursSum} of {hoursDraft.slitHours} SLIT hours{hoursSum === hoursDraft.slitHours ? "" : ` (${hoursDraft.slitHours - hoursSum > 0 ? hoursDraft.slitHours - hoursSum + " left" : hoursSum - hoursDraft.slitHours + " over"})`}</span>
+              {canEdit ? <button type="button" className="underline" onClick={() => setHoursDraft(h => h ? suggestHours(h.slitHours) : h)}>Reset to 40 / 40 / 20</button> : null}
+            </div> : <p className="text-sm text-foreground-600">Enter the SLIT hours for this unit.</p>}
+          </div> : null}
           {drawerTab==="courses" ? <ul className="divide-y divide-background-100 text-sm">{details.filter(d=>d.units.some(u=>u.code.toLowerCase()===draft.code.toLowerCase())).map(d=>
             <li key={d.course.id} className="py-2"><span className="font-semibold">{d.course.code}</span> <span className="text-foreground-600">{d.course.name}</span></li>)}</ul> : null}
           {drawerTab==="details" ? <div className="grid gap-4 sm:grid-cols-2">
@@ -173,6 +258,11 @@ export default function LmsUnitsPage() {
           </div> : null}
           {notice ? <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{notice}</p> : null}
         </div>
+        {canEdit && drawerTab==="hours" ? <div className="flex justify-end gap-2 border-t border-background-200 px-6 py-3">
+          <button className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold" onClick={()=>{setSelected(null);setDraft(null);}}>Cancel</button>
+          <button disabled={hoursBusy || !hoursValid} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" onClick={()=>void acceptHours()}>
+            {hoursBusy ? "Saving…" : draft.id && hours[draft.id]?.confirmedAt ? "Save hours" : "Accept hours"}</button>
+        </div> : null}
         {canEdit && drawerTab==="details" ? <div className="flex justify-end gap-2 border-t border-background-200 px-6 py-3">
           <button className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}}>Cancel</button>
           <button disabled={busy} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" onClick={()=>void save()}>{busy?"Saving…" : adding ? "Add unit" : "Save unit"}</button>

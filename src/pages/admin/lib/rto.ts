@@ -229,3 +229,36 @@ export function sortIntakes(list: RtoIntake[]) {
     return pa === "finished" ? b.startDate.localeCompare(a.startDate) : a.startDate.localeCompare(b.startDate);
   });
 }
+
+/** SLIT's delivery hours for one course unit. confirmedAt is null until an RTO Manager accepts or changes them. */
+export interface UnitHours {
+  unitId: string; slitHours: number | null; theoryHours: number | null; practicalHours: number | null; assessmentHours: number | null;
+  confirmedAt: string | null;
+}
+export type HoursSplit = { slitHours: number; theoryHours: number; practicalHours: number; assessmentHours: number };
+/** The suggested split: 40% theory, 40% practical, the remaining 20% assessment, in whole hours that add up exactly. */
+export function suggestHours(slitHours: number): HoursSplit {
+  const total = Math.max(0, Math.round(slitHours));
+  const theoryHours = Math.round(total * 0.4);
+  const practicalHours = Math.round(total * 0.4);
+  return { slitHours: total, theoryHours, practicalHours, assessmentHours: total - theoryHours - practicalHours };
+}
+/** The hours to show: the saved ones once reviewed, otherwise the nominal hours split 40/40/20 (null when there are none). */
+export function shownHours(saved: UnitHours | undefined, nominalHours: number | null): (HoursSplit & { confirmed: boolean }) | null {
+  if (saved?.confirmedAt && saved.slitHours !== null) {
+    return { slitHours: saved.slitHours, theoryHours: saved.theoryHours ?? 0, practicalHours: saved.practicalHours ?? 0,
+      assessmentHours: saved.assessmentHours ?? 0, confirmed: true };
+  }
+  return nominalHours === null ? null : { ...suggestHours(nominalHours), confirmed: false };
+}
+export async function loadUnitHours(courseId: string): Promise<UnitHours[]> {
+  const { data, error } = await supabase.rpc("rto_unit_hours_list", { p_course_id: courseId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UnitHours[];
+}
+export async function saveUnitHours(unitId: string, h: HoursSplit): Promise<UnitHours> {
+  const { data, error } = await supabase.rpc("rto_unit_hours_save", { p_unit_id: unitId, p_slit: h.slitHours, p_theory: h.theoryHours,
+    p_practical: h.practicalHours, p_assessment: h.assessmentHours });
+  if (error) throw new Error(error.message);
+  return data as UnitHours;
+}

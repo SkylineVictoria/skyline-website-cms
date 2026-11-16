@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(337);
+select plan(345);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -649,6 +649,19 @@ select pg_temp.as_postgres();
 select is((select count(*)::int from public.asm_audit_log where action = 'submit' and target_id = pg_temp.s('s3f')), 1, 'T5 one submission is audited');
 select is((select count(*)::int from public.asm_notifications where attempt_id = pg_temp.v('s3f') and event = 'submitted'), 2, 'T5 one receipt to the student and one notice to the batch trainer');
 select is((select submit_request_id from public.asm_attempts where id = pg_temp.v('s3f')), 'req-7-abc', 'T5 the request id is kept with the submission');
+
+-- ---------------------------------------------------------------- SLIT unit hours (theory, practical, assessment)
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_unit_hours_save('unit-asm-1', 60, 24, 24, 12)$$, '42501', null, 'HRS an editor who is not an RTO Manager cannot set unit hours');
+select is(jsonb_array_length(public.rto_unit_hours_list('course-asm-test')), 2, 'HRS staff can read the course unit hours');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.rto_unit_hours_save('unit-asm-1', 60, 24, 24, 10)$$, '22023', null, 'HRS parts that do not add up to the SLIT hours are refused');
+select throws_ok($$select public.rto_unit_hours_save('unit-asm-1', 60, -1, 49, 12)$$, '22023', null, 'HRS negative hours are refused');
+select throws_ok($$select public.rto_unit_hours_save('unit-missing', 60, 24, 24, 12)$$, 'P0002', null, 'HRS an unknown unit is refused');
+select is((public.rto_unit_hours_save('unit-asm-1', 60, 30, 20, 10))->>'theoryHours', '30', 'HRS an RTO Manager saves changed hours');
+select pg_temp.as_postgres();
+select ok((select hours_confirmed_at is not null and slit_hours = 60 from public.cms_course_units where id = 'unit-asm-1'), 'HRS the saved unit is marked reviewed');
+select is((select count(*)::int from public.cms_course_units where id = 'unit-asm-2' and slit_hours is null and hours_confirmed_at is null), 1, 'HRS other units stay unreviewed');
 
 select * from finish();
 rollback;

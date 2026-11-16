@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(549);
+select plan(552);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1088,5 +1088,12 @@ set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
 select lives_ok($$select public.portal_remove_sms_contact()$$,'the user removes the number');
 reset role;
 select is((select count(*)::int from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and sms_enabled),0,'removing the number turns SMS off everywhere');
+-- Communication Hub conversations (migration 20261116210000): admin only; replies only through the service role.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_people('','',10)$$,'42501',null,'a portal user cannot list people in the Communication Hub');
+select throws_ok($$select * from public.comm_messages$$,'42501',null,'a portal user cannot read hub messages');
+select throws_ok($$select public.comm_record_inbound('email','x@example.test','X','s','b',null)$$,'42501',null,'a portal user cannot record a fake reply');
+reset role;
 select * from finish();
 rollback;

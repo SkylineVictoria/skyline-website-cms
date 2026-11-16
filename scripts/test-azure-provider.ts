@@ -1078,7 +1078,7 @@ test("sms dispatch: stops at the batch limit and counts fenced (stale) records",
   assert.deepEqual([summary.accepted, summary.stale, provider.sent.length], [0, 2, 2]);
 });
 
-// ---- Communication Hub templates: one template, three channels (src/lib/communicationTemplates.ts + migration 20261116170000) ----
+// ---- Communication Hub templates: one template, three channels (src/lib/communicationTemplates.ts + migration 20261116200000) ----
 import { readFileSync } from "node:fs";
 import { TEMPLATE_VARIABLES, channelText, renderTemplate, smsInfo, templateKeyFrom, templateVariables } from "../src/lib/communicationTemplates.ts";
 
@@ -1105,7 +1105,7 @@ test("templates: SMS size counts GSM-7 and Unicode parts", () => {
 });
 
 test("templates: every built-in template uses only known details, has a subject, and has a unique key", () => {
-  const sql = readFileSync(new URL("../supabase/migrations/20261116170000_communication_templates.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8");
   const seeds = sql.slice(sql.indexOf(") values\n"));
   const known = new Set(TEMPLATE_VARIABLES.map((v) => v.name));
   const used = templateVariables(seeds).filter((n) => !known.has(n));

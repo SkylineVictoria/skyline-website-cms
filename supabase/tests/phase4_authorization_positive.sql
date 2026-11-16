@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(582);
+select plan(585);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1135,6 +1135,13 @@ set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.comm_people('','',10)$$,'42501',null,'a portal user cannot list people in the Communication Hub');
 select throws_ok($$select * from public.comm_messages$$,'42501',null,'a portal user cannot read hub messages');
 select throws_ok($$select public.comm_record_inbound('email','x@example.test','X','s','b',null)$$,'42501',null,'a portal user cannot record a fake reply');
+reset role;
+-- Communication Hub teams (migration 20261116213517): admin only, members-only chat.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_teams_list(false)$$,'42501',null,'a portal user cannot list staff teams');
+select throws_ok($$select public.comm_team_post(gen_random_uuid(),'x')$$,'42501',null,'a portal user cannot post to a staff team');
+select throws_ok($$select * from public.comm_team_messages$$,'42501',null,'a portal user cannot read team messages');
 reset role;
 select * from finish();
 rollback;

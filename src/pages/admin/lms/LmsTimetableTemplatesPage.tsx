@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { loadCourseNeed, splitText, weeklyHours, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
   DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, rto, rtoFlow, slotOf,
   type CourseTiming, type LocationRooms, type RtoCourse, type SessionType, type StaffOption,
@@ -27,6 +28,8 @@ export default function LmsTimetableTemplatesPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<CourseTiming | "new" | null>(null);
+  const [need, setNeed] = useState<CourseNeed | null>(null);
+  useEffect(() => { setNeed(null); if (courseId) loadCourseNeed(courseId).then(setNeed).catch(() => undefined); }, [courseId]);
 
   useEffect(() => {
     Promise.all([rto<RtoCourse[]>("course_list"), rto<{ rtoManager: boolean }>("me"),
@@ -89,6 +92,7 @@ export default function LmsTimetableTemplatesPage() {
         {!course ? <p className="py-10 text-center text-sm text-foreground-500">Select a course.</p> : <>
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{course.code}</p>
           <h2 className="font-heading text-xl font-bold text-foreground-950">{course.name}</h2>
+          {need ? <p className="mt-1 text-sm text-foreground-600">The course needs <strong>{need.total} SLIT hours</strong>{need.total ? ` (${splitText(need)})` : ""} over {need.units} units. A template must give enough hours a week to finish them by the intake end; the Batch calendar checks this against each intake's dates.</p> : null}
           {!templates.length ? <div className="py-10 text-center">
             <p className="text-sm text-foreground-500">No templates for this course yet.</p>
             {canEdit && <button type="button" onClick={() => setEditing("new")} className="mt-3 inline-flex items-center gap-2 rounded-lg border-2 border-dashed border-primary-300 px-4 py-2 text-sm font-semibold text-primary-700 hover:border-primary-500 hover:bg-primary-50">
@@ -97,7 +101,7 @@ export default function LmsTimetableTemplatesPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="font-heading text-lg font-bold text-foreground-950">{t.name}</h3>
-                <p className="text-xs text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{t.trainerName || "No trainer"} · {t.sessions.length} class{t.sessions.length === 1 ? "" : "es"} a week</p>
+                <p className="text-xs text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{t.trainerName || "No trainer"} · {t.sessions.length} class{t.sessions.length === 1 ? "" : "es"} a week · {(() => { const w = weeklyHours(t.sessions); const total = w.theory + w.practical + w.assessment; return <>{total} hours a week{need?.total && total ? <> · <strong>about {Math.ceil(need.total / total)} teaching weeks</strong> for the course</> : null}</>; })()}</p>
               </div>
               {canEdit && <div className="flex gap-2">
                 <button type="button" onClick={() => { setNotice(""); setEditing(t); }} className="inline-flex items-center gap-1 rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"><i className="ri-pencil-line" aria-hidden="true" />Edit</button>
@@ -118,13 +122,13 @@ export default function LmsTimetableTemplatesPage() {
         </>}
       </section>
     </div>
-    {editing && course && <TemplateDrawer course={course} template={editing === "new" ? null : editing} others={templates}
+    {editing && course && <TemplateDrawer course={course} need={need} template={editing === "new" ? null : editing} others={templates}
       onClose={() => setEditing(null)} onSaved={name => { setEditing(null); setNotice(`Template ${name} saved.`); void loadTemplates(); }} />}
   </div>;
 }
 
-function TemplateDrawer({ course, template, others, onClose, onSaved }: {
-  course: RtoCourse; template: CourseTiming | null; others: CourseTiming[]; onClose: () => void; onSaved: (name: string) => void;
+function TemplateDrawer({ course, template, others, onClose, onSaved, need }: {
+  course: RtoCourse; template: CourseTiming | null; others: CourseTiming[]; onClose: () => void; onSaved: (name: string) => void; need: CourseNeed | null;
 }) {
   const [name, setName] = useState(template?.name ?? "");
   const [trainerId, setTrainerId] = useState(template?.trainerStaffId ?? "");
@@ -233,6 +237,8 @@ function TemplateDrawer({ course, template, others, onClose, onSaved }: {
         </div>
       </div>)}</div>
     </div>)}
+    {rows.length && need?.total ? (() => { const w = weeklyHours(rows); const total = w.theory + w.practical + w.assessment; return <p className="rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-800">
+      This week gives <strong>{total} hours</strong> ({splitText(w) || "none"}). The course needs {need.total} SLIT hours, so it takes <strong>about {total ? Math.ceil(need.total / total) : "∞"} teaching weeks</strong>, plus term breaks and public holidays.</p>; })() : null}
     {invalid ? <p role="alert" className="text-sm text-primary-800">A class on {WEEKDAYS[invalid.weekday - 1]} ends before it starts.</p> : null}
     {overlap && !invalid ? <p role="alert" className="text-sm text-primary-800">Two classes on {WEEKDAYS[overlap.weekday - 1]} overlap.</p> : null}
   </Drawer>;

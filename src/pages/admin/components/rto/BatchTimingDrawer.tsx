@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { loadClosedDays, loadCourseNeed, planCourse, splitText, typeLabel, weeklyHoursNeeded, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
-  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
+  DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, shortDate, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
   type IntakeDetail, type LocationRooms, type RtoBatch, type RtoIntake, type SessionType, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
@@ -46,7 +47,9 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [locations, setLocations] = useState<LocationRooms[]>([]);
   const [timings, setTimings] = useState<CourseTiming[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
-  const [intakeUnits, setIntakeUnits] = useState<IntakeDetail["schedule"]>([]);
+  const [intakeDates, setIntakeDates] = useState<{ start: string; end: string | null } | null>(null);
+  const [need, setNeed] = useState<CourseNeed | null>(null);
+  const [closed, setClosed] = useState<((day: string) => boolean) | null>(null);
   const [rows, setRows] = useState<Draft[]>(() => { const base = (batch?.sessions ?? []).map(toDraft); return startDay ? withClass(base, startDay) : base; });
   const [name, setName] = useState(batch?.name ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
@@ -67,8 +70,12 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
     ]).then(([l, t, s, d]) => {
       if (!live) return;
       setLocations(l); setTimings(t); setStaff(s);
-      if (d) { setIntakeUnits(d.schedule); if (!given) setBatches(d.batches); }
+      if (d) {
+        setIntakeDates({ start: d.intake.startDate, end: d.intake.endDate }); if (!given) setBatches(d.batches);
+        void loadClosedDays(d.intake.startDate).then((f) => { if (live) setClosed(() => f); });
+      }
     }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Rooms and timing did not load."); });
+    void loadCourseNeed(intake.courseId).then((n) => { if (live) setNeed(n); }).catch(() => undefined);
     return () => { live = false; };
   }, [intake.id, intake.courseId, given]);
 
@@ -151,6 +158,18 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   };
 
   const days = [...new Set(rows.map((r) => r.weekday))].sort((a, b) => a - b);
+  // Does this week cover the course's SLIT hours by the intake end? (the same rules as the class generator)
+  const ready = need && closed && intakeDates && need.total > 0;
+  const plan = ready ? planCourse(intakeDates.start, rows, need, closed) : null;
+  const perWeek = ready && intakeDates.end ? weeklyHoursNeeded(intakeDates.start, intakeDates.end, need.total, closed) : null;
+  const finishesInTime = !!plan && !!plan.lastDate && (!intakeDates?.end || plan.lastDate <= intakeDates.end);
+  const short = !!plan && rows.length > 0 && !finishesInTime;
+  const planFor = (sessions: BatchSession[]) => (ready ? planCourse(intakeDates.start, sessions, need, closed) : null);
+  const fitHint = (sessions: BatchSession[]) => {
+    const p = planFor(sessions);
+    if (!p) return "";
+    return !p.lastDate ? " · ✗ never finishes" : intakeDates?.end && p.lastDate > intakeDates.end ? ` · ✗ ends ${shortDate(p.lastDate)}, after the intake` : ` · ✓ ends ${shortDate(p.lastDate)}`;
+  };
   const roomOptions = (selected: string) => locations.map((l) => (
     <optgroup key={l.id ?? "other"} label={l.name}>
       {l.rooms.filter((r) => r.isActive || r.id === selected).map((r) => <option key={r.id} value={r.id}>{r.name}{r.capacity ? ` (${r.capacity})` : ""}</option>)}
@@ -160,7 +179,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   return (
     <Drawer open width="max-w-2xl" title={adding ? `Add batch ${shownName}` : `Class timing · ${batch.name}`} onClose={onClose}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button disabled={busy || !!invalid || !!overlap} onClick={() => void save()}>{busy ? "Saving…" : adding ? `Add ${shownName}` : "Save timing"}</Button></>}>
+        <Button disabled={busy || !!invalid || !!overlap || short} onClick={() => void save()}>{busy ? "Saving…" : adding ? `Add ${shownName}` : "Save timing"}</Button></>}>
       <ErrorNote text={error} />
       {adding ? (
         <div className="grid gap-3 sm:grid-cols-[8rem_minmax(0,1fr)_7rem]">
@@ -211,7 +230,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
                 onClick={() => setMenu((m) => (m === "timetable" ? "" : "timetable"))}>
                 Use course timetable{timings.length ? ` (${timings.length})` : ""}
               </Button>
-              {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name + (t.id === ownTiming?.id ? " ★" : ""), hint: `${t.sessions.length} classes${t.trainerName ? " · " + t.trainerName : ""}` }))}
+              {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name + (t.id === ownTiming?.id ? " ★" : ""), hint: `${t.sessions.length} classes${t.trainerName ? " · " + t.trainerName : ""}${fitHint(t.sessions)}` }))}
                 empty="No template for this course yet. Create one under Timetable → Templates, or set the days below and click Save as course timetable."
                 onPick={(id) => { const t = timings.find((x) => x.id === id); if (t) applyTiming(t); }}
                 onDelete={(id) => { const t = timings.find((x) => x.id === id); if (t) void deleteTemplate(t); }} onClose={() => setMenu("")} /> : null}
@@ -240,6 +259,15 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           })}
         </div>
         <p className="mt-1.5 text-xs font-medium text-foreground-600">Click a day to add classes on it. Click a ticked day again to remove them.</p>
+        {ready && rows.length ? <div role="status" className={`mt-3 rounded-lg border px-3 py-2 text-sm ${finishesInTime ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800"}`}>
+          <p className="font-semibold"><i className={(finishesInTime ? "ri-checkbox-circle-line" : "ri-error-warning-line") + " mr-1"} aria-hidden="true" />
+            {!plan?.lastDate ? "These class times never cover the course hours."
+              : finishesInTime ? `Covers the full course: last class ${shortDate(plan.lastDate)}${intakeDates.end ? `, intake ends ${shortDate(intakeDates.end)}` : ""}.`
+              : `Not enough class time: the last class would be ${shortDate(plan.lastDate)}, after the intake ends on ${shortDate(intakeDates.end)}.`}</p>
+          <p className="mt-0.5">Course: {need.total} SLIT hours ({splitText(need)}) over {need.units} units. This week: {plan?.weeklyTotal ?? 0} hours ({splitText(plan?.weekly ?? { theory: 0, practical: 0, assessment: 0 }) || "none"}).
+            {perWeek ? ` To finish by the intake end you need about ${perWeek} hours a week.` : ""}</p>
+          {plan?.folded.map((f) => <p key={f.from} className="mt-0.5 text-xs">No {typeLabel(f.from)} class in the week, so its hours are taught in the {typeLabel(f.into)} classes.</p>)}
+        </div> : null}
         {templateNote ? <p role="status" className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{templateNote}</p> : null}
       </div>
 

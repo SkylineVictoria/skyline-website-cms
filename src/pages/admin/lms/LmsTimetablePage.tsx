@@ -20,7 +20,6 @@ export default function LmsTimetablePage() {
   const [data, setData] = useState<BatchPageData | null>(null);
   const [canEdit, setCanEdit] = useState(false);
   const [editor, setEditor] = useState<null | { day?: number; templates?: boolean }>(null);
-  const [view, setView] = useState<"week" | "list">("week");
   const [savedNote, setSavedNote] = useState("");
   const [calendarKey, setCalendarKey] = useState(0);
   const [error, setError] = useState("");
@@ -88,9 +87,6 @@ export default function LmsTimetablePage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
         <p className="text-sm text-foreground-500">Set a batch's weekly class times, trainer and rooms. Term breaks and public holidays are skipped automatically.</p>
       </div>
-      {canManage && <div className="flex flex-wrap items-center gap-2">
-        {selectClassButton(sessions.length ? "Edit class timing" : "Set class timing")}
-      </div>}
     </header>
     {savedNote && <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{savedNote}</p>}
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button type="button" className="ml-3 underline" onClick={() => { void reload(); void refreshBatch(); }}>Retry</button></div>}
@@ -106,47 +102,26 @@ export default function LmsTimetablePage() {
       </label>
     </div>
     <section className={card + " min-w-0 p-5"}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-background-300 p-0.5">
-          {(["week", "list"] as const).map(v => <button key={v} type="button" onClick={() => setView(v)} aria-pressed={view === v}
-            className={`rounded-md px-3 py-1.5 text-sm font-semibold ${view === v ? "bg-primary-600 text-white" : "text-foreground-600 hover:bg-background-100"}`}>{v === "week" ? "Week" : "List"}</button>)}
+      {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p>
+      : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p>
+      : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>
+      : !sessions.length ? <div className="py-8 text-center">
+        <i className="ri-calendar-schedule-line text-4xl text-primary-500" aria-hidden="true" />
+        <h2 className="mt-2 font-heading text-lg font-bold text-foreground-950">No class timing for {data.batch.name} yet</h2>
+        <p className="mx-auto mt-1 max-w-xl text-sm text-foreground-600">Add the days, times, rooms and trainer, or start from a course template. The full course calendar then fills in below, from the intake start to the last class.</p>
+        {canManage ? <div className="mt-4">{selectClassButton("Add class timing")}</div> : <p className="mt-2 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
+      </div>
+      : <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-heading text-lg font-bold text-foreground-950">Weekly class timing</h2>
+          <p className="mt-0.5 text-sm text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{trainerNames || "No trainer"}
+            <Link className="ml-3 text-xs font-semibold text-primary-700 hover:underline" to="/admin/lms/batch-allocation">Batch allocation</Link></p>
+          <ul className="mt-3 flex flex-wrap gap-2">{sessions.map((s, i) => <li key={s.id ?? i} className="rounded-lg bg-primary-50 px-3 py-1.5 text-sm text-foreground-900 ring-1 ring-primary-200">
+            <strong>{dayName(s.weekday).slice(0, 3)}</strong> {shortTime(s.startTime)}–{shortTime(s.endTime)} · <span className="capitalize">{s.type}</span> · {s.room || "No room"}
+          </li>)}</ul>
         </div>
-        {data && <div className="flex flex-wrap items-center gap-3 text-xs text-foreground-500">
-          <span>{sessions.length} weekly {sessions.length === 1 ? "slot" : "slots"} · {data.batch.trainers.length} trainer{data.batch.trainers.length === 1 ? "" : "s"}</span>
-          <Link className="font-semibold text-primary-700 hover:underline" to="/admin/lms/batch-allocation">Batch allocation</Link>
-        </div>}
-      </div>
-      <div className="mt-4">
-        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p> : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p> : !sessions.length && !canManage ? <div className="py-10 text-center">
-          <p className="text-sm text-foreground-500">No class times saved for this batch.</p>
-          {canManage ? <div className="mt-4">{selectClassButton("Set class timing")}</div> : <p className="mt-1 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
-        </div> : view === "week" ? <div className="overflow-x-auto">
-          <div className="grid min-w-[760px] grid-cols-7 divide-x divide-background-200 rounded-lg border border-background-200">
-            {DAYS.map((day, i) => <section key={day} className="min-h-44 p-2">
-              <h2 className="mb-2 text-center text-xs font-semibold uppercase tracking-wide text-foreground-500">{day.slice(0, 3)}</h2>
-              <div className="space-y-1.5">{sessions.filter(s => s.weekday === i + 1).map((s, j) =>
-                <button key={s.id ?? j} type="button" disabled={!canManage} onClick={selectClass}
-                  className="w-full rounded-lg bg-primary-50 px-2 py-1.5 text-left text-xs text-foreground-900 ring-1 ring-primary-200 hover:ring-primary-400 disabled:cursor-default disabled:hover:ring-primary-200">
-                  <strong className="block">{shortTime(s.startTime)} – {shortTime(s.endTime)}</strong>
-                  <span className="block capitalize text-foreground-700">{s.type}</span>
-                  <span className="block truncate text-foreground-600"><i className="ri-door-open-line mr-1" aria-hidden="true" />{s.room || "No room"}</span>
-                  <span className="block truncate text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{trainerNames || "No trainer"}</span>
-                </button>)}
-                {canManage && <button type="button" onClick={() => setEditor({ day: i + 1 })} title={`Add a class on ${day}`} aria-label={`Add a class on ${day}`}
-                  className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-primary-200 py-2 text-xs font-semibold text-primary-600 hover:border-primary-500 hover:bg-primary-50">
-                  <i className="ri-add-line text-base" aria-hidden="true" />Add</button>}</div>
-            </section>)}
-          </div>
-        </div> : <div className="overflow-x-auto">
-          <table className="w-full min-w-[600px] text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
-            {["Day", "Time", "Session type", "Room", "Trainer", ""].map(x => <th key={x || "action"} className="px-3 py-2">{x}</th>)}
-          </tr></thead><tbody>{sessions.map((s, i) => <tr key={s.id ?? i} className="border-b border-background-100 hover:bg-background-100">
-            <td className="px-3 py-2">{dayName(s.weekday)}</td><td className="px-3 py-2">{shortTime(s.startTime)} – {shortTime(s.endTime)}</td>
-            <td className="px-3 py-2 capitalize">{s.type}</td><td className="px-3 py-2">{s.room || "Not assigned"}</td><td className="px-3 py-2">{trainerNames || "Not assigned"}</td>
-            <td className="px-3 py-2 text-right">{canManage && <button type="button" onClick={selectClass} className="font-semibold text-primary-700 hover:underline">Edit</button>}</td>
-          </tr>)}</tbody></table>
-        </div>}
-      </div>
+        {canManage && selectClassButton("Edit class timing")}
+      </div>}
     </section>
     {batchId && data && detail?.intake.id === intakeId && <BatchCourseCalendar key={batchId} batchId={batchId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
       hasSlots={sessions.length > 0} canManage={canManage} reloadKey={calendarKey} />}

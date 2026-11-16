@@ -9,6 +9,7 @@ import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
 import LmsTimetablePage from "./LmsTimetablePage";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
+import LmsLocationsPage from "./LmsLocationsPage";
 import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
 
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
@@ -28,6 +29,7 @@ export default function LmsPage() {
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "timetable") return <LmsTimetablePage />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
+  if (area === "locations") return <LmsLocationsPage />;
   if (area === "timetable-templates") return <LmsTimetableTemplatesPage />;
   if (area === "room-grid") return <Navigate to="/admin/lms/timetable" replace />;
   if (area === "attendance") return <LmsAttendancePage />;

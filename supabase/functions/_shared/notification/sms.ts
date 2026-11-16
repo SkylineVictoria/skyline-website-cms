@@ -107,3 +107,31 @@ export function selectSmsProvider(config: Record<string, string | undefined>, op
   if (variables.length) return { provider: null, unavailable: { code: "configuration_unavailable", variables } };
   return { provider: createClickSendProvider({ username: config.EF_CLICKSEND_USERNAME!.trim(), apiKey: config.EF_CLICKSEND_API_KEY!.trim(), senderId: senderId || undefined, fetch: options.fetch }), unavailable: null };
 }
+
+// ---- dispatch loop ------------------------------------------------------------------------------
+/** One claimed SMS (migration 20261116100000). The phone number and body are held in memory for this send only. */
+export interface ClaimedSms { id: string; leaseToken: string; phone: string; body: string; attempt: number }
+export interface SmsDeliveryPort {
+  claim(): Promise<ClaimedSms | null>;
+  record(delivery: ClaimedSms, outcome: "accepted" | "failed" | "unknown", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
+}
+export interface SmsDispatchSummary { accepted: number; retried: number; failed: number; unknown: number; stale: number }
+
+export async function dispatchSmsBatch(port: SmsDeliveryPort, provider: SmsProvider, limit: number): Promise<SmsDispatchSummary> {
+  const summary: SmsDispatchSummary = { accepted: 0, retried: 0, failed: 0, unknown: 0, stale: 0 };
+  for (let i = 0; i < limit; i++) {
+    const sms = await port.claim();
+    if (!sms) break;
+    const outcome = await provider.send({ deliveryId: sms.id, to: sms.phone, body: sms.body });
+    let stored: boolean;
+    if (outcome.kind === "accepted") { stored = await port.record(sms, "accepted", outcome.messageId, null, false, 0); if (stored) summary.accepted++; }
+    else if (outcome.kind === "retry") {
+      stored = await port.record(sms, "failed", null, outcome.code, true, Math.min(900, 30 * 2 ** sms.attempt));
+      if (stored) { if (sms.attempt < 3) summary.retried++; else summary.failed++; }
+    }
+    else if (outcome.kind === "failed") { stored = await port.record(sms, "failed", null, outcome.code, false, 0); if (stored) summary.failed++; }
+    else { stored = await port.record(sms, "unknown", null, outcome.code, false, 0); if (stored) summary.unknown++; }
+    if (!stored) summary.stale++;
+  }
+  return summary;
+}

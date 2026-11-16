@@ -360,6 +360,42 @@ export async function setEmailPreference(event: NotificationEvent, enabled: bool
   if (error) throw new Error(error.message);
 }
 
+export interface SmsSettings { phone: string | null; events: Record<NotificationEvent, boolean> }
+
+/** SMS settings of the signed-in user: the saved mobile number (if any) and SMS per event (off unless turned on). */
+export async function getSmsSettings(): Promise<SmsSettings> {
+  const [contact, prefs] = await Promise.all([
+    supabase.from("notification_sms_contacts").select("phone_e164").maybeSingle(),
+    supabase.from("notification_preferences").select("event, sms_enabled"),
+  ]);
+  if (contact.error) throw new Error(contact.error.message);
+  if (prefs.error) throw new Error(prefs.error.message);
+  const events: Record<NotificationEvent, boolean> = { application_submitted: false, application_status_changed: false, offer_accepted: false, coe_voe_issued: false };
+  for (const row of prefs.data ?? []) {
+    const r = row as { event: NotificationEvent; sms_enabled: boolean };
+    if (r.event in events) events[r.event] = Boolean(r.sms_enabled);
+  }
+  return { phone: (contact.data as { phone_e164?: string } | null)?.phone_e164 ?? null, events };
+}
+
+/** Saves the mobile number (with consent); returns it in international format. */
+export async function saveSmsNumber(phone: string): Promise<string> {
+  const { data, error } = await supabase.rpc("portal_set_sms_contact", { p_phone: phone });
+  if (error) throw new Error(error.message);
+  return String(data ?? "");
+}
+
+/** Removes the number and turns SMS off for every event. */
+export async function removeSmsNumber(): Promise<void> {
+  const { error } = await supabase.rpc("portal_remove_sms_contact");
+  if (error) throw new Error(error.message);
+}
+
+export async function setSmsPreference(event: NotificationEvent, enabled: boolean): Promise<void> {
+  const { error } = await supabase.rpc("portal_set_sms_preference", { p_event: event, p_sms_enabled: enabled });
+  if (error) throw new Error(error.message);
+}
+
 export async function markNotificationRead(id: string): Promise<void> {
   const { error } = await supabase.from("portal_notifications").update({ read: true }).eq("id", id);
   if (error) throw new Error(error.message);

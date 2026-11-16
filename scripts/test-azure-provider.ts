@@ -1019,3 +1019,35 @@ test("sms: mock provider records sends and replays its script", async () => {
   assert.deepEqual(await mock.send(smsMessage), { kind: "accepted", messageId: "mock-0001" });
   assert.equal(mock.sent.length, 3);
 });
+
+import { dispatchSmsBatch, type ClaimedSms, type SmsDeliveryPort } from "../supabase/functions/_shared/notification/sms.ts";
+function smsPort(queue: ClaimedSms[], storeOk = true) {
+  const recorded: { id: string; outcome: string; messageId: string | null; code: string | null; retry: boolean; delay: number }[] = [];
+  const port: SmsDeliveryPort = {
+    claim: async () => queue.shift() ?? null,
+    record: async (d, outcome, messageId, code, retry, delay) => { recorded.push({ id: d.id, outcome, messageId, code, retry, delay }); return storeOk; },
+  };
+  return { port, recorded };
+}
+const claimedSms = (id: string, attempt = 1): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt });
+
+test("sms dispatch: each outcome is recorded once with the right retry decision", async () => {
+  const { port, recorded } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c", 3), claimedSms("d"), claimedSms("e")]);
+  const provider = createMockSmsProvider([
+    { kind: "accepted", messageId: "MSG-00000001" }, { kind: "retry", code: "rate_limit" }, { kind: "retry", code: "provider" },
+    { kind: "failed", code: "invalid_recipient" }, { kind: "unknown", code: "timeout" },
+  ]);
+  const summary = await dispatchSmsBatch(port, provider, 10);
+  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, stale: 0 });
+  assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}:${r.delay}`), [
+    "a:accepted:null:false:0", "b:failed:rate_limit:true:60", "c:failed:provider:true:240", "d:failed:invalid_recipient:false:0", "e:unknown:timeout:false:0",
+  ]);
+  assert.deepEqual(provider.sent.map((m) => [m.deliveryId, m.to]), [["a", "+61412345678"], ["b", "+61412345678"], ["c", "+61412345678"], ["d", "+61412345678"], ["e", "+61412345678"]]);
+});
+
+test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {
+  const { port } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c")], false);
+  const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);
+  const summary = await dispatchSmsBatch(port, provider, 2);
+  assert.deepEqual([summary.accepted, summary.stale, provider.sent.length], [0, 2, 2]);
+});

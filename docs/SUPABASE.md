@@ -40,9 +40,9 @@ Supabase secrets are project-wide; the prefix gives no function isolation. Exist
 | PUBLIC_ASSISTANT_CHUNK_TOKENS (420), _CHUNK_OVERLAP (60), _MAX_CHUNKS (512), _MAX_CONTENT_CHARS, _DOCUMENT_MAX_BYTES, _DOCUMENT_MAX_PAGES, _DOCUMENT_EXTRACTION_MODEL | public-assistant-index | optional tuning; invalid value fails closed |
 | EF_NOTIFICATION_EMAIL_ENABLED | notification-delivery | sending on only when exactly `true`; default off |
 | EF_POSTMARK_SERVER_TOKEN (secret) | notification-delivery | required with the enable flag; absent = nothing is claimed |
-| EF_NOTIFICATION_SMS_ENABLED | (none yet) | ClickSend SMS transport `_shared/notification/sms.ts`; on only when exactly `true`; default off; not wired to any function or event |
-| EF_CLICKSEND_USERNAME, EF_CLICKSEND_API_KEY (secret) | (none yet) | required with the SMS enable flag |
-| EF_CLICKSEND_SENDER_ID | (none yet) | optional; alphanumeric (1-11, starts with a letter) or E.164 |
+| EF_NOTIFICATION_SMS_ENABLED | notification-delivery | ClickSend SMS (`_shared/notification/sms.ts`) to opted-in portal users (migration 20261116100000, local only); on only when exactly `true`; default off; independent of email |
+| EF_CLICKSEND_USERNAME, EF_CLICKSEND_API_KEY (secret) | notification-delivery | required with the SMS enable flag |
+| EF_CLICKSEND_SENDER_ID | notification-delivery | optional; alphanumeric (1-11, starts with a letter) or E.164 |
 Notification email needs only EF_NOTIFICATION_EMAIL_ENABLED and EF_POSTMARK_SERVER_TOKEN. Sender address/name come from the database (migration 87); the scheduler/pg_cron job must call the function with `Authorization: Bearer <service-role key>` read from Supabase Vault at run time (never stored in the repo); unused secrets to delete in Supabase: EF_NOTIFICATION_WORKER_SECRET, EF_POSTMARK_FROM_EMAIL, EF_POSTMARK_FROM_NAME, EF_POSTMARK_WEBHOOK_USER, EF_POSTMARK_WEBHOOK_PASSWORD. Later, for the other workers only: DOCUMENT_EXTRACTION_WORKER_SECRET and PUBLIC_ASSISTANT_WORKER_SECRET are still used by their pg_net schedulers (`x-worker-secret` from Vault) and would need the same Bearer service-role change on both sides; unchanged here.
 | Planned: EF_STRIPE_SECRET_KEY, EF_STRIPE_WEBHOOK_SECRET (P10) | none yet | not consumed |
 

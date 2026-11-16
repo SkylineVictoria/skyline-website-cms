@@ -1,3 +1,4 @@
+import SwitchView from "./SwitchView";
 import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
@@ -142,7 +143,7 @@ export default function AdminLayout() {
                 <i className="ri-arrow-down-s-line text-foreground-500" aria-hidden="true" />
               </button>
               {userMenu ? (
-                <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-md border border-background-200 bg-background-50 py-1.5">
+                <div className="absolute right-0 top-full z-50 mt-2 w-56 max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-md border border-background-200 bg-background-50 py-1.5">
                   <div className="border-b border-background-200 px-3 py-2">
                     <p className="text-label font-medium text-foreground-900">{user.name}</p>
                     <p className="truncate text-xs text-foreground-500">{user.email}</p>
@@ -158,6 +159,7 @@ export default function AdminLayout() {
                       ))}
                     </div>
                   </div>
+                  {user.role === "Admin" ? <SwitchView onSelect={() => setUserMenu(false)} /> : null}
                   <button
                     type="button"
                     onClick={() => {

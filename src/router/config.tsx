@@ -1,3 +1,4 @@
+import PortalPreviewPage from "@/pages/admin/PortalPreviewPage";
 import LmsPage from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
@@ -212,6 +213,7 @@ const routes: RouteObject[] = [
     children: [
       { path: "login", element: <LoginRedirect /> },
       { path: "set-password", element: <AdminSetPasswordPage /> },
+      { path: "switch-view/:view", element: <PortalPreviewPage /> },
       {
         element: <AdminLayout />,
         children: [

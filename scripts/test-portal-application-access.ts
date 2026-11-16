@@ -901,3 +901,28 @@ test("stages: a step the config does not name joins the stage of the step before
   assert.ok(holder?.sections.includes(2), "placed next to the step before it");
   assert.equal(stages.flatMap((stage) => stage.sections).length, extra.length);
 });
+
+// Switch View uses an offline transport: no operation can reach real records.
+import { previewFetch, createPreviewClient } from '../src/lib/portalPreviewData.ts';
+import { previewView } from '../src/lib/portalPreview.ts';
+test('Switch View accepts only the three presentation views', () => {
+  for (const view of ['student', 'agent', 'staff']) assert.equal(previewView(view), view);
+  for (const view of ['Admin', 'admin', 'owner', '../student', undefined]) assert.equal(previewView(view), null);
+});
+test('Switch View denies writes, unknown reads, storage, functions and auth mutations', async () => {
+  for (const path of ['/rest/v1/rpc/portal_student_save', '/rest/v1/rpc/hr_time_punch', '/rest/v1/rpc/asm_student', '/rest/v1/rpc/signing_mine', '/storage/v1/object/student-documents/file', '/functions/v1/portal-admin-users', '/auth/v1/logout', '/rest/v1/cms_users']) {
+    for (const method of ['GET', 'POST', 'PATCH', 'DELETE']) {
+      const r = await previewFetch('student', `https://preview.invalid${path}`, { method, ...(method === 'POST' ? { body: JSON.stringify({ p_action: 'result_acknowledge' }) } : {}) });
+      assert.equal(r.status, 403, `${method} ${path}`);
+    }
+  }
+});
+test('Switch View real Supabase client contract renders empty samples without network access', async () => {
+  const client = createPreviewClient('student');
+  const { data, error } = await client.rpc('portal_query_applications');
+  assert.equal(error, null);
+  assert.deepEqual(data, { total: 0, rows: [] });
+  const mutation = await client.rpc('portal_student_save', { p_student: 'someone-else' });
+  assert.equal(mutation.error?.code, 'PREVIEW_READ_ONLY');
+  assert.equal((await client.auth.getSession()).data.session, null, 'no real or synthetic authenticated session');
+});

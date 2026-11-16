@@ -1,5 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { previewFrameView } from "@/lib/portalPreview";
+import { createPreviewClient } from "@/lib/portalPreviewData";
 
 /**
  * Single shared Supabase client for the whole app (singleton).
@@ -13,7 +15,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error("Supabase environment variables are missing. Please reconnect the backend.");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const authenticatedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
   global: {
     fetch: (input, init) => {
       const headers = new Headers(init?.headers);
@@ -39,10 +41,15 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+// The isolated preview document cannot issue portal calls with the admin token.
+// Outside that exact document path the existing client is unchanged.
+const frameView = previewFrameView();
+export const supabase = frameView ? createPreviewClient(frameView) : authenticatedSupabase;
+
 // supabase-js already refreshes when a hidden tab becomes visible again; this also covers the network returning and a device
 // waking from sleep, where the page can stay "visible" but its refresh timer was frozen. startAutoRefresh is safe to repeat.
 if (typeof window !== "undefined") {
-  const kick = () => { if (document.visibilityState === "visible") void supabase.auth.startAutoRefresh(); };
+  const kick = () => { if (document.visibilityState === "visible") void authenticatedSupabase.auth.startAutoRefresh(); };
   window.addEventListener("online", kick);
   window.addEventListener("focus", kick);
   document.addEventListener("visibilitychange", kick);

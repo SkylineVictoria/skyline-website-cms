@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { Link, useParams } from "react-router-dom";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
@@ -94,6 +95,7 @@ export default function AgentDetailPage() {
         description={[agent.marn ? `MARN ${agent.marn}` : null, agent.role === "agency_admin" ? "Business admin agent" : "Agent", `with ${agent.business.name}`].filter(Boolean).join(", ")}
         actions={<>
           <AgentStatusBadge status={agent.status} />
+          <MessagePersonButton kind="agent" refId={agent.profileId ?? agent.agentId} name={agent.name} />
           {awaitingPassword(agent) && agent.email
             ? <Button variant="outline" icon="ri-mail-send-line" disabled={busy} onClick={() => void resend()}>{busy ? "Sending…" : "Resend invite"}</Button>
             : null}

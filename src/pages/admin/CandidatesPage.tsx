@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import WhatsAppLink from "@/components/base/WhatsAppLink";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
@@ -212,7 +213,7 @@ export function CandidateDetailPage() {
   actions.push("declined", "withdrawn");
   return <div>
     <PageHeader breadcrumb="Website / Candidates" title={hrName(row)} titleSuffix={<WhatsAppLink phone={row.phone} name={hrName(row)} />} description={row.jobTitle}
-      actions={<><CandidateBadge row={row} /><Button variant="outline" onClick={() => {
+      actions={<><CandidateBadge row={row} /><MessagePersonButton kind="applicant" refId={row.profileId} name={hrName(row)} /><Button variant="outline" onClick={() => {
         setEditing(true);
         void adminListJobs().then(setJobs, (e: Error) => setError(e.message));
       }}>Edit candidate</Button></>} />

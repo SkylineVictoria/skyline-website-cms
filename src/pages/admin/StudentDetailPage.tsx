@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { Link, useParams } from "react-router-dom";
 import WhatsAppLink from "@/components/base/WhatsAppLink";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
@@ -66,7 +67,7 @@ export default function StudentDetailPage() {
         <Link to={`/admin/businesses/${student.business.id}`} className="hover:text-foreground-900">{student.business.name}</Link><span aria-hidden="true">/</span>
         <span className="text-foreground-900">Student</span>
       </nav>
-      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<WhatsAppLink phone={student.phone} name={student.name} />}
+      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<><WhatsAppLink phone={student.phone} name={student.name} /><span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span></>}
         description={`Student of ${student.business.name}${student.agent ? `, looked after by ${student.agent.name}` : ""}${student.selfEnrolled ? ", enrolled themselves from the website" : ""}. Sign-in: ${studentLoginLabel(student.login)}.`}
         actions={student.login?.status === "active" ? undefined : (
           <Button icon="ri-mail-send-line" disabled={inviting || !student.email} onClick={() => void invite()}>

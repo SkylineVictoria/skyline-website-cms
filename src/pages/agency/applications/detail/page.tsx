@@ -1,4 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
 import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -248,6 +249,8 @@ export default function ApplicationDetailPage() {
             {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
+            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Message student" size="sm" /> : null}
+            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Message agent" size="sm" /> : null}
             {isSlit ? (
               <button
                 type="button"

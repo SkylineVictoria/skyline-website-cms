@@ -109,7 +109,7 @@ export function selectSmsProvider(config: Record<string, string | undefined>, op
 }
 
 // ---- dispatch loop ------------------------------------------------------------------------------
-/** One claimed SMS (migration 20261116100000). The phone number and body are held in memory for this send only. */
+/** One claimed SMS (migration 20261116160000). The phone number and body are held in memory for this send only. */
 export interface ClaimedSms { id: string; leaseToken: string; phone: string; body: string; attempt: number }
 export interface SmsDeliveryPort {
   claim(): Promise<ClaimedSms | null>;

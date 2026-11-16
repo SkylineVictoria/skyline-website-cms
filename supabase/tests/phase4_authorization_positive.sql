@@ -447,7 +447,7 @@ select is((select array_agg(user_id::text) from public.agency_memberships where 
 select is((select array_agg(r->>'id') from jsonb_array_elements(public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000a',null,'','','updated','desc',25,0)->'rows') r),array['4c000000-0000-0000-0000-00000000000a'],'agency A lists only its own applications');
 select is((public.portal_query_applications('','','1c000000-0000-0000-0000-00000000000b',null,'','','updated','desc',25,0)->>'total')::int,1,'agency B count covers only its own applications');
 reset role;
--- SMS opt-in (migration 20261116100000): only a portal user with a saved number and SMS on for the event gets an SMS; the queue is service_role only.
+-- SMS opt-in (migration 20261116160000): only a portal user with a saved number and SMS on for the event gets an SMS; the queue is service_role only.
 insert into auth.users(id,email) values ('3a000000-0000-0000-0000-0000000000a1','sms-user@example.test');
 select is(public.notification_normalize_phone('0412 345 678'),'+61412345678','an Australian mobile normalises to E.164');
 select is(public.notification_normalize_phone('03 9123 4567'),null,'a landline is refused');

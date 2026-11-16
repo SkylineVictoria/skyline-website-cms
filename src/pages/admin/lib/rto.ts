@@ -270,3 +270,29 @@ export async function saveUnitHours(unitId: string, h: HoursSplit): Promise<Unit
   if (error) throw new Error(error.message);
   return data as UnitHours;
 }
+
+/** One dated class, generated from a batch's weekly pattern (public.class_sessions). */
+export interface ClassSession {
+  id: string; batchId: string; batch: string; courseCode: string; date: string; startTime: string; endTime: string;
+  type: SessionType; roomId: string | null; room: string | null; unitId: string | null; unitCode: string | null; unitName: string | null;
+  status: "scheduled" | "cancelled"; manual: boolean; trainers: string;
+}
+export interface SessionClash { date: string; startTime: string; room: string; otherBatch: string }
+export interface GenerateResult { created: number; kept: number; from: string; endDate: string | null; clashes: SessionClash[] }
+
+/** Sessions between two dates (YYYY-MM-DD) for one batch, or every batch when batchId is null. */
+export async function loadClassSessions(batchId: string | null, from: string, to: string): Promise<ClassSession[]> {
+  const { data, error } = await supabase.rpc("rto_class_sessions_list", { p_batch: batchId, p_from: from, p_to: to });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ClassSession[];
+}
+export async function generateClassSessions(batchId: string): Promise<GenerateResult> {
+  const { data, error } = await supabase.rpc("rto_class_sessions_generate", { p_batch: batchId });
+  if (error) throw new Error(error.message);
+  return data as GenerateResult;
+}
+export async function updateClassSession(id: string, change: Partial<{ status: "scheduled" | "cancelled"; roomId: string | null; date: string; startTime: string; endTime: string }>): Promise<{ id: string; clashes: SessionClash[] }> {
+  const { data, error } = await supabase.rpc("rto_class_session_update", { p_id: id, p_data: change });
+  if (error) throw new Error(error.message);
+  return data as { id: string; clashes: SessionClash[] };
+}

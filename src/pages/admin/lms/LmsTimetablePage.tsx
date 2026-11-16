@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
+import ClassSessionsPanel from "@/pages/admin/lms/ClassSessionsPanel";
 import { rto, rtoFlow, type BatchPageData, type IntakeDetail, type RtoCourse, type RtoIntake, type BatchSession } from "@/pages/admin/lib/rto";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -80,7 +81,7 @@ export default function LmsTimetablePage() {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
-        <p className="text-sm text-foreground-500">Weekly recurring class times for a batch.</p>
+        <p className="text-sm text-foreground-500">Set a batch's weekly class times once; the dated classes below are generated from them.</p>
       </div>
       {canManage && <button type="button" onClick={selectClass} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Edit class times</button>}
     </header>
@@ -135,6 +136,7 @@ export default function LmsTimetablePage() {
         </div>}
       </div>
     </section>
+    <ClassSessionsPanel batchId={batchId} canManage={canManage} />
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
       onClose={() => setEditor(false)}
       onSaved={out => { setEditor(false); setDetail(out); void refreshBatch(); void reload(); }} />}

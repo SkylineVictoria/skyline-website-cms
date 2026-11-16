@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(345);
+select plan(351);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -662,6 +662,24 @@ select is((public.rto_unit_hours_save('unit-asm-1', 60, 30, 20, 10))->>'theoryHo
 select pg_temp.as_postgres();
 select ok((select hours_confirmed_at is not null and slit_hours = 60 from public.cms_course_units where id = 'unit-asm-1'), 'HRS the saved unit is marked reviewed');
 select is((select count(*)::int from public.cms_course_units where id = 'unit-asm-2' and slit_hours is null and hours_confirmed_at is null), 1, 'HRS other units stay unreviewed');
+
+-- ---------------------------------------------------------------- dated class sessions generated from the weekly pattern
+-- unit-asm-1 now has 60 SLIT hours: 30 theory, 20 practical, 10 assessment. G1 meets Monday theory, Friday workshop, Sunday assessment, 4 hours each.
+insert into public.batch_sessions(batch_id, weekday, slot, start_time, end_time, session_type) values
+ ('f5000000-0000-0000-0000-000000000011', 1, 'morning', '09:00', '13:00', 'theory'),
+ ('f5000000-0000-0000-0000-000000000011', 5, 'morning', '09:00', '13:00', 'practical'),
+ ('f5000000-0000-0000-0000-000000000011', 7, 'morning', '09:00', '13:00', 'assessment');
+insert into hr.public_holidays(holiday_date, name, status)
+ select date '2026-01-26', 'Australia Day', 'confirmed' where not exists(select 1 from hr.public_holidays where holiday_date = date '2026-01-26' and status = 'confirmed' and not is_optional);
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_class_sessions_generate('f5000000-0000-0000-0000-000000000011')$$, '42501', null, 'CLS an editor who is not an RTO Manager cannot generate classes');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.rto_class_sessions_generate('f5000000-0000-0000-0000-000000000012')$$, '22023', null, 'CLS a batch without weekly class times is refused');
+select is((public.rto_class_sessions_generate('f5000000-0000-0000-0000-000000000011'))->>'created', '16', 'CLS 8 theory, 5 workshop and 3 assessment sessions cover the hours');
+select is(jsonb_array_length(public.rto_class_sessions_list('f5000000-0000-0000-0000-000000000011', date '2026-01-01', date '2026-06-30')), 16, 'CLS staff can list the dated classes');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.class_sessions where session_date = date '2026-01-26'), 0, 'CLS a confirmed public holiday is skipped');
+select is((select max(session_date) from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011'), date '2026-03-02', 'CLS the holiday pushes the last theory class a week later');
 
 select * from finish();
 rollback;

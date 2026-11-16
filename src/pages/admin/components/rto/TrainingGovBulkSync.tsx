@@ -2,7 +2,6 @@
 // course by qualification code, and the missing ones are created as draft courses with their core units through the
 // tga-course-import function. Electives are then chosen on each course.
 import { useEffect, useMemo, useState } from "react";
-import { FunctionRegion } from "@supabase/supabase-js";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { RtoCourse } from "@/pages/admin/lib/rto";
@@ -11,9 +10,10 @@ interface ScopeItem { code: string; title: string; status: string; endDate: stri
 interface Scope { rto: string; source: string; items: ScopeItem[] }
 const norm = (value: string | null | undefined) => (value ?? "").trim().toUpperCase();
 
-/** training.gov.au answers from Australia only, so the function runs in Sydney whoever calls it. */
+/** training.gov.au answers from Australia only, so the function runs in Sydney whoever calls it. The region goes in the
+ *  URL (forceFunctionRegion), not the x-region header, which the function's CORS rules do not allow. */
 async function tga<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>("tga-course-import", { body, region: FunctionRegion.ApSoutheast2 });
+  const { data, error } = await supabase.functions.invoke<T>("tga-course-import?forceFunctionRegion=ap-southeast-2", { body });
   if (error) {
     let message = error.message;
     try { const detail = await (error as { context?: Response }).context?.json(); if (detail?.error) message = detail.error; } catch { /* keep the generic message */ }

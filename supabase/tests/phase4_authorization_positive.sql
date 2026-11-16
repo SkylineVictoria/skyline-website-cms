@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(588);
+select plan(591);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1149,6 +1149,13 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.comm_team_microsoft_set(gen_random_uuid(),'')$$,'42501',null,'a portal user cannot link a Teams channel');
 select throws_ok($$select * from public.comm_team_microsoft$$,'42501',null,'the Teams link table is not readable');
+reset role;
+-- Communication Hub channels (migration 20261116231907): admin only; account details never readable; helpers not callable.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_channel_connect_sms('u','ABCDEFGH1234',null)$$,'42501',null,'a portal user cannot connect SMS');
+select throws_ok($$select * from public.comm_channel_accounts$$,'42501',null,'channel accounts are not readable');
+select throws_ok($$select public.comm_channel_secret('sms')$$,'42501',null,'the secret helper is not callable');
 reset role;
 select * from finish();
 rollback;

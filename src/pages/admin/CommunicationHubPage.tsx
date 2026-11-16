@@ -4,6 +4,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import CommunicationTemplates from "@/pages/admin/components/CommunicationTemplates";
 import CommunicationInbox from "@/pages/admin/components/CommunicationInbox";
 import CommunicationTeams from "@/pages/admin/components/CommunicationTeams";
+import CommunicationChannels from "@/pages/admin/components/CommunicationChannels";
 
 type Notice = { id: string; title: string | null; message: string | null; event: string | null; created_at: string | null; application_id: string | null };
 const sections = ["Conversations", "Teams", "Templates", "Activity", "Channels"] as const;
@@ -48,22 +49,6 @@ export default function CommunicationHubPage() {
         <p className="mt-2 whitespace-pre-wrap text-sm text-foreground-700">{n.message || "No message text"}</p>
         {n.application_id ? <Link className="mt-2 inline-block text-sm font-medium text-primary-600 underline" to={`/admin/applications/${n.application_id}`}>View application</Link> : null}
       </article>)}</div>}
-    </section> : section === "Templates" ? <CommunicationTemplates /> : section === "Channels" ? <ChannelsStatus /> : null}
+    </section> : section === "Templates" ? <CommunicationTemplates /> : section === "Channels" ? <CommunicationChannels /> : null}
   </main>;
-}
-
-const CHANNEL_STATUS: { name: string; icon: string; connected: boolean; note: string }[] = [
-  { name: "Email", icon: "ri-mail-line", connected: true, note: "Sent through your existing email service. Messages show as Sent within about a minute." },
-  { name: "SMS", icon: "ri-message-2-line", connected: false, note: "Needs a ClickSend account. Until then, text messages are recorded in the conversation but not sent." },
-  { name: "WhatsApp", icon: "ri-whatsapp-line", connected: false, note: "Needs a WhatsApp Business account. Until then, WhatsApp messages are recorded but not sent." },
-  { name: "Replies", icon: "ri-reply-line", connected: false, note: "Replies from people will appear in their conversation once inbound email and SMS are set up." },
-];
-
-function ChannelsStatus() {
-  return <section className="grid gap-3 md:grid-cols-2">{CHANNEL_STATUS.map(c =>
-    <article key={c.name} className="rounded-xl border border-background-200 bg-background-50 p-4">
-      <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 font-semibold"><i className={c.icon} aria-hidden="true" />{c.name}</h2>
-        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${c.connected ? "bg-primary-100 text-primary-800" : "bg-background-200 text-foreground-600"}`}>{c.connected ? "Connected" : "Not connected yet"}</span></div>
-      <p className="mt-2 text-sm text-foreground-600">{c.note}</p>
-    </article>)}</section>;
 }

@@ -10,7 +10,7 @@ type Person = { kind: Kind; ref: string; name: string; email: string | null; pho
 type ConversationRow = { id: string; kind: Kind; ref: string | null; name: string; email: string | null; phone: string | null; lastMessageAt: string | null; createdAt: string;
   last: { channel: SendChannel; direction: "in" | "out"; text: string; at: string } | null };
 type Item = { id: string; source: "hub" | "automatic"; direction: "in" | "out"; channel: SendChannel; subject: string; body: string; to: string | null; by: string | null;
-  template: string | null; at: string; status: "sending" | "sent" | "failed" | "not_sent" | "not_connected" | "recorded" | "received" };
+  template: string | null; at: string; status: "sending" | "sent" | "failed" | "not_sent" | "not_connected" | "recorded" | "received"; reason?: string | null };
 type Thread = { conversation: { id: string; kind: Kind; ref: string | null; name: string; email: string | null; phone: string | null }; items: Item[] };
 type Tpl = { key: string; name: string; category: string; subject: string; body: string; channels: Channel[] };
 
@@ -21,10 +21,9 @@ const CHANNEL_META: Record<SendChannel, { label: string; icon: string }> = {
 };
 const STATUS_LABELS: Record<Item["status"], { label: string; tone: "primary" | "muted" | "warn" | "secondary" }> = {
   sending: { label: "Sending…", tone: "secondary" }, sent: { label: "Sent", tone: "primary" }, failed: { label: "Not delivered", tone: "warn" },
-  not_sent: { label: "Not sent (opted out)", tone: "muted" }, not_connected: { label: "Recorded – channel not connected yet", tone: "muted" },
+  not_sent: { label: "Not sent (opted out)", tone: "muted" }, not_connected: { label: "Recorded only (channel was not connected)", tone: "muted" },
   recorded: { label: "Note", tone: "muted" }, received: { label: "Reply", tone: "secondary" },
 };
-const CONNECTED: Record<SendChannel, boolean> = { email: true, sms: false, whatsapp: false, note: true };
 const INSTITUTION = "Skyline Institute of Technology";
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
@@ -125,6 +124,14 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
   const [error, setError] = useState("");
   const [templates, setTemplates] = useState<Tpl[]>([]);
   const [channel, setChannel] = useState<SendChannel>("email");
+  // Only channels whose account is connected (Communication Hub > Channels) can be used; an internal note is always available.
+  const [available, setAvailable] = useState<SendChannel[]>(["email", "note"]);
+  useEffect(() => {
+    void supabase.rpc("comm_channels_status").then(({ data }) => {
+      const on = ((data ?? []) as { channel: string; connected: boolean }[]).filter((x) => x.connected).map((x) => x.channel);
+      setAvailable((["email", "sms", "whatsapp"] as SendChannel[]).filter((c) => on.includes(c)).concat("note"));
+    });
+  }, []);
   const [templateKey, setTemplateKey] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -172,7 +179,7 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
     const { error } = await supabase.rpc("comm_send", { p_conversation: c.id, p_channel: channel, p_subject: channel === "email" ? subject : "", p_body: body, p_template_key: templateKey || null });
     setSending(false);
     if (error) { push(`Not sent: ${error.message}`, "error"); return; }
-    push(channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : `${CHANNEL_META[channel].label} is not connected yet – the message was recorded.`);
+    push(channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : `${CHANNEL_META[channel].label} sent – it will show as Sent or Not delivered in a moment.`);
     setBody(""); setSubject(""); setTemplateKey("");
     await load(); onSent();
   };
@@ -205,6 +212,7 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
                 <Badge tone={STATUS_LABELS[m.status].tone}>{STATUS_LABELS[m.status].label}</Badge>
               </div>
               {m.subject ? <p className="font-semibold text-foreground-900">{m.subject}</p> : null}
+              {m.status === "failed" && m.reason ? <p className="mb-1 text-xs text-primary-800">Not delivered: {m.reason}</p> : null}
               {m.body ? <p className="whitespace-pre-wrap text-foreground-800">{long && expanded !== m.id ? `${m.body.slice(0, 400)}…` : m.body}</p> : null}
               {long ? <button type="button" className="mt-1 text-xs font-medium text-primary-700 underline" onClick={() => setExpanded(expanded === m.id ? null : m.id)}>{expanded === m.id ? "Show less" : "Show all"}</button> : null}
             </article>
@@ -215,14 +223,14 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
 
       <div className="space-y-2 border-t border-background-200 p-3">
         <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Send by">
-          {(["email", "sms", "whatsapp", "note"] as SendChannel[]).map((ch) => (
+          {available.map((ch) => (
             <button key={ch} type="button" role="radio" aria-checked={channel === ch} onClick={() => { setChannel(ch); setTemplateKey(""); }}
               className={`rounded-md px-3 py-1.5 text-sm font-medium ${channel === ch ? "bg-primary-500 text-white" : "border border-background-200 text-foreground-700"}`}>
-              <i className={`${CHANNEL_META[ch].icon} mr-1`} aria-hidden="true" />{CHANNEL_META[ch].label}{CONNECTED[ch] ? "" : " (not connected)"}
+              <i className={`${CHANNEL_META[ch].icon} mr-1`} aria-hidden="true" />{CHANNEL_META[ch].label}
             </button>
           ))}
         </div>
-        {!CONNECTED[channel] ? <p className="text-xs text-foreground-600">{CHANNEL_META[channel].label} isn't connected yet. The message will be saved in this conversation but not sent.</p> : null}
+        {available.length <= 2 ? <p className="text-xs text-foreground-600">Only email is connected. Connect SMS or WhatsApp in the Channels tab to use them here.</p> : null}
         {channel === "email" && !c.email ? <p className="text-xs text-primary-800">This person has no email address.</p> : null}
         {(channel === "sms" || channel === "whatsapp") && !c.phone ? <p className="text-xs text-primary-800">This person has no phone number.</p> : null}
         <div className="grid gap-2 sm:grid-cols-2">
@@ -238,7 +246,7 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-foreground-500">{sms ? `${sms.characters} characters · ${sms.segments} SMS part${sms.segments === 1 ? "" : "s"}` : channel === "email" ? `To ${c.email ?? "—"}` : ""}</span>
           <Button icon={channel === "note" ? "ri-save-line" : "ri-send-plane-2-line"} disabled={sending || blocked} onClick={() => void send()}>
-            {sending ? "Sending…" : channel === "note" ? "Save note" : CONNECTED[channel] ? "Send" : "Record message"}
+            {sending ? "Sending…" : channel === "note" ? "Save note" : "Send"}
           </Button>
         </div>
       </div>

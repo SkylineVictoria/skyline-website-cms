@@ -4,7 +4,10 @@ import AddUnitsFromTga from "./AddUnitsFromTga";
 import { UnitDetail } from "./UnitTgaList";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
-const inputClass = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
+/** Filled from Training.gov.au or calculated: shown greyed out, not typed in. */
+const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-600";
+/** Hours SLIT enters by hand: white, outlined, bold, so they stand out from the greyed fields. */
+const hoursInputClass = "w-full rounded-lg border-2 border-primary-300 bg-background-50 px-3 py-2 text-base font-semibold text-foreground-950 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:border-background-200 disabled:bg-background-100";
 const HOUR_PARTS = [["theoryHours", "Theory hrs", "40%"], ["practicalHours", "Practical hrs", "40%"], ["assessmentHours", "Assessment hrs", "20%"]] as const;
 export default function LmsUnitsPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
@@ -14,7 +17,7 @@ export default function LmsUnitsPage() {
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details">("content");
+  const [drawerTab, setDrawerTab] = useState<"content" | "details">("details");
   const [hours, setHours] = useState<Record<string, UnitHours>>({});
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
@@ -75,7 +78,7 @@ export default function LmsUnitsPage() {
     const shown = hoursOf(entry.unit);
     setSelected(entry); setAdding(false); setDraft({...entry.unit}); setNotice("");
     setHoursDraft(shown ? { slitHours: shown.slitHours, theoryHours: shown.theoryHours, practicalHours: shown.practicalHours, assessmentHours: shown.assessmentHours } : null);
-    setDrawerTab(!entry.unit.id || (canEdit && !shown?.confirmed) ? "details" : "content");
+    setDrawerTab("details");
   };
   const hoursSum = hoursDraft ? hoursDraft.theoryHours + hoursDraft.practicalHours + hoursDraft.assessmentHours : 0;
   const hoursValid = !!hoursDraft && [hoursDraft.slitHours, hoursDraft.theoryHours, hoursDraft.practicalHours, hoursDraft.assessmentHours]
@@ -162,10 +165,10 @@ export default function LmsUnitsPage() {
         {canEdit ? <div className="flex flex-wrap items-center gap-2">{(() => {
           const pending = (details.find(d => d.course.id === selectedCourse.id)?.units ?? [])
             .filter(u => u.isActive && u.id && u.nominalHours !== null && !hours[u.id]?.confirmedAt);
-          return pending.length && !hoursError.includes("migration") ? <button type="button" disabled={hoursBusy} onClick={() => void acceptAllSuggested(pending)}
-            title="Save the suggested 40% theory, 40% practical and 20% assessment split of the nominal hours for every unit not yet reviewed"
-            className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">
-            {hoursBusy ? "Accepting…" : `Accept suggested hours (${pending.length})`}</button> : null;
+          return <button type="button" disabled={hoursBusy || !pending.length} onClick={() => void acceptAllSuggested(pending)}
+            title="For every unit not yet accepted: SLIT hours = nominal hours, split 40% theory, 40% practical, 20% assessment"
+            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:border-background-300 disabled:bg-transparent disabled:text-foreground-500">
+            {hoursBusy ? "Accepting…" : pending.length ? `Accept nominal hours for all units (${pending.length})` : "All unit hours accepted"}</button>;
         })()}
           <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add units</button></div> : null}
       </div>
@@ -225,33 +228,39 @@ export default function LmsUnitsPage() {
           <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div role="tablist" className="flex gap-5 border-b border-background-200 px-6">
-          {([["content","Training.gov.au"],["details","Details"]] as const).filter(([id]) => id !== "content" || draft.id).map(([id, label]) =>
+          {([["details","Details"],["content","Training.gov.au"]] as const).filter(([id]) => id !== "content" || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
               className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
-          {drawerTab==="details" ? <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2">
-            {([{key:"code",label:"Unit code"},{key:"name",label:"Unit name"}] as const).map(f=><label key={f.key} className={"block text-sm font-medium text-foreground-800" + (f.key === "name" ? " sm:col-span-2" : "")}>{f.label}
-              <input disabled={!canEdit} className={inputClass + " mt-1"} value={draft[f.key]} onChange={e=>setDraft(d=>d?{...d,[f.key]:e.target.value}:d)}/></label>)}
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground-800"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>
+          {drawerTab==="details" ? <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
+            <label className="block text-xs font-medium text-foreground-500">Unit code<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.code} /></label>
+            <label className="block text-xs font-medium text-foreground-500">Unit name<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.name} /></label>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground-800 sm:col-span-2"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>
           </div>
-          {draft.id ? <div className="space-y-4 border-t border-background-200 pt-5">
-            <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Hours</h3>
-            {(() => { const shown = hoursOf(draft); return shown && !shown.confirmed ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Suggested from the {draft.nominalHours} Training.gov.au nominal hours: 40% theory, 40% practical and 20% assessment. Change them if needed, then accept.</p>
-              : shown?.confirmed ? <p className="text-sm text-foreground-600">Reviewed {new Date(hours[draft.id]?.confirmedAt ?? "").toLocaleDateString()}.</p> : null; })()}
-            <div className="grid gap-4 sm:grid-cols-2">
+          {draft.id ? <div className="space-y-3 border-t border-background-200 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Hours</h3>
+              {(() => { const shown = hoursOf(draft); return shown && !shown.confirmed
+                ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Suggested · review and accept</span>
+                : shown?.confirmed ? <span className="text-xs text-foreground-500">Accepted {new Date(hours[draft.id]?.confirmedAt ?? "").toLocaleDateString()}</span> : null; })()}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
               <label className="block text-sm font-medium text-foreground-800">SLIT hours
-                <input disabled={!canEdit} type="number" min="0" step="1" className={inputClass + " mt-1"} value={hoursDraft?.slitHours ?? ""}
+                <input disabled={!canEdit} type="number" min="0" step="1" className={hoursInputClass + " mt-1"} value={hoursDraft?.slitHours ?? ""}
                   onChange={e => { const v = e.target.value; setHoursDraft(v === "" ? null : suggestHours(Number(v))); }} /></label>
-              <div className="text-sm font-medium text-foreground-800">Duration
-                <p className="mt-1 rounded-lg bg-background-100 px-3 py-2 text-foreground-950">{hoursDraft
-                  ? <>{weeksForHours(hoursDraft.slitHours)} week{weeksForHours(hoursDraft.slitHours) === 1 ? "" : "s"} <span className="text-foreground-500">({hoursDraft.slitHours} hrs ÷ {HOURS_PER_WEEK} a week)</span></>
-                  : <>{draft.defaultWeeks} weeks</>}</p></div>
-              {HOUR_PARTS.map(([key, label, pct]) => <label key={key} className="block text-sm font-medium text-foreground-800">{label} <span className="font-normal text-foreground-500">(default {pct})</span>
-                <input disabled={!canEdit || !hoursDraft} type="number" min="0" step="1" className={inputClass + " mt-1"} value={hoursDraft?.[key] ?? ""}
+              <div className="block text-xs font-medium text-foreground-500">Nominal hours (Training.gov.au)
+                <div className="mt-1 flex gap-2"><input readOnly tabIndex={-1} className={readOnlyClass} value={draft.nominalHours ?? "—"} />
+                  {canEdit && draft.nominalHours !== null ? <button type="button" title="Set SLIT hours to the nominal hours and split them 40 / 40 / 20"
+                    onClick={() => setHoursDraft(suggestHours(draft.nominalHours as number))}
+                    className="shrink-0 rounded-lg border border-background-300 px-2 text-xs font-semibold text-foreground-800 hover:bg-background-100">Use</button> : null}</div></div>
+              <label className="block text-xs font-medium text-foreground-500">Duration ({HOURS_PER_WEEK} hrs a week)
+                <input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"}
+                  value={hoursDraft ? `${weeksForHours(hoursDraft.slitHours)} week${weeksForHours(hoursDraft.slitHours) === 1 ? "" : "s"}` : `${draft.defaultWeeks} weeks`} /></label>
+              {HOUR_PARTS.map(([key, label, pct]) => <label key={key} className="block text-sm font-medium text-foreground-800">{label} <span className="text-xs font-normal text-foreground-500">({pct})</span>
+                <input disabled={!canEdit || !hoursDraft} type="number" min="0" step="1" className={hoursInputClass + " mt-1"} value={hoursDraft?.[key] ?? ""}
                   onChange={e => { const v = e.target.value === "" ? 0 : Number(e.target.value); setHoursDraft(h => h ? { ...h, [key]: v } : h); }} /></label>)}
             </div>
             {hoursDraft ? <div className="flex flex-wrap items-center gap-3 text-sm">

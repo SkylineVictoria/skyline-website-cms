@@ -10,6 +10,8 @@ export interface OpenIntake { id: string | null; courseId: string; startDate: st
 export const intakeKey = (id: string | null | undefined, label: string | null | undefined) => (id ? id : label ? `month:${label}` : "");
 
 const cache = new Map<string, Promise<OpenIntake[]>>();
+/** Drops a course's cached list (an intake was just added), so the next load asks the database again. */
+export const forgetIntakes = (courseId: string) => { cache.delete(courseId.trim()); };
 /** Open intakes of a course (its CMS id, or its slug for the static course list). Cached per page load; a failure is not cached. */
 export function openIntakes(courseId: string): Promise<OpenIntake[]> {
   const key = courseId.trim();

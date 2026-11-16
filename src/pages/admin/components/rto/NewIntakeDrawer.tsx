@@ -18,12 +18,17 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: "the next free Monday" };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, zIndex }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
+  /** Opened from a course (or the enrolment wizard): the course is fixed and not shown as a choice. */
   courseId?: string;
   onCreated: (detail: IntakeDetail, addBatch: boolean) => void;
+  /** "Create & add batch" is for the LMS pages; the enrolment wizard only creates the intake. */
+  allowBatch?: boolean;
+  /** Stacking layer when opened over another dialog (the wizard). */
+  zIndex?: string;
 }) {
   const [chosen, setChosen] = useState(courseId ?? "");
   const [course, setCourse] = useState<CourseDetail | null>(null);
@@ -66,10 +71,10 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   };
 
   return (
-    <Drawer open={open} title="New intake" onClose={onClose}
+    <Drawer open={open} title="New intake" onClose={onClose} zIndex={zIndex}
       footer={<>
-        <Button variant="outline" disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
-        <Button disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
+        <Button variant={allowBatch ? "outline" : undefined} disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : "Create"}</Button>
+        {allowBatch ? <Button disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (

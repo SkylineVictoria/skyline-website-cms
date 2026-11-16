@@ -42,6 +42,7 @@ export async function previewFetch(view: PreviewView, input: Parameters<typeof f
     if (rpc === "hr_optional_holidays_my") return json({ profileId: id, year: new Date().getFullYear(), allowance: 0, isPaid: false, used: 0, remaining: 0, today: today(), holidays: [], requests: [] });
   }
   // Only explicitly reviewed list tables. Never turn arbitrary operations into successes.
+  if (request.method === "GET" && url.pathname === "/rest/v1/notification_sms_contacts") return json(null);
   const table = url.pathname.match(/^\/rest\/v1\/([^/]+)$/)?.[1];
   if (request.method === "GET" && table && ["portal_notifications", "notification_preferences", "portal_email_preferences", "enrollment_applications", "enrollment_application_documents"].includes(table)) return json([]);
   return json({ message: PREVIEW_READ_ONLY, code: "PREVIEW_READ_ONLY", error: PREVIEW_READ_ONLY }, 403);

@@ -9,7 +9,10 @@ import {
 } from "@/pages/admin/lib/rto";
 
 /** A panel that slides in from the right; used instead of new pages for create and edit. */
-export function Drawer({ open, title, onClose, children, footer, width = "max-w-lg" }: { open: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: string }) {
+export function Drawer({ open, title, onClose, children, footer, width = "max-w-lg", zIndex = "z-50" }: {
+  open: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: string;
+  /** The stacking layer (a drawer opened over a portal dialog needs a higher one, e.g. "z-[100]"). */ zIndex?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -25,7 +28,7 @@ export function Drawer({ open, title, onClose, children, footer, width = "max-w-
   if (!open) return null;
   // Rendered on <body>, so a drawer opened from a sliding sheet covers the screen, not the sheet.
   return createPortal(
-    <div ref={ref} className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={title}>
+    <div ref={ref} className={`fixed inset-0 ${zIndex} flex justify-end`} role="dialog" aria-modal="true" aria-label={title}>
       <button type="button" aria-label="Close" className="modal-backdrop-in absolute inset-0 cursor-default bg-foreground-950/30" onClick={onClose} />
       <div className={`drawer-in relative flex h-full w-full ${width} flex-col bg-background-50 shadow-xl`}>
         <div className="flex items-center justify-between border-b border-background-200 px-5 py-4">

@@ -21,6 +21,7 @@ const icons: Record<string, string> = {
   website: 'ri-global-line', admissions: 'ri-file-list-line', agencies: 'ri-team-line',
   communications: 'ri-mail-line', students: 'ri-user-line', external: 'ri-external-link-line', jobs: 'ri-briefcase-line',
   time: 'ri-time-line', leave: 'ri-calendar-event-line', pay: 'ri-money-dollar-circle-line', calendar: 'ri-calendar-2-line', export: 'ri-download-cloud-2-line',
+  finance: 'ri-wallet-3-line', payments: 'ri-bank-card-line',
 };
 export const menuIcon = (key: string) => Object.hasOwn(icons, key) ? icons[key] : 'ri-folder-line';
 
@@ -35,6 +36,7 @@ const routes = new Set([
   '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/course-fees', '/admin/intakes', '/admin/classrooms', '/admin/tickets', '/admin/bookings', '/admin/assessments', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
   STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH, STAFF_LOCATIONS_PATH,
   '/admin/signing', '/admin/signing/templates', '/admin/signing/sent', '/admin/signing/partial', '/admin/signing/signed', '/admin/signing/declined', '/admin/signing/expired', '/admin/signing/void', // Sign child routes
+  '/admin/finance/payments', // Finance group (admin_menu_items 'finance' / 'finance_payments')
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

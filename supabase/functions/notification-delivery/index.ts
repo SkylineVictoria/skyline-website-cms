@@ -2,21 +2,38 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { authorizeWorker, dispatchBatch, selectEmailProvider, type ClaimedDelivery, type DeliveryPort } from "../_shared/notification/delivery.ts";
+import { dispatchSmsBatch, selectSmsProvider, type SmsDeliveryPort } from "../_shared/notification/sms.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const providerConfig: Record<string, string> = {};
-for (const name of ["EF_NOTIFICATION_EMAIL_ENABLED", "EF_POSTMARK_SERVER_TOKEN"]) providerConfig[name] = Deno.env.get(name) ?? "";
+for (const name of ["EF_NOTIFICATION_EMAIL_ENABLED", "EF_POSTMARK_SERVER_TOKEN", "EF_NOTIFICATION_SMS_ENABLED", "EF_CLICKSEND_USERNAME", "EF_CLICKSEND_API_KEY", "EF_CLICKSEND_SENDER_ID"]) providerConfig[name] = Deno.env.get(name) ?? "";
 
 const headers = { "Content-Type": "application/json" };
 const reply = (body: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { ...headers, ...extra } });
 const BATCH = 10;
 
 async function worker() {
-  // Nothing is claimed unless sending is enabled and fully configured; values are never echoed.
+  // Nothing is claimed on a channel unless it is enabled and fully configured; values are never echoed. Email and SMS are independent:
+  // with neither configured the reply is the same 503 as before (naming the email variables), so existing monitoring is unchanged.
   const selection = selectEmailProvider(providerConfig);
-  if (!selection.provider) return reply({ error: "Edge Function configuration is unavailable.", code: selection.unavailable.code, variables: selection.unavailable.variables }, 503);
+  const smsSelection = selectSmsProvider(providerConfig);
+  if (!selection.provider && !smsSelection.provider) return reply({ error: "Edge Function configuration is unavailable.", code: selection.unavailable.code, variables: selection.unavailable.variables }, 503);
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+  const smsPort: SmsDeliveryPort = {
+    claim: async () => {
+      const { data, error } = await admin.rpc("notification_claim_sms_delivery");
+      if (error) throw new Error("sms claim");
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return null;
+      return { id: String(row.id), leaseToken: String(row.lease_token), phone: String(row.phone ?? ""), body: String(row.body ?? ""), attempt: Number(row.attempt_count ?? 1) };
+    },
+    record: async (d, outcome, messageId, errorCode, retry, delay) => {
+      const { data, error } = await admin.rpc("notification_record_sms_attempt", { p_id: d.id, p_lease: d.leaseToken, p_outcome: outcome, p_message_id: messageId, p_error: errorCode, p_retry: retry, p_delay: delay });
+      if (error) throw new Error("sms record");
+      return data === true;
+    },
+  };
   const port: DeliveryPort = {
     claim: async () => {
       const { data, error } = await admin.rpc("notification_claim_delivery");
@@ -62,7 +79,9 @@ async function worker() {
     },
   };
   try {
-    return reply({ ok: true, ...(await dispatchBatch(port, selection.provider, BATCH)) });
+    const email = selection.provider ? await dispatchBatch(port, selection.provider, BATCH) : null;
+    const sms = smsSelection.provider ? await dispatchSmsBatch(smsPort, smsSelection.provider, BATCH) : null;
+    return reply({ ok: true, ...(email ?? { email: "disabled" }), sms: sms ?? "disabled" });
   } catch {
     // A claimed delivery whose outcome could not be stored becomes 'unknown' when its lease expires; it is never resent.
     return reply({ ok: false, error: "Delivery run stopped unexpectedly." }, 500);

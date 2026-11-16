@@ -8,13 +8,18 @@ interface Props {
   disabled?: boolean;
   /** Only one course may be chosen: picking another replaces it. */
   single?: boolean;
+  /** Labels saved on an old draft that are no longer offered: shown as selected with a hint, never offered in the search. */
+  legacy?: string[];
+  /** Shown instead of the search box when there is nothing to choose from. */
+  emptyMessage?: string;
 }
 
 /**
  * Searchable course picker. The real inputs stay hidden checkboxes (one per course), so saving, restoring a draft and
  * the required-field check keep working unchanged; this only replaces the long tick list with a search box and chips.
  */
-export default function CourseSearchField({ name, options, disabled, single }: Props) {
+export default function CourseSearchField({ name, options, disabled, single, legacy = [], emptyMessage = "No active courses are available" }: Props) {
+  const current = useMemo(() => options.filter((option) => !legacy.includes(option)), [options, legacy]);
   const boxRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -50,8 +55,8 @@ export default function CourseSearchField({ name, options, disabled, single }: P
 
   const matches = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    return options.filter((option) => !selected.includes(option) && words.every((word) => option.toLowerCase().includes(word))).slice(0, 12);
-  }, [options, query, selected]);
+    return current.filter((option) => !selected.includes(option) && words.every((word) => option.toLowerCase().includes(word))).slice(0, 12);
+  }, [current, query, selected]);
 
   const choose = (option: string) => {
     if (single) for (const box of boxes()) if (box.checked && box.value !== option) setChecked(box.value, false);
@@ -65,8 +70,9 @@ export default function CourseSearchField({ name, options, disabled, single }: P
       {selected.length ? (
         <ul className="mb-2 flex flex-wrap gap-2" aria-label="Selected courses">
           {selected.map((option) => (
-            <li key={option} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary-200 bg-primary-50 py-1 pl-3 pr-1 text-xs font-medium text-primary-900">
+            <li key={option} data-testid={legacy.includes(option) ? "course-chip-legacy" : "course-chip"} className={`inline-flex max-w-full items-center gap-1.5 rounded-full border py-1 pl-3 pr-1 text-xs font-medium ${legacy.includes(option) ? "border-amber-300 bg-amber-50 text-amber-900" : "border-primary-200 bg-primary-50 text-primary-900"}`}>
               <span className="truncate">{option}</span>
+              {legacy.includes(option) ? <span className="shrink-0 text-2xs font-normal">· no longer offered, choose a current course</span> : null}
               {disabled ? null : (
                 <button
                   type="button"
@@ -90,8 +96,9 @@ export default function CourseSearchField({ name, options, disabled, single }: P
             // No name: the search text itself is never saved.
             autoComplete="off"
             value={query}
-            placeholder={single && selected.length ? "Search to change the course" : options.length ? "Search courses by code or name, e.g. BSB50120 or Diploma of Business" : "No active courses are available"}
-            disabled={!options.length}
+            placeholder={!current.length ? emptyMessage : single && selected.length ? "Search to change the course" : "Search courses by code or name, e.g. BSB50120 or Diploma of Business"}
+            disabled={!current.length}
+            data-testid={`${name}-search`}
             role="combobox"
             aria-expanded={open && matches.length > 0}
             aria-controls={`${name}-results`}
@@ -126,6 +133,7 @@ export default function CourseSearchField({ name, options, disabled, single }: P
           {open && query.trim() && !matches.length ? (
             <p className="mt-1 text-xs text-foreground-500">No active course matches “{query.trim()}”.</p>
           ) : null}
+          {!current.length ? <p className="mt-1 text-xs text-primary-700" role="alert" data-testid={`${name}-empty`}>{emptyMessage}</p> : null}
         </div>
       )}
 

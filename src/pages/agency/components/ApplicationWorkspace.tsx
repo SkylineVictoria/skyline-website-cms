@@ -14,8 +14,9 @@ import {
   COURSE_FIELD,
   LOCKED_AGENT_FIELDS,
   portalSections,
-  resolveCourseOption,
+  staffCourseLabel,
 } from "@/pages/agency/lib/portalSections";
+import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
 import {
   listInstitutionCourses,
   flushApplicationEdits,
@@ -210,15 +211,35 @@ export default function ApplicationWorkspace({
   reviewBar,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
-  const [courseOptions, setCourseOptions] = useState<ApplicationCourseRow[]>([]);
-  const sections = useMemo(() => application.tenantId ? portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseOptions.map(course => course.code + " - " + course.title) } : field) })) : portalSections, [application.tenantId, courseOptions]);
-  useEffect(() => { if (application.tenantId) void listInstitutionCourses().then(setCourseOptions).catch(e => setSaveError(e.message)); }, [application.tenantId]);
-  const resolveCourse = useCallback((label: string) => {
-    if (!application.tenantId) return resolveCourseOption(label);
-    const course = courseOptions.find(item => item.code + " - " + item.title === label);
-    if (!course) throw new Error("This course is no longer available. Reload the application.");
+  // The courses on offer, by their CMS id: rto_admin course_list for staff (every status), portal_course_options for agents and students
+  // (Published, or with an open intake). null while loading. No static catalogue.
+  const [courseChoices, setCourseChoices] = useState<{ label: string; row: ApplicationCourseRow }[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
+      const choices = me
+        ? (await rto<RtoCourse[]>("course_list")).filter(c => c.code?.trim() && c.name?.trim())
+          .map(c => ({ label: staffCourseLabel(c), row: { courseId: c.id, code: c.code, title: c.name, variant: c.variantLabel ?? c.duration ?? "" } }))
+        : (await listInstitutionCourses()).map(row => ({ label: `${row.code} - ${row.title}`, row }));
+      if (live) setCourseChoices(choices);
+    })().catch(e => { if (live) { setCourseChoices([]); setSaveError(e instanceof Error ? e.message : "The courses could not be loaded."); } });
+    return () => { live = false; };
+  }, []);
+  // A course saved on the draft that is not on offer any more still shows as selected (read-only, with a hint), so the draft stays readable.
+  const legacyCourses = useMemo(() => {
+    const saved = ((application.data as { values?: DraftValues } | null)?.values?.[COURSE_FIELD] as string[] | undefined) ?? [];
+    return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label)) : [];
+  }, [application.data, courseChoices]);
+  const courseLabels = useMemo(() => courseChoices ? [...courseChoices.map(c => c.label), ...legacyCourses] : [], [courseChoices, legacyCourses]);
+  const sections = useMemo(() => portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseLabels } : field) })), [courseLabels]);
+  const resolveCourse = useCallback((label: string): ApplicationCourseRow => {
+    const course = courseChoices?.find(item => item.label === label)?.row
+      // An old draft's course keeps the row (and id) the application already holds.
+      ?? application.courses?.find(item => `${item.code} - ${item.title}` === label);
+    if (!course) throw new Error("This course is no longer offered. Choose a current course.");
     return course;
-  }, [application.tenantId, courseOptions]);
+  }, [courseChoices, application.courses]);
   const reviewIndex = sections.length;
 
   const storedValues = useMemo<DraftValues>(() => {
@@ -367,9 +388,9 @@ export default function ApplicationWorkspace({
   const initialCoursesRef = useRef(storedValues[COURSE_FIELD] ?? []);
 
   useEffect(() => {
-    if (!courseOptions.length || !formRef.current) return;
+    if (!courseLabels.length || !formRef.current) return;
     applyFormValues(formRef.current, { [COURSE_FIELD]: initialCoursesRef.current });
-  }, [courseOptions]);
+  }, [courseLabels]);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -1569,7 +1590,8 @@ export default function ApplicationWorkspace({
             onDelete={deleteAttachment}
           />
         ) : field.name === COURSE_FIELD ? (
-          <CourseSearchField name={field.name} options={field.options ?? []} disabled={locked} single />
+          <CourseSearchField name={field.name} options={field.options ?? []} legacy={legacyCourses} disabled={locked} single
+            emptyMessage={courseChoices === null ? "Loading courses…" : "No courses are open for applications yet. Contact admissions."} />
         ) : field.name === "preferred_intake" ? (
           <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
             courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}

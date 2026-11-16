@@ -5,10 +5,13 @@ import { fmtDate, fromLocalInput, toLocalInput } from "@/lib/assessment/api";
 import StudentPicker from "@/pages/admin/components/rto/StudentPicker";
 import UnitDocumentsPanel from "./UnitDocumentsPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type StaffOption } from "@/pages/admin/lib/rto";
+import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
+import { supabase } from "@/pages/admin/lib/supabase";
+import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type IntakeDetail, type StaffOption } from "@/pages/admin/lib/rto";
 
-/** Dedicated allocation screen, backed by the existing CRM enrolment and HRMS trainer APIs. */
-export default function LmsBatchAllocationPage() {
+/** One Batches screen: pick course > intake > batch, then manage its students, unit dates and unit trainers, batch trainers and
+ * assessments. Backed by the existing RTO, CRM enrolment and HRMS trainer APIs (formerly two screens: Batches and Batch Allocation). */
+export default function LmsBatchesPage() {
   const { push } = useToast();
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
@@ -22,7 +25,13 @@ export default function LmsBatchAllocationPage() {
   const [intakeSearch, setIntakeSearch] = useState("");
   const [batchSearch, setBatchSearch] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
-  const [tab, setTab] = useState<"students" | "trainers" | "assessments">("students");
+  const [tab, setTab] = useState<"students" | "units" | "trainers" | "assessments">("students");
+  const [unitTrainers, setUnitTrainers] = useState<Record<string, string>>({});
+  const [savingUnit, setSavingUnit] = useState("");
+  const [rtoManager, setRtoManager] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState<IntakeDetail | null>(null);
   const [assessmentOptions, setAssessmentOptions] = useState<AssessmentRow[]>([]);
   const [assessmentAssignments, setAssessmentAssignments] = useState<AssignmentRow[]>([]);
   const [assessmentId, setAssessmentId] = useState("");
@@ -43,8 +52,8 @@ export default function LmsBatchAllocationPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([rto<RtoCourse[]>("course_list"), rto<RtoIntake[]>("intake_list")])
-      .then(([c, i]) => { if (active) { setCourses(c); setIntakes(i); setCourseId(c[0]?.id ?? ""); } })
+    Promise.all([rto<RtoCourse[]>("course_list"), rto<RtoIntake[]>("intake_list"), rto<{ rtoManager: boolean }>("me")])
+      .then(([c, i, me]) => { if (active) { setCourses(c); setIntakes(i); setRtoManager(!!me.rtoManager); setCourseId(c[0]?.id ?? ""); } })
       .catch(e => { if (active) setError(e instanceof Error ? e.message : "Unable to load academic records"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -61,6 +70,50 @@ export default function LmsBatchAllocationPage() {
     catch (e) { setData(null); setError(e instanceof Error ? e.message : "Unable to load batch allocations"); }
   }, [batchId]);
   useEffect(() => { setData(null); void load(); }, [load]);
+  useEffect(() => {
+    setUnitTrainers({});
+    if (tab !== "units" || !batchId) return;
+    let active = true;
+    supabase.rpc("rto_batch_unit_trainers_get", { p_batch_id: batchId }).then(({ data: rows, error: e }) => {
+      if (active) { if (e) setError(e.message); else setUnitTrainers((rows ?? {}) as Record<string, string>); }
+    });
+    return () => { active = false; };
+  }, [tab, batchId]);
+  const reloadIntakes = async () => { try { setIntakes(await rto<RtoIntake[]>("intake_list")); } catch (e) { setError(e instanceof Error ? e.message : "Unable to reload intakes"); } };
+  const setUnitTrainer = async (unitId: string, trainerId: string) => {
+    if (!batchId) return;
+    setSavingUnit(unitId); setError("");
+    try {
+      const { error: e } = await supabase.rpc("rto_batch_unit_trainer", { p_batch_id: batchId, p_intake_unit_id: unitId, p_staff_id: trainerId || null });
+      if (e) throw e;
+      setUnitTrainers(prev => ({ ...prev, [unitId]: trainerId }));
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save trainer"); }
+    finally { setSavingUnit(""); }
+  };
+  const saveUnitDates = async (unitId: string, startDate: string, endDate: string) => {
+    if (!batchId || !startDate || !endDate || startDate > endDate) { setError("End date must be on or after start date."); return; }
+    setSavingUnit(unitId); setError("");
+    try { await rtoFlow("batch_override_set", { batchId, intakeUnitId: unitId, startDate, endDate }); await load(); push("Unit dates saved", "success"); }
+    catch (e) { setError(e instanceof Error ? e.message : "Unable to save unit dates"); }
+    finally { setSavingUnit(""); }
+  };
+  const createBatch = async () => {
+    if (!intakeId || !newName.trim()) { setError("Enter a batch name."); return; }
+    setBusy(true); setError("");
+    try {
+      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: null, intakeId, name: newName.trim(), sessions: [] });
+      setAdding(false); setNewName("");
+      await reloadIntakes();
+      setBatchId(out.batchId);
+      push("Batch added", "success");
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to create batch"); }
+    finally { setBusy(false); }
+  };
+  const openEditor = async () => {
+    if (!intakeId) return;
+    try { setEditing(await rto<IntakeDetail>("intake_get", { intakeId })); }
+    catch (e) { setError(e instanceof Error ? e.message : "Unable to open the batch editor"); }
+  };
   useEffect(() => {
     if (tab !== "trainers" || !data?.rtoManager) return;
     let active = true;
@@ -205,10 +258,9 @@ export default function LmsBatchAllocationPage() {
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="font-heading text-2xl font-bold text-foreground-950">Batch Allocation</h1>
-        <p className="text-sm text-foreground-500">Students, trainers and assessments for each batch.</p>
+        <h1 className="font-heading text-2xl font-bold text-foreground-950">Batches</h1>
+        <p className="text-sm text-foreground-500">Students, unit dates, trainers and assessments for each batch.</p>
       </div>
-      <Link className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" to="/admin/lms/batches">Manage batches</Link>
     </header>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button className="ml-3 underline" onClick={() => { setError(""); void load(); }}>Retry</button></div>}
     <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -234,7 +286,13 @@ export default function LmsBatchAllocationPage() {
           {!availableIntakes.length && <p className={emptyRow}>No intakes for this course.</p>}
         </section>
         <section aria-label="Batch selection" className="border-t border-background-200 pt-3">
-          <h2 className={sectionHeading + " mb-2 px-1"}>Batches</h2>
+          <div className="mb-2 flex items-center justify-between gap-2 px-1"><h2 className={sectionHeading}>Batches</h2>
+            {rtoManager && intakeId && <button type="button" className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => setAdding(true)}>+ Add</button>}</div>
+          {adding && <div className="mb-2 space-y-2 rounded-lg bg-background-100 p-2">
+            <label className="block text-xs text-foreground-500">New batch name<input autoFocus value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. G1" className={inputClass + " mt-1"} /></label>
+            <div className="flex items-center gap-2"><button type="button" disabled={busy || !newName.trim()} onClick={() => void createBatch()} className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Add batch</button>
+              <button type="button" className="text-xs font-semibold text-foreground-600 hover:underline" onClick={() => { setAdding(false); setNewName(""); }}>Cancel</button></div>
+          </div>}
           {searchBox("Search batches", batchSearch, setBatchSearch)}
           <div className="mt-2 space-y-1">{batches.filter(b => b.name.toLowerCase().includes(batchSearch.toLowerCase())).map(b => <button key={b.id} type="button" aria-pressed={batchId === b.id} onClick={() => { setBatchId(b.id); setPicker(false); }} className={selectionClass(batchId === b.id)}>
             {dot(b.isActive, b.isActive ? "Active" : "Inactive")}
@@ -246,9 +304,12 @@ export default function LmsBatchAllocationPage() {
       </div>
       <section aria-label="Allocation workspace" className={card + " min-w-0 p-5"}>
         {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a batch.</p> : !current || data?.batch.id !== batchId ? <p className="py-10 text-center text-sm text-foreground-500">Loading allocations…</p> : <>
-          <div className="min-w-0">
-            <p className={sectionHeading}>Batch</p>
-            <h2 className="font-heading text-xl font-bold text-foreground-950">{current.name}</h2>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className={sectionHeading}>Batch</p>
+              <h2 className="font-heading text-xl font-bold text-foreground-950">{current.name}</h2>
+            </div>
+            {canEdit && <button type="button" className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={() => void openEditor()}>Edit batch timing</button>}
           </div>
           <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">
             {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
@@ -256,7 +317,7 @@ export default function LmsBatchAllocationPage() {
             </div>)}
           </dl>
           <div className="mt-5 flex gap-5 border-b border-background-200" role="tablist" aria-label="Allocation type">
-            {(["students", "trainers", "assessments"] as const).map(t => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t === "students" ? `Students (${students.length})` : t === "trainers" ? `Trainers (${current.trainers.length})` : "Assessments"}</button>)}
+            {(["students", "units", "trainers", "assessments"] as const).map(t => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t === "students" ? `Students (${students.length})` : t === "units" ? `Units & dates (${current.schedule?.length ?? 0})` : t === "trainers" ? `Trainers (${current.trainers.length})` : "Assessments"}</button>)}
           </div>
           <div className="pt-4">
           {tab === "students" ? <>
@@ -277,6 +338,23 @@ export default function LmsBatchAllocationPage() {
                 </tr>)}</tbody>
               </table>
             </div> : <p className="py-10 text-center text-sm text-foreground-500">No students assigned yet.</p>}
+          </> : tab === "units" ? <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
+                  <th className="px-3 py-2">Unit</th><th className="px-3 py-2">Start</th><th className="px-3 py-2">End</th><th className="px-3 py-2">Trainer</th><th className="px-3 py-2"><span className="sr-only">Actions</span></th>
+                </tr></thead>
+                <tbody>
+                  {(current.schedule ?? []).map(u => <UnitAllocationRow key={u.intakeUnitId} unit={u}
+                    disabled={!canEdit || busy || !!savingUnit} saving={savingUnit === u.intakeUnitId}
+                    trainers={current.trainers} trainerId={unitTrainers[u.intakeUnitId] ?? ""}
+                    onTrainerChange={id => void setUnitTrainer(u.intakeUnitId, id)}
+                    onSave={(start, end) => void saveUnitDates(u.intakeUnitId, start, end)} />)}
+                </tbody>
+              </table>
+              {!(current.schedule ?? []).length && <p className="py-10 text-center text-sm text-foreground-500">No units in this intake.</p>}
+            </div>
+            <p className="mt-2 text-xs text-foreground-500">A unit's trainer is chosen from the batch trainers (Trainers tab).</p>
           </> : tab === "trainers" ? <>
             {canEdit && <select aria-label="Assign trainer" className={inputClass + " sm:max-w-sm"} value="" disabled={busy} onChange={ev => { const id = ev.target.value; if (id) void save("batch_trainers_set", { batchId, trainerIds: [...current.trainers.map(t => t.id), id] }, "Trainer assigned"); }}><option value="">Add trainer…</option>{staff.filter(t => !current.trainers.some(a => a.id === t.id)).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}
             <ul className="mt-3">{current.trainers.map(t => <li key={t.id} className="flex items-center justify-between gap-2 border-b border-background-100 px-3 py-2 text-sm hover:bg-background-100"><span className="font-semibold text-foreground-950">{t.name}</span>{canEdit && <button type="button" disabled={busy} className={removeClass} onClick={() => void save("batch_trainers_set", { batchId, trainerIds: current.trainers.filter(x => x.id !== t.id).map(x => x.id) }, "Trainer removed")}>Remove</button>}</li>)}</ul>
@@ -349,8 +427,35 @@ export default function LmsBatchAllocationPage() {
         </>}
       </section>
     </div>
+      {editing && canEdit && <BatchTimingDrawer key={`${intakeId}:${batchId}`} intake={editing.intake} batches={editing.batches}
+        batch={editing.batches.find(b => b.id === batchId) ?? null}
+        onClose={() => setEditing(null)}
+        onSaved={out => { setEditing(null); setBatchId(out.batchId); void reloadIntakes(); void load(); push("Batch saved", "success"); }} />}
       {picker && data && current && <StudentPicker courseId={data.intake.courseId} batchId={batchId} rtoManager={canEdit}
         batches={[{ id: batchId, name: current.name, capacity: current.capacity, enrolled: students.length, studentIds: students.map(s => s.id) }]}
         onClose={() => setPicker(false)} onAdded={() => { setPicker(false); void load(); push("Students assigned", "success"); }} />}
   </div>;
+}
+
+function UnitAllocationRow({ unit, disabled, saving, trainers, trainerId, onTrainerChange, onSave }: {
+  unit: { intakeUnitId: string; code: string; name: string; startDate: string; endDate: string };
+  disabled: boolean; saving: boolean; trainers: { id: string; name: string }[]; trainerId: string; onTrainerChange: (id: string) => void; onSave: (start: string, end: string) => void;
+}) {
+  const [start, setStart] = useState(unit.startDate);
+  const [end, setEnd] = useState(unit.endDate);
+  useEffect(() => { setStart(unit.startDate); setEnd(unit.endDate); }, [unit.startDate, unit.endDate]);
+  const changed = start !== unit.startDate || end !== unit.endDate;
+  const field = "rounded-lg border border-background-300 bg-background-50 px-2 py-1.5 text-sm disabled:opacity-60";
+  return <tr className="border-b border-background-100 align-middle hover:bg-background-100">
+    <td className="max-w-[260px] px-3 py-2"><span className="block font-semibold text-foreground-950">{unit.code}</span><span className="block truncate text-xs text-foreground-600" title={unit.name}>{unit.name}</span></td>
+    <td className="px-3 py-2"><label><span className="sr-only">Start date</span><input type="date" value={start} disabled={disabled} onChange={e => setStart(e.target.value)} className={field} /></label></td>
+    <td className="px-3 py-2"><label><span className="sr-only">End date</span><input type="date" value={end} disabled={disabled} onChange={e => setEnd(e.target.value)} className={field} /></label></td>
+    <td className="px-3 py-2">
+      <select aria-label={`Trainer for ${unit.code}`} value={trainerId} disabled={disabled} onChange={e => onTrainerChange(e.target.value)} className={field + " min-w-[150px]"}>
+        <option value="">Select trainer…</option>
+        {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
+    </td>
+    <td className="px-3 py-2 text-right">{changed && <button type="button" disabled={disabled || !start || !end || start > end} onClick={() => onSave(start, end)} className="whitespace-nowrap rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save dates"}</button>}</td>
+  </tr>;
 }

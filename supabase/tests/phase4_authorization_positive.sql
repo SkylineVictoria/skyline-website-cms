@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(536);
+select plan(588);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1064,7 +1064,91 @@ select is(public.portal_student_find('stu.x@example.test')->0->>'id', 'ee000000-
 set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b2';
 select is(public.portal_student_find('agent.one@example.test'), '[{"taken": true}]'::jsonb, 'rule fix: an agent does not see an unassigned student of the business');
 select is(public.portal_student_find('', '+61400000111')->0->>'name', 'Stu X Again', 'rule fix: an agent finds their own student by mobile');
+-- OFFER-PAY-GATE (20261116220000): a letter with a deposit is accepted only by the verified Stripe payment; one without keeps signing = accepting.
 reset role;
+insert into hr.sign_requests(id, title, recipient_name, recipient_email, original_path, original_hash, state, created_by, reference, category, offer_letter_id) values
+ ('7a000000-0000-0000-0000-0000000000a1','Letter of Offer','Direct Student','direct.student@example.test','7a000000-0000-0000-0000-0000000000a1/original.pdf',repeat('a',64),'sent','33000000-0000-0000-0000-000000000002','SLIT-TEST-0001','student_offer_letter',(select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1)),
+ ('7a000000-0000-0000-0000-0000000000a2','Letter of Offer','Asha Patel','mismatch@example.test','7a000000-0000-0000-0000-0000000000a2/original.pdf',repeat('b',64),'sent','33000000-0000-0000-0000-000000000002','SLIT-TEST-0002','student_offer_letter',(select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1));
+update public.enrollment_offer_letters set payment_amount_cents=150000, payment_currency='aud', payment_description='Initial deposit', signing_request_id='7a000000-0000-0000-0000-0000000000a1' where application_id='43000000-0000-0000-0000-000000000036';
+update public.enrollment_offer_letters set signing_request_id='7a000000-0000-0000-0000-0000000000a2' where application_id='43000000-0000-0000-0000-000000000037';
+insert into public.payments(id, subject_type, subject_id, description, amount_cents, currency, timing, status) values ('7b000000-0000-0000-0000-0000000000b1','sign_request','7a000000-0000-0000-0000-0000000000a1','Initial deposit',150000,'aud','after_sign','pending');
+select is((select public.offer_letter_payment_required(l) from public.enrollment_offer_letters l where l.application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),true,'OFFER-PAY-GATE: a letter with a deposit and a live payment waits for the deposit');
+select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'signing a letter that asks for a deposit');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_issued','signing does not accept the offer while the deposit is unpaid');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(signed_at is not null)::text||'|'||(accepted_at is null)::text||'|'||coalesce(accepted_via,'')||'|'||(signed_content is not null)::text$q$),'true|true||true','the letter is signed and stored, not accepted');
+select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_signed' and (detail->>'awaiting_payment')::boolean),'the signing is in the audit log as awaiting the deposit');
+select ok(exists(select 1 from hr.sign_events where request_id='7a000000-0000-0000-0000-0000000000a1' and event='offer_signed_awaiting_payment'),'and in the signing history');
+select throws_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'P0001','This offer letter was already signed','a signed letter is not signed twice');
+select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted')::int,0,'no accept_offer history row before the deposit');
+update public.payments set status='paid', amount_cents=100000, amount_paid_cents=100000, paid_at=now() where id='7b000000-0000-0000-0000-0000000000b1';
+select lives_ok($$select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1')$$,'a paid amount that differs from the letter is handled without error');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is null)::text||'|'||(accepted_at is null)::text$q$),'true|true','a mismatched amount neither verifies the deposit nor accepts the offer');
+select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_deposit_mismatch' and detail->>'reason'='amount' and (detail->>'expected_cents')::int=150000 and (detail->>'paid_cents')::int=100000),'the mismatch is flagged in the audit log with both amounts');
+select ok(exists(select 1 from hr.sign_events where request_id='7a000000-0000-0000-0000-0000000000a1' and event='payment_mismatch'),'and in the signing history');
+select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1');
+select is((select count(*) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_deposit_mismatch')::int,1,'a retried event flags the same payment once');
+update public.payments set amount_cents=150000, amount_paid_cents=150000 where id='7b000000-0000-0000-0000-0000000000b1';
+select lives_ok($$select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1')$$,'the matching deposit');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_accepted','the verified deposit accepts the signed offer');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is not null)::text||'|'||(accepted_at is not null)::text||'|'||accepted_via||'|'||accepted_by_name$q$),'true|true|signing_and_payment|Direct Student','deposit_paid_at, accepted_at and accepted_via = signing_and_payment are recorded');
+select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted' and action_key='accept_offer')::int,1,'one accept_offer history row');
+select is((select actor_role||'|'||actor_name||'|'||note||'|'||(payload->>'via') from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted'),'student|Direct Student (signed online)|Offer accepted: the student signed the offer letter online and paid the initial deposit|signing_and_payment','the history row names the student, the note and the channel');
+select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_accepted' and detail->>'via'='signing_and_payment' and detail->>'payment'='7b000000-0000-0000-0000-0000000000b1'),'the acceptance audit row carries the payment');
+select is((select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000036' and event='offer_accepted')::int,1,'the offer_accepted notification is queued once');
+select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1');
+select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted')::text||'|'||(select count(*) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action in ('offer_deposit_paid','offer_accepted'))::text,'1|2','a retried webhook changes nothing (idempotent)');
+select is((select (s->>'offer')||'|'||(s->>'acceptedVia')||'|'||(s->>'paymentRequired')||'|'||(s->>'hasPayment')||'|'||(s->>'mismatch')||'|'||(s->'institution' is not null)::text from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a1') s),'true|signing_and_payment|false|true|true|true','offer_signing_state reports the letter''s state for the signing page');
+select is((public.offer_signing_state('7a000000-0000-0000-0000-0000000000ff'))->>'offer','false','a request that is not an offer letter reports offer false');
+select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a2','Asha Patel','\x255044462d312e34'::bytea,repeat('e',64),'\x255044462d312e34'::bytea,repeat('f',64),'YES','203.0.113.2')$$,'signing a letter without a deposit');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000037'),'offer_accepted','a letter without a deposit keeps today''s behaviour: signing accepts');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000037',$q$accepted_via||'|'||prepaid_more$q$),'signing|YES','accepted_via signing with the pre-paid answer');
+select is(has_function_privilege('authenticated','public.offer_signing_state(uuid)','execute'),false,'offer_signing_state is not callable by signed-in users');
+select is(has_function_privilege('anon','public.offer_letter_accept_apply(uuid,text,text,text,jsonb)','execute')::text||has_function_privilege('authenticated','public.offer_letter_accept_apply(uuid,text,text,text,jsonb)','execute')::text,'falsefalse','nothing a student or agent calls can mark an offer accepted');
+select is(has_function_privilege('authenticated','public.offer_letter_deposit_paid(uuid,uuid)','execute')::text||has_function_privilege('authenticated','public.payment_apply_stripe(uuid,text,jsonb)','execute')::text,'falsefalse','nothing a student or agent calls can mark a deposit paid');
+select ok(not exists(select 1 from pg_policies where schemaname='public' and tablename='payments' and cmd in ('INSERT','UPDATE','ALL')),'payments has no write policy for signed-in users');
 
+-- SMS opt-in (migration 20261116160000): only a portal user with a saved number and SMS on for the event gets an SMS; the queue is service_role only.
+insert into auth.users(id,email) values ('3a000000-0000-0000-0000-0000000000a1','sms-user@example.test');
+select is(public.notification_normalize_phone('0412 345 678'),'+61412345678','an Australian mobile normalises to E.164');
+select is(public.notification_normalize_phone('03 9123 4567'),null,'a landline is refused');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
+select throws_ok($$select public.portal_set_sms_preference('offer_accepted',true)$$,'22023',null,'SMS cannot be turned on before a number is saved');
+select throws_ok($$select public.portal_set_sms_contact('12')$$,'22023',null,'an invalid number is refused');
+select is(public.portal_set_sms_contact('0412 345 678'),'+61412345678','a number is saved with consent');
+select lives_ok($$select public.portal_set_sms_preference('offer_accepted',true)$$,'SMS is turned on for an event');
+select throws_ok($$select * from public.notification_claim_sms_delivery()$$,'42501',null,'a portal user cannot claim SMS deliveries');
+select throws_ok($$select * from public.notification_sms_deliveries$$,'42501',null,'a portal user cannot read the SMS queue');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select is((select count(*)::int from public.notification_sms_contacts),0,'another user cannot read that number');
+reset role;
+select is((select count(*)::int from public.notification_sms_contacts where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and phone_e164='+61412345678' and consent_text<>''),1,'the number and consent wording are stored');
+select is((select sms_enabled and email_enabled from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and event='offer_accepted'),true,'turning SMS on keeps email on');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"3a000000-0000-0000-0000-0000000000a1"}';
+select lives_ok($$select public.portal_remove_sms_contact()$$,'the user removes the number');
+reset role;
+select is((select count(*)::int from public.notification_preferences where auth_user_id='3a000000-0000-0000-0000-0000000000a1' and sms_enabled),0,'removing the number turns SMS off everywhere');
+-- Communication Hub conversations (migration 20261116210000): admin only; replies only through the service role.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_people('','',10)$$,'42501',null,'a portal user cannot list people in the Communication Hub');
+select throws_ok($$select * from public.comm_messages$$,'42501',null,'a portal user cannot read hub messages');
+select throws_ok($$select public.comm_record_inbound('email','x@example.test','X','s','b',null)$$,'42501',null,'a portal user cannot record a fake reply');
+reset role;
+-- Communication Hub teams (migration 20261116213517): admin only, members-only chat.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_teams_list(false)$$,'42501',null,'a portal user cannot list staff teams');
+select throws_ok($$select public.comm_team_post(gen_random_uuid(),'x')$$,'42501',null,'a portal user cannot post to a staff team');
+select throws_ok($$select * from public.comm_team_messages$$,'42501',null,'a portal user cannot read team messages');
+reset role;
+-- Microsoft Teams channel link for staff teams (migration 20261116224113): admin only; the link table is never readable.
+select ok(public.comm_team_microsoft_host_ok('https://prod-1.au.logic.azure.com:443/workflows/w') and not public.comm_team_microsoft_host_ok('https://logic.azure.com@evil.test/x'),'only Microsoft webhook hosts are accepted');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.comm_team_microsoft_set(gen_random_uuid(),'')$$,'42501',null,'a portal user cannot link a Teams channel');
+select throws_ok($$select * from public.comm_team_microsoft$$,'42501',null,'the Teams link table is not readable');
+reset role;
 select * from finish();
 rollback;

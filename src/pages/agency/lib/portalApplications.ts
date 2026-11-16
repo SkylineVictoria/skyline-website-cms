@@ -706,9 +706,39 @@ export async function setApplicationStatus(applicationId: string, status: string
 /* ------------------------------------------------- Offer letter and workflow commands */
 
 export interface OfferRecipient { kind: "agent" | "student"; name: string; email: string; reason: string; declarationMismatch: boolean }
+/** OFFER-DEPOSIT: the initial deposit asked for with a letter and where its Stripe payment stands (hr.sign_payment_json plus the letter's own request). */
+export interface OfferPayment {
+  id?: string; status?: string; amount_cents?: number; currency?: string; paid_at?: string | null; amount_paid_cents?: number | null; failure_reason?: string | null; livemode?: boolean | null;
+  receipt_url?: string | null; stripe_payment_intent_id?: string | null;
+  requestedAmountCents: number | null; requestedCurrency: string; requestedDescription: string | null; note: string | null; depositPaidAt: string | null;
+}
+/** "Paid" / "Payment pending" / "Payment failed" and the amount, for the offer letter lists. */
+export function offerPaymentState(payment: OfferPayment | null | undefined): { label: string; tone: "paid" | "pending" | "failed" } | null {
+  if (!payment || (payment.requestedAmountCents == null && !payment.status)) return null;
+  const cents = payment.status === "paid" && payment.amount_paid_cents != null ? payment.amount_paid_cents : payment.amount_cents ?? payment.requestedAmountCents ?? 0;
+  const amount = `${(payment.currency ?? payment.requestedCurrency ?? "aud").toUpperCase()} ${(cents / 100).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (payment.status === "paid" || payment.depositPaidAt) return { label: `Paid ${amount}`, tone: "paid" };
+  if (payment.status === "refunded") return { label: `Refunded ${amount}`, tone: "failed" };
+  if (payment.status === "failed") return { label: `Payment failed · ${amount}`, tone: "failed" };
+  return { label: `Payment pending · ${amount}`, tone: "pending" };
+}
 export interface OfferLetter {
   id: string; fileName: string; sizeBytes: number; source: string; message: string; recipientKind: "agent" | "student"; recipientName: string; recipientEmail: string;
-  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | null;
+  issuedAt: string; issuedByName: string; resentAt: string | null; acceptedAt: string | null; acceptedByName: string; acceptedVia: "portal" | "staff" | "signing" | "signing_and_payment" | null;
+  payment?: OfferPayment | null;
+}
+/**
+ * OFFER-PAY-GATE: the one label staff and agents see for a letter's acceptance. A letter with a deposit is "Signed · Payment pending"
+ * once signed and "Accepted · Paid" once Stripe verified the deposit; a letter without one is "Signed online" / "Accepted" as before.
+ */
+export function offerAcceptanceState(letter: { acceptedAt: string | null; acceptedVia?: string | null; signedAt?: string | null; payment?: OfferPayment | null }): { label: string; tone: "accepted" | "signed" | "open" } | null {
+  const paid = letter.payment?.status === "paid" || !!letter.payment?.depositPaidAt;
+  if (letter.acceptedAt) {
+    if (letter.acceptedVia === "signing_and_payment" || (letter.acceptedVia === "signing" && paid)) return { label: "Accepted · Paid", tone: "accepted" };
+    return { label: letter.acceptedVia === "signing" ? "Signed online" : "Accepted", tone: "accepted" };
+  }
+  if (letter.signedAt) return { label: paid ? "Signed · Payment received" : "Signed · Payment pending", tone: "signed" };
+  return null;
 }
 
 const rpcOrThrow = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
@@ -727,7 +757,7 @@ export const resendOfferLetter = (applicationId: string, note = "") => rpcOrThro
 export const currentOfferLetter = (applicationId: string) => rpcOrThrow<OfferLetter | null>("portal_offer_letter_current", { p_application: applicationId });
 export const offerLetterList = (applicationId: string) =>
   rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null;
-    acceptedVia?: string | null; signedAt?: string | null; hasSigned?: boolean; hasCertificate?: boolean; prepaidMore?: "YES" | "NO" | null;
+    acceptedVia?: string | null; signedAt?: string | null; hasSigned?: boolean; hasCertificate?: boolean; prepaidMore?: "YES" | "NO" | null; payment?: OfferPayment | null;
     signing?: { status: string; expiresAt: string | null; viewedAt: string | null; reference: string } | null }>>("portal_offer_letter_list", { p_application: applicationId });
 /** The signed offer letter or its signing certificate (signed online), opened in a new tab. */
 export async function openOfferLetterFile(letterId: string, kind: "signed" | "certificate"): Promise<void> {

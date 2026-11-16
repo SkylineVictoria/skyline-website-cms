@@ -14,7 +14,7 @@ import { Modal } from "./components/ui";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { unitDocuments, type UnitTemplateLink } from "@/lib/unitDocuments";
 
-/** UNIT-DOCS: choose the course and unit a document template belongs to (it is then sent to that unit's batches from Batch Allocation). */
+/** UNIT-DOCS: choose the course and unit a document template belongs to (it is then sent to that unit's batches from Batches). */
 function UnitPicker({ title, initial, onClose, onPick }: { title: string; initial?: { courseId: string; unitId: string } | null; onClose: () => void; onPick: (pick: { courseId: string; unitId: string } | null) => void }) {
   const [courses, setCourses] = useState<RtoCourse[]>([]); const [units, setUnits] = useState<RtoUnit[]>([]);
   const [courseId, setCourseId] = useState(initial?.courseId ?? ""); const [unitId, setUnitId] = useState(initial?.unitId ?? ""); const [error, setError] = useState("");
@@ -26,7 +26,7 @@ function UnitPicker({ title, initial, onClose, onPick }: { title: string; initia
   }, [courseId]);
   return <Modal open title={title} onClose={onClose}>
     <div className="space-y-3" data-testid="template-unit-picker">
-      <p className="text-sm text-foreground-600">Students in a batch of this course are sent the document to sign from Batch Allocation › Assessments when this unit is selected.</p>
+      <p className="text-sm text-foreground-600">Students in a batch of this course are sent the document to sign from Batches › Assessments when this unit is selected.</p>
       <Field label="Course"><Select value={courseId} onChange={(e) => { setCourseId(e.target.value); setUnitId(""); }}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</Select></Field>
       <Field label="Unit"><Select value={unitId} onChange={(e) => setUnitId(e.target.value)}><option value="">Select unit</option>{units.map((u) => <option key={u.id} value={u.id ?? ""}>{u.code} — {u.name}</option>)}</Select></Field>
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
@@ -165,7 +165,7 @@ function EnvelopeSigningPage() {
             </div>))}
         <button type="button" data-testid="template-audience-unit" onClick={() => { setChoosing(false); setUnitStep({ templateId: null, initial: null }); }}
           className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">
-          <i className="ri-book-open-line text-xl text-primary-600" aria-hidden="true" /><span className="font-semibold text-foreground-950">Units / Assessments</span><span className="text-xs text-foreground-600">Choose a course and unit. Students of that unit's batches sign it, sent from Batch Allocation › Assessments.</span>
+          <i className="ri-book-open-line text-xl text-primary-600" aria-hidden="true" /><span className="font-semibold text-foreground-950">Units / Assessments</span><span className="text-xs text-foreground-600">Choose a course and unit. Students of that unit's batches sign it, sent from Batches › Assessments.</span>
         </button>
       </div>
     </Modal>}
@@ -178,7 +178,7 @@ function EnvelopeSigningPage() {
     {editing && <TemplateEditor savedTemplates={context.templates} lockCategory={!("id" in editing) && editing.lockCategory} template={"id" in editing ? editing : null} audience={"id" in editing ? undefined : editing.audience} newCategory={"id" in editing ? undefined : editing.category}
       onClose={() => { setEditing(null); setPendingUnit(null); }} onSaved={(message, id) => {
         const unit = pendingUnit; setEditing(null); setPendingUnit(null); setNotice(message);
-        if (unit && id) void unitDocuments("link_set", { templateId: id, ...unit }).then(loadLinks).then(() => setNotice(`${message} It is linked to the unit; send it from Batch Allocation › Assessments.`)).catch((e: Error) => setError(`${message} Linking it to the unit failed: ${e.message}`));
+        if (unit && id) void unitDocuments("link_set", { templateId: id, ...unit }).then(loadLinks).then(() => setNotice(`${message} It is linked to the unit; send it from Batches › Assessments.`)).catch((e: Error) => setError(`${message} Linking it to the unit failed: ${e.message}`));
         void load();
       }} />}
     {presets && <PresetsManager onClose={() => setPresets(false)} />}

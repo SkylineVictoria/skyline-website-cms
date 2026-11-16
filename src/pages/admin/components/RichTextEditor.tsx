@@ -6,7 +6,8 @@ import { CURLY_TOKEN, LETTER_GROUPS, isBlockMarker, parseCurly, unmappedTokens, 
 /** How the block markers read in the editor. */
 const BLOCK_LABELS: Record<string, string> = {
   "#each courses": "▸ Course block: repeats per course", "/each": "◂ End of course block",
-  "#if multiple_courses": "▸ Only when there are several courses", "/if": "◂ End of the several-courses part",
+  "#if multiple_courses": "▸ Only when there are several courses", "#if gst": "▸ Only when a fee line has GST",
+  "#if discount": "▸ Only for a course with a discount", "/if": "◂ End of the conditional part",
 };
 import { rehostImagesIn, uploadTemplateAsset } from "@/lib/offerLetters";
 
@@ -143,11 +144,14 @@ export default function RichTextEditor({
   storageImages = false,
   label = "Rich text editor",
   testId,
+  maxHeight = "60vh",
 }: {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
   minHeight?: number;
+  /** Document mode: the text area scrolls inside this height, so the toolbar and the variable picker stay in view. */
+  maxHeight?: string;
   mode?: "cms" | "document";
   /** Document mode: the registry variables offered in the picker beside the text. */
   variables?: readonly TemplateVariable[];
@@ -912,7 +916,7 @@ export default function RichTextEditor({
             }}
             onFocus={() => setFocused(true)}
             className={`rte-content px-3 py-3 outline-none ${doc ? "doc-content overflow-y-auto bg-white" : "text-sm leading-relaxed text-foreground-900"} ${sourceOpen ? "hidden" : ""}`}
-            style={doc ? { minHeight, maxHeight: "60vh" } : { minHeight }}
+            style={doc ? { minHeight, maxHeight } : { minHeight }}
           />
         </div>
         {letter ? (

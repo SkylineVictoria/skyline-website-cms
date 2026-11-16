@@ -15,10 +15,12 @@ import {
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
-import { portalCourseOptions, portalSections, resolveCourseOption } from "@/pages/agency/lib/portalSections";
+import { portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
-import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
+import { forgetIntakes, intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
+import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
 import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
@@ -154,6 +156,13 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [savingAnswers, setSavingAnswers] = useState(false);
   const [answerSaveError, setAnswerSaveError] = useState("");
   const [institutionCourses, setInstitutionCourses] = useState<ApplicationCourseRow[] | null>(null);
+  // Staff: the courses of Learning Management (rto_admin course_list, every status) by their CMS id; RTO Managers may add an intake from here.
+  const [staffCourses, setStaffCourses] = useState<RtoCourse[] | null>(null);
+  const [rtoManager, setRtoManager] = useState(false);
+  const [intakeDrawer, setIntakeDrawer] = useState(false);
+  const [intakeReload, setIntakeReload] = useState(0);
+  /** The intake just created from the wizard: chosen as soon as the re-read list holds it. */
+  const pendingIntake = useRef<string | null>(null);
   const questionFormRef = useRef<HTMLFormElement>(null);
   // English step without an IELTS / PTE / TOEFL result: 2+ years of Australian study, or a Cambridge English course with Skyline.
   const [englishAlt, setEnglishAlt] = useState(false);
@@ -223,7 +232,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             intake_id: application.courses?.[0]?.intakeId ?? "",
           });
         }
-        if (application.tenantId) {
+        // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
+        const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
+        if (me) {
+          const list = await rto<RtoCourse[]>("course_list").catch(() => null);
+          if (active) {
+            setRtoManager(Boolean(me.rtoManager));
+            if (list) setStaffCourses(list.filter((c) => c.code?.trim() && c.name?.trim()));
+          }
+        }
+        // Agents and students: the courses open for applications (portal_course_options: Published, or with an open intake). No static list.
+        if (!me) {
           const offered = await listInstitutionCourses().catch(() => []);
           if (active) setInstitutionCourses(offered);
         }
@@ -489,7 +508,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   /* ------------------------------------------------------- answer screens */
 
-  const courseLabels = institutionCourses ? institutionCourses.map((course) => `${course.code} - ${course.title}`) : portalCourseOptions;
+  // null until the list has loaded; an empty list means no course is open for applications.
+  const courseLabels: string[] | null = staffCourses ? staffCourses.map(staffCourseLabel) : institutionCourses ? institutionCourses.map((course) => `${course.code} - ${course.title}`) : null;
+  const institutionCourseOf = (label: string) => institutionCourses?.find((item) => `${item.code} - ${item.title}` === label) ?? null;
+  const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
     // A new course clears the intake: intakes belong to one course.
     setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "" } : {}) }));
@@ -499,12 +521,27 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The course's intakes as listed (real intakes, or the fallback months): the choice must be one of them.
   const [intakeList, setIntakeList] = useState<OpenIntake[] | null>(null);
   const courseIdOf = (label: string): string | null => {
-    const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === label) : resolveCourseOption(label);
-    return course?.courseId || null;
+    if (staffCourses) return staffCourseOf(label)?.id || null;
+    return institutionCourseOf(label)?.courseId || null;
   };
   const setIntake = (intake: OpenIntake | null) => {
     setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "" }));
     setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
+  };
+  const intakesLoaded = (list: OpenIntake[]) => {
+    setIntakeList(list);
+    const wanted = pendingIntake.current;
+    if (!wanted) return;
+    const created = list.find((i) => i.id === wanted);
+    if (created) { setIntake(created); pendingIntake.current = null; }
+  };
+  const currentCourseId = answers.course ? courseIdOf(answers.course) : null;
+  /** The intake the RTO Manager just created: the list is read again from the database and the new one chosen; the wizard keeps everything else. */
+  const intakeCreated = (intakeId: string) => {
+    setIntakeDrawer(false);
+    if (currentCourseId) forgetIntakes(currentCourseId);
+    pendingIntake.current = intakeId;
+    setIntakeReload((n) => n + 1);
   };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
@@ -543,7 +580,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
       else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display) === chosen))) errors.preferred_intake = "Choose the intake.";
       if (filled("course")) {
-        const course = institutionCourses ? institutionCourses.find((item) => `${item.code} - ${item.title}` === answers.course) : resolveCourseOption(answers.course);
+        const staff = staffCourses ? staffCourseOf(answers.course) : null;
+        const course: ApplicationCourseRow | null = staffCourses
+          ? (staff ? { courseId: staff.id, code: staff.code, title: staff.name, variant: staff.variantLabel ?? staff.duration ?? "" } : null)
+          : institutionCourseOf(answers.course);
         if (!course) errors.course = "This course is no longer offered. Choose another.";
         else patch.courses = [{ ...course, intakeId: filled("intake_id") || undefined }];
       }
@@ -617,11 +657,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     }
     if (question) {
       return (
-        <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
-          <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-            onIntake={setIntake} onIntakesLoaded={setIntakeList} />
-          {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
-        </form>
+        <>
+          <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
+            <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
+              onIntake={setIntake} onIntakesLoaded={intakesLoaded}
+              canAddIntake={rtoManager && Boolean(staffCourses)} onAddIntake={() => { if (currentCourseId) setIntakeDrawer(true); }} intakeReload={intakeReload} />
+            {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
+          </form>
+          {/* The same New intake drawer as Learning Management › Intakes, over the wizard, locked to the chosen course; the wizard's state stays. */}
+          {rtoManager && currentCourseId ? (
+            <NewIntakeDrawer open={intakeDrawer} onClose={() => setIntakeDrawer(false)} courses={[]} courseId={currentCourseId} allowBatch={false} zIndex="z-[100]"
+              onCreated={(detail) => intakeCreated(detail.intake.id)} />
+          ) : null}
+        </>
       );
     }
     const documentStepProps = {

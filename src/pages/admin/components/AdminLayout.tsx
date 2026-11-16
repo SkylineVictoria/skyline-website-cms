@@ -9,6 +9,7 @@ import AdminMenu from "@/pages/admin/components/AdminMenu";
 import { hadSession, loginUrl } from "@/lib/loginRouting";
 import { useUiPrefs, type Density } from "@/pages/admin/lib/uiPrefs";
 import { VIEW_LABELS, switchView, type ViewKind } from "@/lib/viewAs";
+import CommPopup from "@/pages/admin/components/CommPopup";
 
 /** Form and text pages read better at a set width; tables, timelines and boards use the full width. */
 const NARROW = [/^\/admin\/(settings|institution|set-password|seo|contact|navigation|footer)\/?$/, /^\/admin\/integrations\/(settings|credentials|add)\/?$/];
@@ -213,6 +214,7 @@ export default function AdminLayout() {
           </main>
         </div>
       </div>
+      {user.role === "Admin" ? <CommPopup /> : null}
     </div>
     </DraftProvider>
   );

@@ -4,11 +4,11 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, EmptyState, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 
-type TeamRow = { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; memberCount: number; isMember: boolean; lastAt: string | null; last: { author: string; text: string } | null; unread: number };
+export type TeamRow = { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; memberCount: number; isMember: boolean; lastAt: string | null; last: { author: string; text: string } | null; unread: number };
 type Staff = { id: string; name: string; email: string; role: string };
-type Thread = { team: { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; microsoftHost?: string | null }; me: string | null; members: { id: string; name: string; email: string }[];
+export type TeamThread = { team: { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; microsoftHost?: string | null }; me: string | null; members: { id: string; name: string; email: string }[];
   messages: { id: string; authorId: string | null; author: string; body: string; at: string; microsoft?: "sent" | "failed" | "sending" | null }[] };
-type Editing = { id: string | null; name: string; description: string; memberIds: string[]; microsoft: boolean; microsoftHost: string | null };
+export type Editing = { id: string | null; name: string; description: string; memberIds: string[]; microsoft: boolean; microsoftHost: string | null };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
@@ -77,9 +77,9 @@ export default function CommunicationTeams() {
   );
 }
 
-function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () => void; onManage: (t: Thread) => void; onChanged: () => void }) {
+export function TeamChat({ id, onBack, onManage, onChanged, compact = false }: { id: string; onBack: () => void; onManage: (t: TeamThread) => void; onChanged: () => void; compact?: boolean }) {
   const { push } = useToast();
-  const [thread, setThread] = useState<Thread | null>(null);
+  const [thread, setThread] = useState<TeamThread | null>(null);
   const [error, setError] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -87,7 +87,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
   const load = useCallback(async () => {
     const { data, error } = await supabase.rpc("comm_team_thread", { p_team: id });
     setError(error?.message ?? "");
-    if (!error) setThread(data as Thread);
+    if (!error) setThread(data as TeamThread);
   }, [id]);
   useEffect(() => { setThread(null); void load().then(onChanged); const t = setInterval(() => void load(), 15000); return () => clearInterval(t); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps -- onChanged only refreshes unread counts once on open
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread?.messages.length]);
@@ -105,16 +105,16 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
   if (error) return <p role="alert" className="rounded-xl border border-red-300 p-4">Could not load the team: {error}</p>;
   if (!thread) return <p role="status" className="p-4">Loading team…</p>;
   return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-background-200 bg-background-50">
+    <div className={compact ? "flex h-full min-h-0 flex-col bg-background-50" : "flex min-h-[60vh] flex-col rounded-xl border border-background-200 bg-background-50"}>
       <header className="flex flex-wrap items-center gap-3 border-b border-background-200 p-3">
-        <button type="button" onClick={onBack} className="rounded-md p-1 text-foreground-600 hover:bg-background-100 lg:hidden" aria-label="Back to teams"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
+        <button type="button" onClick={onBack} className={`rounded-md p-1 text-foreground-600 hover:bg-background-100 ${compact ? "" : "lg:hidden"}`} aria-label="Back to teams"><i className="ri-arrow-left-line text-lg" aria-hidden="true" /></button>
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-semibold text-foreground-950">{thread.team.name}{thread.team.archived ? <span className="ml-2 rounded bg-background-200 px-1.5 text-xs font-normal">Archived</span> : null}{thread.team.microsoft ? <span className="ml-2 rounded bg-primary-50 px-1.5 text-xs font-normal text-primary-800"><i className="ri-microsoft-line mr-1" aria-hidden="true" />Copied to Microsoft Teams{thread.team.microsoftHost ? ` · ${thread.team.microsoftHost}` : ""}</span> : null}</h2>
           <p className="truncate text-xs text-foreground-600" title={thread.members.map((m) => m.name).join(", ")}>{thread.team.description ? `${thread.team.description} · ` : ""}{thread.members.map((m) => m.name).join(", ")}</p>
         </div>
         <Button size="sm" variant="outline" icon="ri-settings-3-line" onClick={() => onManage(thread)}>Manage</Button>
       </header>
-      <div className="max-h-[55vh] flex-1 space-y-3 overflow-y-auto bg-background-100/40 p-3">
+      <div className={`${compact ? "min-h-0" : "max-h-[55vh]"} flex-1 space-y-3 overflow-y-auto bg-background-100/40 p-3`}>
         {thread.messages.length === 0 ? <p className="py-8 text-center text-sm text-foreground-600">No messages yet. Say hello to your team.</p> : thread.messages.map((m) => {
           const mine = m.authorId === thread.me;
           return (
@@ -142,7 +142,7 @@ function TeamChat({ id, onBack, onManage, onChanged }: { id: string; onBack: () 
   );
 }
 
-function TeamEditor({ initial, archived, onClose, onSaved }: { initial: Editing; archived: boolean; onClose: () => void; onSaved: (id: string) => void }) {
+export function TeamEditor({ initial, archived, onClose, onSaved }: { initial: Editing; archived: boolean; onClose: () => void; onSaved: (id: string) => void }) {
   const { push } = useToast();
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);

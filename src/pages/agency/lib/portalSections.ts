@@ -46,6 +46,19 @@ export const portalCourseOptions: string[] = (() => {
   return options;
 })();
 
+/**
+ * "CODE - Name (variant or duration)" for a Learning Management course (rto_admin course_list), the wizard's course option for staff.
+ * A name that already starts with the code is not prefixed with it twice, and a suffix the name already ends with is not repeated.
+ */
+export function staffCourseLabel(course: { code: string; name: string; variantLabel?: string | null; duration?: string | null }): string {
+  const code = course.code.trim();
+  let name = course.name.trim();
+  if (code && name.toUpperCase().startsWith(code.toUpperCase())) name = name.slice(code.length).replace(/^[\s:–—-]+/, "").trim() || name;
+  const suffix = (course.variantLabel ?? "").trim() || (course.duration ?? "").trim();
+  const hasSuffix = Boolean(suffix) && name.toLowerCase().endsWith(`(${suffix.toLowerCase()})`);
+  return `${code ? `${code} - ` : ""}${name}${suffix && !hasSuffix ? ` (${suffix})` : ""}`;
+}
+
 export interface ResolvedCourse {
   courseId: string;
   code: string;

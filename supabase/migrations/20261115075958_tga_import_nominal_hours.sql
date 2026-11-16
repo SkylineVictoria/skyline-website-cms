@@ -1,3 +1,5 @@
+-- Pulled 2026-11-16 from hosted xcpydisstlvtvcsqnjob (supabase_migrations.schema_migrations.statements, version 20261115075958),
+-- applied there by another session; the repo copy exists so a fresh lab replay matches hosted. Do not edit: fixes go in new migrations.
 alter table public.cms_course_units add column if not exists nominal_hours_source text;
 create or replace function public.rto_tga_import_save(p_actor uuid, p_tenant uuid, p_course jsonb, p_units jsonb) returns text
 language plpgsql security invoker set search_path = '' as $$

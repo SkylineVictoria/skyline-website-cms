@@ -74,6 +74,10 @@ verify_jwt = true
 [functions.integrations-webhook]
 verify_jwt = false # Stripe HMAC signature verification in the handler; no user JWT exists on provider deliveries.
 
+[functions.payments]
+# Stripe Checkout for signing requests (the offer letter's initial deposit): link holders call with the anon key and their signing token.
+verify_jwt = true
+
 [functions.student-office365]
 # CMS > Students > Office 365 email. The gateway verifies the caller's JWT; student_o365_* RPCs (admin_business_require) decide
 # access. App-only Microsoft Graph with EF_MICROSOFT365_* secrets; the temporary password is never stored or returned.

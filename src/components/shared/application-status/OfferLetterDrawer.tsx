@@ -7,9 +7,13 @@ import LetterPreview, { VariableCheck, type BuiltLetter } from "@/components/sha
 import RichTextEditor from "@/pages/admin/components/RichTextEditor";
 import {
   applicationCourses, courseMeta, expandFor, issueTemplateLetter, letterValues, loadLetterRegistry, loadLetterTemplates, saveLetterValueToSource, setCourseDiscount, toBase64,
-  type ApplicationCourse, type LetterTemplate, type LetterValues,
+  type ApplicationCourse, type LetterTemplate, type LetterValues, type OfferDepositInput,
 } from "@/lib/offerLetters";
-import { baseKey, blockingDetails, formatTyped, missingDetails, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
+import { baseKey, blockingDetails, courseIndexOf, formatTyped, letterKeys, missingDetails, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
+import { formatMoney } from "@/lib/signingApi";
+
+/** The fee variables of the Fees section, in the letter's order (the total and the discount lines are calculated, never typed). */
+const FEE_ORDER = ["fees.application", "fees.enrolment", "fees.registration", "fees.material", "fees.oshc", "fees.tuition", "fees.deposit"] as const;
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
@@ -64,6 +68,9 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   // The application's course rows, for the discount each one carries into the letter (saved with application_course_discount_set).
   const [appCourses, setAppCourses] = useState<ApplicationCourse[] | null>(null);
   const [discountDraft, setDiscountDraft] = useState<Record<string, string>>({});
+  // OFFER-DEPOSIT: the initial deposit the student pays through Stripe after signing: on by default; its amount is the letter's fees.deposit (one source).
+  const [payOn, setPayOn] = useState(true);
+  const [payNote, setPayNote] = useState("");
 
   useEffect(() => {
     void offerLetterRecipient(application.id).then(setRecipient, (e: Error) => setError(e.message));
@@ -120,6 +127,55 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     return value ? [{ key, value, mode: "letter" }] : [];
   }), [entries, registry, flat, dateFormat]);
   const blocking = blockingDetails(missing, manual);
+  // OFFER-FEES: the first course's fee variables are one editable section (prefilled from LMS: the intake's fee lines, else the course's, else
+  // the fee setup), so they never sit in "Needs your input"; a fee of a 2nd, 3rd... course (key#n) still does. The total is calculated.
+  const isFeeKey = (key: string) => baseKey(key).startsWith("fees.");
+  const usedKeys = useMemo(() => new Set(letterKeys(usedHtml)), [usedHtml]);
+  const feeKeys = FEE_ORDER.filter((k) => usedKeys.has(k));
+  const rawCents = (key: string): number | null => { const raw = flat[key]?.raw ?? ""; return /^-?[0-9]+(\.[0-9]+)?$/.test(raw) ? Math.round(Number(raw) * 100) : null; };
+  const typedCents = (key: string): number | null => {
+    const e = entries[key];
+    if (!e || e.mode !== "letter" || !e.input.trim()) return null;
+    const n = Number(e.input.replace(/^(AUD)?\$?\s*/i, "").replace(/,/g, ""));
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : null;
+  };
+  /** What the letter prints for a fee: typed for this letter, else the LMS value (a blank left on purpose prints nothing). */
+  const feeCents = (key: string): number | null => (entries[key]?.mode === "blank" ? null : typedCents(key) ?? rawCents(key));
+  const discountPct = Number(String(values?.courses?.[0]?.["fees.discount_percent"]?.raw ?? values?.values["fees.discount_percent"]?.raw ?? "0").replace("%", "")) || 0;
+  // The lines in the total, as LMS counts them: application (or enrolment), registration, material and tuition; the deposit and OSHC are not.
+  const totalKeys = ["fees.registration", "fees.material", "fees.tuition", usedKeys.has("fees.application") || !usedKeys.has("fees.enrolment") ? "fees.application" : "fees.enrolment"];
+  const discountOf = (tuition: number | null) => (tuition != null && discountPct > 0 ? Math.round(tuition * discountPct / 100) : 0);
+  const sumOf = (get: (k: string) => number | null): number | null => { const tuition = get("fees.tuition"); if (tuition == null) return null; return totalKeys.reduce((s, k) => s + (get(k) ?? 0), 0) - discountOf(tuition); };
+  // Other fee lines LMS counts (e.g. "other" lines) that this section does not show: the LMS total less the lines it does show.
+  const otherLinesCents = (() => { const db = rawCents("fees.total"); const f = sumOf(rawCents); return db != null && f != null ? db - f : 0; })();
+  const feesOverridden = feeKeys.some((k) => typedCents(k) != null || entries[k]?.mode === "blank");
+  const totalCents = feesOverridden ? (() => { const f = sumOf(feeCents); return f == null ? null : f + otherLinesCents; })() : rawCents("fees.total");
+  const tuitionCents = feeCents("fees.tuition");
+  const discountCents = discountOf(tuitionCents);
+  // The calculated lines follow the typed fees: total, and the discount lines when a discount applies.
+  useEffect(() => {
+    setEntries((prev) => {
+      const next = { ...prev }; let changed = false;
+      const sync = (key: string, cents: number | null) => {
+        if (feesOverridden && cents != null) { const input = (cents / 100).toFixed(2); if (prev[key]?.input !== input || prev[key]?.mode !== "letter") { next[key] = { input, mode: "letter" }; changed = true; } }
+        else if (!feesOverridden && prev[key]) { delete next[key]; changed = true; }
+      };
+      sync("fees.total", totalCents);
+      if (discountPct > 0) { sync("fees.discount_amount", discountCents); sync("fees.tuition_after_discount", tuitionCents == null ? null : tuitionCents - discountCents); }
+      return changed ? next : prev;
+    });
+  }, [feesOverridden, totalCents, discountCents, tuitionCents, discountPct]);
+  const shownMissing = missing.filter((m) => !isFeeKey(m.key) || courseIndexOf(m.key) > 0);
+  const blockingCount = blocking.length;
+  const missingCount = missing.length;
+  const inCms = typeof window !== "undefined" && window.location.pathname.startsWith("/admin");
+  // OFFER-DEPOSIT: the payment amount is the letter's initial deposit, exactly as printed (the server refuses anything else).
+  const depositCents = feeCents("fees.deposit");
+  const courseDepositCents = rawCents("fees.deposit");
+  const payPossible = depositCents != null && depositCents >= 50;
+  const payDiffers = payPossible && depositCents !== courseDepositCents;
+  const depositInput = (): OfferDepositInput | null => payOn && payPossible ? { amount: depositCents! / 100, currency: "AUD", description: "Initial deposit", note: payDiffers ? payNote.trim() : "" } : null;
+  const payValid = true;
   const missingKeys = new Set(missing.map((m) => m.key));
   const sourceRecords = Object.entries(entries).filter(([key, e]) => e.mode === "source" && e.saved && !missingKeys.has(key));
 
@@ -155,7 +211,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   const needsOverride = mismatch || reviewIssues > 0;
   const fileName = `Offer letter ${application.reference || application.studentName}.pdf`.replace(/[\\/:*?"<>|]+/g, " ");
   const ready = Boolean(recipient?.email) && (!needsOverride || override.trim().length > 0) && !busy
-    && (mode === "template" ? Boolean(template && letter && values && registry) && blocking.length === 0 : Boolean(file));
+    && (mode === "template" ? Boolean(template && letter && values && registry) && blocking.length === 0 && payValid : Boolean(file));
   const handFilled = [...manual.filter((m) => m.mode !== "source"), ...sourceRecords.map(([key]) => ({ key, value: flat[key]?.value ?? "", mode: "source" as const }))];
 
   const send = async () => {
@@ -169,7 +225,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
         issued = { id: (await issueOfferLetter({ applicationId: application.id, source: "upload", fileName: file.name, contentBase64: toBase64(bytes), templateId: null, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" })).id, bytes };
       } else if (template && letter) {
         issued = { id: (await issueTemplateLetter({ applicationId: application.id, templateId: template.id, templateVersion: template.version, fileName, contentBase64: toBase64(letter.bytes),
-          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" })).id, bytes: letter.bytes };
+          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "", payment: depositInput() })).id, bytes: letter.bytes };
       }
       if (ccOn) await sendCc(application.id, "offer_letter_issued", cc);
       // The student signs online: where (initials, signature, date, YES / NO) is read from the letter and stored before the email goes
@@ -179,7 +235,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     } catch (e) { setError(e instanceof Error ? e.message : "The offer letter could not be sent."); setBusy(""); }
   };
   const clickSend = () => { if (mode === "template" && handFilled.length) setFinalCheck(true); else void send(); };
-  const sendLabel = mode === "template" && blocking.length ? `Send (${blocking.length} ${blocking.length === 1 ? "detail" : "details"} missing)` : "Send offer letter";
+  const sendLabel = mode === "template" && blocking.length ? `Send (${blockingCount} ${blockingCount === 1 ? "detail" : "details"} missing)` : "Send offer letter";
 
   return (
     <ActionDrawer title="Issue offer letter" testId="offer-letter-drawer" wide={mode === "template"}
@@ -194,6 +250,16 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
         </button>
       </>}>
       <div className={mode === "template" ? "grid gap-5 lg:grid-cols-[minmax(0,400px)_minmax(0,1fr)]" : ""}>
+        {mode === "template" && template && bodyEdit !== null ? (
+          // The wording editor takes the whole drawer: the toolbar and the Insert variable panel beside a tall text area that scrolls on its own.
+          <section className="min-w-0 lg:col-span-2" data-testid="offer-wording-section">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground-950">Wording of this letter <span className="font-normal text-foreground-500">· changes apply to this letter only; the template stays as it is</span></p>
+              <button type="button" onClick={() => setBodyEdit(null)} data-testid="offer-edit-wording" className="text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Discard my wording changes</button>
+            </div>
+            <RichTextEditor mode="document" value={bodyEdit} onChange={setBodyEdit} letterVariables={registry ?? []} minHeight={Math.max(360, Math.round(window.innerHeight * 0.6))} maxHeight="62vh" label="Wording of this letter" testId="offer-wording-editor" />
+          </section>
+        ) : null}
         <div className="space-y-4">
           <div className="rounded-lg border border-background-200 bg-background-100/60 px-3 py-2.5" data-testid="offer-recipient">
             <p className={FORM_LABEL}>Sends to</p>
@@ -284,12 +350,12 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
               {template && registry && values ? (
                 <section className={`rounded-lg border p-3 ${blocking.length ? "border-amber-300 bg-amber-50/60" : "border-emerald-200 bg-emerald-50/50"}`} data-testid="needs-input" aria-label="Needs your input">
                   <p className="text-sm font-semibold text-foreground-950">
-                    {missing.length ? <>Needs your input <span className="ml-1 rounded-full bg-amber-200 px-2 py-0.5 text-xs text-amber-950" data-testid="needs-input-count">{blocking.length}</span></>
+                    {missing.length ? <>Needs your input <span className="ml-1 rounded-full bg-amber-200 px-2 py-0.5 text-xs text-amber-950" data-testid="needs-input-count">{blockingCount}</span></>
                       : <><i className="ri-check-line text-emerald-700" aria-hidden="true" /> Every detail is filled from the application</>}
                   </p>
-                  {missing.length ? <p className="mb-2 mt-0.5 text-xs text-foreground-600">{blocking.length ? `${blocking.length} of ${missing.length} still to fill. ` : "All filled. "}Each is missing in its source; fill it here.</p> : null}
+                  {missing.length ? <p className="mb-2 mt-0.5 text-xs text-foreground-600">{blockingCount ? `${blockingCount} of ${missingCount} still to fill. ` : "All filled. "}Each is missing in its source; fill it here.</p> : null}
                   <ul className="space-y-3">
-                    {missing.map(({ key, variable, label }) => {
+                    {shownMissing.map(({ key, variable, label }) => {
                       const entry = entries[key] ?? { input: "", mode: "letter" as const };
                       const done = !blocking.some((b) => b.key === key);
                       const id = `letter-input-${key}`;
@@ -303,8 +369,9 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                           </div>
                           <p className="mb-1.5 text-2xs text-foreground-500">From {flat[key]?.source ?? variable.source}</p>
                           {variable.inputType === "textarea" ? <textarea rows={2} {...inputProps} className={INPUT} />
-                            : <input type={variable.inputType === "date" ? "date" : variable.inputType === "email" ? "email" : variable.inputType === "tel" ? "tel" : "text"} inputMode={variable.inputType === "money" ? "decimal" : undefined}
-                                placeholder={variable.inputType === "money" ? "e.g. 14500.00" : variable.sample} {...inputProps} className={INPUT} />}
+                            : variable.inputType === "money" ? <input type="number" min={0} step={0.01} inputMode="decimal" placeholder="e.g. 14500.00" {...inputProps} className={INPUT} />
+                            : <input type={variable.inputType === "date" ? "date" : variable.inputType === "email" ? "email" : variable.inputType === "tel" ? "tel" : "text"}
+                                placeholder={variable.inputType === "date" ? undefined : variable.sample} {...inputProps} className={INPUT} />}
                           {entry.input.trim() && entry.mode !== "blank" && variable.format !== "text" ? <p className="mt-1 text-2xs text-foreground-600">Prints as: {formatTyped(variable, entry.input, dateFormat)}</p> : null}
                           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                             <span className="text-foreground-600">{entry.input.trim() && entry.mode === "letter" ? "Used for this letter only (recorded)." : ""}</span>
@@ -337,18 +404,83 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                 </div>
               ) : null}
 
-              {template ? (
+              {template && registry && values && feeKeys.length ? (
+                <section className="rounded-lg border border-background-200 bg-background-100/60 p-3" data-testid="offer-fees" aria-label="Fees">
+                  <p className="text-sm font-semibold text-foreground-950">Fees</p>
+                  <p className="mb-2 mt-0.5 text-xs text-foreground-600">From LMS ({values.values["fees.tuition"]?.source ?? "the course's Fees"}). Leave a fee as it is, or type the amount for this letter.{inCms && values.context.courseId ? <> <a className="font-medium underline underline-offset-2" href={`/admin/courses/${encodeURIComponent(values.context.courseId)}/fees`} target="_blank" rel="noreferrer" data-testid="offer-fees-link">Course Fees in LMS</a></> : null}</p>
+                  <ul className="space-y-2">
+                    {feeKeys.map((key) => {
+                      const variable = registry.find((v) => v.key === key); if (!variable) return null;
+                      const entry = entries[key] ?? { input: "", mode: "letter" as const };
+                      const db = flat[key]; const dbCents = rawCents(key); const printed = feeCents(key);
+                      const id = `letter-input-${key}`;
+                      return (
+                        <li key={key} className="rounded-md border border-background-200 bg-background-50 p-2.5" data-testid="offer-fee" data-key={key}>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <label htmlFor={id} className="text-sm font-medium text-foreground-900">{variable.label}{variable.required ? <span className="text-red-600" aria-hidden="true"> *</span> : null}</label>
+                            {printed == null && variable.required ? <span className="text-xs text-amber-900">Needed</span> : printed != null ? <i className="ri-check-line text-emerald-700" aria-label="Filled" /> : null}
+                          </div>
+                          <p className="mb-1.5 text-2xs text-foreground-500">From {db?.source ?? variable.source}{dbCents == null ? " · not set in LMS" : ""}</p>
+                          <input id={id} type="number" min={0} step={0.01} inputMode="decimal" value={entry.input} disabled={entry.mode === "blank" || busy.startsWith("source")} data-testid={id}
+                            placeholder={dbCents != null ? (dbCents / 100).toFixed(2) : "e.g. 1500.00"} className={INPUT}
+                            onChange={(e) => setEntry(key, { input: e.target.value, ...(entry.mode === "blank" ? { mode: "letter" as const } : {}) })} />
+                          <p className="mt-1 text-2xs text-foreground-600">{printed != null ? <>Prints as: {entry.input.trim() && entry.mode === "letter" ? formatTyped(variable, entry.input, dateFormat) : db?.value}</> : entry.mode === "blank" ? "Left blank." : "Nothing to print yet."}</p>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                            <span className="text-foreground-600">{entry.input.trim() && entry.mode === "letter" ? "Used for this letter only (recorded)." : ""}</span>
+                            {variable.editableSource ? (
+                              <button type="button" disabled={!entry.input.trim() || Boolean(busy)} onClick={() => setConfirmSource({ key, variable })} data-testid={`save-source-${key}`}
+                                className="font-medium text-primary-700 underline underline-offset-2 disabled:cursor-not-allowed disabled:text-foreground-400 disabled:no-underline">
+                                {busy === `source-${key}` ? "Saving…" : "Fill and save to source"}
+                              </button>
+                            ) : <span className="text-foreground-400" title={`Change it in ${variable.source}`}>Saved only in its source screen</span>}
+                            {!variable.required ? (
+                              <label className="inline-flex items-center gap-1.5 text-foreground-700">
+                                <input type="checkbox" checked={entry.mode === "blank"} data-testid={`leave-blank-${key}`} onChange={(e) => setEntry(key, e.target.checked ? { mode: "blank", input: "" } : { mode: "letter" })} /> Leave blank
+                              </label>
+                            ) : null}
+                          </div>
+                        </li>
+                      );
+                    })}
+                    {discountPct > 0 ? <li className="flex items-center justify-between rounded-md border border-dashed border-emerald-300 bg-emerald-50/50 px-2.5 py-2 text-sm" data-testid="offer-fee-discount"><span className="text-foreground-800">Discount {discountPct}% of tuition</span><span className="font-medium text-emerald-800">− {formatMoney(discountCents, "AUD")}</span></li> : null}
+                    {usedKeys.has("fees.total") ? (
+                      <li className="flex items-center justify-between rounded-md border border-background-300 bg-background-100 px-2.5 py-2 text-sm" data-testid="offer-fee-total">
+                        <span><span className="font-semibold text-foreground-950">Total fees</span> <span className="text-2xs text-foreground-500">calculated{otherLinesCents ? ` · includes ${formatMoney(otherLinesCents, "AUD")} of other LMS fee lines` : ""}</span></span>
+                        <span className="font-semibold text-foreground-950">{totalCents != null ? formatMoney(totalCents, "AUD") : <span className="text-amber-900">needs the tuition fee</span>}</span>
+                      </li>
+                    ) : null}
+                  </ul>
+                </section>
+              ) : null}
+
+              {template && values ? (
+                <section className="rounded-lg border border-background-200 bg-background-100/60 p-3" data-testid="offer-deposit" aria-label="Initial deposit">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-foreground-950">Initial deposit via Stripe</p>
+                    <label className={`inline-flex items-center gap-1.5 text-xs ${payPossible ? "text-foreground-700" : "text-foreground-400"}`}><input type="checkbox" checked={payOn && payPossible} disabled={!payPossible} onChange={(e) => setPayOn(e.target.checked)} data-testid="offer-deposit-on" /> Ask for payment with this letter</label>
+                  </div>
+                  {!payPossible ? (
+                    <p className="mt-0.5 text-xs text-foreground-600" data-testid="offer-deposit-missing">Set an initial deposit above to ask for payment.</p>
+                  ) : payOn ? (
+                    <>
+                      <p className="mt-0.5 text-xs text-foreground-800" data-testid="offer-deposit-line">Student pays <strong>{formatMoney(depositCents!, "AUD")}</strong> (initial deposit) after signing, by card on the signing page; the offer is then marked accepted and paid.</p>
+                      {payDiffers ? (
+                        <div className="mt-2">
+                          <label htmlFor="offer-deposit-note" className={`${FORM_LABEL} mb-1 block`}>Why this amount <span className="font-normal text-foreground-500">(the course's Fees say {courseDepositCents != null ? formatMoney(courseDepositCents, "AUD") : "nothing"}; recorded with the letter)</span></label>
+                          <input id="offer-deposit-note" value={payNote} maxLength={500} onChange={(e) => setPayNote(e.target.value)} placeholder="e.g. Scholarship: half deposit agreed by the director" className={INPUT} data-testid="offer-deposit-note" />
+                        </div>
+                      ) : null}
+                    </>
+                  ) : <p className="mt-0.5 text-xs text-foreground-600">No payment is asked for with this letter.</p>}
+                </section>
+              ) : null}
+
+              {template && bodyEdit === null ? (
                 <div>
-                  <button type="button" onClick={() => setBodyEdit((prev) => (prev === null ? template.bodyHtml ?? "" : null))} data-testid="offer-edit-wording"
+                  <button type="button" onClick={() => setBodyEdit(template.bodyHtml ?? "")} data-testid="offer-edit-wording"
                     className="text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">
-                    {bodyEdit === null ? "Edit the wording for this letter" : "Discard my wording changes"}
+                    Edit the wording for this letter
                   </button>
-                  {bodyEdit !== null ? (
-                    <div className="mt-2">
-                      <p className="mb-1 text-2xs text-foreground-600">Changes apply to this letter only; the template stays as it is.</p>
-                      <RichTextEditor mode="document" value={bodyEdit} onChange={setBodyEdit} letterVariables={registry ?? []} minHeight={200} label="Wording of this letter" testId="offer-wording-editor" />
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
             </>

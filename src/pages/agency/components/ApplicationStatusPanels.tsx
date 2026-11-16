@@ -4,7 +4,7 @@ import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { actionsFor, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
-import { acceptOffer, currentOfferLetter, offerLetterList, openOfferLetter, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
+import { acceptOffer, currentOfferLetter, offerLetterList, offerPaymentState, openOfferLetter, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 
@@ -85,6 +85,7 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-foreground-950">Your offer letter is ready</p>
             <p className="text-xs text-foreground-600">{letter ? <>Issued {formatDate(letter.issuedAt)}{letter.message ? <> &middot; {letter.message}</> : null}</> : "Read the letter, then accept the offer to continue."}</p>
+            {(() => { const pay = offerPaymentState(letter?.payment); return pay ? <p className="mt-0.5 text-xs" data-testid="offer-card-payment"><span className={pay.tone === "paid" ? "text-emerald-800" : pay.tone === "failed" ? "text-red-800" : "text-amber-900"}>Initial deposit: {pay.label}</span>{pay.tone !== "paid" ? <span className="text-foreground-500"> · paid by card on the signing page after signing</span> : null}</p> : null; })()}
           </div>
           {letter ? (
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))}
@@ -189,6 +190,8 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
             <span className="text-xs text-foreground-500">To {letter.recipientKind} {letter.recipientEmail} &middot; {formatDate(letter.issuedAt)}{letter.templateName ? <> &middot; {letter.templateName} v{letter.templateVersion}</> : null}</span>
             <span data-testid="offer-letter-state" className={`rounded-full px-2 py-0.5 text-2xs font-medium ${letter.acceptedAt ? "bg-emerald-50 text-emerald-800" : "bg-background-100 text-foreground-600"}`}>
               {letter.acceptedAt ? `${letter.acceptedVia === "signing" ? "Signed online" : "Accepted"} ${formatDate(letter.acceptedAt)}` : letter.signing ? signingState(letter.signing) : "Awaiting acceptance"}</span>
+            {(() => { const pay = offerPaymentState(letter.payment); return pay ? <span data-testid="offer-letter-payment" className={`rounded-full px-2 py-0.5 text-2xs font-medium ${pay.tone === "paid" ? "bg-emerald-50 text-emerald-800" : pay.tone === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900"}`}>{pay.label}{letter.payment?.livemode === false ? " (test)" : ""}</span> : null; })()}
+            {letter.payment?.receipt_url ? <a href={letter.payment.receipt_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Receipt</a> : null}
             {letter.prepaidMore ? <span className="text-xs text-foreground-500">Pays more than the pre-paid fee: {letter.prepaidMore}</span> : null}
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">View</button>
             {letter.hasSigned ? <button type="button" data-testid="offer-letter-signed" onClick={() => void openOfferLetterFile(letter.id, "signed").catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Signed copy</button> : null}

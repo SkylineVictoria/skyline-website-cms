@@ -30,7 +30,11 @@ export interface LetterValues {
   values: Record<string, LetterValue>; courses?: Array<Record<string, LetterValue>>;
   /** Settings › Other fees and charges, one entry per row ({{#each other_fees}}). */
   charges?: Array<Record<string, LetterValue>>;
-  context: { courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string; courseCount?: number; gst?: boolean };
+  context: {
+    courseId: string | null; intakeId: string | null; feeSetup: string | null; courseTitle: string | null; dateFormat: string; courseCount?: number; gst?: boolean;
+    /** OFFER-LETTER-SOURCES: whether the first course has any fees in LMS (fee lines or a fee setup); false means every fee variable is empty. */
+    feesSetUp?: boolean;
+  };
 }
 /**
  * The template as printed for these values: {{#each courses}} once per course, {{#if multiple_courses}} for several, {{#each other_fees}} once
@@ -69,9 +73,13 @@ export interface LetterTemplate {
 export const loadLetterTemplates = () => rpc<LetterTemplate[]>("letter_templates");
 export const setLetterTemplateActive = (id: string, active: boolean) => rpc<{ id: string; active: boolean }>("letter_template_set_active", { p_id: id, p_active: active });
 
+/** OFFER-DEPOSIT: the initial deposit the student pays through Stripe after signing (amount in dollars); `note` records why it differs from the course fee. */
+export interface OfferDepositInput { amount: number; currency: string; description?: string; note?: string }
 export const issueTemplateLetter = (input: {
   applicationId: string; templateId: string; templateVersion: number; fileName: string; contentBase64: string; manual: ManualFill[]; conditions: string; message: string; overrideNote: string;
+  payment?: OfferDepositInput | null;
 }) => rpc<{ id: string }>("portal_offer_letter_issue_template", {
+  p_payment: input.payment ?? null,
   p_application: input.applicationId, p_template: input.templateId, p_template_version: input.templateVersion, p_file_name: input.fileName, p_content_base64: input.contentBase64,
   p_manual: input.manual, p_conditions: input.conditions, p_message: input.message, p_override_note: input.overrideNote,
 });

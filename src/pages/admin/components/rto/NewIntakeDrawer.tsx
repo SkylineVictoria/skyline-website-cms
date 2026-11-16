@@ -1,7 +1,8 @@
 // New intake: one field, the start date, filled in from the calendar (the next term start this course has no intake for). The
 // schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & add batch".
 import { useEffect, useMemo, useState } from "react";
-import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
+import { Button, Field, Select } from "@/pages/admin/components/ui";
+import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import {
   addDays, listBreaks, mondayOf, rto, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
@@ -64,8 +65,8 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   return (
     <Drawer open={open} title="New intake" onClose={onClose}
       footer={<>
-        <Button variant="outline" disabled={!!busy || !chosen || !start || !!clash} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
-        <Button disabled={!!busy || !chosen || !start || !!clash} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
+        <Button variant="outline" disabled={!!busy || !chosen || !start || !!clash || !!inBreak} onClick={() => void create(false)}>{busy === "create" ? "Creating…" : "Create"}</Button>
+        <Button disabled={!!busy || !chosen || !start || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button>
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (
@@ -77,10 +78,13 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
         </Field>
       )}
       <Field label="Start date" required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
-        <TextInput type="date" autoFocus value={start} onChange={(e) => { setStart(e.target.value); setTouched(true); }} />
+        <div className="space-y-2">
+          <p className="text-sm font-semibold text-foreground-900">{start ? new Date(start + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "Pick a day below"}</p>
+          <BreakDatePicker value={start} onChange={(d) => { setStart(d); setTouched(true); }} breaks={breaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
+        </div>
       </Field>
       {clash ? <p role="alert" className="text-sm text-primary-800">This course already has an intake starting on {shortDate(start)}.</p> : null}
-      {inBreak ? <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(start)} is in the {inBreak.label.toLowerCase()} ({shortDate(inBreak.startDate)} – {shortDate(inBreak.endDate)}); classes start after it.</p> : null}
+      {inBreak ? <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(start)} is in the {inBreak.label.toLowerCase()} ({shortDate(inBreak.startDate)} – {shortDate(inBreak.endDate)}). Pick a day outside the break.</p> : null}
       {course ? (
         <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">
           {units.length

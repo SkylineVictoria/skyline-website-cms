@@ -94,13 +94,14 @@ export default function ClassSessionsPanel({ batchId, canManage, reloadKey = 0, 
       : mode === "batch" ? <div className="space-y-4">
         {byWeek.map(([wk, list]) => <div key={wk} className="break-inside-avoid">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-500">Week of {fmtDay(wk)}</h3>
-          <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><tbody>
+          <div className="overflow-x-auto"><table className="w-full min-w-[860px] text-left text-sm"><tbody>
             {list.map(s => <tr key={s.id} className={`border-b border-background-100 ${s.status === "cancelled" ? "text-foreground-400 line-through" : ""}`}>
               <td className="w-32 px-2 py-1.5 font-medium">{fmtDay(s.date)}</td>
               <td className="w-44 px-2 py-1.5">{fmtTime(s.startTime)} – {fmtTime(s.endTime)}</td>
               <td className="w-28 px-2 py-1.5"><span className={`rounded-full px-2 py-0.5 text-xs capitalize ring-1 ${typeTone[s.type] ?? ""}`}>{s.type}</span></td>
               <td className="px-2 py-1.5"><strong>{s.unitCode ?? "—"}</strong> <span className="text-foreground-600">{s.unitName ?? ""}</span></td>
               <td className="w-32 px-2 py-1.5 text-foreground-600">{s.room ?? "No room"}</td>
+              <td className="w-40 px-2 py-1.5 text-foreground-600">{s.trainers || "No trainer"}</td>
               <td className="w-28 px-2 py-1.5 text-right print:hidden">{s.manual && <span className="mr-2 text-xs text-foreground-400">edited</span>}
                 {canManage && <button type="button" onClick={() => void toggle(s)} className="text-xs font-semibold text-primary-700 no-underline hover:underline">{s.status === "cancelled" ? "Restore" : "Cancel"}</button>}</td>
             </tr>)}

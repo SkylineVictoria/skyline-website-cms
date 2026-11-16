@@ -19,7 +19,7 @@ export default function LmsTimetablePage() {
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [data, setData] = useState<BatchPageData | null>(null);
   const [canEdit, setCanEdit] = useState(false);
-  const [editor, setEditor] = useState(false);
+  const [editor, setEditor] = useState<null | { day?: number; templates?: boolean }>(null);
   const [view, setView] = useState<"week" | "list">("week");
   const [savedKey, setSavedKey] = useState(0);
   const [savedNote, setSavedNote] = useState("");
@@ -74,8 +74,9 @@ export default function LmsTimetablePage() {
   useEffect(() => { setData(null); void refreshBatch(); }, [refreshBatch]);
 
   const sessions = ordered(data?.batch.sessions ?? []);
+  const trainerNames = (data?.batch.trainers ?? []).map(t => t.name).join(", ");
   const canManage = canEdit && !!data && !!detail && detail.intake.id === intakeId;
-  const selectClass = () => { if (canManage) setEditor(true); };
+  const selectClass = () => { if (canManage) setEditor({}); };
   const selectClassButton = (label: string) => <button type="button" disabled={!canManage} onClick={selectClass}
     className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:cursor-not-allowed disabled:opacity-50">
     <i className="ri-time-line text-lg" aria-hidden="true" />{label}</button>;
@@ -87,7 +88,12 @@ export default function LmsTimetablePage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable</h1>
         <p className="text-sm text-foreground-500">Set a batch's weekly class times. The dated classes below fill in by themselves, skipping term breaks and public holidays.</p>
       </div>
-      {canManage && sessions.length > 0 && selectClassButton("Edit class timing")}
+      {canManage && <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => setEditor({ templates: true })} title="Start this batch from a saved course timetable, or save this batch's timing as one"
+          className="inline-flex items-center gap-2 rounded-lg border-2 border-primary-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-primary-700 hover:border-primary-500 hover:bg-primary-50">
+          <i className="ri-calendar-check-line text-lg" aria-hidden="true" />Course timetable</button>
+        {selectClassButton(sessions.length ? "Edit class timing" : "Set class timing")}
+      </div>}
     </header>
     {savedNote && <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{savedNote}</p>}
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button type="button" className="ml-3 underline" onClick={() => { void reload(); void refreshBatch(); }}>Retry</button></div>}
@@ -114,7 +120,7 @@ export default function LmsTimetablePage() {
         </div>}
       </div>
       <div className="mt-4">
-        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p> : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p> : !sessions.length ? <div className="py-10 text-center">
+        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p> : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p> : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p> : !sessions.length && !canManage ? <div className="py-10 text-center">
           <p className="text-sm text-foreground-500">No class times saved for this batch.</p>
           {canManage ? <div className="mt-4">{selectClassButton("Set class timing")}</div> : <p className="mt-1 text-xs text-foreground-500">An RTO Manager sets the class timing.</p>}
         </div> : view === "week" ? <div className="overflow-x-auto">
@@ -126,16 +132,20 @@ export default function LmsTimetablePage() {
                   className="w-full rounded-lg bg-primary-50 px-2 py-1.5 text-left text-xs text-foreground-900 ring-1 ring-primary-200 hover:ring-primary-400 disabled:cursor-default disabled:hover:ring-primary-200">
                   <strong className="block">{shortTime(s.startTime)} – {shortTime(s.endTime)}</strong>
                   <span className="block capitalize text-foreground-700">{s.type}</span>
-                  <span className="block truncate text-foreground-500">{s.room || "No room"}</span>
-                </button>)}</div>
+                  <span className="block truncate text-foreground-600"><i className="ri-door-open-line mr-1" aria-hidden="true" />{s.room || "No room"}</span>
+                  <span className="block truncate text-foreground-600"><i className="ri-user-line mr-1" aria-hidden="true" />{trainerNames || "No trainer"}</span>
+                </button>)}
+                {canManage && <button type="button" onClick={() => setEditor({ day: i + 1 })} title={`Add a class on ${day}`} aria-label={`Add a class on ${day}`}
+                  className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-primary-200 py-2 text-xs font-semibold text-primary-600 hover:border-primary-500 hover:bg-primary-50">
+                  <i className="ri-add-line text-base" aria-hidden="true" />Add</button>}</div>
             </section>)}
           </div>
         </div> : <div className="overflow-x-auto">
           <table className="w-full min-w-[600px] text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
-            {["Day", "Time", "Session type", "Room", ""].map(x => <th key={x || "action"} className="px-3 py-2">{x}</th>)}
+            {["Day", "Time", "Session type", "Room", "Trainer", ""].map(x => <th key={x || "action"} className="px-3 py-2">{x}</th>)}
           </tr></thead><tbody>{sessions.map((s, i) => <tr key={s.id ?? i} className="border-b border-background-100 hover:bg-background-100">
             <td className="px-3 py-2">{dayName(s.weekday)}</td><td className="px-3 py-2">{shortTime(s.startTime)} – {shortTime(s.endTime)}</td>
-            <td className="px-3 py-2 capitalize">{s.type}</td><td className="px-3 py-2">{s.room || "Not assigned"}</td>
+            <td className="px-3 py-2 capitalize">{s.type}</td><td className="px-3 py-2">{s.room || "Not assigned"}</td><td className="px-3 py-2">{trainerNames || "Not assigned"}</td>
             <td className="px-3 py-2 text-right">{canManage && <button type="button" onClick={selectClass} className="font-semibold text-primary-700 hover:underline">Edit</button>}</td>
           </tr>)}</tbody></table>
         </div>}
@@ -143,9 +153,10 @@ export default function LmsTimetablePage() {
     </section>
     <ClassSessionsPanel batchId={batchId} canManage={canManage} reloadKey={savedKey} />
     {editor && detail && data && canManage && <BatchTimingDrawer key={batchId} intake={detail.intake} batches={detail.batches} batch={data.batch}
-      onClose={() => setEditor(false)}
+      startDay={editor.day} showTemplates={editor.templates}
+      onClose={() => setEditor(null)}
       onSaved={out => {
-        setEditor(false); setDetail(out); void refreshBatch(); void reload(); setSavedKey(k => k + 1);
+        setEditor(null); setDetail(out); void refreshBatch(); void reload(); setSavedKey(k => k + 1);
         const g = out.generated;
         setSavedNote(g ? `Class timing saved. ${g.created} classes scheduled${g.endDate ? `, last class ${new Date(g.endDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}` : ""}.` : "Class timing saved.");
       }} />}

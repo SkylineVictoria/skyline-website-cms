@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
+import { supabase } from "@/pages/admin/lib/supabase";
 import {
   DAYS, SESSION_TYPES, SLOTS, WEEKDAYS, clashText, generateClassSessions, nextBatchName, rto, rtoFlow, slotOf, timeRange, type BatchSession, type Clash, type CourseTiming, type GenerateResult,
   type IntakeDetail, type LocationRooms, type RtoBatch, type RtoIntake, type SessionType, type StaffOption,
@@ -13,9 +14,20 @@ type Draft = { key: number; weekday: number; startTime: string; endTime: string;
 let seq = 0;
 const toDraft = (s: BatchSession): Draft => ({ key: ++seq, weekday: s.weekday, startTime: s.startTime.slice(0, 5), endTime: s.endTime.slice(0, 5), type: s.type, roomId: s.roomId ?? "" });
 const toSession = (d: Draft) => ({ weekday: d.weekday, startTime: d.startTime, endTime: d.endTime, type: d.type, roomId: d.roomId || null });
+/** The list with one more class: on a day that has classes, the next part of the day; on a new day, the same times as the last class; else a morning. */
+const withClass = (list: Draft[], weekday: number): Draft[] => {
+  const sameDay = list.filter((r) => r.weekday === weekday).pop();
+  const last = list[list.length - 1];
+  let start = SLOTS[0].start, end = SLOTS[0].end;
+  if (sameDay) { const next = SLOTS[Math.min(SLOTS.length - 1, SLOTS.findIndex((s) => s.id === slotOf(sameDay.startTime)) + 1)]; start = next.start; end = next.end; }
+  else if (last) { start = last.startTime; end = last.endTime; }
+  const like = sameDay ?? last;
+  return [...list, { key: ++seq, weekday, startTime: start, endTime: end, type: like?.type ?? "theory", roomId: like?.roomId ?? "" }]
+    .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime));
+};
 export type BatchSaved = IntakeDetail & { batchId: string; clashes: Clash[]; generated?: GenerateResult | null };
 
-export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved }: {
+export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved, startDay, showTemplates = false }: {
   intake: Pick<RtoIntake, "id" | "courseId" | "name">;
   /** The intake's batches (to copy timing from and to name a new batch); loaded when not given. */
   batches?: RtoBatch[];
@@ -24,6 +36,10 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   onClose: () => void;
   /** After saving; `previous` is the timing before (for Undo) when a batch was changed. */
   onSaved: (out: BatchSaved, previous?: BatchSession[]) => void;
+  /** Opens with a new class on this weekday (1 Monday … 7 Sunday). */
+  startDay?: number;
+  /** Opens with the course timetables list showing. */
+  showTemplates?: boolean;
 }) {
   const adding = !batch;
   const [batches, setBatches] = useState<RtoBatch[]>(given ?? []);
@@ -31,21 +47,22 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [timings, setTimings] = useState<CourseTiming[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [intakeUnits, setIntakeUnits] = useState<IntakeDetail["schedule"]>([]);
-  const [rows, setRows] = useState<Draft[]>(() => (batch?.sessions ?? []).map(toDraft));
+  const [rows, setRows] = useState<Draft[]>(() => { const base = (batch?.sessions ?? []).map(toDraft); return startDay ? withClass(base, startDay) : base; });
   const [name, setName] = useState(batch?.name ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
-  const [trainerIds, setTrainerIds] = useState<string[]>([]);
+  const [trainerIds, setTrainerIds] = useState<string[]>(() => (batch?.trainers ?? []).map((t) => t.id));
+  const [templateNote, setTemplateNote] = useState("");
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [menu, setMenu] = useState<"" | "timetable" | "copy">("");
+  const [menu, setMenu] = useState<"" | "timetable" | "copy">(showTemplates ? "timetable" : "");
 
   useEffect(() => {
     let live = true;
     void Promise.all([
       rtoFlow<LocationRooms[]>("locations_rooms"),
       rtoFlow<CourseTiming[]>("timing_list", { courseId: intake.courseId }),
-      adding ? rto<StaffOption[]>("staff_list") : Promise.resolve([] as StaffOption[]),
+      rto<StaffOption[]>("staff_list"),
       rto<IntakeDetail>("intake_get", { intakeId: intake.id }),
     ]).then(([l, t, s, d]) => {
       if (!live) return;
@@ -53,7 +70,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
       if (d) { setIntakeUnits(d.schedule); if (!given) setBatches(d.batches); }
     }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Rooms and timing did not load."); });
     return () => { live = false; };
-  }, [intake.id, intake.courseId, adding, given]);
+  }, [intake.id, intake.courseId, given]);
 
   const newName = useMemo(() => nextBatchName(batches.map((b) => b.name)), [batches]);
   const shownName = adding ? (name.trim() || newName) : batch.name;
@@ -63,21 +80,40 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
 
   // ---- edits
   const set = (key: number, patch: Partial<Draft>) => setRows((list) => list.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  /** A new class: on a day that has classes, the next part of the day; on a new day, the same times as the last class; else a morning. */
-  const addClass = (weekday: number) => setRows((list) => {
-    const sameDay = list.filter((r) => r.weekday === weekday).pop();
-    const last = list[list.length - 1];
-    let start = SLOTS[0].start, end = SLOTS[0].end;
-    if (sameDay) { const next = SLOTS[Math.min(SLOTS.length - 1, SLOTS.findIndex((s) => s.id === slotOf(sameDay.startTime)) + 1)]; start = next.start; end = next.end; }
-    else if (last) { start = last.startTime; end = last.endTime; }
-    const like = sameDay ?? last;
-    return [...list, { key: ++seq, weekday, startTime: start, endTime: end, type: like?.type ?? "theory", roomId: like?.roomId ?? "" }]
-      .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime));
-  });
+  const addClass = (weekday: number) => setRows((list) => withClass(list, weekday));
   const toggleDay = (weekday: number) => { if (rows.some((r) => r.weekday === weekday)) setRows((list) => list.filter((r) => r.weekday !== weekday)); else addClass(weekday); };
   const applyTiming = (t: CourseTiming) => {
     setRows(t.sessions.map(toDraft)); setMenu("");
-    if (adding && t.trainerStaffId && trainerIds.length === 0) setTrainerIds([t.trainerStaffId]);
+    if (t.trainerStaffId && trainerIds.length === 0) setTrainerIds([t.trainerStaffId]);
+  };
+  /** Saves these days, times, rooms and the first trainer as a course timetable that any batch of the course can start from. */
+  const saveTemplate = async () => {
+    const entered = window.prompt("Name of this course timetable (e.g. G1, Weekend, Evening):", shownName);
+    const label = entered?.trim();
+    if (!label) return;
+    if (label.length > 40) { setError("The name can be at most 40 characters."); return; }
+    const existing = timings.find((t) => t.name.toLowerCase() === label.toLowerCase());
+    if (existing && !window.confirm(`Replace the course timetable "${existing.name}"?`)) return;
+    setBusy(true); setError(""); setTemplateNote("");
+    try {
+      const trainer = staff.find((s) => s.id === trainerIds[0]);
+      const values = {
+        course_id: intake.courseId, name: existing?.name ?? label, trainer_staff_id: trainer?.id ?? null, trainer_name: trainer?.name ?? null,
+        sessions: rows.map((r) => ({ weekday: r.weekday, slot: slotOf(r.startTime), start: r.startTime, end: r.endTime, type: r.type, roomId: r.roomId || null })),
+        source: "Saved from batch class timing",
+      };
+      const { error: e } = await supabase.from("course_timing_templates").upsert(values, { onConflict: "course_id,name" });
+      if (e) throw new Error(e.message);
+      setTimings(await rtoFlow<CourseTiming[]>("timing_list", { courseId: intake.courseId }));
+      setTemplateNote(`Saved as course timetable "${values.name}". Any batch of this course can now use it.`);
+    } catch (e) { setError(e instanceof Error ? e.message : "The course timetable was not saved."); }
+    finally { setBusy(false); }
+  };
+  const deleteTemplate = async (t: CourseTiming) => {
+    if (!window.confirm(`Delete the course timetable "${t.name}"? Batches already using its times keep them.`)) return;
+    const { error: e } = await supabase.from("course_timing_templates").delete().eq("id", t.id);
+    if (e) { setError(e.message); return; }
+    setTimings((list) => list.filter((x) => x.id !== t.id)); setMenu("");
   };
   const copyTiming = (b: RtoBatch) => { setRows((b.sessions ?? []).map(toDraft)); setMenu(""); };
 
@@ -104,6 +140,8 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
         batchId: batch?.id ?? null, intakeId: intake.id, sessions: rows.map(toSession),
         ...(adding ? { name: name.trim() || newName, capacity, trainerIds } : {}),
       });
+      const before = (batch?.trainers ?? []).map((t) => t.id).sort().join();
+      if (!adding && before !== [...trainerIds].sort().join()) await rtoFlow("batch_trainers_set", { batchId: out.batchId, trainerIds });
       // The dated classes follow the saved timing automatically (term breaks and public holidays skipped).
       let generated: GenerateResult | null = null;
       if (rows.length) generated = await generateClassSessions(out.batchId).catch(() => null);
@@ -145,19 +183,42 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
             </div>
           ) : null}
         </div>
-      ) : null}
+      ) : (
+        <Field label="Trainer">
+          <div className="space-y-2">
+            {trainerIds.length ? <div className="flex flex-wrap gap-1.5">
+              {trainerIds.map((id) => (
+                <span key={id} className="inline-flex items-center gap-1 rounded-full bg-secondary-100 py-1 pl-3 pr-1 text-sm font-medium text-secondary-900">
+                  <i className="ri-user-line" aria-hidden="true" />{staff.find((s) => s.id === id)?.name ?? batch.trainers.find((t) => t.id === id)?.name ?? "Trainer"}
+                  <button type="button" aria-label="Remove trainer" className="rounded-full p-0.5 hover:bg-secondary-200" onClick={() => setTrainerIds((t) => t.filter((x) => x !== id))}><i className="ri-close-line" aria-hidden="true" /></button>
+                </span>
+              ))}
+            </div> : null}
+            <Select value="" onChange={(e) => { const id = e.target.value; if (id) setTrainerIds((t) => (t.includes(id) ? t : [...t, id])); }}>
+              <option value="">{trainerIds.length ? "Add another trainer" : "Choose a trainer"}</option>
+              {staff.filter((s) => !trainerIds.includes(s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+          </div>
+        </Field>
+      )}
 
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-label font-medium text-foreground-800">Days and times</p>
           <div className="flex flex-wrap gap-1.5">
             <div className="relative">
-              <Button size="sm" variant="outline" icon="ri-calendar-check-line" disabled={!timings.length}
-                onClick={() => (ownTiming ? applyTiming(ownTiming) : setMenu((m) => (m === "timetable" ? "" : "timetable")))}>
-                Use course timetable{ownTiming ? ` (${ownTiming.name})` : ""}
+              <Button size="sm" variant="outline" icon="ri-calendar-check-line"
+                onClick={() => setMenu((m) => (m === "timetable" ? "" : "timetable"))}>
+                Use course timetable{timings.length ? ` (${timings.length})` : ""}
               </Button>
-              {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name, hint: t.trainerName ?? "" }))} onPick={(id) => { const t = timings.find((x) => x.id === id); if (t) applyTiming(t); }} onClose={() => setMenu("")} /> : null}
+              {menu === "timetable" ? <PickList items={timings.map((t) => ({ id: t.id, label: t.name + (t.id === ownTiming?.id ? " ★" : ""), hint: `${t.sessions.length} classes${t.trainerName ? " · " + t.trainerName : ""}` }))}
+                empty="No course timetable yet. Set the days below, then click Save as course timetable."
+                onPick={(id) => { const t = timings.find((x) => x.id === id); if (t) applyTiming(t); }}
+                onDelete={(id) => { const t = timings.find((x) => x.id === id); if (t) void deleteTemplate(t); }} onClose={() => setMenu("")} /> : null}
             </div>
+            <Button size="sm" variant="outline" icon="ri-save-3-line" disabled={busy || !rows.length || !!invalid || !!overlap} onClick={() => void saveTemplate()}>
+              Save as course timetable
+            </Button>
             {copyFrom.length ? (
               <div className="relative">
                 <Button size="sm" variant="outline" icon="ri-file-copy-line" onClick={() => (copyFrom.length === 1 ? copyTiming(copyFrom[0]) : setMenu((m) => (m === "copy" ? "" : "copy")))}>
@@ -179,6 +240,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
           })}
         </div>
         <p className="mt-1.5 text-xs font-medium text-foreground-600">Click a day to add classes on it. Click a ticked day again to remove them.</p>
+        {templateNote ? <p role="status" className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{templateNote}</p> : null}
       </div>
 
       {days.length === 0 ? (
@@ -236,18 +298,27 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   );
 }
 
-function PickList({ items, onPick, onClose }: { items: { id: string; label: string; hint: string }[]; onPick: (id: string) => void; onClose: () => void }) {
+function PickList({ items, onPick, onClose, onDelete, empty }: {
+  items: { id: string; label: string; hint: string }[]; onPick: (id: string) => void; onClose: () => void;
+  /** Shows a delete button on each item. */
+  onDelete?: (id: string) => void; empty?: string;
+}) {
   useEffect(() => {
     const close = () => onClose();
     const t = window.setTimeout(() => document.addEventListener("click", close), 0);
     return () => { window.clearTimeout(t); document.removeEventListener("click", close); };
   }, [onClose]);
   return (
-    <div className="fade-in absolute right-0 top-full z-30 mt-1 w-56 rounded-md border border-background-200 bg-background-50 py-1 text-sm shadow-lg">
+    <div className="fade-in absolute right-0 top-full z-30 mt-1 w-72 rounded-md border border-background-200 bg-background-50 py-1 text-sm shadow-lg">
+      {!items.length && empty ? <p className="px-3 py-2 text-xs text-foreground-600">{empty}</p> : null}
       {items.map((it) => (
-        <button key={it.id} type="button" className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-background-100" onClick={() => onPick(it.id)}>
-          <span className="font-medium text-foreground-900">{it.label}</span><span className="truncate text-xs text-foreground-500">{it.hint}</span>
-        </button>
+        <div key={it.id} className="flex items-center hover:bg-background-100">
+          <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2 text-left" onClick={() => onPick(it.id)}>
+            <span className="font-medium text-foreground-900">{it.label}</span><span className="truncate text-xs text-foreground-500">{it.hint}</span>
+          </button>
+          {onDelete ? <button type="button" aria-label={`Delete ${it.label}`} title="Delete this course timetable" className="mr-1 rounded p-1.5 text-foreground-400 hover:bg-background-200 hover:text-red-700"
+            onClick={() => onDelete(it.id)}><i className="ri-delete-bin-line" aria-hidden="true" /></button> : null}
+        </div>
       ))}
     </div>
   );

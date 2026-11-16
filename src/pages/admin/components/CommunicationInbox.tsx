@@ -6,7 +6,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { renderTemplate, smsInfo, templateVariables, type Channel } from "@/lib/communicationTemplates";
 
 type Kind = "student" | "agent" | "staff" | "applicant" | "agency" | "other";
-type SendChannel = Channel | "note";
+type SendChannel = Channel | "note" | "teams";
 type Person = { kind: Kind; ref: string; name: string; email: string | null; phone: string | null; detail: string; conversationId: string | null; lastMessageAt: string | null };
 type ConversationRow = { id: string; kind: Kind; ref: string | null; name: string; email: string | null; phone: string | null; lastMessageAt: string | null; createdAt: string;
   last: { channel: SendChannel; direction: "in" | "out"; text: string; at: string } | null };
@@ -19,6 +19,7 @@ const KIND_LABELS: Record<Kind, string> = { student: "Student", agent: "Agent", 
 const CHANNEL_META: Record<SendChannel, { label: string; icon: string }> = {
   email: { label: "Email", icon: "ri-mail-line" }, sms: { label: "SMS", icon: "ri-message-2-line" },
   whatsapp: { label: "WhatsApp", icon: "ri-whatsapp-line" }, note: { label: "Internal note", icon: "ri-sticky-note-line" },
+  teams: { label: "Teams", icon: "ri-team-line" },
 };
 const STATUS_LABELS: Record<Item["status"], { label: string; tone: "primary" | "muted" | "warn" | "secondary" }> = {
   sending: { label: "Sending…", tone: "secondary" }, sent: { label: "Sent", tone: "primary" }, failed: { label: "Not delivered", tone: "warn" },
@@ -127,11 +128,16 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
   const [templates, setTemplates] = useState<Tpl[]>([]);
   const [channel, setChannel] = useState<SendChannel>("email");
   // Only channels whose account is connected in Integrations › Connections can be used; an internal note is always available.
+  // Teams: share the message into one of my staff team chats (recorded in this conversation too).
   const [available, setAvailable] = useState<SendChannel[]>(["email", "note"]);
+  const [myTeams, setMyTeams] = useState<{ id: string; name: string }[]>([]);
+  const [teamId, setTeamId] = useState("");
   useEffect(() => {
-    void supabase.rpc("comm_channels_status").then(({ data }) => {
-      const on = ((data ?? []) as { channel: string; connected: boolean }[]).filter((x) => x.connected).map((x) => x.channel);
-      setAvailable((["email", "sms", "whatsapp"] as SendChannel[]).filter((c) => on.includes(c)).concat("note"));
+    void Promise.all([supabase.rpc("comm_channels_status"), supabase.rpc("comm_teams_list", { p_include_archived: false })]).then(([st, tm]) => {
+      const on = ((st.data ?? []) as { channel: string; connected: boolean }[]).filter((x) => x.connected).map((x) => x.channel);
+      const mine = ((tm.data ?? []) as { id: string; name: string; isMember: boolean; archived: boolean }[]).filter((t) => t.isMember && !t.archived);
+      setMyTeams(mine.map((t) => ({ id: t.id, name: t.name })));
+      setAvailable((["email", "sms", "whatsapp"] as SendChannel[]).filter((c) => on.includes(c)).concat(mine.length ? ["teams", "note"] : ["note"]));
     });
   }, []);
   const [templateKey, setTemplateKey] = useState("");
@@ -163,7 +169,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
       ...(c.kind === "agency" ? { agency_name: c.name } : {}), ...(c.kind === "applicant" || c.kind === "staff" ? { booker_name: c.name } : {}),
     };
   }, [c]);
-  const usable = templates.filter((t) => channel === "note" || t.channels.includes(channel as Channel));
+  const usable = templates.filter((t) => channel === "note" || channel === "teams" || t.channels.includes(channel as Channel));
   const chooseTemplate = (key: string) => {
     setTemplateKey(key);
     const t = templates.find((x) => x.key === key);
@@ -172,16 +178,18 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
     setBody(renderTemplate(t.body, values));
   };
   const missing = templateVariables(subject, body);
-  const blocked = !c || !body.trim() || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone);
+  const blocked = !c || !body.trim() || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone) || (channel === "teams" && !teamId);
 
   const send = async () => {
     if (!c || blocked) return;
     if (missing.length && !window.confirm(`These details are still blank: ${missing.map((m) => `{{${m}}}`).join(", ")}. Send anyway?`)) return;
     setSending(true);
-    const { error } = await supabase.rpc("comm_send", { p_conversation: c.id, p_channel: channel, p_subject: channel === "email" ? subject : "", p_body: body, p_template_key: templateKey || null });
+    const { error } = channel === "teams"
+      ? await supabase.rpc("comm_send_to_team", { p_conversation: c.id, p_team: teamId, p_body: body })
+      : await supabase.rpc("comm_send", { p_conversation: c.id, p_channel: channel, p_subject: channel === "email" ? subject : "", p_body: body, p_template_key: templateKey || null });
     setSending(false);
     if (error) { push(`Not sent: ${error.message}`, "error"); return; }
-    push(channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : `${CHANNEL_META[channel].label} sent – it will show as Sent or Not delivered in a moment.`);
+    push(channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : channel === "teams" ? `Shared with ${myTeams.find((t) => t.id === teamId)?.name ?? "the team"}.` : `${CHANNEL_META[channel].label} sent – it will show as Sent or Not delivered in a moment.`);
     setBody(""); setSubject(""); setTemplateKey("");
     await load(); onSent();
   };
@@ -211,7 +219,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
                 <i className={CHANNEL_META[m.channel].icon} aria-hidden="true" /><span>{CHANNEL_META[m.channel].label}</span>
                 <span>·</span><span>{auto ? "Automatic" : m.direction === "in" ? "From " + c.name : m.by ?? "Staff"}</span>
                 <span>·</span><time>{when(m.at)}</time>
-                <Badge tone={STATUS_LABELS[m.status].tone}>{STATUS_LABELS[m.status].label}</Badge>
+                <Badge tone={STATUS_LABELS[m.status].tone}>{m.channel === "teams" ? `Shared with ${m.to ?? "team"}` : STATUS_LABELS[m.status].label}</Badge>
               </div>
               {m.subject ? <p className="font-semibold text-foreground-900">{m.subject}</p> : null}
               {m.status === "failed" && m.reason ? <p className="mb-1 text-xs text-primary-800">Not delivered: {m.reason}</p> : null}
@@ -241,6 +249,10 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
             {usable.map((t) => <option key={t.key} value={t.key}>{t.category} – {t.name}</option>)}
           </Select>
           {channel === "email" ? <TextInput value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" maxLength={200} aria-label="Subject" /> : null}
+          {channel === "teams" ? <Select value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Team">
+            <option value="">Choose a team</option>
+            {myTeams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </Select> : null}
         </div>
         <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={4000} placeholder={channel === "note" ? "Write a note for your team (not sent to the person)" : "Write your message"}
           aria-label="Message" className="w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100" />
@@ -248,7 +260,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-foreground-500">{sms ? `${sms.characters} characters · ${sms.segments} SMS part${sms.segments === 1 ? "" : "s"}` : channel === "email" ? `To ${c.email ?? "—"}` : ""}</span>
           <Button icon={channel === "note" ? "ri-save-line" : "ri-send-plane-2-line"} disabled={sending || blocked} onClick={() => void send()}>
-            {sending ? "Sending…" : channel === "note" ? "Save note" : "Send"}
+            {sending ? "Sending…" : channel === "note" ? "Save note" : channel === "teams" ? "Share with team" : "Send"}
           </Button>
         </div>
       </div>

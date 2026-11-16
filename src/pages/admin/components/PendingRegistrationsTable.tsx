@@ -1,5 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
-import WhatsAppLink from "@/components/base/WhatsAppLink";
+import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { Link } from "react-router-dom";
 import { Button } from "@/pages/admin/components/ui";
 import { ListMessage } from "@/pages/admin/components/ListControls";
@@ -35,8 +35,8 @@ export default function PendingRegistrationsTable({ rows, loading, busyId, onApp
                   <p className="mt-0.5 text-xs text-foreground-500">{row.abn ? `ABN ${row.abn}` : "No ABN"}</p>
                 </td>
                 <td className="text-xs">
-                  <p className="font-medium text-foreground-900">{row.contact || "—"}<WhatsAppLink phone={row.phone} name={row.contact || row.name} /></p>
-                  {row.email ? <p><a href={`mailto:${row.email}`} className="text-foreground-700 hover:text-primary-700">{row.email}</a></p> : null}
+                  <p className="font-medium text-foreground-900">{row.contact || "—"}<PersonMessageIcon phone={row.phone} name={row.contact || row.name} email={row.email} /></p>
+                  {row.email ? <p><span className="text-foreground-700">{row.email}</span></p> : null}
                   {row.phone ? <p className="text-foreground-600">{row.phone}</p> : null}
                 </td>
                 <td className="text-xs text-foreground-700">{row.requestedAt ? formatDate(row.requestedAt) : "—"}</td>

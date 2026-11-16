@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
-import WhatsAppLink from "@/components/base/WhatsAppLink";
+import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
@@ -79,7 +79,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
   const active = employee.status === "active";
   return (
     <div>
-      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)} titleSuffix={<WhatsAppLink phone={employee.phone} name={fullName(employee)} />}
+      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)}
         actions={<>
           <MessagePersonButton kind="staff" refId={employee.id} name={fullName(employee)} />
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>

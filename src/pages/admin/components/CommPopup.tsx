@@ -9,7 +9,7 @@ type Kind = "student" | "agent" | "staff" | "applicant" | "agency" | "other";
 type Conv = { id: string; kind: Kind; name: string; lastMessageAt: string | null; createdAt: string; last: { channel: string; direction: string; text: string; at: string } | null };
 type Person = { kind: Kind; ref: string; name: string; email: string | null; phone: string | null; detail: string; conversationId: string | null };
 const KIND: Record<Kind, string> = { student: "Student", agent: "Agent", staff: "Staff", applicant: "Applicant", agency: "Agency", other: "Other" };
-const ICON: Record<string, string> = { email: "ri-mail-line", sms: "ri-message-2-line", whatsapp: "ri-whatsapp-line", note: "ri-sticky-note-line" };
+const ICON: Record<string, string> = { email: "ri-mail-line", sms: "ri-message-2-line", whatsapp: "ri-whatsapp-line", note: "ri-sticky-note-line", teams: "ri-team-line" };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
 /**

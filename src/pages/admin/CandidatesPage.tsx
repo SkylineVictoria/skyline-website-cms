@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
-import WhatsAppLink from "@/components/base/WhatsAppLink";
+import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
@@ -111,7 +111,7 @@ export default function CandidatesPage() {
           {["Candidate", "Applied job", "Application date", "Source", "Status"].map((label) => <th key={label} className="px-4 py-3">{label}</th>)}
         </tr></thead>
         <tbody>{result.rows.map((row) => <tr key={row.id} className="border-b border-background-100 last:border-0" data-testid={`candidate-row-${row.id}`}>
-          <td data-label="Candidate" className="px-4 py-3"><HrLink to={staffCandidatePath(row.id)}>{hrName(row)}</HrLink><WhatsAppLink phone={row.phone} name={hrName(row)} /><div className="text-xs text-foreground-500">{row.email}</div></td>
+          <td data-label="Candidate" className="px-4 py-3"><HrLink to={staffCandidatePath(row.id)}>{hrName(row)}</HrLink><PersonMessageIcon phone={row.phone} name={hrName(row)} email={row.email} /><div className="text-xs text-foreground-500">{row.email}</div></td>
           <td data-label="Applied job" className="px-4 py-3">{row.jobTitle}</td><td data-label="Application date" className="px-4 py-3">{hrDate(row.appliedAt)}</td>
           <td data-label="Source" className="px-4 py-3">{row.source === "manual" ? "Manual" : "Careers"}</td><td data-label="Status" className="px-4 py-3"><CandidateBadge row={row} /></td>
         </tr>)}</tbody>
@@ -212,7 +212,7 @@ export function CandidateDetailPage() {
   if (row.stage === "selected") actions.push("hired");
   actions.push("declined", "withdrawn");
   return <div>
-    <PageHeader breadcrumb="Website / Candidates" title={hrName(row)} titleSuffix={<WhatsAppLink phone={row.phone} name={hrName(row)} />} description={row.jobTitle}
+    <PageHeader breadcrumb="Website / Candidates" title={hrName(row)} description={row.jobTitle}
       actions={<><CandidateBadge row={row} /><MessagePersonButton kind="applicant" refId={row.profileId} name={hrName(row)} /><Button variant="outline" onClick={() => {
         setEditing(true);
         void adminListJobs().then(setJobs, (e: Error) => setError(e.message));

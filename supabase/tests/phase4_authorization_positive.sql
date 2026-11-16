@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(591);
+select plan(608);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1064,48 +1064,89 @@ select is(public.portal_student_find('stu.x@example.test')->0->>'id', 'ee000000-
 set local request.jwt.claim.sub = 'ee000000-0000-0000-0000-0000000000b2';
 select is(public.portal_student_find('agent.one@example.test'), '[{"taken": true}]'::jsonb, 'rule fix: an agent does not see an unassigned student of the business');
 select is(public.portal_student_find('', '+61400000111')->0->>'name', 'Stu X Again', 'rule fix: an agent finds their own student by mobile');
--- OFFER-PAY-GATE (20261116220000): a letter with a deposit is accepted only by the verified Stripe payment; one without keeps signing = accepting.
+-- OFFER-DEPOSIT (20261116230000): signing accepts the offer at once; the initial deposit is tracked on its own (pending until Stripe verifies it), with reminders.
 reset role;
 insert into hr.sign_requests(id, title, recipient_name, recipient_email, original_path, original_hash, state, created_by, reference, category, offer_letter_id) values
  ('7a000000-0000-0000-0000-0000000000a1','Letter of Offer','Direct Student','direct.student@example.test','7a000000-0000-0000-0000-0000000000a1/original.pdf',repeat('a',64),'sent','33000000-0000-0000-0000-000000000002','SLIT-TEST-0001','student_offer_letter',(select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1)),
  ('7a000000-0000-0000-0000-0000000000a2','Letter of Offer','Asha Patel','mismatch@example.test','7a000000-0000-0000-0000-0000000000a2/original.pdf',repeat('b',64),'sent','33000000-0000-0000-0000-000000000002','SLIT-TEST-0002','student_offer_letter',(select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1));
+insert into hr.sign_recipients(id, request_id, role_key, role_label, name, email, signing_order, required, state) values
+ ('7c000000-0000-0000-0000-0000000000c1','7a000000-0000-0000-0000-0000000000a1','student','Student','Direct Student','direct.student@example.test',1,true,'sent'),
+ ('7c000000-0000-0000-0000-0000000000c2','7a000000-0000-0000-0000-0000000000a2','student','Student','Asha Patel','mismatch@example.test',1,true,'sent');
 update public.enrollment_offer_letters set payment_amount_cents=150000, payment_currency='aud', payment_description='Initial deposit', signing_request_id='7a000000-0000-0000-0000-0000000000a1' where application_id='43000000-0000-0000-0000-000000000036';
 update public.enrollment_offer_letters set signing_request_id='7a000000-0000-0000-0000-0000000000a2' where application_id='43000000-0000-0000-0000-000000000037';
 insert into public.payments(id, subject_type, subject_id, description, amount_cents, currency, timing, status) values ('7b000000-0000-0000-0000-0000000000b1','sign_request','7a000000-0000-0000-0000-0000000000a1','Initial deposit',150000,'aud','after_sign','pending');
-select is((select public.offer_letter_payment_required(l) from public.enrollment_offer_letters l where l.application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),true,'OFFER-PAY-GATE: a letter with a deposit and a live payment waits for the deposit');
+select is(public.offer_money_label(150000,'aud'),'AUD$1,500.00','OFFER-DEPOSIT: money prints as AUD$1,500.00');
 select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'signing a letter that asks for a deposit');
-select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_issued','signing does not accept the offer while the deposit is unpaid');
-select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(signed_at is not null)::text||'|'||(accepted_at is null)::text||'|'||coalesce(accepted_via,'')||'|'||(signed_content is not null)::text$q$),'true|true||true','the letter is signed and stored, not accepted');
-select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_signed' and (detail->>'awaiting_payment')::boolean),'the signing is in the audit log as awaiting the deposit');
-select ok(exists(select 1 from hr.sign_events where request_id='7a000000-0000-0000-0000-0000000000a1' and event='offer_signed_awaiting_payment'),'and in the signing history');
-select throws_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'P0001','This offer letter was already signed','a signed letter is not signed twice');
-select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted')::int,0,'no accept_offer history row before the deposit');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_accepted','signing accepts the offer at once, deposit or not');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(signed_at is not null)::text||'|'||(accepted_at is not null)::text||'|'||accepted_via||'|'||(deposit_paid_at is null)::text$q$),'true|true|signing|true','the letter is signed and accepted via signing; the deposit is still pending');
+select is((select count(*)||'|'||max(payload->>'deposit') from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted' and action_key='accept_offer'),'1|pending','one accept_offer history row, noting the pending deposit');
+select is((select public.offer_letter_payment_required(l) from public.enrollment_offer_letters l where l.application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),true,'the deposit is pending');
+select throws_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'P0001','This offer was already accepted','an accepted letter is not signed twice');
+select is((select (s->>'offer')||'|'||(s->>'acceptedVia')||'|'||(s->>'paymentRequired')||'|'||(s->>'hasPayment')||'|'||(s->>'coeLabel')||'|'||(s->'institution' is not null)::text from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a1') s),'true|signing|true|true|CoE|true','offer_signing_state: accepted, deposit pending, CoE wording');
+select is((public.offer_signing_state('7a000000-0000-0000-0000-0000000000ff'))->>'offer','false','a request that is not an offer letter reports offer false');
+-- The completion email of the signer carries the deposit (amount and a fresh token); the administrator's copy does not.
+select is((select (j->>'label')||'|'||(length(j->>'token'))::text from public.offer_deposit_mail_json('7a000000-0000-0000-0000-0000000000a1','completed','recipient') j),'AUD$1,500.00|64','offer_deposit_mail_json: the amount and a 64-hex token for the signer''s completion email');
+select is(public.offer_deposit_mail_json('7a000000-0000-0000-0000-0000000000a1','completed','admin'),null,'no deposit link in the administrator''s copy');
+select hr.sign_queue('7a000000-0000-0000-0000-0000000000a1','7c000000-0000-0000-0000-0000000000c1','completed','completed:test:7c000000-0000-0000-0000-0000000000c1');
+select is((select j->'deposit'->>'label' from jsonb_array_elements(public.signing_service('notify_claim',null,null,'{"limit":50}')) j where j->>'request_id'='7a000000-0000-0000-0000-0000000000a1' and j->>'kind'='completed'),'AUD$1,500.00','notify_claim (patched signing_service) hands the completion job its deposit');
+select ok(exists(select 1 from hr.sign_tokens t where t.recipient_id='7c000000-0000-0000-0000-0000000000c1'),'the token for the payment link is stored by hash for the signer');
+-- Reminders: staff send one (one per 24 hours unless forced); an agent of another application cannot.
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select lives_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036')$$,'staff send a deposit reminder');
+select throws_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036')$$,'P0024',null,'a second reminder within 24 hours is refused unless forced');
+select lives_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036', true)$$,'staff can force a second reminder');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000030';
+select throws_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036')$$,'P0024',null,'the agency''s agent may send too, under the same 24-hour rule');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000077';
+select throws_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036', true)$$,'42501',null,'a student cannot send reminders');
+reset role;
+select is((select reminder_count::text||'|'||(last_reminder_at is not null)::text from public.payments where id='7b000000-0000-0000-0000-0000000000b1'),'2|true','the payment counts its reminders');
+select is((select count(*) from public.notification_deliveries d where d.application_id='43000000-0000-0000-0000-000000000036' and d.event='offer_deposit_reminder' and d.recipient_email='direct.student@example.test' and d.signing)::int,2,'each reminder queues the student''s email, flagged for its personal link');
+select is((select count(*) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_deposit_reminder')::int,2,'reminders are in the audit log');
+update public.notification_deliveries set state='sending', lease_token='7d000000-0000-0000-0000-0000000000d1' where id=(select id from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000036' and event='offer_deposit_reminder' and signing order by seq limit 1);
+select ok((select (j->>'text') like '%Pay your initial deposit: https://example.test/sign#t=%' and (j->>'html') like '%example.test/sign#t=%' from public.notification_delivery_deposit_reminder((select id from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000036' and event='offer_deposit_reminder' and signing order by seq limit 1),'7d000000-0000-0000-0000-0000000000d1','https://example.test') j),'email-sender gets the reminder text with the personal payment link');
+-- Automatic reminders: every 3 days, at most 3, only when the letter''s switch is on.
+update public.enrollment_offer_letters set deposit_auto_remind=true where application_id='43000000-0000-0000-0000-000000000036';
+update public.payments set last_reminder_at=now()-interval '4 days' where id='7b000000-0000-0000-0000-0000000000b1';
+select is(public.offer_deposit_reminders_tick(),1,'the automatic reminder goes out after 3 days');
+select is(public.offer_deposit_reminders_tick(),0,'and not again until 3 more days');
+update public.payments set last_reminder_at=now()-interval '4 days' where id='7b000000-0000-0000-0000-0000000000b1';
+select is(public.offer_deposit_reminders_tick()::text||'|'||(select reminder_count from public.payments where id='7b000000-0000-0000-0000-0000000000b1')::text,'0|3','never more than 3 reminders');
+-- The verified deposit: amount and currency must match; then deposit_paid_at, one history row, the confirmation email.
 update public.payments set status='paid', amount_cents=100000, amount_paid_cents=100000, paid_at=now() where id='7b000000-0000-0000-0000-0000000000b1';
 select lives_ok($$select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1')$$,'a paid amount that differs from the letter is handled without error');
-select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is null)::text||'|'||(accepted_at is null)::text$q$),'true|true','a mismatched amount neither verifies the deposit nor accepts the offer');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is null)::text$q$),'true','a mismatched amount does not count as the deposit');
 select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_deposit_mismatch' and detail->>'reason'='amount' and (detail->>'expected_cents')::int=150000 and (detail->>'paid_cents')::int=100000),'the mismatch is flagged in the audit log with both amounts');
-select ok(exists(select 1 from hr.sign_events where request_id='7a000000-0000-0000-0000-0000000000a1' and event='payment_mismatch'),'and in the signing history');
 select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1');
 select is((select count(*) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_deposit_mismatch')::int,1,'a retried event flags the same payment once');
-update public.payments set amount_cents=150000, amount_paid_cents=150000 where id='7b000000-0000-0000-0000-0000000000b1';
+update public.payments set amount_cents=150000, amount_paid_cents=150000, receipt_url='https://pay.stripe.com/receipts/test' where id='7b000000-0000-0000-0000-0000000000b1';
 select lives_ok($$select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1')$$,'the matching deposit');
-select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_accepted','the verified deposit accepts the signed offer');
-select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is not null)::text||'|'||(accepted_at is not null)::text||'|'||accepted_via||'|'||accepted_by_name$q$),'true|true|signing_and_payment|Direct Student','deposit_paid_at, accepted_at and accepted_via = signing_and_payment are recorded');
-select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted' and action_key='accept_offer')::int,1,'one accept_offer history row');
-select is((select actor_role||'|'||actor_name||'|'||note||'|'||(payload->>'via') from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted'),'student|Direct Student (signed online)|Offer accepted: the student signed the offer letter online and paid the initial deposit|signing_and_payment','the history row names the student, the note and the channel');
-select ok(exists(select 1 from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action='offer_accepted' and detail->>'via'='signing_and_payment' and detail->>'payment'='7b000000-0000-0000-0000-0000000000b1'),'the acceptance audit row carries the payment');
-select is((select count(*) from public.admission_event_outbox where application_id='43000000-0000-0000-0000-000000000036' and event='offer_accepted')::int,1,'the offer_accepted notification is queued once');
+select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(deposit_paid_at is not null)::text||'|'||accepted_via$q$),'true|signing','deposit_paid_at is recorded; the acceptance is unchanged');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_accepted','the status stays Offer accepted (no status between it and CoE / VoE issued)');
+select is((select count(*)||'|'||max(note)||'|'||max(previous_status)||'>'||max(new_status) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and action_key='deposit_paid'),'1|Initial deposit paid AUD$1,500.00|offer_accepted>offer_accepted','one "Initial deposit paid" history row');
+select is((select count(*) from public.notification_deliveries d where d.application_id='43000000-0000-0000-0000-000000000036' and d.event='offer_deposit_paid' and d.recipient_email='direct.student@example.test' and d.body like '%Payment received, thank you%' and d.body like '%CoE will be issued soon%' and d.body like '%https://pay.stripe.com/receipts/test%')::int,1,'the confirmation email (CoE wording, receipt link) is queued for the student');
 select public.offer_letter_deposit_paid('7a000000-0000-0000-0000-0000000000a1','7b000000-0000-0000-0000-0000000000b1');
-select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted')::text||'|'||(select count(*) from public.portal_audit_log where application_id='43000000-0000-0000-0000-000000000036' and action in ('offer_deposit_paid','offer_accepted'))::text,'1|2','a retried webhook changes nothing (idempotent)');
-select is((select (s->>'offer')||'|'||(s->>'acceptedVia')||'|'||(s->>'paymentRequired')||'|'||(s->>'hasPayment')||'|'||(s->>'mismatch')||'|'||(s->'institution' is not null)::text from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a1') s),'true|signing_and_payment|false|true|true|true','offer_signing_state reports the letter''s state for the signing page');
-select is((public.offer_signing_state('7a000000-0000-0000-0000-0000000000ff'))->>'offer','false','a request that is not an offer letter reports offer false');
+select is((select count(*) from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and action_key='deposit_paid')::text||'|'||(select count(*) from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000036' and event='offer_deposit_paid' and recipient_email='direct.student@example.test')::text,'1|1','a retried webhook changes nothing (idempotent)');
+select ok(exists(select 1 from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000036' and event='offer_deposit_paid' and recipient_email<>'direct.student@example.test'),'the CC''d agent gets the confirmation too');
+select is((select public.offer_letter_payment_required(l) from public.enrollment_offer_letters l where l.application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),false,'the deposit is no longer pending');
+select is(public.offer_deposit_reminders_tick(),0,'no automatic reminder once paid');
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select throws_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036', true)$$,'22023',null,'no reminder once the deposit is paid');
+reset role;
+-- A letter without a deposit: signing accepts, nothing else happens.
 select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a2','Asha Patel','\x255044462d312e34'::bytea,repeat('e',64),'\x255044462d312e34'::bytea,repeat('f',64),'YES','203.0.113.2')$$,'signing a letter without a deposit');
-select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000037'),'offer_accepted','a letter without a deposit keeps today''s behaviour: signing accepts');
-select is(pg_temp.letter('43000000-0000-0000-0000-000000000037',$q$accepted_via||'|'||prepaid_more$q$),'signing|YES','accepted_via signing with the pre-paid answer');
+select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000037'),'offer_accepted','a letter without a deposit: signing accepts');
+select is((select (s->>'hasPayment')||'|'||(s->>'paymentRequired') from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a2') s),'false|false','and reports no deposit');
+select is(public.offer_deposit_mail_json('7a000000-0000-0000-0000-0000000000a2','completed','recipient'),null,'its completion email carries no payment link');
 select is(has_function_privilege('authenticated','public.offer_signing_state(uuid)','execute'),false,'offer_signing_state is not callable by signed-in users');
-select is(has_function_privilege('anon','public.offer_letter_accept_apply(uuid,text,text,text,jsonb)','execute')::text||has_function_privilege('authenticated','public.offer_letter_accept_apply(uuid,text,text,text,jsonb)','execute')::text,'falsefalse','nothing a student or agent calls can mark an offer accepted');
-select is(has_function_privilege('authenticated','public.offer_letter_deposit_paid(uuid,uuid)','execute')::text||has_function_privilege('authenticated','public.payment_apply_stripe(uuid,text,jsonb)','execute')::text,'falsefalse','nothing a student or agent calls can mark a deposit paid');
+select is(has_function_privilege('authenticated','public.offer_letter_deposit_paid(uuid,uuid)','execute')::text||has_function_privilege('authenticated','public.payment_apply_stripe(uuid,text,jsonb)','execute')::text||has_function_privilege('anon','public.offer_letter_accept_apply(uuid,text,text,text,jsonb)','execute')::text||has_function_privilege('authenticated','hr.sign_payment_token(uuid)','execute')::text||has_function_privilege('authenticated','public.offer_deposit_mail(uuid,text,uuid)','execute')::text,'falsefalsefalsefalsefalse','nothing a student or agent calls can mark a deposit paid, accept an offer, mint a link or queue the emails');
+select is(has_function_privilege('authenticated','public.offer_deposit_reminder_send(uuid,boolean)','execute')::text||has_function_privilege('anon','public.offer_deposit_reminder_send(uuid,boolean)','execute')::text,'truefalse','reminders are for signed-in staff and agents only');
 select ok(not exists(select 1 from pg_policies where schemaname='public' and tablename='payments' and cmd in ('INSERT','UPDATE','ALL')),'payments has no write policy for signed-in users');
+-- Leave the claim the way the suites after this one expect it (they set request.jwt.claims; a leftover request.jwt.claim.sub would win).
+set local request.jwt.claim.sub = '';
+
 
 -- SMS opt-in (migration 20261116160000): only a portal user with a saved number and SMS on for the event gets an SMS; the queue is service_role only.
 insert into auth.users(id,email) values ('3a000000-0000-0000-0000-0000000000a1','sms-user@example.test');

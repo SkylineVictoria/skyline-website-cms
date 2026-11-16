@@ -5,6 +5,7 @@ import { Drawer } from "@/pages/admin/components/rto/shared";
 import { downloadCsv } from "@/pages/admin/lib/assessments";
 import { financeOptions, financePayments, financeStatus, stripeDashboardUrl, type FinanceFilters, type FinanceOptions, type FinancePage, type FinancePaymentRow } from "@/pages/admin/lib/finance";
 import { formatMoney } from "@/lib/signingApi";
+import { sendDepositReminder } from "@/pages/agency/lib/portalApplications";
 
 type Preset = "today" | "7d" | "month" | "custom" | "all";
 const PAGE_SIZE = 25;
@@ -35,6 +36,18 @@ export default function PaymentsPage() {
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<FinancePaymentRow | null>(null);
   const [search, setSearch] = useState("");
+  /** OFFER-DEPOSIT: Send reminder on a pending deposit; one per 24 hours unless confirmed (P0024). */
+  const [reminding, setReminding] = useState<string | null>(null); const [forceFor, setForceFor] = useState<FinancePaymentRow | null>(null);
+  const [reminderNote, setReminderNote] = useState<{ id: string; text: string; tone: "ok" | "warn" } | null>(null);
+  const remind = async (row: FinancePaymentRow, force: boolean) => {
+    if (!row.application_id) return;
+    setReminding(row.id); setReminderNote(null); setForceFor(null);
+    try { const r = await sendDepositReminder(row.application_id, force); setReminderNote({ id: row.id, tone: "ok", text: `Reminder sent (${r.reminderCount})` }); await load(); }
+    catch (e) {
+      const err = e as Error & { code?: string };
+      if (err.code === "P0024" || /less than 24 hours/i.test(err.message)) setForceFor(row); else setReminderNote({ id: row.id, tone: "warn", text: err.message || "The reminder could not be sent." });
+    } finally { setReminding(null); }
+  };
   const filters = useMemo<FinanceFilters>(() => ({ ...presetRange(preset, custom), status: status || undefined, courseId: courseId || undefined, agencyId: agencyId || undefined, q: q || undefined, sort, dir, page, pageSize: PAGE_SIZE }),
     [preset, custom, status, courseId, agencyId, q, sort, dir, page]);
   const load = useCallback(async () => {
@@ -99,7 +112,7 @@ export default function PaymentsPage() {
           <th className="px-3 text-right"><button type="button" className="font-semibold" onClick={() => sortBy("amount")}>Amount {arrow("amount")}</button></th>
           <th className="px-3">Purpose</th>
           <th className="px-3"><button type="button" className="font-semibold" onClick={() => sortBy("status")}>Status {arrow("status")}</button></th>
-          <th className="px-3">Stripe</th><th className="px-3">Receipt</th></tr></thead>
+          <th className="px-3">Stripe</th><th className="px-3">Receipt</th><th className="px-3">Reminders</th></tr></thead>
         <tbody>{data.rows.map((r) => { const s = financeStatus(r.status); const dash = stripeDashboardUrl(r); return <tr key={r.id} className="cursor-pointer border-t border-background-200 hover:bg-background-100" onClick={() => setOpen(r)} data-testid="finance-row">
           <td className="px-3 py-2 whitespace-nowrap">{r.paid_at ? when(r.paid_at) : <span className="text-foreground-500">not paid · created {when(r.created_at)}</span>}</td>
           <td className="px-3"><p className="font-medium text-foreground-900">{r.student_name || "—"}</p><p className="text-xs text-foreground-500">{r.student_email}</p></td>
@@ -111,7 +124,18 @@ export default function PaymentsPage() {
           <td className="px-3"><Badge tone={TONE[s.tone]}>{s.label}</Badge>{r.livemode === false ? <span className="ml-1 rounded border border-amber-300 bg-amber-50 px-1 text-2xs font-semibold uppercase text-amber-900">Test</span> : null}</td>
           <td className="px-3">{dash ? <a href={dash} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-primary-700 hover:underline">{r.stripe_payment_intent_id}</a> : <span className="text-xs text-foreground-500">—</span>}</td>
           <td className="px-3">{r.receipt_url ? <a href={r.receipt_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-primary-700 hover:underline">Receipt</a> : <span className="text-xs text-foreground-500">—</span>}</td>
+          <td className="px-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            {["pending", "open", "failed"].includes(r.status) && r.application_id && r.offer_letter_id
+              ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={reminding === r.id} onClick={() => void remind(r, false)} data-testid="finance-send-reminder">{reminding === r.id ? "Sending…" : "Send reminder"}</Button>
+                <span className="text-xs text-foreground-500" data-testid="finance-reminder-count">{r.reminder_count ? `${r.reminder_count} sent${r.last_reminder_at ? ` · last ${when(r.last_reminder_at)}` : ""}` : "none sent"}{r.deposit_auto_remind ? " · auto" : ""}</span>
+                {reminderNote?.id === r.id ? <span className={`text-xs font-medium ${reminderNote.tone === "ok" ? "text-emerald-800" : "text-red-700"}`} role="status">{reminderNote.text}</span> : null}</span>
+              : <span className="text-xs text-foreground-500">{r.reminder_count ? `${r.reminder_count} sent` : "—"}</span>}
+          </td>
         </tr>; })}</tbody></table></div>}
+    {forceFor ? <div role="dialog" aria-label="Send another reminder?" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm" data-testid="finance-reminder-confirm">
+      A reminder for {forceFor.student_name || "this student"} was sent less than 24 hours ago{forceFor.last_reminder_at ? ` (${when(forceFor.last_reminder_at)})` : ""}. Send another one now?
+      <span className="ml-3 inline-flex gap-2"><Button size="sm" onClick={() => void remind(forceFor, true)}>Send anyway</Button><Button size="sm" variant="outline" onClick={() => setForceFor(null)}>Cancel</Button></span>
+    </div> : null}
     {data && data.total > data.pageSize ? <div className="flex items-center justify-between text-sm"><span>{data.total} payments · page {data.page} of {pages}</span>
       <div className="flex gap-2"><Button size="sm" variant="outline" disabled={busy || page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button><Button size="sm" variant="outline" disabled={busy || page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button></div></div> : data ? <p className="text-xs text-foreground-500">{data.total} payment{data.total === 1 ? "" : "s"}</p> : null}
     <Drawer open={Boolean(open)} title={open ? `${formatMoney(open.amount_cents, open.currency)} · ${open.description}` : "Payment"} onClose={() => setOpen(null)}>
@@ -123,7 +147,8 @@ export default function PaymentsPage() {
           ["Amount", `${formatMoney(open.amount_cents, open.currency)}${open.amount_paid_cents != null && open.amount_paid_cents !== open.amount_cents ? ` (paid ${formatMoney(open.amount_paid_cents, open.currency)})` : ""}${open.amount_refunded_cents ? ` · ${formatMoney(open.amount_refunded_cents, open.currency)} refunded` : ""}`],
           ["Paid", open.paid_at ? when(open.paid_at) : "Not paid"], ["Created", when(open.created_at)], ["Payer email", open.payer_email ?? "—"],
           ["Signing request", open.request_reference ? `${open.request_reference} · ${open.request_title ?? ""} (${open.request_state ?? ""})` : "—"],
-          ["Offer", open.offer_letter_id ? `${open.offer_accepted_at ? `Accepted ${when(open.offer_accepted_at)}` : "Not accepted yet"}${open.deposit_paid_at ? ` · deposit paid ${when(open.deposit_paid_at)}` : ""}` : "—"],
+          ["Offer", open.offer_letter_id ? `Offer accepted: ${open.offer_accepted_at ? `Yes (${when(open.offer_accepted_at)})` : "No"} · Deposit: ${open.deposit_paid_at ? `Paid (${when(open.deposit_paid_at)})` : open.status === "paid" ? "Paid" : "Pending"}` : "—"],
+          ["Reminders", open.offer_letter_id ? `${open.reminder_count ?? 0} sent${open.last_reminder_at ? ` · last ${when(open.last_reminder_at)}` : ""}${open.deposit_auto_remind ? " · automatic reminders on" : ""}` : "—"],
           ["Stripe", stripeDashboardUrl(open) ? <a href={stripeDashboardUrl(open)!} target="_blank" rel="noreferrer" className="font-mono text-xs text-primary-700 underline">{open.stripe_payment_intent_id}</a> : "—"],
           ["Receipt", open.receipt_url ? <a href={open.receipt_url} target="_blank" rel="noreferrer" className="text-primary-700 underline">Open the Stripe receipt</a> : "—"],
           ["Failure", open.failure_reason ?? "—"]] as Array<[string, React.ReactNode]>).map(([k, v]) => <div key={k}><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{k}</dt><dd className="mt-0.5">{v}</dd></div>)}

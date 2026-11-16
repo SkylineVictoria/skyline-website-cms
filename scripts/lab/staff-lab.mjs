@@ -209,6 +209,9 @@ async function up() {
     // (20261113140000) adds; hosted applied them after it.
     "20261113025808_business_onboarding.sql": "20261113140001_business_onboarding.sql",
     "20261113031341_staff_signed_documents.sql": "20261113140002_staff_signed_documents.sql",
+    // Two repo files share version 20261116140000 (hosted recorded the discount block as 20261116130000, which the repo's
+    // intake_study_load file also uses): the lab replays the discount block under a free version so the stack can start.
+    "20261116140000_offer_letter_discount_block.sql": "20261116135000_offer_letter_discount_block.sql",
   };
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
     fs.copyFileSync(path.join(REPO, "supabase", "migrations", file), path.join(migrations, HOSTED_LATER[file] ?? file));

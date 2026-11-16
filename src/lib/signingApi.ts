@@ -30,6 +30,8 @@ export interface OfferSigningState {
   offer: boolean; institution?: { name: string | null; logo: string | null } | null;
   letterId?: string; signedAt?: string | null; acceptedAt?: string | null; acceptedVia?: string | null; depositPaidAt?: string | null;
   paymentAmountCents?: number | null; paymentCurrency?: string; paymentRequired?: boolean; hasPayment?: boolean; mismatch?: boolean; applicationStatus?: string;
+  /** "CoE", or "VoE" when the chosen intake's study load is voe (the wording after the deposit is paid). */
+  coeLabel?: string;
 }
 /** What the `payments` function tells a link holder (status / checkout / confirm) and an administrator (refresh). */
 export interface PaymentView {

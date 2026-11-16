@@ -113,6 +113,25 @@ async function offerSigning(admin: any, d: Record<string, unknown>, letterBase64
   } catch { return "retry"; }
 }
 
+/**
+ * OFFER-DEPOSIT: a deposit reminder to the student (event offer_deposit_reminder, delivery.signing) gets their personal payment link
+ * (the signing link: once signed it opens the payment page). The database mints the token while this worker holds the lease and returns
+ * the text and HTML; the link is stored nowhere. "closed": nothing left to pay, the email is dropped. null: send as it is.
+ */
+// deno-lint-ignore no-explicit-any
+async function depositReminder(admin: any, d: Record<string, unknown>): Promise<{ text: string; html: string } | "retry" | "closed" | null> {
+  if (d.event !== "offer_deposit_reminder" || d.signing !== true) return null;
+  if (!signingSite) return "retry";
+  try {
+    const { data, error } = await admin.rpc("notification_delivery_deposit_reminder", { p_id: d.id, p_lease: d.lease_token, p_site: signingSite });
+    if (error) return "retry";
+    const link = data as Record<string, unknown> | null;
+    if (!link) return "retry";
+    if (link.closed) return "closed";
+    return typeof link.text === "string" && typeof link.html === "string" && /#t=[a-f0-9]{64}/.test(link.text) ? { text: link.text, html: link.html } : "retry";
+  } catch { return "retry"; }
+}
+
 type Outcome = { outcome: "accepted"; messageId: string } | { outcome: "failed" | "unknown"; code: string; retry: boolean };
 
 async function send(d: Record<string, unknown>, extra: { attachments: Attachment[]; note: string }): Promise<Outcome> {
@@ -168,7 +187,15 @@ async function worker(): Promise<Response> {
       if (signed === "retry") extra = "retry";
       else if (signed) { d.body = signed.text; d.html_body = signed.html; }
     }
-    const result: Outcome = extra === "retry" ? { outcome: "failed", code: "attachment_unavailable", retry: true } : await send(d, extra);
+    let settled = false;
+    if (extra !== "retry") {
+      const reminder = await depositReminder(admin, d);
+      if (reminder === "retry") extra = "retry";
+      else if (reminder === "closed") settled = true;
+      else if (reminder) { d.body = reminder.text; d.html_body = reminder.html; }
+    }
+    const result: Outcome = extra === "retry" ? { outcome: "failed", code: "attachment_unavailable", retry: true }
+      : settled ? { outcome: "failed", code: "deposit_settled", retry: false } : await send(d, extra);
     const { error: recordError } = await admin.rpc("notification_record_attempt", {
       p_id: d.id, p_lease: d.lease_token, p_outcome: result.outcome,
       p_message_id: result.outcome === "accepted" ? result.messageId : null,

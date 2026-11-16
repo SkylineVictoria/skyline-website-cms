@@ -52,7 +52,8 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
           <p>Details saved{connectorId === 'clicksend' ? ` (username ${summary?.username}${summary?.from ? `, sender ${summary.from}` : ''})`
             : connectorId === 'whatsapp' ? ` (phone number ID ${summary?.phoneNumberId}${summary?.displayNumber ? `, ${summary.displayNumber}` : ''})`
             : `: ${summary?.channels?.join(', ')}`}. Values are never shown again.</p>
-          <p className="text-foreground-600">{connectorId === 'microsoft_teams' ? 'Link a staff team to one of these channels in Communication Hub › Teams › Manage.' : 'Send a test message from Communication Hub › Channels.'}</p>
+          <p className="text-foreground-600">{connectorId === 'microsoft_teams' ? 'Link a staff team to one of these channels in Communication Hub › Teams › Manage.' : 'The Communication Hub offers this channel when messaging people. Send a test to check it.'}</p>
+          {connectorId !== 'microsoft_teams' && <TestSend channel={connectorId === 'clicksend' ? 'sms' : 'whatsapp'} busy={busy} />}
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Replace details</Button>
             <Button variant="outline" disabled={busy} onClick={() => void clear()}>Disconnect</Button>
@@ -91,6 +92,35 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
           </div>
         </form>
       )}
+    </div>
+  );
+}
+
+/** Sends a test message through the saved account to a phone number and shows the provider's answer. */
+function TestSend({ channel, busy }: { channel: 'sms' | 'whatsapp'; busy: boolean }) {
+  const [to, setTo] = useState('');
+  const [state, setState] = useState('');
+  const [running, setRunning] = useState(false);
+  const run = async () => {
+    setRunning(true); setState('Sending test…');
+    try {
+      const request = await rpc<number>('comm_channel_test', { p_channel: channel, p_phone: to });
+      for (let i = 0; i < 8; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const out = await rpc<{ status: string; reason?: string } | null>('comm_channel_test_result', { p_channel: channel, p_request: request });
+        if (out && out.status !== 'sending') { setState(out.status === 'sent' ? 'Test sent. Check the phone.' : `Not delivered: ${out.reason ?? 'unknown reason'}`); return; }
+      }
+      setState('Still waiting for the provider. Check the phone in a minute.');
+    } catch (e) { setState(e instanceof Error ? e.message : 'The test could not be sent.'); }
+    finally { setRunning(false); }
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-2">
+        <input className={inputClass + ' min-w-0 flex-1'} type="tel" value={to} onChange={e => setTo(e.target.value)} placeholder="Your mobile, e.g. 0412 345 678" aria-label="Test phone number" />
+        <Button variant="outline" disabled={busy || running || !to.trim()} onClick={() => void run()}>Send test</Button>
+      </div>
+      {state && <p className="text-xs" role="status">{state}</p>}
     </div>
   );
 }

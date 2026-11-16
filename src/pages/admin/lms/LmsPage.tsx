@@ -1,8 +1,7 @@
 import { Link, Navigate, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
-import LmsBatchWorkspacePage from "./LmsBatchWorkspacePage";
-import LmsBatchAllocationPage from "./LmsBatchAllocationPage";
+import LmsBatchesPage from "./LmsBatchesPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
@@ -24,8 +23,9 @@ export default function LmsPage() {
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
-  if (area === "batches") return <LmsBatchWorkspacePage />;
-  if (area === "batch-allocation") return <LmsBatchAllocationPage />;
+  if (area === "batches") return <LmsBatchesPage />;
+  // Batch Allocation is now part of Batches (one screen).
+  if (area === "batch-allocation") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "timetable") return <LmsTimetablePage />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;

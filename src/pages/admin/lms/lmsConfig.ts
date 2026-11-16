@@ -22,7 +22,6 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "timetable-templates", label: "Templates", route: "/admin/lms/timetable-templates", icon: "ri-file-copy-2-line", dependencies: ["course"], parent: "timetable" },
   { id: "term-breaks", label: "Term breaks", route: "/admin/lms/term-breaks", icon: "ri-calendar-close-line", dependencies: [], parent: "timetable" },
   { id: "locations", label: "Locations & rooms", route: "/admin/lms/locations", icon: "ri-building-line", dependencies: [], parent: "timetable" },
-  { id: "batch-allocation", label: "Batch Allocation", route: "/admin/lms/batch-allocation", icon: "ri-user-follow-line", dependencies: ["course", "intake", "batch"] },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "batch", "session"], primaryAction: "Mark Attendance" },
   { id: "assessments", label: "Assessments", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "batch", "unit"], primaryAction: "Add Assessment" },
 ] as const;

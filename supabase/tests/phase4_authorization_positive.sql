@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(608);
+select plan(611);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1198,5 +1198,12 @@ select throws_ok($$select public.integration_comm_credentials_save(gen_random_uu
 select throws_ok($$select public.integration_comm_fields('clicksend')$$,'42501',null,'saved account details are not readable');
 select throws_ok($$select public.comm_channel_secret('sms')$$,'42501',null,'the secret helper is not callable');
 reset role;
+-- Switch view (migration 20261117003406): only the service role prepares test accounts; a real user is never used.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')$$,'42501',null,'a signed-in user cannot prepare a test account');
+select throws_ok($$select * from public.admin_view_accounts$$,'42501',null,'test accounts are not readable');
+reset role;
+select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')$$,'42501',null,'switch view refuses an account that is not the fixed test account');
 select * from finish();
 rollback;

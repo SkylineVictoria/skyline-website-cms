@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Badge, Button, EmptyState, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -124,7 +125,7 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
   const [error, setError] = useState("");
   const [templates, setTemplates] = useState<Tpl[]>([]);
   const [channel, setChannel] = useState<SendChannel>("email");
-  // Only channels whose account is connected (Communication Hub > Channels) can be used; an internal note is always available.
+  // Only channels whose account is connected in Integrations › Connections can be used; an internal note is always available.
   const [available, setAvailable] = useState<SendChannel[]>(["email", "note"]);
   useEffect(() => {
     void supabase.rpc("comm_channels_status").then(({ data }) => {
@@ -230,7 +231,7 @@ function ConversationView({ id, onBack, onSent }: { id: string; onBack: () => vo
             </button>
           ))}
         </div>
-        {available.length <= 2 ? <p className="text-xs text-foreground-600">Only email is connected. Connect SMS or WhatsApp in the Channels tab to use them here.</p> : null}
+        {available.length <= 2 ? <p className="text-xs text-foreground-600">Only email is connected. Connect SMS (ClickSend) or WhatsApp Business in <Link className="font-medium text-primary-700 underline" to="/admin/integrations">Integrations</Link> to use them here.</p> : null}
         {channel === "email" && !c.email ? <p className="text-xs text-primary-800">This person has no email address.</p> : null}
         {(channel === "sms" || channel === "whatsapp") && !c.phone ? <p className="text-xs text-primary-800">This person has no phone number.</p> : null}
         <div className="grid gap-2 sm:grid-cols-2">

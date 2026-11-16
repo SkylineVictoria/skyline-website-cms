@@ -33,6 +33,23 @@ export interface OfferApplication {
 
 /** What staff typed for one missing detail (the input as typed; printed formatted). */
 interface Entry { input: string; mode: "letter" | "source" | "blank"; saved?: boolean }
+/** The source (LMS) value as the input shows it: money as "25000.00", a date as YYYY-MM-DD, text as it is; "" when the source has none. */
+function sourceInputOf(variable: Pick<LetterVariable, "format" | "inputType">, lv: LetterValue | undefined): string {
+  if (!lv || lv.missing) return "";
+  const raw = String(lv.raw ?? "").trim();
+  if (variable.inputType === "money" || variable.format === "money") return /^-?[0-9]+(\.[0-9]+)?$/.test(raw) ? Number(raw).toFixed(2) : "";
+  if (variable.inputType === "date" || variable.format === "date") { const m = raw.match(/^\d{4}-\d{2}-\d{2}/); return m ? m[0] : ""; }
+  return raw || String(lv.value ?? "").trim();
+}
+/** True when what was typed is the source value (money compared in cents), so it is not an override. */
+function sameAsSource(variable: Pick<LetterVariable, "format" | "inputType">, input: string, source: string): boolean {
+  const a = input.trim(); const b = source.trim();
+  if (variable.inputType === "money" || variable.format === "money") {
+    const cents = (s: string) => { const n = Number(s.replace(/^(AUD)?\$?\s*/i, "").replace(/,/g, "")); return s && Number.isFinite(n) ? Math.round(n * 100) : null; };
+    return cents(a) === cents(b);
+  }
+  return a === b;
+}
 
 
 /**
@@ -123,6 +140,8 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     if (!variable) return [];
     if (e.mode === "source") return e.saved ? [{ key, value: flat[key]?.value ?? "", mode: "source" }] : [];
     if (e.mode === "blank") return [{ key, value: "", mode: "blank" }];
+    // OFFER-FEES: inputs show the LMS value; only what differs from it is an override worth recording.
+    if (sameAsSource(variable, e.input, sourceInputOf(variable, flat[key]))) return [];
     const value = formatTyped(variable, e.input, dateFormat);
     return value ? [{ key, value, mode: "letter" }] : [];
   }), [entries, registry, flat, dateFormat]);
@@ -180,6 +199,17 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   const sourceRecords = Object.entries(entries).filter(([key, e]) => e.mode === "source" && e.saved && !missingKeys.has(key));
 
   const setEntry = (key: string, patch: Partial<Entry>) => setEntries((prev) => ({ ...prev, [key]: { input: "", mode: "letter", ...prev[key], ...patch } }));
+  // OFFER-FEES: an input shows the LMS value until something else is typed; typing the LMS value back removes the override.
+  const sourceInput = (key: string, variable: LetterVariable) => sourceInputOf(variable, flat[key]);
+  const shownInput = (key: string, variable: LetterVariable) => entries[key]?.input ?? sourceInput(key, variable);
+  const isEdited = (key: string, variable: LetterVariable) => { const e = entries[key]; return Boolean(e && e.mode === "letter" && e.input.trim() && !sameAsSource(variable, e.input, sourceInput(key, variable))); };
+  const changeInput = (key: string, variable: LetterVariable, next: string) => setEntries((prev) => {
+    const cur = prev[key]; const same = sameAsSource(variable, next, sourceInputOf(variable, flat[key]));
+    if (same && cur?.mode === "source") return { ...prev, [key]: { ...cur, input: next } };
+    if (same) { if (!cur) return prev; const rest = { ...prev }; delete rest[key]; return rest; }
+    return { ...prev, [key]: { input: next, mode: "letter" } };
+  });
+  const resetToSource = (key: string) => setEntries((prev) => { if (!prev[key]) return prev; const rest = { ...prev }; delete rest[key]; return rest; });
   const focusInput = (key: string) => {
     const el = document.getElementById(`letter-input-${key}`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -359,24 +389,26 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                       const entry = entries[key] ?? { input: "", mode: "letter" as const };
                       const done = !blocking.some((b) => b.key === key);
                       const id = `letter-input-${key}`;
-                      const inputProps = { id, value: entry.input, disabled: entry.mode === "blank" || busy.startsWith("source"), "data-testid": id,
-                        onChange: (e: { target: { value: string } }) => setEntry(key, { input: e.target.value, ...(entry.mode === "blank" ? { mode: "letter" as const } : {}) }) };
+                      const src = sourceInput(key, variable); const shown = shownInput(key, variable); const edited = isEdited(key, variable);
+                      const inputProps = { id, value: shown, disabled: entry.mode === "blank" || busy.startsWith("source"), "data-testid": id,
+                        onChange: (e: { target: { value: string } }) => changeInput(key, variable, e.target.value) };
                       return (
                         <li key={key} className="rounded-md border border-background-200 bg-background-50 p-2.5" data-testid="needs-input-item" data-key={key}>
                           <div className="flex items-baseline justify-between gap-2">
                             <label htmlFor={id} className="text-sm font-medium text-foreground-900">{label}{variable.required ? <span className="text-red-600" aria-hidden="true"> *</span> : <span className="ml-1 text-xs font-normal text-foreground-500">optional</span>}</label>
                             {done ? <i className="ri-check-line text-emerald-700" aria-label="Filled" /> : null}
                           </div>
-                          <p className="mb-1.5 text-2xs text-foreground-500">From {flat[key]?.source ?? variable.source}</p>
+                          <p className="mb-1.5 text-2xs text-foreground-500">From {flat[key]?.source ?? variable.source}{src ? "" : " · not set in LMS"}</p>
                           {variable.inputType === "textarea" ? <textarea rows={2} {...inputProps} className={INPUT} />
-                            : variable.inputType === "money" ? <input type="number" min={0} step={0.01} inputMode="decimal" placeholder="e.g. 14500.00" {...inputProps} className={INPUT} />
+                            : variable.inputType === "money" ? <input type="number" min={0} step={0.01} inputMode="decimal" placeholder={src ? undefined : "e.g. 14500.00"} {...inputProps} className={INPUT} />
                             : <input type={variable.inputType === "date" ? "date" : variable.inputType === "email" ? "email" : variable.inputType === "tel" ? "tel" : "text"}
-                                placeholder={variable.inputType === "date" ? undefined : variable.sample} {...inputProps} className={INPUT} />}
-                          {entry.input.trim() && entry.mode !== "blank" && variable.format !== "text" ? <p className="mt-1 text-2xs text-foreground-600">Prints as: {formatTyped(variable, entry.input, dateFormat)}</p> : null}
+                                placeholder={variable.inputType === "date" || src ? undefined : variable.sample} {...inputProps} className={INPUT} />}
+                          {shown.trim() && entry.mode !== "blank" && variable.format !== "text" ? <p className="mt-1 text-2xs text-foreground-600">Prints as: {formatTyped(variable, shown, dateFormat)}</p> : null}
                           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                            <span className="text-foreground-600">{entry.input.trim() && entry.mode === "letter" ? "Used for this letter only (recorded)." : ""}</span>
+                            <span className="text-foreground-600">{edited ? "Used for this letter only (recorded)." : ""}</span>
+                            {edited ? <button type="button" onClick={() => resetToSource(key)} data-testid={`reset-source-${key}`} className="font-medium text-primary-700 underline underline-offset-2">{src ? "Reset to LMS value" : "Clear"}</button> : null}
                             {variable.editableSource ? (
-                              <button type="button" disabled={!entry.input.trim() || Boolean(busy)} onClick={() => setConfirmSource({ key, variable })} data-testid={`save-source-${key}`}
+                              <button type="button" disabled={!edited || Boolean(busy)} onClick={() => setConfirmSource({ key, variable })} data-testid={`save-source-${key}`}
                                 className="font-medium text-primary-700 underline underline-offset-2 disabled:cursor-not-allowed disabled:text-foreground-400 disabled:no-underline">
                                 {busy === `source-${key}` ? "Saving…" : "Fill and save to source"}
                               </button>
@@ -384,7 +416,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                             {!variable.required ? (
                               <label className="inline-flex items-center gap-1.5 text-foreground-700">
                                 <input type="checkbox" checked={entry.mode === "blank"} data-testid={`leave-blank-${key}`}
-                                  onChange={(e) => setEntry(key, e.target.checked ? { mode: "blank", input: "" } : { mode: "letter" })} />
+                                  onChange={(e) => e.target.checked ? setEntry(key, { mode: "blank", input: "" }) : resetToSource(key)} />
                                 Leave blank
                               </label>
                             ) : null}
@@ -413,6 +445,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                       const variable = registry.find((v) => v.key === key); if (!variable) return null;
                       const entry = entries[key] ?? { input: "", mode: "letter" as const };
                       const db = flat[key]; const dbCents = rawCents(key); const printed = feeCents(key);
+                      const src = sourceInput(key, variable); const shown = shownInput(key, variable); const edited = isEdited(key, variable);
                       const id = `letter-input-${key}`;
                       return (
                         <li key={key} className="rounded-md border border-background-200 bg-background-50 p-2.5" data-testid="offer-fee" data-key={key}>
@@ -421,21 +454,22 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                             {printed == null && variable.required ? <span className="text-xs text-amber-900">Needed</span> : printed != null ? <i className="ri-check-line text-emerald-700" aria-label="Filled" /> : null}
                           </div>
                           <p className="mb-1.5 text-2xs text-foreground-500">From {db?.source ?? variable.source}{dbCents == null ? " · not set in LMS" : ""}</p>
-                          <input id={id} type="number" min={0} step={0.01} inputMode="decimal" value={entry.input} disabled={entry.mode === "blank" || busy.startsWith("source")} data-testid={id}
-                            placeholder={dbCents != null ? (dbCents / 100).toFixed(2) : "e.g. 1500.00"} className={INPUT}
-                            onChange={(e) => setEntry(key, { input: e.target.value, ...(entry.mode === "blank" ? { mode: "letter" as const } : {}) })} />
-                          <p className="mt-1 text-2xs text-foreground-600">{printed != null ? <>Prints as: {entry.input.trim() && entry.mode === "letter" ? formatTyped(variable, entry.input, dateFormat) : db?.value}</> : entry.mode === "blank" ? "Left blank." : "Nothing to print yet."}</p>
+                          <input id={id} type="number" min={0} step={0.01} inputMode="decimal" value={shown} disabled={entry.mode === "blank" || busy.startsWith("source")} data-testid={id}
+                            placeholder={src ? undefined : "e.g. 1500.00"} className={INPUT}
+                            onChange={(e) => changeInput(key, variable, e.target.value)} />
+                          <p className="mt-1 text-2xs text-foreground-600">{printed != null ? <>Prints as: {edited ? formatTyped(variable, shown, dateFormat) : db?.value || formatTyped(variable, shown, dateFormat)}</> : entry.mode === "blank" ? "Left blank." : "Nothing to print yet."}</p>
                           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                            <span className="text-foreground-600">{entry.input.trim() && entry.mode === "letter" ? "Used for this letter only (recorded)." : ""}</span>
+                            <span className="text-foreground-600">{edited ? "Used for this letter only (recorded)." : ""}</span>
+                            {edited ? <button type="button" onClick={() => resetToSource(key)} data-testid={`reset-source-${key}`} className="font-medium text-primary-700 underline underline-offset-2">{dbCents != null ? "Reset to LMS value" : "Clear"}</button> : null}
                             {variable.editableSource ? (
-                              <button type="button" disabled={!entry.input.trim() || Boolean(busy)} onClick={() => setConfirmSource({ key, variable })} data-testid={`save-source-${key}`}
+                              <button type="button" disabled={!edited || Boolean(busy)} onClick={() => setConfirmSource({ key, variable })} data-testid={`save-source-${key}`}
                                 className="font-medium text-primary-700 underline underline-offset-2 disabled:cursor-not-allowed disabled:text-foreground-400 disabled:no-underline">
                                 {busy === `source-${key}` ? "Saving…" : "Fill and save to source"}
                               </button>
                             ) : <span className="text-foreground-400" title={`Change it in ${variable.source}`}>Saved only in its source screen</span>}
                             {!variable.required ? (
                               <label className="inline-flex items-center gap-1.5 text-foreground-700">
-                                <input type="checkbox" checked={entry.mode === "blank"} data-testid={`leave-blank-${key}`} onChange={(e) => setEntry(key, e.target.checked ? { mode: "blank", input: "" } : { mode: "letter" })} /> Leave blank
+                                <input type="checkbox" checked={entry.mode === "blank"} data-testid={`leave-blank-${key}`} onChange={(e) => e.target.checked ? setEntry(key, { mode: "blank", input: "" }) : resetToSource(key)} /> Leave blank
                               </label>
                             ) : null}
                           </div>

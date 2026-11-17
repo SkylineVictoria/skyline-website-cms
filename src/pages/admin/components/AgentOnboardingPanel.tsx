@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
+import { activateOnboardedAgent, addAgentForOnboarding, changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
 import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
@@ -24,7 +24,7 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
   const [changing, setChanging] = useState<OnboardingReferee | null>(null);
   const [history, setHistory] = useState(false);
   const load = useCallback(async () => {
-    try { setRows(await listOnboarding(business.id)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load the onboarding documents."); }
+    try { setRows((await listOnboarding(business.id)).filter((r) => r.kind !== "agent")); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load the onboarding documents."); }
   }, [business.id]);
   useEffect(() => { void load(); }, [load]);
   const refresh = async () => { await load(); await onChanged(); };
@@ -99,7 +99,11 @@ const STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
   { label: "Application form", stages: ["application_sent"] }, { label: "Referee checks", stages: ["application_signed", "references_pending"] },
   { label: "Staff review", stages: ["references_received"] }, { label: "Agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Active", stages: ["agreement_signed"] },
 ];
-function stepIndex(stage: OnboardingStage) { const i = STEPS.findIndex((s) => s.stages.includes(stage)); return i < 0 ? -1 : i; }
+const AGENT_STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
+  { label: "Application form", stages: ["application_sent"] }, { label: "Referee checks", stages: ["application_signed", "references_pending"] },
+  { label: "Ready", stages: ["references_received"] }, { label: "Active", stages: ["activated"] },
+];
+function stepIndex(stage: OnboardingStage, steps = STEPS) { const i = steps.findIndex((s) => s.stages.includes(stage)); return i < 0 ? -1 : i; }
 function detailWords(event: string, detail: Record<string, unknown>): string {
   const parts: string[] = [];
   if (typeof detail.request === "string") parts.push(detail.request);
@@ -124,11 +128,15 @@ function RequestLine({ request, who, busy, onOpen, onRemind }: { request: Reques
   </span>;
 }
 
-function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDownload, onSendAgreement, onReview, onSendReferees, onChangeReferee, onUpload }: {
+function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDownload, onSendAgreement, onReview, onSendReferees, onChangeReferee, onUpload, actions }: {
   row: OnboardingRow; busy: string; compact?: boolean; onOpen: (id: string) => void; onRemind: (r: RequestSummary, who: string) => void; onDownload: (row: OnboardingRow, kind: OnboardingFileKind, label: string) => void;
   onSendAgreement: () => void; onReview: () => void; onSendReferees: () => void; onChangeReferee: (r: OnboardingReferee) => void; onUpload: (r: OnboardingReferee, file: File) => void;
+  /** An agent's own onboarding: Activate / Reject instead of the review and the agreement. */
+  actions?: ReactNode;
 }) {
-  const index = stepIndex(row.stage);
+  const agentMode = row.kind === "agent";
+  const steps = agentMode ? AGENT_STEPS : STEPS;
+  const index = stepIndex(row.stage, steps);
   const received = row.referees.filter((r) => r.status === "received").length;
   // The agreement goes after staff approve the references; before that only with a typed reason (override).
   const canSend = row.stage === "references_approved", canOverride = row.stage === "application_signed" || row.stage === "references_pending" || row.stage === "references_received";
@@ -136,11 +144,12 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
   const pendingSend = row.referees.some((r) => r.status === "pending" && !r.request) && (row.stage === "application_signed" || row.stage === "references_pending");
   const dl = (kind: OnboardingFileKind, label: string) => <Button key={kind} size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:${kind}`} onClick={() => onDownload(row, kind, label)} data-testid={`download-${kind.replace(/:.*/, "")}`}>{label}</Button>;
   return <div className={compact ? "space-y-2" : "mt-4 space-y-4"} data-testid={compact ? undefined : "onboarding-current"} data-stage={row.stage}>
-    <ol className="flex flex-wrap gap-2" aria-label="Onboarding stages" data-testid="onboarding-stepper">{STEPS.map((step, i) => {
+    <ol className="flex flex-wrap gap-2" aria-label="Onboarding stages" data-testid="onboarding-stepper">{steps.map((step, i) => {
       const state = closed ? "todo" : i < index ? "done" : i === index ? "current" : "todo";
       return <li key={step.label} data-step-state={state} className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${state === "done" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : state === "current" ? "border-primary-500 bg-primary-50 font-semibold text-primary-800" : "border-background-300 text-foreground-500"}`}>
         <i className={state === "done" ? "ri-checkbox-circle-fill" : state === "current" ? "ri-radio-button-line" : "ri-checkbox-blank-circle-line"} aria-hidden="true" />{step.label}</li>; })}</ol>
-    <p className="text-sm text-foreground-700"><strong>{stageWords(row.stage, received, row.referees.length)}</strong> · to {row.agent.name} ({row.agent.email}) · started {new Date(row.createdAt).toLocaleDateString()}{row.adminName ? ` by ${row.adminName}` : ""}{closed && row.closedReason ? ` · ${row.closedReason}` : ""}</p>
+    <p className="text-sm text-foreground-700"><strong>{stageWords(row.stage, received, row.referees.length, agentMode ? "agent" : "business")}</strong> · to {row.agent.name} ({row.agent.email}) · started {new Date(row.createdAt).toLocaleDateString()}{row.adminName ? ` by ${row.adminName}` : ""}{closed && row.closedReason ? ` · ${row.closedReason}` : ""}</p>
+    {actions ? <div className="flex flex-wrap gap-2" data-testid="agent-onboarding-actions">{actions}</div> : null}
     <div className="space-y-1 rounded-lg border border-background-200 p-3">
       <p className="text-sm font-medium text-foreground-900">1. Agent Application Form (F04)</p>
       <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />
@@ -152,7 +161,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         <p className="text-sm font-medium text-foreground-900">2. Referee checks (F05) · {received} of {row.referees.length || 2} received</p>
         <span className="flex flex-wrap gap-1.5">
           {!compact && pendingSend ? <Button size="sm" variant="outline" disabled={busy === "referees"} onClick={onSendReferees} data-testid="send-referees">Send referee checks</Button> : null}
-          {!compact && row.stage === "references_received" ? <Button size="sm" icon="ri-shield-check-line" disabled={!!busy} onClick={onReview} data-testid="review-references">Review references</Button> : null}
+          {!compact && !agentMode && row.stage === "references_received" ? <Button size="sm" icon="ri-shield-check-line" disabled={!!busy} onClick={onReview} data-testid="review-references">Review references</Button> : null}
         </span>
       </div>
       {row.approval ? <p className="text-xs text-emerald-800" data-testid="approval-note">References approved{row.approval.by ? ` by ${row.approval.by}` : ""} on {new Date(row.approval.at).toLocaleDateString()}.</p> : null}
@@ -174,7 +183,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         </div>
       </div>)}
     </div>
-    <div className="space-y-1 rounded-lg border border-background-200 p-3">
+    {agentMode ? null : <div className="space-y-1 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium text-foreground-900">3. Agent Agreement (P06)</p>
         {!compact && !row.agreement && !closed ? (canSend
@@ -186,9 +195,101 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       {row.agreement ? <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}{row.signedAt && row.stage === "agreement_signed" ? ` · signed ${new Date(row.signedAt).toLocaleDateString()}` : ""}</p> : null}
       {row.override ? <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="override-note">Sent before both references were back{row.override.by ? ` by ${row.override.by}` : ""} on {new Date(row.override.at).toLocaleDateString()}: “{row.override.reason}”</p> : null}
       <div className="flex flex-wrap gap-1.5">{row.files.agreement ? dl("agreement", ONBOARDING_FILE_LABEL.agreement) : null}{row.files.certificate ? dl("certificate", ONBOARDING_FILE_LABEL.certificate) : null}</div>
-    </div>
+    </div>}
   </div>;
 }
+
+/**
+ * Businesses > {name} > Agents: each agent's own onboarding (migration 20261118004521). The application form and the two referee checks as
+ * for a business (reminders, change of a referee's email, a signed form uploaded); at Ready (both references back) an administrator
+ * activates the agent (only then the congratulations set-password email) or rejects them (a short polite email, never an invitation).
+ */
+export function AgentOnboardings({ businessId, reloadKey = 0, onChanged }: { businessId: string; reloadKey?: number; onChanged: () => void }) {
+  const { push } = useToast();
+  const [rows, setRows] = useState<OnboardingRow[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [changing, setChanging] = useState<OnboardingReferee | null>(null);
+  const [rejecting, setRejecting] = useState<OnboardingRow | null>(null);
+  const load = useCallback(async () => {
+    try { setRows((await listOnboarding(businessId)).filter((r) => r.kind === "agent")); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load the agents' onboarding."); }
+  }, [businessId]);
+  useEffect(() => { void load(); }, [load, reloadKey]);
+  const refresh = async () => { await load(); onChanged(); };
+  const act = async (key: string, work: () => Promise<string>) => {
+    setBusy(key);
+    try { push(await work()); await refresh(); } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }
+  };
+  const download = (row: OnboardingRow, kind: OnboardingFileKind, label: string) => act(`${row.id}:${kind}`, async () => { await openOnboardingFile(row.id, kind); return `${label} opened.`; });
+  const remind = (request: RequestSummary, who: string) => act(`remind:${request.id}`, async () => {
+    if (!request.recipientId) throw new Error("Nobody to remind.");
+    await signingAction({ action: "resend", id: request.id, recipientId: request.recipientId }); return `Reminder sent to ${who}.`;
+  });
+  if (error) return <p role="alert" className="px-4 py-3 text-sm text-red-700">{error}</p>;
+  if (!rows || !rows.length) return null;
+  // The latest onboarding of each agent (the list is newest first).
+  const latest = rows.filter((r, i) => rows.findIndex((x) => x.agent.id === r.agent.id) === i);
+  const open = latest.filter((r) => ACTIVE_STAGES.includes(r.stage));
+  const closed = latest.filter((r) => !ACTIVE_STAGES.includes(r.stage));
+  const actionsFor = (row: OnboardingRow) => {
+    const isOpen = ACTIVE_STAGES.includes(row.stage);
+    const received = row.referees.filter((r) => r.status === "received").length;
+    const restart = !isOpen && row.stage !== "activated" && (row.agent.status === "Onboarding" || row.agent.status === "Declined");
+    return <>
+      {isOpen ? <Button size="sm" icon="ri-user-follow-line" disabled={!!busy || row.stage !== "references_received"} title={row.stage === "references_received" ? undefined : `Available once both references are back (${received} of 2 received)`}
+        onClick={() => void act(`activate:${row.id}`, async () => { const r = await activateOnboardedAgent(row.id); return `${row.agent.name} is active. ${r.invited ? `The congratulations email with their sign-in link was sent to ${row.agent.email}.` : r.loginExists ? "They already sign in." : "The sign-in email could not be sent; use Resend invite."}`; })}
+        data-testid="activate-agent">{busy === `activate:${row.id}` ? "Activating…" : "Activate agent"}</Button> : null}
+      {isOpen ? <Button size="sm" variant="outline" icon="ri-close-circle-line" disabled={!!busy} onClick={() => setRejecting(row)} data-testid="reject-agent">Reject…</Button> : null}
+      {restart ? <Button size="sm" variant="outline" icon="ri-restart-line" disabled={!!busy}
+        onClick={() => void act(`restart:${row.id}`, async () => { const r = await addAgentForOnboarding({ businessId, agentId: row.agent.id, name: row.agent.name, email: row.agent.email }); return `Application form (${r.reference}) sent to ${r.agent.email} again.`; })}
+        data-testid="restart-agent-onboarding">Start onboarding again</Button> : null}
+    </>;
+  };
+  const staged = (row: OnboardingRow, compact: boolean) => <StagedOnboarding row={row} busy={busy} compact={compact} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => undefined} onReview={() => undefined}
+    onSendReferees={() => void act("referees", async () => { const r = await sendRefereeChecks(row.id); return r.sent ? `Referee check${r.sent === 1 ? "" : "s"} sent (${r.sent}).` : "Nothing to send: every referee has a request or is received."; })}
+    onChangeReferee={setChanging} onUpload={(referee, file) => void act(`upload:${referee.id}`, async () => { const r = await uploadRefereeForm(referee.id, file); return `Reference ${referee.position} marked as received (${r.stage === "references_received" ? "the agent is ready to activate" : "waiting for the other"}).`; })}
+    actions={actionsFor(row)} />;
+  return <div className="border-t border-background-200 p-4" data-testid="agent-onboardings">
+    <h3 className="font-heading text-sm font-semibold text-foreground-950">Agent onboarding</h3>
+    <p className="text-xs text-foreground-600">Agents added here sign the application form, then their two referees are asked for a reference. An agent is Ready once both are back; nothing reaches them until an administrator activates them.</p>
+    {open.map((row) => <div key={row.id} className="mt-3 rounded-lg border border-sky-200 p-3" data-testid="agent-onboarding" data-stage={row.stage} data-agent={row.agent.email}>
+      <p className="text-sm font-semibold text-foreground-900">{row.agent.name} <span className="font-normal text-foreground-600">({row.agent.email})</span></p>
+      {staged(row, false)}
+    </div>)}
+    {closed.length ? <details className="mt-3" open={!open.length}>
+      <summary className="cursor-pointer text-sm font-medium text-foreground-700">Finished or closed ({closed.length})</summary>
+      <ul className="mt-2 divide-y divide-background-200 text-sm">{closed.map((row) => <li key={row.id} className="py-3" data-testid="agent-onboarding" data-stage={row.stage} data-agent={row.agent.email}>
+        <p className="font-medium text-foreground-900">{row.agent.name} <span className="font-normal text-foreground-600">({row.agent.email})</span></p>
+        {row.decline ? <p className="text-xs text-amber-900">Rejected{row.decline.by ? ` by ${row.decline.by}` : ""} on {new Date(row.decline.at).toLocaleDateString()} (reason for staff): “{row.decline.reason}”. The agent was told politely, without the reason, and was never invited.</p> : null}
+        {staged(row, true)}
+      </li>)}</ul>
+    </details> : null}
+    {rejecting ? <RejectAgentDialog row={rejecting} onClose={() => setRejecting(null)} onDone={async (m) => { setRejecting(null); push(m); await refresh(); }} /> : null}
+    {changing ? <ChangeRefereeDialog referee={changing} onClose={() => setChanging(null)} onDone={async (m) => { setChanging(null); push(m); await refresh(); }} /> : null}
+    {openId ? <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void refresh()} /> : null}
+  </div>;
+}
+
+function RejectAgentDialog({ row, onClose, onDone }: { row: OnboardingRow; onClose: () => void; onDone: (message: string) => Promise<void> }) {
+  const [reason, setReason] = useState(""); const [working, setWorking] = useState(false); const [error, setError] = useState("");
+  const reject = async () => {
+    if (working || reason.trim().length < 5) return;
+    setWorking(true); setError("");
+    try { const r = await rejectOnboarding({ onboardingId: row.id, reason: reason.trim() }); await onDone(`${row.agent.name} rejected. ${r.emailed ? "They were told politely (without your reason)." : "They could not be emailed; tell them yourself."} No sign-in invitation is sent.`); }
+    catch (e) { setError(e instanceof Error ? e.message : "The agent could not be rejected."); setWorking(false); }
+  };
+  return <Modal open title={`Reject ${row.agent.name}`} onClose={() => { if (!working) onClose(); }} width="max-w-lg"
+    footer={<div className="flex justify-end gap-2"><Button variant="outline" disabled={working} onClick={onClose}>Cancel</Button>
+      <Button variant="outline" icon="ri-close-circle-line" disabled={working || reason.trim().length < 5} onClick={() => void reject()} data-testid="reject-agent-confirm">{working ? "Rejecting…" : "Reject agent"}</Button></div>}>
+    <div className="space-y-3 text-sm">
+      <p className="text-foreground-700">The agent&apos;s onboarding closes: open requests are voided, they get a short polite email without your reason, and they never get a sign-in invitation. You can start their onboarding again later.</p>
+      {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700">{error}</p> : null}
+      <Field label="Reason (kept for staff only)" required><TextArea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} data-testid="reject-agent-reason" /></Field>
+    </div>
+  </Modal>;
+}
+
 
 function UploadButton({ disabled, onFile, position }: { disabled: boolean; onFile: (file: File) => void; position: number }) {
   const input = useRef<HTMLInputElement>(null);

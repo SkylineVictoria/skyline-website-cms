@@ -27,6 +27,8 @@ export interface OnboardingReferee {
 }
 export interface OnboardingEvent { id: number; at: string; actor: string; event: string; detail: Record<string, unknown> }
 export interface OnboardingRow {
+  /** business: the business's onboarding (agreement); agent: one agent's own onboarding (no agreement; activated by staff). */
+  kind?: "business" | "agent";
   id: string; status: "sent" | "signed" | "closed"; stage: OnboardingStage; createdAt: string; signedAt: string | null; signerName: string | null; closedReason: string | null;
   applicationSignedAt: string | null; referencesReceivedAt: string | null; message: string | null;
   commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null; adminName: string; adminPosition: string;
@@ -35,7 +37,7 @@ export interface OnboardingRow {
   approval?: { at: string; by: string | null } | null;
   decline?: { at: string; reason: string; by: string | null } | null;
   activation?: { at: string; invitationId: string | null; invitationStatus: "pending" | "accepted" | "revoked" | null } | null;
-  agent: { id: string; name: string; email: string }; answers: Record<string, string>;
+  agent: { id: string; name: string; email: string; role?: "agent" | "agency_admin"; status?: string }; answers: Record<string, string>;
   /** The merged request of a legacy onboarding. */
   request: RequestSummary | null;
   application: RequestSummary | null; agreement: RequestSummary | null; referees: OnboardingReferee[]; events: OnboardingEvent[];
@@ -50,6 +52,7 @@ export const EVENT_LABEL: Record<string, string> = {
   agent_notified_referees: "Agent told their referees were contacted", staff_notified_references: "Staff emailed: references received", override: "Agreement sent before both references (override)",
   agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
   references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
+  agent_added: "Agent added", agent_activated: "Agent activated",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
@@ -101,7 +104,9 @@ export const REFEREE_LABELS: Array<[string, string]> = [
 export const todayIso = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 export const formatAuDate = (iso: string | null | undefined) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso ?? ""; };
 /** The stage in plain words, with the referee count while waiting for them. */
-export function stageWords(stage: OnboardingStage, received: number, total: number): string {
-  if (stage === "references_pending") return `Waiting for referees (${received} of ${total || 2} received)`;
+export function stageWords(stage: OnboardingStage, received: number, total: number, kind: "business" | "agent" = "business"): string {
+  if (stage === "references_pending" || (kind === "agent" && stage === "application_signed")) return `Waiting for referees (${received} of ${total || 2} received)`;
+  if (kind === "agent" && stage === "references_received") return "Ready: both references received";
+  if (kind === "agent" && stage === "declined") return "Rejected";
   return STAGE_LABEL[stage] ?? stage;
 }

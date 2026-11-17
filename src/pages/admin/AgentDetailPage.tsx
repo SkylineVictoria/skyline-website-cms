@@ -11,7 +11,7 @@ import ApplicationsList from "@/pages/admin/components/ApplicationsList";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
-import { deactivateAgent, getAgentOverview, resendInvitation, type AgentOverview, awaitingPassword } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, deactivateAgent, getAgentOverview, resendInvitation, type AgentOverview, awaitingPassword } from "@/pages/admin/lib/businessData";
 import { groupByStudent } from "@/pages/admin/lib/businessGroups";
 import { formatDate } from "@/pages/agency/lib/portalData";
 
@@ -98,7 +98,9 @@ export default function AgentDetailPage() {
           {awaitingPassword(agent) && agent.email
             ? <Button variant="outline" icon="ri-mail-send-line" disabled={busy} onClick={() => void resend()}>{busy ? "Sending…" : "Resend invite"}</Button>
             : null}
-          {agent.status === "Inactive"
+          {agent.status === "Onboarding" || agent.status === "Declined"
+            ? <Link to={`/admin/businesses/${agent.business.id}?tab=agents`} className="text-sm font-semibold text-primary-700 hover:underline">Open their onboarding</Link>
+            : agent.status === "Inactive"
             ? <Button onClick={() => setDialog(true)}>Activate agent</Button>
             : <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate agent</Button>}
         </>}
@@ -106,6 +108,14 @@ export default function AgentDetailPage() {
       {awaitingPassword(agent) ? (
         <p role="status" className="-mt-2 mb-5 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {agent.status === "Active" ? "Active" : "Waiting for their business to be approved"}{agent.statusChangedAt ? ` since ${formatDate(agent.statusChangedAt)}` : ""}. {agent.email || "They"} hasn't set a password yet, so they cannot sign in until they open the invitation email. Use Resend invite if they lost it.
+        </p>
+      ) : agent.status === "Onboarding" ? (
+        <p role="status" className="-mt-2 mb-5 rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950" data-testid="agent-onboarding-status">
+          In onboarding: {agentOnboardingWords(agent.onboarding)}. They have no sign-in and get their invitation only when an administrator activates them on the business&apos;s Agents tab.
+        </p>
+      ) : agent.status === "Declined" ? (
+        <p role="status" className="-mt-2 mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          Rejected during onboarding. They were never invited; their onboarding can be started again from the business&apos;s Agents tab.
         </p>
       ) : agent.status === "Inactive" ? (
         <p role="status" className="-mt-2 mb-5 rounded-md border border-background-300 bg-background-100 px-4 py-3 text-sm text-foreground-700">

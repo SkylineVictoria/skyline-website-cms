@@ -234,6 +234,17 @@ export interface AgentAgreementSendInput {
 export const sendAgentAgreement = (input: AgentAgreementSendInput) => onboardingAction<AgentOnboardingSendResult>({ action: "agent_onboarding_send_agreement", ...input });
 /** Reject the references: the onboarding is declined (reason kept for staff), its open requests voided, the agent emailed a polite decline. */
 export const rejectOnboarding = (input: { onboardingId: string; reason: string }) => onboardingAction<{ id: string; stage: string; emailed: boolean; agent: { name: string; email: string } }>({ action: "agent_onboarding_reject", ...input });
+/**
+ * Agent-level onboarding (migration 20261118004521): Add agent records the agent as Onboarding (no login, no invitation) and emails them
+ * the application form, prefilled with the business's details. CMS administrators pass the business; a business admin agent in the portal
+ * adds to their own business. `agentId` starts the onboarding again for a Declined agent or one whose form was never signed.
+ */
+export interface AgentAddResult { onboardingId: string; agentId: string; reference: string; sent: boolean; agent: { id: string; name: string; email: string; role: "agent" | "agency_admin" }; agency: { id: string; name: string } }
+export const addAgentForOnboarding = (input: { businessId?: string | null; agentId?: string | null; name: string; email: string; phone?: string; role?: "agent" | "agency_admin"; message?: string }) =>
+  onboardingAction<AgentAddResult>({ action: "agent_onboarding_add_agent", ...input });
+/** Activate: both references are back; the agent becomes Active and is sent the congratulations set-password email (once). */
+export const activateOnboardedAgent = (onboardingId: string) =>
+  onboardingAction<{ onboardingId: string; invited: boolean; loginExists: boolean; agent: { id: string; name: string; email: string } }>({ action: "agent_onboarding_agent_activate", onboardingId });
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

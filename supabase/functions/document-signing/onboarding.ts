@@ -110,7 +110,7 @@ async function prepare(ctx: OnboardingContext, agencyId: string, agentId: unknow
   return prepared;
 }
 /** The values our records give, plus the ABN Lookup (legal entity, trading name, GST, state, postcode). Unavailable: left for the agent. */
-async function recordValues(prepared: Prepared): Promise<Record<string, string>> {
+async function recordValues(prepared: Pick<Prepared, "agency" | "values">): Promise<Record<string, string>> {
   const values: Record<string, string> = {};
   for (const [key, value] of Object.entries(prepared.values ?? {})) if (typeof value === "string" && value.trim()) values[key] = value.trim();
   if (prepared.agency.abn) {
@@ -203,8 +203,58 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   return await sendRequest(ctx, id, { reference: record.reference, onboardingId, stage: onboarding.stage, override: onboarding.override === true, printed: made.printed.length, fields: made.recipient.length });
 }
 
+/**
+ * Agent-level onboarding (2026-11-17, fourth brief): Add agent (CMS) or the business admin agent (portal) adds the agent as Onboarding (no
+ * login, no invitation) and the Agent Application Form (F04), prefilled with the business's details and the agent's contact, is made and
+ * emailed from the database as the referee checks are (the portal caller is no Sign administrator). The rest runs as for a business: the
+ * signed form sends the two referee checks; both back = Ready; an administrator activates (the congratulations set-password email) or rejects.
+ */
+interface AgentAdded { onboardingId: string; agentId: string; agency: { id: string; name: string; abn: string | null }; agent: { id: string; name: string; email: string; role: string; status: string }; values: Record<string, unknown> }
+export async function addAgent(ctx: OnboardingContext): Promise<Json> {
+  // Both blanks must be installed before anything is recorded: the referee checks go out by themselves once the form is signed.
+  const form = await serviceRpc(ctx.ports, "agency_onboarding_template_get", { p_key: AGENT_ONBOARDING_DOCS.form.key }) as OnboardingTemplate | null;
+  if (!form) throw new SigningError(`${ONBOARDING_TEMPLATES_MISSING} (form)`);
+  if (!await serviceRpc(ctx.ports, "agency_onboarding_template_get", { p_key: AGENT_ONBOARDING_DOCS.referee.key })) throw new SigningError(`${ONBOARDING_TEMPLATES_MISSING} (referee)`);
+  const business = String(ctx.body.businessId ?? ""), agent = String(ctx.body.agentId ?? "");
+  const added = await ctx.rpc("agent_onboarding_agent_add", { p_business: UUID.test(business) ? business : null, p_name: text(ctx.body.name, 200), p_email: text(ctx.body.email, 254),
+    p_phone: text(ctx.body.phone, 40), p_role: ctx.body.role === "agency_admin" ? "agency_admin" : ctx.body.role === "agent" ? "agent" : null, p_message: text(ctx.body.message, 2000) || null,
+    p_agent: UUID.test(agent) ? agent : null }) as AgentAdded;
+  return await sendAgentApplicationForm(ctx, added, form);
+}
+async function sendAgentApplicationForm(ctx: OnboardingContext, added: AgentAdded, template: OnboardingTemplate): Promise<Json> {
+  try {
+    const values = await recordValues({ agency: added.agency, values: added.values });
+    const title = `Agent application form: ${text(added.agent.name, 80)} (${text(added.agency.name, 110)})`.slice(0, 200);
+    const made = await buildDocument(ctx, template, values, title);
+    const id = ctx.ports.uuid();
+    await ctx.store(`${id}/original.pdf`, made.bytes);
+    const role = signerRole("form");
+    const created = await serviceRpc(ctx.ports, "agency_onboarding_agent_application_create", { p_onboarding: added.onboardingId, p_data: { id, title, original_hash: await sha256Hex(made.bytes),
+      template_id: template.id, fields: recipientFields(made.recipient, role.key), role_key: role.key, role_label: role.label, form_pages: template.sourcePages,
+      message: text(ctx.body.message, 2000) || null, expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3, values } }) as { reference: string; requestId: string };
+    ctx.commit();
+    const mail = await drainSigningMail(ctx.ports);
+    return { onboardingId: added.onboardingId, agentId: added.agentId, agent: added.agent, agency: { id: added.agency.id, name: added.agency.name }, reference: created.reference,
+      requestId: created.requestId, sent: true, mail, printed: made.printed.length, fields: made.recipient.length };
+  } catch (error) {
+    // Nothing usable was sent: the onboarding closes; the agent stays Onboarding and can be sent the form again.
+    await serviceRpc(ctx.ports, "agency_onboarding_agent_abort", { p_onboarding: added.onboardingId, p_reason: "not_sent" }).catch(() => undefined);
+    throw error;
+  }
+}
+/** Activate: both references are back; the agent becomes Active and gets ONE congratulations email with the set-password link. */
+export async function activateAgent(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const result = await ctx.rpc("agency_onboarding_agent_activate", { p_onboarding: onboardingId }) as Activation;
+  const invitation = result.invitation;
+  const invited = !!invitation && !invitation.sent && await sendSetPasswordEmail(ctx.ports, { invitationId: invitation.id, email: invitation.email, name: invitation.name, role: invitation.role,
+    agencyName: result.agency.name, expiresAt: invitation.expiresAt, kind: "agent" });
+  return { ...result, invited };
+}
+
 interface Followup {
-  id: string; stage: string; agency: { id: string; name: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
+  id: string; kind?: "business" | "agent"; stage: string; agency: { id: string; name: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
   values: Record<string, string>; referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; address: string; status: string; requestId: string | null }>;
   received: number; total: number; template: OnboardingTemplate | null; notified: { agentReferees: boolean; staffReferences: boolean };
 }
@@ -251,7 +301,8 @@ export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "
     const names = (follow.referees ?? []).map((r) => `${r.name || r.email}${r.organisation ? ` (${r.organisation})` : ""}`).join(" and ");
     const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-referees-${onboardingId}`, from: config.from, to: follow.agent.email, subject: "Your referees have been contacted",
       textBody: `Hello ${text(follow.agent.name, 80) || "there"},\n\nThank you for signing the Agent Application Form for ${text(follow.agency.name, 120)}. We have emailed a referee check form to ${names}. `
-        + "Once both referees have completed it, our team will send you the Agent Agreement. You can see where things are up to on your agency dashboard." + SIGN_OFF }));
+        + (follow.kind === "agent" ? "Once both referees have completed it, our team will review your application and let you know by email."
+          : "Once both referees have completed it, our team will send you the Agent Agreement. You can see where things are up to on your agency dashboard.") + SIGN_OFF }));
     if (outcome.state === "sent") await serviceRpc(ports, "agency_onboarding_mark_notified", { p_onboarding: onboardingId, p_kind: "agent_notified_referees", p_detail: { to: follow.agent.email, referees: sent } }).catch(() => undefined);
   }
   return { sent, skipped: 0 };
@@ -266,8 +317,12 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   const to = [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.sentBy?.email ? [] : config.adminTo)].filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
   if (!provider || !config.from || !to.length) return { notified: false };
   const lines = (follow.referees ?? []).map((r) => `- ${r.name || r.email}${r.organisation ? `, ${r.organisation}` : ""}: ${r.status === "received" ? "received" : r.status}`).join("\n");
-  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}`, from: config.from, to: to.join(", "), subject: `References received: ${text(follow.agency.name, 120)}`,
-    textBody: `Both referee checks for ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) are in.\n\n${lines}\n\nOpen the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) to read them and send the Agent Agreement.` + SIGN_OFF }));
+  const agent = follow.kind === "agent";
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}`, from: config.from, to: to.join(", "),
+    subject: agent ? `Agent ready to activate: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `References received: ${text(follow.agency.name, 120)}`,
+    textBody: `Both referee checks for ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) are in.\n\n${lines}\n\n`
+      + (agent ? `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to read them, then activate or reject the agent. Nothing is sent to the agent until you do.`
+        : `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) to read them and send the Agent Agreement.`) + SIGN_OFF }));
   if (outcome.state !== "sent") return { notified: false };
   await serviceRpc(ports, "agency_onboarding_mark_notified", { p_onboarding: onboardingId, p_kind: "staff_notified_references", p_detail: { to } }).catch(() => undefined);
   return { notified: true };
@@ -303,7 +358,7 @@ export async function activateBusiness(ctx: Pick<OnboardingContext, "ports">, on
 }
 
 /** A new one-time link for an invitation, mailed through the signing mail provider; the database keeps only the token's hash. */
-export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null }): Promise<boolean> {
+export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null; kind?: "business" | "agent" }): Promise<boolean> {
   const { provider, config } = ports.mail;
   if (!provider || !config.from || !config.siteUrl) return false;
   const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
@@ -312,8 +367,12 @@ export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitatio
   const link = `${config.siteUrl.replace(/\/+$/, "")}/agency/accept-invite#t=${token}`;
   const role = inv.role === "agency_admin" ? "the business admin agent" : "an agent";
   const until = inv.expiresAt && isoToday() <= inv.expiresAt.slice(0, 10) ? ` This link works until ${inv.expiresAt.slice(0, 10).split("-").reverse().join("/")}.` : "";
-  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-${hash.slice(0, 8)}`, from: config.from, to: inv.email, subject: "Set your password for the Skyline agent portal",
-    textBody: `Hello ${text(inv.name, 80) || "there"},\n\nYour agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. You are ${role} for it.\n\n`
+  const agent = inv.kind === "agent";
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-${hash.slice(0, 8)}`, from: config.from, to: inv.email,
+    subject: agent ? "Congratulations: your Skyline agent account is ready" : "Set your password for the Skyline agent portal",
+    textBody: `Hello ${text(inv.name, 80) || "there"},\n\n`
+      + (agent ? `Congratulations! Your application to become ${role} for Skyline Institute of Technology with ${text(inv.agencyName, 120)} has been approved.\n\n`
+        : `Your agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. You are ${role} for it.\n\n`)
       + `Set your password to open the agent portal:\n${link}\n\nOpen the link and press the button on the page to continue.${until} If the link has expired, the page lets you ask for a new one.` + SIGN_OFF }));
   return outcome.state === "sent";
 }
@@ -324,13 +383,16 @@ export async function rejectOnboarding(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
   const declined = await ctx.rpc("agency_onboarding_decline", { p_onboarding: onboardingId, p_reason: text(ctx.body.reason, 1000) }) as
-    { id: string; stage: string; openRequestIds: string[]; agent: { id: string; name: string; email: string }; agency: { id: string; name: string } };
+    { id: string; stage: string; kind?: "business" | "agent"; openRequestIds: string[]; agent: { id: string; name: string; email: string }; agency: { id: string; name: string } };
   for (const id of declined.openRequestIds ?? []) { try { await ctx.admin("void", id, { reason: "Onboarding declined" }); } catch { /* already closed */ } }
   const { provider, config } = ctx.ports.mail;
   let emailed = false;
   if (provider && config.from && declined.agent?.email) {
     const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-declined-${onboardingId}`, from: config.from, to: declined.agent.email, subject: "Your agent application with Skyline Institute of Technology",
-      textBody: `Hello ${text(declined.agent.name, 80) || "there"},\n\nThank you for your interest in representing Skyline Institute of Technology and for the time you put into the application for ${text(declined.agency.name, 120)}. `
+      textBody: declined.kind === "agent"
+        ? `Hello ${text(declined.agent.name, 80) || "there"},\n\nThank you for your interest in becoming an agent for Skyline Institute of Technology with ${text(declined.agency.name, 120)}, and for the time you put into your application. `
+          + "After reviewing it, we are unable to proceed at this time.\n\nWe appreciate your interest and wish you every success." + SIGN_OFF
+        : `Hello ${text(declined.agent.name, 80) || "there"},\n\nThank you for your interest in representing Skyline Institute of Technology and for the time you put into the application for ${text(declined.agency.name, 120)}. `
         + "After reviewing it, we are unable to proceed with an agent agreement at this time.\n\nWe appreciate your interest and wish you every success. If you have any questions, please reply to this email." + SIGN_OFF }));
     emailed = outcome.state === "sent";
   }
@@ -377,4 +439,6 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_reject: rejectOnboarding,
   agent_onboarding_referee_change: changeReferee,
   agent_onboarding_referee_upload: uploadRefereeForm,
+  agent_onboarding_add_agent: addAgent,
+  agent_onboarding_agent_activate: activateAgent,
 };

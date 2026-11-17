@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(845);
+select plan(909);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -73,6 +73,13 @@ insert into public.agency_memberships(user_id,agency_id,role) values
  ('23000000-0000-0000-0000-000000000010','13000000-0000-0000-0000-000000000001','agency_admin'),
  ('23000000-0000-0000-0000-000000000011','13000000-0000-0000-0000-000000000002','agency_admin'),
  ('23000000-0000-0000-0000-000000000012','13000000-0000-0000-0000-000000000002','agent');
+-- Since migration 20261118004521 an agent invitation needs the agent's Active record in that business (Add agent / onboarding first).
+insert into public.agents(business_id,full_name,email,role,status) values
+ ('13000000-0000-0000-0000-000000000001','New Agent','new.agent@example.test','agent','Active'),
+ ('13000000-0000-0000-0000-000000000001','Second','second.admin@example.test','agent','Active'),
+ ('13000000-0000-0000-0000-000000000002','B Agent','b.agent@example.test','agent','Active'),
+ ('13000000-0000-0000-0000-000000000001','Accepted','accept.me@example.test','agent','Active'),
+ ('13000000-0000-0000-0000-000000000001','Mixed Case','mixed.case@example.test','agent','Active');
 select lives_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010',null,'new.agent@example.test','New Agent','agent')$$,'agency admin invites an agent; agency comes from their own membership');
 select is((select agency_id from public.agency_invitations where email='new.agent@example.test'),'13000000-0000-0000-0000-000000000001'::uuid,'invitation is bound to the inviter agency');
 select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000010','13000000-0000-0000-0000-000000000002','other@example.test','Other','agent')$$,'42501',null,'agency admin cannot target another agency');
@@ -1588,7 +1595,7 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
 select is(public.portal_agency_id(),pg_temp.gate(),'renewed: the workspace is back');
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
-select is(public.admin_agent_activate(null,pg_temp.gate(),'Extra Agent','extra.gate@example.test','','','agent')->>'role','agent','and Add agent works again');
+select is(public.agent_onboarding_agent_add(pg_temp.gate(),'Extra Agent','extra.gate@example.test','','agent')->'agent'->>'status','Onboarding','and Add agent works again (it starts the agent''s onboarding since 20261118004521)');
 -- SLIT's direct business (migration 20261117230000): agents there are @slit.edu.au only; an uploaded signed copy needs a reason and is logged.
 reset role;
 create function pg_temp.direct() returns uuid language sql stable security definer as $$ select id from public.agencies where coalesce(is_direct, false) limit 1 $$;
@@ -1613,6 +1620,117 @@ select is((select d->>'reason' from jsonb_array_elements(public.admin_business_d
 select is((select count(*)::int from jsonb_array_elements(public.agency_onboarding_list(pg_temp.gate())) o, jsonb_array_elements(o->'events') e where e->>'event'='agreement_uploaded' and e->'detail'->>'reason'='Signed on paper at the agent fair'),1,'and the onboarding history has it');
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.admin_business_document_add(pg_temp.gate(),'agent_agreement',pg_temp.gate()::text || '/signed-copy.pdf','signed-copy.pdf',1000,'An agent tries')$$,'42501',null,'only administrators record a signed copy');
+-- Agent-level onboarding (migration 20261118004521): Add agent starts the agent's own onboarding (Onboarding, no login, no invitation);
+-- not Ready after one reference, Ready after both; an administrator activates (ONE invitation) or rejects (Declined, never invited); no
+-- invitation to an agent who is not Active; the business flow and the direct business are unchanged. Plus addresses are accepted.
+reset role;
+insert into public.agencies(id,name,code,registration_number,business_email,status) values ('13000000-0000-0000-0000-0000000000f1','Flow Co','FLOW-1','11111111111','info@flow.example','Active');
+insert into public.business_documents(business_id, kind, file_name, storage_path) values ('13000000-0000-0000-0000-0000000000f1','agent_agreement','fixture-agreement.pdf','fixtures/flow/agreement.pdf');
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-0000000000f2','flow.admin@example.test',now());
+insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-0000000000f2','33000000-0000-0000-0000-0000000000f2','Flow Admin','flow.admin@example.test');
+insert into public.agency_memberships(user_id,agency_id,role,status) values ('23000000-0000-0000-0000-0000000000f2','13000000-0000-0000-0000-0000000000f1','agency_admin','Active');
+update public.agencies set profile = '{"agent_website":"flow.example","ref1_email":"business.ref@example.test","contact_given_name":"Flow"}'::jsonb where id = '13000000-0000-0000-0000-0000000000f1';
+create function pg_temp.fa(p_email text) returns public.agents language sql stable security definer as $$ select * from public.agents where email = p_email $$;
+create function pg_temp.fo(p_email text) returns uuid language sql stable security definer as $$ select o.id from public.agency_onboarding o join public.agents g on g.id = o.agent_id where g.email = p_email and o.kind = 'agent' order by o.created_at desc, o.id limit 1 $$;
+create function pg_temp.fstage(p_email text) returns text language sql stable security definer as $$ select o.stage from public.agency_onboarding o join public.agents g on g.id = o.agent_id where g.email = p_email and o.kind = 'agent' order by o.created_at desc, o.id limit 1 $$;
+create function pg_temp.fref(p_email text, p_position integer) returns uuid language sql stable security definer as $$ select f.id from public.agency_onboarding_referees f where f.onboarding_id = pg_temp.fo(p_email) and f.position = p_position $$;
+create function pg_temp.finv(p_email text) returns integer language sql stable security definer as $$ select count(*)::int from public.agency_invitations where email = p_email $$;
+select is(public.agency_is_operational('13000000-0000-0000-0000-0000000000f1'),true,'agent flow: the business is operational');
+select is((select count(*)::int from public.agency_onboarding where kind = 'agent' and agency_id <> pg_temp.gate()),0,'agent flow: no agent onboarding exists except the one Add agent just started (onboardings default to the business kind)');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_agent_activate(null,'13000000-0000-0000-0000-0000000000f1','Old Way','old.way@example.test','','','agent')$$,'23514',null,'agent flow: a new agent is no longer approved at once outside the direct business');
+select is(public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','Zed Agent','zed+agent@example.test','','agent')->'agent'->>'status','Onboarding','agent flow: Add agent records the agent as Onboarding (a plus address is fine)');
+select is(public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','Rex Reject','rex+agent2@example.test','','agent')->'agent'->>'status','Onboarding','agent flow: a second agent for the reject run');
+select throws_ok($$select public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','Zed Again','zed+agent@example.test','','agent')$$,'23505',null,'agent flow: the same email twice in one business is refused');
+select throws_ok($$select public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','No Mail','','','agent')$$,'22023',null,'agent flow: the email is required');
+select throws_ok($$select public.agent_onboarding_agent_add(pg_temp.direct(),'Staff','new.staff@slit.edu.au','','agent')$$,'22023',null,'agent flow: SLIT''s direct business has no onboarding (it adds agents as before)');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','X','x.flow@example.test','','agent')$$,'42501',null,'agent flow: an agent cannot add agents');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000f2"}';
+select is(public.agent_onboarding_agent_add(null,'Pia Portal','pia@example.test','','agent')->'agency'->>'name','Flow Co','agent flow: the business admin agent adds an agent to their own business (portal)');
+select throws_ok($$select public.agent_onboarding_agent_add('13000000-0000-0000-0000-000000000001','Y','y.flow@example.test','','agent')$$,'42501',null,'agent flow: but not to another business');
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('pia@example.test'))$$,'42501',null,'agent flow: the business admin agent cannot activate');
+select throws_ok($$select public.agent_onboarding_agent_add(null,'Pia Again','pia@example.test','','agent')$$,'23505',null,'agent flow: re-adding an email already in onboarding is refused (no duplicate agent)');
+select throws_ok($$select public.agent_onboarding_agent_add(null,'Pia Upper','  PIA@Example.TEST ','','agent')$$,'23505',null,'agent flow: also with different case and spaces');
+reset role;
+select is((pg_temp.fa('zed+agent@example.test')).status||'|'||coalesce((pg_temp.fa('zed+agent@example.test')).profile_id::text,'no login'),'Onboarding|no login','agent flow: the new agent has no login');
+select is(pg_temp.finv('zed+agent@example.test'),0,'agent flow: and no invitation');
+select is((select kind||'|'||stage||'|'||coalesce(application_request_id::text,'none') from public.agency_onboarding where id=pg_temp.fo('zed+agent@example.test')),'agent|application_sent|none','agent flow: their own onboarding, waiting for the form');
+select is((select sent_by::text from public.agency_onboarding where id=pg_temp.fo('pia@example.test')),'33000000-0000-0000-0000-0000000000f2','agent flow: started by the business admin agent');
+select is(public.agent_onboarding_agent_values((pg_temp.fa('zed+agent@example.test')).id)->>'agent_website','flow.example','agent flow: the form is prefilled with the business''s details');
+select is(public.agent_onboarding_agent_values((pg_temp.fa('zed+agent@example.test')).id)->>'contact_email'||'|'||coalesce(public.agent_onboarding_agent_values((pg_temp.fa('zed+agent@example.test')).id)->>'ref1_email','none'),'zed+agent@example.test|none','agent flow: with the agent''s own contact, never the business''s referees');
+-- No invitation to an agent who is not Active (CMS Users, the old Agency page and the portal all go through these two functions).
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-0000000000f1','zed+agent@example.test','Zed Agent','agent')$$,'22023',null,'agent flow: an administrator cannot invite an agent in onboarding');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-0000000000f2',null,'zed+agent@example.test','Zed Agent','agent')$$,'22023',null,'agent flow: nor can the business admin agent');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-0000000000f1','stranger@example.test','Stranger','agent')$$,'22023',null,'agent flow: an invitation without an agent record is refused (Add agent first)');
+insert into public.agents(business_id,full_name,email,role,status) values ('13000000-0000-0000-0000-0000000000f1','Ina Inactive','ina@example.test','agent','Inactive');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-0000000000f1','ina@example.test','Ina Inactive','agent')$$,'22023',null,'agent flow: an Inactive agent cannot be invited');
+insert into public.agency_invitations(id,agency_id,email,full_name,role,invited_by,invited_by_name) values ('7f000000-0000-0000-0000-0000000000f1','13000000-0000-0000-0000-0000000000f1','ina@example.test','Ina Inactive','agent','33000000-0000-0000-0000-000000000002','Admin');
+select throws_ok($$select public.portal_invitation_resend('33000000-0000-0000-0000-000000000002','7f000000-0000-0000-0000-0000000000f1')$$,'22023',null,'agent flow: nor can a waiting invitation be resent to them');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_agent_activate((pg_temp.fa('zed+agent@example.test')).id,null,'','','','','agent')$$,'23514',null,'agent flow: the old Activate button refuses an agent in onboarding');
+select throws_ok($$select public.agency_onboarding_agent_application_create(pg_temp.fo('zed+agent@example.test'),'{}')$$,'42501',null,'agent flow: only the function makes the form request');
+reset role;
+-- The form, made and sent from the database (the function stored the prefilled PDF first).
+select is(public.agency_onboarding_agent_application_create(pg_temp.fo('zed+agent@example.test'),'{"id":"7f000000-0000-0000-0000-0000000000a1","title":"Agent application form: Zed Agent (Flow Co)","original_hash":"abababababababababababababababababababababababababababababababab","role_key":"agent","role_label":"Agent","form_pages":3,"fields":[{"type":"text","page":1,"x":0.1,"y":0.10,"w":0.3,"h":0.02,"key":"ref1_contact_name","label":"Reference 1"},{"type":"text","page":1,"x":0.1,"y":0.15,"w":0.3,"h":0.02,"key":"ref1_email","label":"Reference 1 email"},{"type":"text","page":1,"x":0.1,"y":0.20,"w":0.3,"h":0.02,"key":"ref2_contact_name","label":"Reference 2"},{"type":"text","page":1,"x":0.1,"y":0.25,"w":0.3,"h":0.02,"key":"ref2_email","label":"Reference 2 email"}],"values":{"agent_agency_name":"Flow Co"}}')->>'requestId','7f000000-0000-0000-0000-0000000000a1','agent flow: the application form request is made');
+select is((select state||'|'||recipient_email||'|'||subject_type from hr.sign_requests where id='7f000000-0000-0000-0000-0000000000a1'),'sent|zed+agent@example.test|agent','agent flow: sent to the agent');
+select is((select count(*)::int from hr.sign_notifications where request_id='7f000000-0000-0000-0000-0000000000a1' and kind='invite' and state='queued'),1,'agent flow: the signing email is queued');
+select is(public.agency_onboarding_request_plan('7f000000-0000-0000-0000-0000000000a1')->>'kind','application','agent flow: the request is the application kind');
+select throws_ok($$select public.agency_onboarding_agent_application_create(pg_temp.fo('zed+agent@example.test'),'{"original_hash":"abababababababababababababababababababababababababababababababab"}')$$,null,'This onboarding is not waiting for its application form','agent flow: one form per onboarding');
+-- The agent signs, naming two referees (plus addresses accepted).
+update hr.sign_recipients set signer_name='Zed Agent' where request_id='7f000000-0000-0000-0000-0000000000a1';
+update hr.sign_fields f set value = v.value, filled_at = now() from (values ('ref1_contact_name','Ref One'),('ref1_email','ref+one@example.test'),('ref2_contact_name','Ref Two'),('ref2_email','ref.two@slit.edu.au')) v(k, value) where f.request_id='7f000000-0000-0000-0000-0000000000a1' and f.key = v.k;
+select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a1',pg_temp.rcp('7f000000-0000-0000-0000-0000000000a1'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,'agent flow: the agent signs the application form');
+select is(pg_temp.fstage('zed+agent@example.test'),'application_signed','agent flow: stage application signed');
+select is((select profile->>'ref1_email'||'|'||(profile->>'contact_given_name') from public.agencies where id='13000000-0000-0000-0000-0000000000f1'),'business.ref@example.test|Flow','agent flow: an agent''s answers never rewrite the business profile');
+select is((select string_agg(email, ',' order by position) from public.agency_onboarding_referees where onboarding_id=pg_temp.fo('zed+agent@example.test')),'ref+one@example.test,ref.two@slit.edu.au','agent flow: the two referees from the form');
+select is((select (r->>'requestId') from (select public.agency_onboarding_referee_request_create(pg_temp.fref('zed+agent@example.test',1),'{"id":"7f000000-0000-0000-0000-0000000000a2","original_hash":"acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac","fields":[]}') r) x),'7f000000-0000-0000-0000-0000000000a2','agent flow: referee check 1 sent');
+select is((select (r->>'requestId') from (select public.agency_onboarding_referee_request_create(pg_temp.fref('zed+agent@example.test',2),'{"id":"7f000000-0000-0000-0000-0000000000a3","original_hash":"adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad","fields":[]}') r) x),'7f000000-0000-0000-0000-0000000000a3','agent flow: referee check 2 sent');
+-- Referee 1 signs: 1 of 2, not Ready, cannot be activated, still no invitation.
+update hr.sign_recipients set signer_name='Ref One' where request_id='7f000000-0000-0000-0000-0000000000a2';
+select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a2',pg_temp.rcp('7f000000-0000-0000-0000-0000000000a2'),decode('255044462d312e36','hex'),decode('255044462d312e37','hex'),'{}')$$,'agent flow: referee 1 signs');
+select is(pg_temp.fstage('zed+agent@example.test'),'references_pending','agent flow: 1 of 2 is not Ready');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select (r->'onboarding'->>'received')||'|'||(r->'onboarding'->>'ready')||'|'||(r->>'status') from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-0000000000f1')) r where r->>'email'='zed+agent@example.test'),'1|false|Onboarding','agent flow: the Agents tab shows 1 of 2, not Ready');
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agent flow: the agent cannot be activated at 1 of 2');
+reset role;
+select is(pg_temp.finv('zed+agent@example.test'),0,'agent flow: still no invitation at 1 of 2');
+-- Referee 2 signs: Ready (both back), still nothing sent to the agent.
+update hr.sign_recipients set signer_name='Ref Two' where request_id='7f000000-0000-0000-0000-0000000000a3';
+select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a3',pg_temp.rcp('7f000000-0000-0000-0000-0000000000a3'),decode('255044462d312e38','hex'),decode('255044462d312e39','hex'),'{}')$$,'agent flow: referee 2 signs');
+select is(pg_temp.fstage('zed+agent@example.test'),'references_received','agent flow: both back: Ready');
+select is(public.agency_onboarding_followup(pg_temp.fo('zed+agent@example.test'))->>'kind','agent','agent flow: the function words its emails for an agent');
+select is(pg_temp.finv('zed+agent@example.test'),0,'agent flow: Ready is not Active: no invitation yet');
+select is((pg_temp.fa('zed+agent@example.test')).status,'Onboarding','agent flow: and the agent is still Onboarding');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select (r->'onboarding'->>'received')||'|'||(r->'onboarding'->>'ready') from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-0000000000f1')) r where r->>'email'='zed+agent@example.test'),'2|true','agent flow: the Agents tab shows Ready');
+select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'counts'->>'readyAgents'),'1','agent flow: the business counts one Ready agent');
+select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'onboarding'->>'stage'),null,'agent flow: agent onboardings never show as the business''s own stage');
+select throws_ok($$select public.agency_onboarding_approve_references(pg_temp.fo('zed+agent@example.test'))$$,'22023',null,'agent flow: no business approval step');
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a9','{}')$$,'22023',null,'agent flow: no agreement for an agent');
+-- Activate: Active and ONE invitation.
+select is(public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))->'invitation'->>'email','zed+agent@example.test','agent flow: Activate makes the invitation');
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agent flow: activating twice is refused');
+reset role;
+select is((pg_temp.fa('zed+agent@example.test')).status||'|'||pg_temp.fstage('zed+agent@example.test'),'Active|activated','agent flow: the agent is Active, the onboarding activated');
+select is(pg_temp.finv('zed+agent@example.test'),1,'agent flow: exactly one invitation');
+-- Reject run: Declined, never invited, cannot be invited or activated; the onboarding can start again.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.agency_onboarding_decline(pg_temp.fo('rex+agent2@example.test'),'References could not be confirmed')->>'kind','agent','agent flow: Reject (the email is worded for an agent)');
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('rex+agent2@example.test'))$$,'23514',null,'agent flow: a rejected agent cannot be activated');
+reset role;
+select is((pg_temp.fa('rex+agent2@example.test')).status||'|'||pg_temp.fstage('rex+agent2@example.test'),'Declined|declined','agent flow: the rejected agent is Declined');
+select is(pg_temp.finv('rex+agent2@example.test'),0,'agent flow: and was never invited');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-0000000000f1','rex+agent2@example.test','Rex Reject','agent')$$,'22023',null,'agent flow: a Declined agent cannot be invited');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','','','',null,null,(pg_temp.fa('rex+agent2@example.test')).id)->'agent'->>'status','Onboarding','agent flow: a rejected agent''s onboarding can start again');
+select is((select count(*)::int from jsonb_array_elements(public.agency_onboarding_list('13000000-0000-0000-0000-0000000000f1')) o where o->>'kind'='agent' and o->'agent'->>'email'='rex+agent2@example.test'),2,'agent flow: both of their onboardings are listed');
 reset role;
 reset role;
 select * from finish();

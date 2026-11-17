@@ -11,10 +11,11 @@ import StudentsTable from "@/pages/admin/components/StudentsTable";
 import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
 import BusinessOnboarding from "@/pages/admin/components/BusinessOnboarding";
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
+import { AgentOnboardings } from "@/pages/admin/components/AgentOnboardingPanel";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
-import { awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
 
 type Tab = "details" | "agents" | "students" | "applications";
@@ -228,7 +229,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
   return (
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
-        <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students; activating an agent can send their sign-in invitation.</p>
+        <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students. A new agent goes through their own onboarding (application form, two references) and gets a sign-in invitation only when an administrator activates them.</p>
         {business.operational ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })} data-testid="add-agent">Add agent</Button>
           : <span className="flex items-center gap-2"><Button size="sm" icon="ri-user-add-line" disabled title={business.gateReason ?? "Available once the business is active with a signed agent agreement."} data-testid="add-agent">Add agent</Button>
             <span className="text-xs font-medium text-amber-700" data-testid="add-agent-reason">{business.gateReason ?? "Agents can be added once the business is active with a signed, unexpired agent agreement."}</span></span>}
@@ -259,11 +260,14 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
-                  <td><AgentStatusBadge status={r.status} />{r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Invited, waiting for password</p> : null}</td>
+                  <td><AgentStatusBadge status={r.status} />{r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Invited, waiting for password</p> : null}
+                    {r.status === "Onboarding" ? <p className={`mt-1 text-2xs font-medium ${r.onboarding?.ready ? "text-emerald-700" : "text-sky-800"}`} data-testid="agent-onboarding-words">{agentOnboardingWords(r.onboarding)}</p> : null}
+                    {r.status === "Declined" ? <p className="mt-1 text-2xs font-medium text-red-700">Rejected; no sign-in</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
-                      {r.status === "Inactive"
+                      {r.status === "Onboarding" || r.status === "Declined" ? <span className="text-xs text-foreground-500">See Agent onboarding below</span>
+                        : r.status === "Inactive"
                         ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
                         : <Button size="sm" variant="ghost" disabled={busyId === r.agentId} onClick={() => setConfirm(r)}>Deactivate</Button>}
                     </div>
@@ -273,6 +277,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
             </tbody>
           </ResponsiveTable>
         )}
+      <AgentOnboardings businessId={business.id} reloadKey={reload} onChanged={() => { setReload((n) => n + 1); void onChanged(); }} />
       <ActivateAgentDialog agent={activating} open={dialogOpen} onClose={() => setDialogOpen(false)} onDone={refresh} />
       <ConfirmDialog open={Boolean(confirm)} title={`Deactivate ${confirm?.name ?? "this agent"}?`}
         message="They will not be able to sign in, and an invitation still waiting is withdrawn. Their students and applications stay with the business."

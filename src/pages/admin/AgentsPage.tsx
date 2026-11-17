@@ -8,7 +8,8 @@ import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { deactivateAgent, listAgentDirectory, resendInvitation, type AgentCounts, type AgentStatus, type DirectoryAgent, awaitingPassword } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, deactivateAgent, listAgentDirectory, resendInvitation, type AgentCounts, type AgentStatus, type DirectoryAgent, awaitingPassword } from "@/pages/admin/lib/businessData";
+import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
 
@@ -16,7 +17,7 @@ const PAGE_SIZE = 100;
 const KEYS = ["q", "status", "sort", "dir"] as const;
 type SortKey = "business" | "agent" | "students" | "applications" | "status";
 const SORT_KEYS: SortKey[] = ["business", "agent", "students", "applications", "status"];
-const STATUS_RANK: Record<AgentStatus, number> = { Active: 0, Invited: 1, Inactive: 2 };
+const STATUS_RANK: Record<AgentStatus, number> = { Active: 0, Onboarding: 1, Invited: 2, Inactive: 3, Declined: 4 };
 const applicationTotal = (r: DirectoryAgent) => Object.values(r.statusCounts).reduce((sum, n) => sum + Number(n || 0), 0);
 const text = (value: string) => value.trim().toLowerCase();
 const inactiveBusiness = (r: DirectoryAgent) => Boolean(r.businessStatus) && r.businessStatus !== "Active";
@@ -35,6 +36,8 @@ const STATUS_SELECT: Record<AgentStatus, string> = {
   Active: "border-emerald-200 bg-emerald-50 text-emerald-800",
   Invited: "border-amber-200 bg-amber-50 text-amber-900",
   Inactive: "border-background-300 bg-background-100 text-foreground-600",
+  Onboarding: "border-sky-200 bg-sky-50 text-sky-900",
+  Declined: "border-red-200 bg-red-50 text-red-800",
 };
 
 /** Agencies > Agents: every agent of every business, with their students and applications. */
@@ -181,6 +184,11 @@ export default function AgentsPage() {
                       ) : <span className="text-xs text-foreground-500">None</span>}
                     </td>
                     <td>
+                      {r.status === "Onboarding" || r.status === "Declined" ? <div data-testid="agent-onboarding-status">
+                        <AgentStatusBadge status={r.status} />
+                        <p className="mt-1 text-2xs font-medium text-foreground-600">{r.status === "Declined" ? "Rejected; no sign-in" : agentOnboardingWords(r.onboarding)}</p>
+                        <Link to={`/admin/businesses/${r.businessId}?tab=agents`} className="mt-1 inline-block text-xs font-semibold text-primary-700 hover:underline">{r.onboarding?.ready ? "Activate or reject" : "Open onboarding"}</Link>
+                      </div> : <>
                       <label className="sr-only" htmlFor={`status-${r.key}`}>Status for {r.name}</label>
                       <select id={`status-${r.key}`} value={r.status} disabled={busyKey === r.key} onChange={(e) => changeStatus(r, e.target.value)}
                         className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${STATUS_SELECT[r.status]}`}>
@@ -200,6 +208,7 @@ export default function AgentsPage() {
                           <i className="ri-mail-send-line" aria-hidden="true" /> {busyKey === r.key ? "Sending…" : "Resend invite"}
                         </button>
                       ) : null}
+                      </>}
                     </td>
                   </tr>
                 ))}

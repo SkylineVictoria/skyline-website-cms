@@ -79,7 +79,7 @@ export interface BusinessDetail {
     id: string; code: string; name: string; status: BusinessStatus; email: string; phone: string; address: string;
     country: string; contact: string; registrationNumber: string; createdAt: string;
   };
-  counts: { admins: number; agents: number; inactiveAgents: number; students: number; applications: number };
+  counts: { admins: number; agents: number; inactiveAgents: number; onboardingAgents?: number; readyAgents?: number; students: number; applications: number };
   statusCounts: StatusCounts;
   /** Onboarding: a business is activated only once its agent agreement is signed (uploaded or through Skyline Sign). */
   onboarding?: {
@@ -277,9 +277,26 @@ export const getStudent = (id: string) => call<StudentDetail | null>("admin_stud
 /**
  * Active: approved (their business is active); they may not have set a password yet, see awaitingPassword.
  * Invited: waiting for their business to be approved. Inactive: everything else (the default).
+ * Onboarding: added to a business and going through their own onboarding (application form, two references, then an administrator
+ * activates them); no login and no invitation until then. Declined: an administrator rejected their onboarding (never invited).
  */
-export type AgentStatus = "Active" | "Invited" | "Inactive";
-export interface AgentCounts { all: number; active: number; invited: number; inactive: number }
+export type AgentStatus = "Active" | "Invited" | "Inactive" | "Onboarding" | "Declined";
+export interface AgentCounts { all: number; active: number; invited: number; inactive: number; onboarding?: number; declined?: number }
+/** An agent's own onboarding (migration 20261118004521): its stage and the references received so far. */
+export interface AgentOnboardingSummary { id: string; stage: string; createdAt: string; received: number; total: number; ready: boolean }
+/** The agent's onboarding in plain words for lists. */
+export function agentOnboardingWords(o: AgentOnboardingSummary | null | undefined): string {
+  if (!o) return "Onboarding";
+  switch (o.stage) {
+    case "application_sent": return "Application form sent";
+    case "application_signed": case "references_pending": return `References ${o.received} of ${o.total}`;
+    case "references_received": return "Ready to activate";
+    case "activated": return "Activated";
+    case "declined": return "Rejected";
+    case "cancelled": case "expired": return `Onboarding ${o.stage}`;
+    default: return o.stage.replaceAll("_", " ");
+  }
+}
 
 export interface DirectoryAgent {
   /** The agent record's id, used in links. */
@@ -297,6 +314,8 @@ export interface DirectoryAgent {
   statusChangedAt: string | null;
   marn: string;
   registered: boolean | null;
+  /** The agent's own onboarding, when they were added through it. */
+  onboarding?: AgentOnboardingSummary | null;
   /** On SLIT's direct business, an agent whose address is not @slit.edu.au (kept as is, flagged for a decision). */
   externalOnDirect?: boolean;
   businessId: string;
@@ -320,6 +339,7 @@ export interface AgentOverview {
   statusChangedAt: string | null;
   marn: string;
   business: { id: string; name: string; status: BusinessStatus };
+  onboarding?: AgentOnboardingSummary | null;
   applications: ApplicationRow[];
   students: Array<{ id: string; name: string; email: string }>;
 }
@@ -341,7 +361,7 @@ export const listAgentDirectory = (f: { search?: string; status?: string; busine
  */
 /** Approved or waiting, but has not set a password yet: shown with "Hasn't set a password yet" and Resend invite. */
 export function awaitingPassword(agent: { status: string; profileId: string | null }): boolean {
-  return agent.status !== "Inactive" && !agent.profileId;
+  return (agent.status === "Active" || agent.status === "Invited") && !agent.profileId;
 }
 
 export async function invitedBusinesses(): Promise<Map<string, DirectoryAgent[]>> {

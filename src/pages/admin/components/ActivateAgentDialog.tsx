@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { activateAgent, listBusinesses, type ActivationResult, type BusinessRow, type BusinessStatus } from "@/pages/admin/lib/businessData";
+import { activateAgent, getBusiness, listBusinesses, type ActivationResult, type BusinessRow, type BusinessStatus } from "@/pages/admin/lib/businessData";
+import { addAgentForOnboarding } from "@/lib/signingApi";
 import type { AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
@@ -17,6 +18,9 @@ const EMAIL = /^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/;
 /**
  * Add an agent to a business, or activate one, in one step: choose the business (activated too when it is inactive), confirm
  * name, email, phone and role, and optionally send the sign-in invitation. A new business is added from Businesses (ABN).
+ * Adding a NEW agent to a business other than SLIT's direct one starts their onboarding instead (migration 20261118004521): the agent is
+ * recorded as Onboarding and emailed the application form; there is no invitation until both references are back and an administrator
+ * activates them. SLIT's direct business (@slit.edu.au staff) adds and invites as before.
  */
 export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
   agent: AgentToActivate | null; open: boolean; onClose: () => void; onDone: (result: ActivationResult) => void;
@@ -38,6 +42,8 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
   // Set when the agent was saved but the invitation's email was refused: a retry updates that agent instead of adding another,
   // and the list is refreshed when the dialog closes.
   const [saved, setSaved] = useState<ActivationResult | null>(null);
+  // Whether the chosen business is SLIT's direct one (null while checking): it decides between onboarding and adding directly.
+  const [direct, setDirect] = useState<boolean | null>(null);
   const agentId = saved?.agentId ?? agent?.agentId ?? null;
   const close = () => {
     if (busy) return;
@@ -58,6 +64,15 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
     setInvite(true);
     setError("");
   }, [open, agent]);
+
+  useEffect(() => {
+    if (!open || !picked) { setDirect(null); return; }
+    let active = true;
+    setDirect(null);
+    getBusiness(picked.id).then((d) => { if (active) setDirect(Boolean(d?.isDirect)); }).catch(() => { if (active) setDirect(false); });
+    return () => { active = false; };
+  }, [open, picked]);
+  const onboarding = adding && Boolean(picked) && direct === false;
 
   useEffect(() => {
     if (!open || picked) return;
@@ -89,6 +104,23 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
       if (problem) { setError(problem); return; }
     }
     const storedPhone = hasNumber ? cleanPhone : "";
+    if (adding && direct === null) { setError("Checking the business; try again in a moment."); return; }
+    if (onboarding) {
+      if (!cleanEmail) { setError("Enter the agent's email address: the application form goes there."); return; }
+      setBusy(true);
+      try {
+        const r = await addAgentForOnboarding({ businessId: picked.id, name: name.trim(), email: cleanEmail, phone: storedPhone, role });
+        push(`${r.agent.name} added to ${r.agency.name}. The application form (${r.reference}) was emailed to ${r.agent.email}. They get a sign-in invitation only after both references are back and an administrator activates them.`);
+        onDone({ agentId: r.agentId, businessId: picked.id, businessName: r.agency.name, agencyId: picked.id, businessCreated: false, businessActivated: false, hasLogin: false, email: r.agent.email, name: r.agent.name, role: r.agent.role });
+        onClose();
+      } catch (e) {
+        if (isEmailTakenError(e)) { setEmailError(e); return; }
+        setError(e instanceof Error ? e.message : "We could not add this agent.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     try {
       // The MARN is no longer asked for; an agent's existing one is kept.
@@ -131,7 +163,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
       title={adding ? "Add agent" : `Activate ${agent?.name || "agent"}`}
       footer={<>
         <Button variant="outline" disabled={busy} onClick={close}>Cancel</Button>
-        <Button disabled={busy || emailBlocking} onClick={() => void submit()}>{busy ? (adding ? "Adding…" : "Activating…") : adding ? "Add agent" : "Activate agent"}</Button>
+        <Button disabled={busy || emailBlocking || (adding && Boolean(picked) && direct === null)} onClick={() => void submit()} data-testid="add-agent-submit">{busy ? (adding ? "Adding…" : "Activating…") : onboarding ? "Add agent and send application form" : adding ? "Add agent" : "Activate agent"}</Button>
       </>}>
       <div className="space-y-4">
         <div>
@@ -167,7 +199,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} /></Field>
-          <Field label="Email" hint={agent?.hasLogin ? "They already have a login." : "Where the sign-in invitation goes."}>
+          <Field label="Email" required={onboarding} hint={agent?.hasLogin ? "They already have a login." : onboarding ? "Where the application form goes." : "Where the sign-in invitation goes."}>
             <EmailField value={email} onChange={setEmail} aria-invalid={!emailValid} kind="agent" context="admin"
               recordId={agentId} savedEmail={saved ? null : agent?.email ?? null} serverError={emailError}
               onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
@@ -190,7 +222,13 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
           </div>
         </fieldset>
 
-        {!agent?.hasLogin ? (
+        {onboarding ? (
+          <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950" data-testid="agent-onboarding-note">
+            Adding an agent starts their onboarding: they are emailed the Agent Application Form, prefilled with {picked?.name}'s details. When they sign it,
+            their two referees are sent a referee check. Once both references are back the agent shows as Ready on the business's Agents tab, where an
+            administrator activates them. Only then do they get their sign-in invitation.
+          </p>
+        ) : !agent?.hasLogin ? (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5" checked={invite} disabled={!cleanEmail} onChange={(e) => setInvite(e.target.checked)} />
             <span>Send a sign-in invitation{cleanEmail ? ` to ${cleanEmail}` : ""}

@@ -610,6 +610,109 @@ test("agent onboarding gate (2026-11-17): the signed agreement activates the bus
   assert.ok(!mails[1].textBody.includes("Referee 2") && /unable to proceed/.test(mails[1].textBody), "the decline email is polite and never shows the reason");
 });
 
+test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the agent and emails the form from the database; nothing usable sent closes it; Activate sends ONE congratulations link; the agent's emails never mention the agreement or the staff reason", async () => {
+  const pdf = new TextEncoder().encode("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  const pdfHash = createHash("sha256").update(pdf).digest("hex");
+  const stored = new Map<string, Uint8Array>([["templates/form/source.pdf", pdf], ["templates/referee/source.pdf", pdf]]);
+  const tpl = (key: string, dir: string) => ({ id: `tpl-${dir}`, systemKey: key, status: "active", sourcePath: `templates/${dir}/source.pdf`, sourceHash: pdfHash, sourcePages: 1, fields: [], expiryDays: 30, reminderDays: 3 });
+  const mails: Array<{ to: string; subject: string; textBody: string }> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = []; const adminCalls: string[] = [];
+  const opts = { templates: true, failCreate: false, invitation: "new" as "new" | "none", declineKind: "agent" };
+  let n = 0;
+  const referees = [
+    { id: "41000000-0000-4000-8000-000000000001", position: 1, name: "Ref One", organisation: "Org One", positionTitle: "", email: "ref1@example.test", phone: "", address: "", status: "pending", requestId: null as string | null },
+    { id: "41000000-0000-4000-8000-000000000002", position: 2, name: "Ref Two", organisation: "Org Two", positionTitle: "", email: "ref2@example.test", phone: "", address: "", status: "pending", requestId: null as string | null },
+  ];
+  const state = { stage: "application_signed", notifiedAgent: false, notifiedStaff: false };
+  const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+    admin: async (action: string, id: string | null) => { adminCalls.push(action); if (action === "subject_search") return []; if (action === "void") return { id, state: "void" }; throw new Error(`an agent's onboarding never needs a Sign administrator (${action})`); },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agent_onboarding_agent_add") return { onboardingId: "21000000-0000-4000-8000-000000000001", agentId: "11000000-0000-4000-8000-000000000001", agency: { id: "31000000-0000-4000-8000-000000000001", name: "ZZ Test Agency", abn: null },
+        agent: { id: "11000000-0000-4000-8000-000000000001", name: String(args.p_name), email: String(args.p_email), role: "agent", status: "Onboarding" }, values: { agent_agency_name: "ZZ Test Agency", contact_email: String(args.p_email) } };
+      if (name === "agency_onboarding_agent_activate") return { onboardingId: args.p_onboarding, stage: "activated", agency: { id: "31000000-0000-4000-8000-000000000001", name: "ZZ Test Agency", status: "Active" },
+        agent: { id: "11000000-0000-4000-8000-000000000001", name: "Zed Agent", email: "zed@example.test", role: "agent", status: "Active" }, loginExists: opts.invitation === "none",
+        invitation: opts.invitation === "none" ? null : { id: "71000000-0000-4000-8000-000000000001", email: "zed@example.test", name: "Zed Agent", role: "agent", expiresAt: "2099-01-01T00:00:00Z", new: true, sent: false } };
+      if (name === "agency_onboarding_decline") return { id: args.p_onboarding, stage: "declined", kind: opts.declineKind, openRequestIds: [], agent: { id: "a", name: "Zed Agent", email: "zed@example.test" }, agency: { id: "b", name: "ZZ Test Agency" } };
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      services.push([name, args]);
+      if (name === "agency_onboarding_template_get") return !opts.templates ? null : args.p_key === "agent_referee_check_form" ? tpl("agent_referee_check_form", "referee") : tpl(String(args.p_key), "form");
+      if (name === "agency_onboarding_agent_application_create") { if (opts.failCreate) throw { message: "This onboarding is not waiting for its application form" }; return { onboardingId: args.p_onboarding, requestId: (args.p_data as Record<string, unknown>).id, reference: "SLIT-2026-000101" }; }
+      if (name === "agency_onboarding_agent_abort") return null;
+      if (name === "portal_invitation_link_issue") return { email: "zed@example.test" };
+      if (name === "agency_onboarding_followup") return { id: args.p_onboarding, kind: "agent", stage: state.stage, agency: { id: "b", name: "ZZ Test Agency" }, agent: { id: "a", name: "Zed Agent", email: "zed@example.test" },
+        sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: [], values: { agent_agency_name: "ZZ Test Agency" }, referees: referees.map((r) => ({ ...r })),
+        received: referees.filter((r) => r.status === "received").length, total: 2, template: tpl("agent_referee_check_form", "referee"), notified: { agentReferees: state.notifiedAgent, staffReferences: state.notifiedStaff } };
+      if (name === "agency_onboarding_referee_request_create") { const r = referees.find((x) => x.id === args.p_referee)!; r.status = "sent"; r.requestId = String((args.p_data as Record<string, unknown>).id); state.stage = "references_pending"; return { requestId: r.requestId, reference: `SLIT-2026-R${r.position}` }; }
+      if (name === "agency_onboarding_mark_notified") { if (args.p_kind === "agent_notified_referees") state.notifiedAgent = true; else state.notifiedStaff = true; return null; }
+      throw new Error(`unexpected service ${name}`);
+    },
+    service: async (action: string) => { if (action === "notify_claim") return []; if (action === "path_referenced") return false; return true; },
+    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async (paths: string[]) => { for (const p of paths) stored.delete(p); }, signedUrl: async () => null },
+    mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: ["admin@example.test"], siteUrl: "https://site.example.test/", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const call = (body: Record<string, unknown>) => signingCore.handleSigning({ body, upload: null, ip: null, userAgent: null }, ports);
+
+  // The blanks must be installed before anything is recorded.
+  opts.templates = false;
+  await assert.rejects(call({ action: "agent_onboarding_add_agent", businessId: "31000000-0000-4000-8000-000000000001", name: "Zed Agent", email: "zed@example.test" }), /Install the agent onboarding templates first\. \(form\)/);
+  assert.ok(!rpcs.some(([name]) => name === "agent_onboarding_agent_add"), "nothing is recorded without the blanks");
+  opts.templates = true;
+
+  // Add agent: the caller's RPC records the agent; the form is made and sent by the database (no Sign administrator needed: the portal can add too).
+  const added = await call({ action: "agent_onboarding_add_agent", businessId: "31000000-0000-4000-8000-000000000001", name: "Zed Agent", email: "zed@example.test", phone: "+61 400000000", role: "agent" }) as { reference: string; sent: boolean; onboardingId: string };
+  assert.equal(added.reference, "SLIT-2026-000101"); assert.equal(added.sent, true);
+  const addArgs = rpcs.find(([name]) => name === "agent_onboarding_agent_add")![1];
+  assert.deepEqual([addArgs.p_business, addArgs.p_name, addArgs.p_email, addArgs.p_role, addArgs.p_agent], ["31000000-0000-4000-8000-000000000001", "Zed Agent", "zed@example.test", "agent", null]);
+  const create = services.find(([name]) => name === "agency_onboarding_agent_application_create")![1];
+  const createData = create.p_data as Record<string, unknown>;
+  assert.equal(create.p_onboarding, "21000000-0000-4000-8000-000000000001");
+  assert.match(String(createData.original_hash), /^[a-f0-9]{64}$/); assert.equal(createData.role_key, "agent");
+  assert.equal((createData.values as Record<string, string>).agent_agency_name, "ZZ Test Agency", "the form is prefilled with the business's details");
+  assert.ok(stored.has(`${createData.id}/original.pdf`), "the prefilled form is stored before the request");
+  assert.deepEqual(adminCalls, [], "no Sign administrator call");
+  assert.equal(mails.length, 0, "nothing but the signing invitation (queued by the database) goes out at this point: no sign-in email");
+
+  // The form could not be sent: the onboarding closes, the error is shown.
+  opts.failCreate = true;
+  await assert.rejects(call({ action: "agent_onboarding_add_agent", businessId: "31000000-0000-4000-8000-000000000001", name: "Zed Agent", email: "zed@example.test" }), /not waiting for its application form/);
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_agent_abort").length, 1, "the onboarding is closed");
+  opts.failCreate = false;
+
+  // The agent signed the form: the referee checks go out; the agent is told the team will review (never "the Agent Agreement").
+  await onboardingFn.afterCompletion({ ports, store: async (p, b) => { stored.set(p, b); }, fileBytes: async (p) => stored.get(p)!, commit: () => undefined }, { id: "21000000-0000-4000-8000-000000000001", kind: "application" });
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 2, "both referees get a referee check");
+  const told = mails.find((m) => /referees have been contacted/i.test(m.subject))!;
+  assert.ok(told && /review your application/.test(told.textBody) && !/Agreement/.test(told.textBody), "the agent's email is about the review, not an agreement");
+  // Both back: staff are told the agent is ready to activate; nothing to the agent.
+  referees.forEach((r) => { r.status = "received"; }); state.stage = "references_received";
+  await onboardingFn.afterCompletion({ ports, store: async () => undefined, fileBytes: async (p) => stored.get(p)!, commit: () => undefined }, { id: "21000000-0000-4000-8000-000000000001", kind: "referee" });
+  const staff = mails.find((m) => /Agent ready to activate/.test(m.subject))!;
+  assert.ok(staff && staff.to.includes("hari@example.test") && /activate or reject/.test(staff.textBody), "staff are told the agent is ready");
+  assert.equal(mails.filter((m) => m.to === "zed@example.test").length, 1, "the agent got only the referee note so far, no sign-in email");
+
+  // Activate: ONE congratulations email with the set-password link on our own page.
+  const before = mails.length;
+  const activated = await call({ action: "agent_onboarding_agent_activate", onboardingId: "21000000-0000-4000-8000-000000000001" }) as { invited: boolean };
+  assert.equal(activated.invited, true); assert.equal(mails.length, before + 1);
+  const congrats = mails[mails.length - 1];
+  assert.equal(congrats.to, "zed@example.test"); assert.match(congrats.subject, /Congratulations/);
+  assert.match(congrats.textBody, /https:\/\/site\.example\.test\/agency\/accept-invite#t=[A-Za-z0-9_-]{40,100}/);
+  assert.ok(/application to become an agent/.test(congrats.textBody) && !/agreement/i.test(congrats.textBody), "the congratulations text is the agent's");
+  // An agent who already signs in: activated, nothing emailed.
+  opts.invitation = "none";
+  const quiet = await call({ action: "agent_onboarding_agent_activate", onboardingId: "21000000-0000-4000-8000-000000000001" }) as { invited: boolean };
+  assert.equal(quiet.invited, false); assert.equal(mails.length, before + 1);
+
+  // Reject: the agent's polite email, without the reason and without the agreement wording.
+  const rejected = await call({ action: "agent_onboarding_reject", onboardingId: "21000000-0000-4000-8000-000000000001", reason: "Referee 2 could not confirm the agent" }) as { emailed: boolean };
+  assert.equal(rejected.emailed, true);
+  const decline = mails[mails.length - 1];
+  assert.equal(decline.to, "zed@example.test");
+  assert.ok(/unable to proceed at this time/.test(decline.textBody) && !/Referee 2/.test(decline.textBody) && !/agreement/i.test(decline.textBody) && !/accept-invite/.test(decline.textBody), "short, polite, no reason, no invitation");
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [

@@ -44,11 +44,11 @@ export const REFEREE_SIGNER_ROLE = { key: "referee", label: "Referee", order: 1,
 export const signerRole = (doc: OnboardingDoc) => doc === "referee" ? REFEREE_SIGNER_ROLE : ONBOARDING_SIGNER_ROLE;
 /** The onboarding runs in stages (2026-11-17): the form, then a referee check per reference, then the agreement. */
 export const ONBOARDING_STAGES = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent", "agreement_signed"] as const;
-export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired" | "declined";
+export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired" | "declined" | "activated";
 export const STAGE_LABEL: Record<OnboardingStage, string> = {
   legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
   references_received: "References received: review", references_approved: "References approved", agreement_sent: "Agreement sent", agreement_signed: "Agreement signed",
-  cancelled: "Cancelled", expired: "Expired", declined: "Declined",
+  cancelled: "Cancelled", expired: "Expired", declined: "Declined", activated: "Agent activated",
 };
 
 const auto = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", ...extra });

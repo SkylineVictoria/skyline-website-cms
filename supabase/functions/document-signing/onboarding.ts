@@ -62,7 +62,8 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
 async function installedTemplate(ctx: OnboardingContext, which: OnboardingDoc): Promise<OnboardingTemplate> {
   const templates = (await ctx.rpc("agency_onboarding_templates", {})) as OnboardingTemplate[];
   const found = templates.find((t) => t.systemKey === AGENT_ONBOARDING_DOCS[which].key && t.status === "active");
-  if (!found) throw new SigningError(ONBOARDING_TEMPLATES_MISSING);
+  // The CMS reads the name in brackets and installs that blank (public/templates), then tries again.
+  if (!found) throw new SigningError(`${ONBOARDING_TEMPLATES_MISSING} (${which})`);
   return found;
 }
 
@@ -111,6 +112,8 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const agencyId = String(ctx.body.agencyId ?? "");
   const prepared = await prepare(ctx, agencyId, ctx.body.agentId);
   const template = await installedTemplate(ctx, "form");
+  // The referee checks go out by themselves when the form is signed (no browser to install a blank then): all three must exist now.
+  await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
   const values = await recordValues(prepared);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
   const made = await buildDocument(ctx, template, values, title);

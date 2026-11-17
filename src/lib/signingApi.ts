@@ -199,10 +199,11 @@ export const AGENT_ONBOARDING_BLANKS: ReadonlyArray<{ which: "form" | "agreement
   { which: "referee", name: "Agent Referee Check Form", path: "/templates/agent_referee_check_form_template_blank.pdf" },
   { which: "agreement", name: "Agent Agreement", path: "/templates/agent_agreement_template_blank.pdf" },
 ];
-export const ONBOARDING_TEMPLATES_MISSING = /Install the agent onboarding templates first/i;
-export async function installAgentOnboardingTemplates(): Promise<Array<{ id: string; systemKey: string; fields: number; pages: number }>> {
+export const ONBOARDING_TEMPLATES_MISSING = /Install the agent onboarding templates first(?: \((form|referee|agreement)\))?/i;
+/** Installs the blanks the function asked for (the one named in its error), or all three. */
+export async function installAgentOnboardingTemplates(only?: "form" | "referee" | "agreement" | null): Promise<Array<{ id: string; systemKey: string; fields: number; pages: number }>> {
   const out = [];
-  for (const blank of AGENT_ONBOARDING_BLANKS) {
+  for (const blank of AGENT_ONBOARDING_BLANKS.filter((b) => !only || b.which === only)) {
     const response = await fetch(blank.path);
     if (!response.ok) throw new Error(`The ${blank.name} blank is missing from the site (${blank.path}).`);
     const file = new File([await response.blob()], blank.path.split("/").pop() ?? "blank.pdf", { type: "application/pdf" });
@@ -213,11 +214,13 @@ export async function installAgentOnboardingTemplates(): Promise<Array<{ id: str
 export interface AgentOnboardingSendResult { id: string; reference: string; onboardingId: string; stage?: string; sent: boolean; state?: string; warning?: string; override?: boolean; agent?: { name: string; email: string }; printed?: number; fields?: number }
 /** Runs an onboarding action; installs the three blanks first when the Sign module does not have them yet, then tries once more. */
 async function onboardingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
-  try { return await signingAction<T>(body, file); }
-  catch (error) {
-    if (!ONBOARDING_TEMPLATES_MISSING.test((error as Error).message)) throw error;
-    await installAgentOnboardingTemplates();
-    return await signingAction<T>(body, file);
+  for (let attempt = 0; ; attempt++) {
+    try { return await signingAction<T>(body, file); }
+    catch (error) {
+      const missing = ONBOARDING_TEMPLATES_MISSING.exec((error as Error).message);
+      if (!missing || attempt >= 3) throw error;
+      await installAgentOnboardingTemplates((missing[1] as "form" | "referee" | "agreement" | undefined) ?? null);
+    }
   }
 }
 /** Stage 1: the application form to the business's agent. */

@@ -245,6 +245,12 @@ export const addAgentForOnboarding = (input: { businessId?: string | null; agent
 /** Activate: both references are back; the agent becomes Active and is sent the congratulations set-password email (once). */
 export const activateOnboardedAgent = (onboardingId: string) =>
   onboardingAction<{ onboardingId: string; invited: boolean; loginExists: boolean; agent: { id: string; name: string; email: string } }>({ action: "agent_onboarding_agent_activate", onboardingId });
+/** The agent's own agreement: the active Individual agent agreement template, sent to the agent once both references are back. */
+export const sendAgentOwnAgreement = (input: { onboardingId: string; message?: string }) =>
+  onboardingAction<{ id: string; reference: string; stage: string; sent: boolean; warning?: string; template: { id: string; name: string; version: number }; agent: { name: string; email: string } }>({ action: "agent_onboarding_agent_agreement_send", ...input });
+/** A signed agreement received outside the Sign module, recorded by an administrator with a reason (kept in the history). */
+export const uploadAgentOwnAgreement = (onboardingId: string, file: File, reason: string) =>
+  onboardingAction<{ onboardingId: string; stage: string; voided: string | null }>({ action: "agent_onboarding_agent_agreement_upload", onboardingId, reason }, file);
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

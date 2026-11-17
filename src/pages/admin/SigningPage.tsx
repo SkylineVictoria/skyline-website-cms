@@ -155,7 +155,7 @@ function EnvelopeSigningPage() {
       <div className="grid gap-3 sm:grid-cols-2" data-testid="template-audience-choice">
         {([["employee", "Employees", "Contracts, declarations and other staff documents (employee variables).", "employment_contract", "ri-user-star-line"],
           ["student", "Students / Applications", "The Letter of Offer sent from an application, and student documents (student, course, fee and institute variables).", LETTER_CATEGORY, "ri-graduation-cap-line"],
-          ["agent", AUDIENCE.agent, "Agency agreements, commission agreements and other documents for agents or business representatives.", "agency_agreement", "ri-briefcase-line"]] as const)
+          ["agent", AUDIENCE.agent, "Agency agreements, individual agent agreements, commission agreements and other documents for agents or business representatives.", "agency_agreement", "ri-briefcase-line"]] as const)
           .map(([audience, label, hint, category, icon]) => (
             <div key={audience} className="min-w-0 rounded-lg border border-background-300">
               <button type="button" data-testid={`template-audience-${audience}`} onClick={() => { setChoosing(false); setEditing({ audience, category }); }}

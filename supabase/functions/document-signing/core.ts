@@ -338,11 +338,54 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return inspected.pages;
     };
 
+    /** A request from a saved template (or an uploaded PDF) for a record: the "create" action, also used by the agent's own agreement. */
+    // deno-lint-ignore no-explicit-any
+    const createRequest = async (body: Record<string, any>, upload: SigningCall["upload"]) => {
+      const context = await admin("list");
+      const recipients = checkRecipients(body.recipients);
+      const subject = await subjectValues(body.subjectType, body.subjectId);
+      let title = String(body.title ?? "").trim(), rendered: string | null = null, templateId: string | null = null, category = String(body.category ?? "other");
+      let values: Record<string, unknown> = {}; let bytes: Uint8Array; let fields: Array<Record<string, unknown>> = [];
+      let edited = false, templateText: string | null = null;
+      const options: Record<string, unknown> = { signing_mode: body.signingMode === "parallel" ? "parallel" : "sequential" };
+      if (upload) {
+        bytes = upload.bytes;
+        await inspect(bytes);
+      } else {
+        const template = context.templates.find((t: { id: string; status: string }) => t.id === body.templateId && t.status === "active");
+        if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
+        // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
+        values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
+        const made = await templateDocument(template, values, false, body.text, body.html);
+        title = made.title; rendered = made.rendered; bytes = made.bytes; templateId = template.id; category = template.category;
+        edited = made.edited; templateText = made.templateText;
+        // What the sender prints on a PDF template (its variables) becomes part of the document itself, before anyone sees or signs it.
+        const printed = made.fields.filter((f: Record<string, unknown>) => f.role === "sender" && f.value).map((f: Record<string, unknown>) => ({ ...f, recipient_id: null, done: true })) as unknown as import("../_shared/signing-pdf.ts").StampField[];
+        if (printed.length) bytes = await (await signingPdfModule()).stampDocument(bytes, { reference: "", title, fields: printed, recipients: [] });
+        fields = made.fields.filter((f: Record<string, unknown>) => recipients.some((r) => r.role === f.role));
+        // TPL-02: [Student Initial] on every page and every [token] the signer answers belong to the first signer (the student, the employee).
+        if (made.generated.length) {
+          const first = [...recipients].sort((a, b) => a.order - b.order)[0];
+          fields = [...fields, ...made.generated.map((f) => ({ type: f.type, role: first.role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: true, label: f.label }))];
+        }
+        options.signing_mode = body.signingMode ? options.signing_mode : template.signing_mode;
+        options.expiry_days = body.expiryDays ?? template.expiry_days; options.reminder_days = body.reminderDays ?? template.reminder_days;
+      }
+      if (!title || title.length > 200 || /[\r\n]/.test(title)) throw new SigningError("Enter a document title up to 200 characters on one line.");
+      const id = ports.uuid();
+      await store(`${id}/original.pdf`, bytes);
+      const record = await admin("create", id, { title, template_id: templateId, rendered_text: rendered, field_values: values, original_hash: await sha256Hex(bytes), recipients, fields,
+        subject_type: body.subjectType ?? null, subject_id: body.subjectId ?? null, category, message: body.message ?? null, edited, template_text: edited ? templateText : null,
+        expiry_days: body.expiryDays ?? undefined, reminder_days: body.reminderDays ?? undefined, ...options });
+      staged.length = 0;
+      return record;
+    };
+
     if (Object.hasOwn(ONBOARDING_ACTIONS, action)) {
       // Agent onboarding (2026-11-17): install a blank, send the application form / the referee checks / the agreement, change or upload a referee's form.
       if (!ports.callerRpc) throw new SigningError("Not available.");
       const callerRpc = ports.callerRpc;
-      const ctx: OnboardingContext = { ports, body, upload: call.upload, admin, store, fileBytes, commit: () => { staged.length = 0; },
+      const ctx: OnboardingContext = { ports, body, upload: call.upload, admin, store, fileBytes, commit: () => { staged.length = 0; }, createRequest: (input) => createRequest(input, null),
         rpc: async (name, args) => { try { return await callerRpc(name, args); } catch (error) { const e = error as RpcError; throw new SigningError(e.message, e.code === "42501" ? 403 : 400); } } };
       return await ONBOARDING_ACTIONS[action](ctx);
     }
@@ -399,46 +442,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return { pdfBase64: toBase64(made.bytes), title: made.title, text: made.rendered, templateText: made.templateText, edited: made.edited, isHtml: made.isHtml,
         recipientName: recipients[0].name, recipientEmail: recipients[0].email, variables: templateVariables(template), templateName: template.name };
     }
-    if (action === "create") {
-      const context = await admin("list");
-      const recipients = checkRecipients(body.recipients);
-      const subject = await subjectValues(body.subjectType, body.subjectId);
-      let title = String(body.title ?? "").trim(), rendered: string | null = null, templateId: string | null = null, category = String(body.category ?? "other");
-      let values: Record<string, unknown> = {}; let bytes: Uint8Array; let fields: Array<Record<string, unknown>> = [];
-      let edited = false, templateText: string | null = null;
-      const options: Record<string, unknown> = { signing_mode: body.signingMode === "parallel" ? "parallel" : "sequential" };
-      if (call.upload) {
-        bytes = call.upload.bytes;
-        await inspect(bytes);
-      } else {
-        const template = context.templates.find((t: { id: string; status: string }) => t.id === body.templateId && t.status === "active");
-        if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
-        // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
-        values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
-        const made = await templateDocument(template, values, false, body.text, body.html);
-        title = made.title; rendered = made.rendered; bytes = made.bytes; templateId = template.id; category = template.category;
-        edited = made.edited; templateText = made.templateText;
-        // What the sender prints on a PDF template (its variables) becomes part of the document itself, before anyone sees or signs it.
-        const printed = made.fields.filter((f: Record<string, unknown>) => f.role === "sender" && f.value).map((f: Record<string, unknown>) => ({ ...f, recipient_id: null, done: true })) as unknown as import("../_shared/signing-pdf.ts").StampField[];
-        if (printed.length) bytes = await (await signingPdfModule()).stampDocument(bytes, { reference: "", title, fields: printed, recipients: [] });
-        fields = made.fields.filter((f: Record<string, unknown>) => recipients.some((r) => r.role === f.role));
-        // TPL-02: [Student Initial] on every page and every [token] the signer answers belong to the first signer (the student, the employee).
-        if (made.generated.length) {
-          const first = [...recipients].sort((a, b) => a.order - b.order)[0];
-          fields = [...fields, ...made.generated.map((f) => ({ type: f.type, role: first.role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: true, label: f.label }))];
-        }
-        options.signing_mode = body.signingMode ? options.signing_mode : template.signing_mode;
-        options.expiry_days = body.expiryDays ?? template.expiry_days; options.reminder_days = body.reminderDays ?? template.reminder_days;
-      }
-      if (!title || title.length > 200 || /[\r\n]/.test(title)) throw new SigningError("Enter a document title up to 200 characters on one line.");
-      const id = ports.uuid();
-      await store(`${id}/original.pdf`, bytes);
-      const record = await admin("create", id, { title, template_id: templateId, rendered_text: rendered, field_values: values, original_hash: await sha256Hex(bytes), recipients, fields,
-        subject_type: body.subjectType ?? null, subject_id: body.subjectId ?? null, category, message: body.message ?? null, edited, template_text: edited ? templateText : null,
-        expiry_days: body.expiryDays ?? undefined, reminder_days: body.reminderDays ?? undefined, ...options });
-      staged.length = 0;
-      return record;
-    }
+    if (action === "create") return await createRequest(body, call.upload);
     if (action === "admin_url") {
       const record = await admin("detail", body.id);
       const which = String(body.which ?? "document");

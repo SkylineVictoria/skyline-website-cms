@@ -27,6 +27,8 @@ export interface OnboardingContext {
   fileBytes(path: string, expected: string): Promise<Uint8Array>;
   /** Marks the staged files as committed (the database row that references them exists). */
   commit(): void;
+  /** A draft request from a saved template for a record (the Sign module's "create": the record's values printed, the signers' fields placed). */
+  createRequest?(input: Record<string, unknown>): Promise<Json>;
 }
 interface OnboardingTemplate { id: string; systemKey: string; status: string; sourcePath: string; sourceHash: string; sourcePages: number; fields: PlacedField[]; expiryDays: number; reminderDays: number }
 
@@ -242,7 +244,61 @@ async function sendAgentApplicationForm(ctx: OnboardingContext, added: AgentAdde
     throw error;
   }
 }
-/** Activate: both references are back; the agent becomes Active and gets ONE congratulations email with the set-password link. */
+/**
+ * The agent's own agreement (2026-11-17, owner decision (a)): at both references back, staff send the active template of type Individual
+ * agent agreement (CMS > Templates; never P06). The Sign module makes it as any template request for the agent (their name and email,
+ * the business's name and ABN, the date; the template's one signer is the agent), then the database links it to the onboarding.
+ */
+export const AGENT_AGREEMENT_TEMPLATE_MISSING = "No individual agent agreement template yet";
+interface AgentAgreementTemplate { id: string; name: string; kind: string; roles: Array<{ key: string; label?: string; order?: number; required?: boolean }>; version: number }
+export async function sendAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const template = await ctx.rpc("agent_agreement_template", {}) as AgentAgreementTemplate | null;
+  if (!template?.id) throw new SigningError(AGENT_AGREEMENT_TEMPLATE_MISSING, 409);
+  const roles = Array.isArray(template.roles) ? template.roles : [];
+  if (roles.length !== 1) throw new SigningError(`The ${template.name} template must have exactly one signer (the Agent). Fix it in Templates, then send again.`);
+  const follow = await serviceRpc(ctx.ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  if (follow.kind !== "agent") throw new SigningError("This is the business's onboarding: send the business's agreement from its page.");
+  if (follow.stage !== "references_received") throw new SigningError("The agreement can be sent once both references are back.");
+  if (!follow.agent?.email) throw new SigningError("The agent has no email address.");
+  const role = roles[0];
+  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null,
+    recipients: [{ name: follow.agent.name, email: follow.agent.email, role: role.key, label: role.label || "Agent", order: 1, required: true }] }) as { id: string; reference: string };
+  const linked = await ctx.rpc("agency_onboarding_agent_agreement_create", { p_onboarding: onboardingId, p_request: record.id }) as { stage: string };
+  return await sendRequest(ctx, record.id, { reference: record.reference, onboardingId, stage: linked.stage, template: { id: template.id, name: template.name, version: template.version },
+    agent: { name: follow.agent.name, email: follow.agent.email } });
+}
+/** A signed agreement received outside the Sign module, recorded by an administrator with a reason; an open online request is voided. */
+export async function uploadAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  if (!ctx.upload) throw new SigningError("Choose the signed agreement (PDF).");
+  const reason = text(ctx.body.reason, 1000);
+  if (reason.length < 5) throw new SigningError("Give the reason for recording a signed copy instead of the online agreement (kept on the record).");
+  const inspected = await (await import("../_shared/offer-pdf.ts")).inspectOfferPdf(ctx.upload.bytes);
+  if (!inspected.ok) throw new SigningError(inspected.error.replaceAll("offer letter", "agreement"));
+  const stored = await ctx.rpc("agency_onboarding_agent_agreement_upload", { p_onboarding: onboardingId, p_file_name: text(ctx.upload.name, 200) || "agent-agreement.pdf",
+    p_base64: toBase64(ctx.upload.bytes), p_reason: reason }) as { stage: string; previousRequestId: string | null };
+  if (stored.previousRequestId) { try { await ctx.admin("void", stored.previousRequestId, { reason: "Signed agreement recorded by staff" }); } catch { /* already closed */ } }
+  return { onboardingId, stage: stored.stage, voided: stored.previousRequestId ?? null };
+}
+/** The agent signed their agreement: staff are told they can activate (nothing goes to the agent until then). */
+export async function notifyAgentAgreementSigned(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
+  const { ports } = ctx;
+  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  if (follow.stage !== "agreement_signed") return { notified: false };
+  const { provider, config } = ports.mail;
+  const to = [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.sentBy?.email ? [] : config.adminTo)].filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
+  if (!provider || !config.from || !to.length) return { notified: false };
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-agent-agreement-${onboardingId}`, from: config.from, to: to.join(", "),
+    subject: `Agent ready to activate: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})`,
+    textBody: `${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) has signed their individual agent agreement, and both references are in.\n\n`
+      + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to activate or reject the agent. Nothing is sent to the agent until you do.` + SIGN_OFF }));
+  return { notified: outcome.state === "sent" };
+}
+
+/** Activate: both references are back and the agent's own agreement is signed; the agent becomes Active and gets ONE congratulations email with the set-password link. */
 export async function activateAgent(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
@@ -319,9 +375,9 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   const lines = (follow.referees ?? []).map((r) => `- ${r.name || r.email}${r.organisation ? `, ${r.organisation}` : ""}: ${r.status === "received" ? "received" : r.status}`).join("\n");
   const agent = follow.kind === "agent";
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}`, from: config.from, to: to.join(", "),
-    subject: agent ? `Agent ready to activate: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `References received: ${text(follow.agency.name, 120)}`,
+    subject: agent ? `Agent references received: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `References received: ${text(follow.agency.name, 120)}`,
     textBody: `Both referee checks for ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) are in.\n\n${lines}\n\n`
-      + (agent ? `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to read them, then activate or reject the agent. Nothing is sent to the agent until you do.`
+      + (agent ? `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to read them, then send the agent their individual agent agreement or reject them. The agent can be activated once the agreement is signed.`
         : `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) to read them and send the Agent Agreement.`) + SIGN_OFF }));
   if (outcome.state !== "sent") return { notified: false };
   await serviceRpc(ports, "agency_onboarding_mark_notified", { p_onboarding: onboardingId, p_kind: "staff_notified_references", p_detail: { to } }).catch(() => undefined);
@@ -332,7 +388,12 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
 export async function afterCompletion(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, plan: { id: string; kind?: string }): Promise<void> {
   if (plan.kind === "application") await sendRefereeChecks(ctx, plan.id);
   else if (plan.kind === "referee") await notifyReferencesReceived(ctx, plan.id);
-  else if (plan.kind === "agreement") await activateBusiness(ctx, plan.id);
+  else if (plan.kind === "agreement") {
+    // An agent's own agreement never activates anything: staff are told they can activate the agent.
+    const follow = await serviceRpc(ctx.ports, "agency_onboarding_followup", { p_onboarding: plan.id }) as Followup;
+    if (follow.kind === "agent") await notifyAgentAgreementSigned(ctx, plan.id);
+    else await activateBusiness(ctx, plan.id);
+  }
 }
 
 interface Activation {
@@ -441,4 +502,6 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_referee_upload: uploadRefereeForm,
   agent_onboarding_add_agent: addAgent,
   agent_onboarding_agent_activate: activateAgent,
+  agent_onboarding_agent_agreement_send: sendAgentOwnAgreement,
+  agent_onboarding_agent_agreement_upload: uploadAgentOwnAgreement,
 };

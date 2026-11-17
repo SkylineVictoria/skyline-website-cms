@@ -33,6 +33,8 @@ export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student
   fee_agreement: { label: "Fee agreement", audience: "student" }, employment_contract: { label: "Employment contract", audience: "employee" },
   offer_letter: { label: "Offer letter", audience: "employee" }, hr_declaration: { label: "HR declaration", audience: "employee" },
   agency_agreement: { label: "Agency agreement", audience: "agent" }, commission_agreement: { label: "Commission agreement", audience: "agent" },
+  // The agreement each agent signs in their own onboarding (2026-11-17): the active template of this type is what Send agreement uses.
+  individual_agent_agreement: { label: "Individual agent agreement", audience: "agent" },
   other: { label: "Other document", audience: "any" },
   student_offer_letter: { label: "Letter of Offer (student)", audience: "student" },
 };

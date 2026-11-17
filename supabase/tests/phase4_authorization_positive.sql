@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(909);
+select plan(938);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -833,8 +833,11 @@ insert into public.agents(id,business_id,full_name,email,role,status) values
 insert into public.agencies(id,name,code,status,registration_requested_at) values ('13000000-0000-0000-0000-000000000090','Waiting Co','P2-WAIT','Inactive',now());
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
+-- pre-existing data (before 20261118023417 no agent is made Active without an agreement): seeded with triggers off
+set local session_replication_role = replica;
 insert into public.agents(id,business_id,full_name,email,role,status) values
  ('53000000-0000-0000-0000-000000000091','13000000-0000-0000-0000-000000000090','Waiting Admin','waiting.admin@example.test','agency_admin','Active');
+set local session_replication_role = origin;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((select r->>'status' from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-000000000001')) r where r->>'email'='no.password@example.test'),'Invited','an approved agent without a password yet is Invited (waiting for their password)');
@@ -1555,7 +1558,11 @@ select is(public.admin_agency_directory('Gate Co','Onboarding',25,0)->>'total','
 reset role;
 insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-0000000000c1','gate.admin@example.test',now());
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-0000000000c1','33000000-0000-0000-0000-0000000000c1','Gate Admin','gate.admin@example.test');
+-- since 20261118023417 that login can no longer make the contact an Active agent (no agreement): seeded with triggers off
+select throws_ok($q$insert into public.agency_memberships(user_id,agency_id,role) select '23000000-0000-0000-0000-0000000000c1',pg_temp.gate(),'agency_admin'$q$,'23514',null,'a login cannot make an agent Active without an agreement');
+set local session_replication_role = replica;
 insert into public.agency_memberships(user_id,agency_id,role) select '23000000-0000-0000-0000-0000000000c1',pg_temp.gate(),'agency_admin';
+set local session_replication_role = origin;
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
 select is(public.portal_agency_id(),null,'a member of an onboarding business has no workspace');
@@ -1707,12 +1714,57 @@ select is(pg_temp.finv('zed+agent@example.test'),0,'agent flow: Ready is not Act
 select is((pg_temp.fa('zed+agent@example.test')).status,'Onboarding','agent flow: and the agent is still Onboarding');
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
-select is((select (r->'onboarding'->>'received')||'|'||(r->'onboarding'->>'ready') from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-0000000000f1')) r where r->>'email'='zed+agent@example.test'),'2|true','agent flow: the Agents tab shows Ready');
-select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'counts'->>'readyAgents'),'1','agent flow: the business counts one Ready agent');
+select is((select (r->'onboarding'->>'received')||'|'||(r->'onboarding'->>'ready') from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-0000000000f1')) r where r->>'email'='zed+agent@example.test'),'2|false','agent flow: both references back is not Ready yet (the agreement comes next)');
+select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'counts'->>'readyAgents'),'0','agent flow: not counted Ready before the agreement');
 select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'onboarding'->>'stage'),null,'agent flow: agent onboardings never show as the business''s own stage');
 select throws_ok($$select public.agency_onboarding_approve_references(pg_temp.fo('zed+agent@example.test'))$$,'22023',null,'agent flow: no business approval step');
-select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a9','{}')$$,'22023',null,'agent flow: no agreement for an agent');
--- Activate: Active and ONE invitation.
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000a9','{}')$$,'22023',null,'agent flow: the business agreement (P06) is never sent to an agent');
+-- No agent becomes Active without a signed agreement (migration 20261118023417).
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agreement: Activate is refused with both references back and no agreement');
+select throws_ok($$select public.admin_agent_activate((pg_temp.fa('zed+agent@example.test')).id,null,'','','','','agent')$$,'23514',null,'agreement: so is the old Activate button');
+select is(public.agent_agreement_template(),null,'agreement: no individual agent agreement template yet');
+reset role;
+select throws_ok($$update public.agents set status='Active' where email='zed+agent@example.test'$$,'23514',null,'agreement: not even a direct update makes the agent Active');
+select throws_ok($$insert into public.agents(business_id,full_name,email,role,status) values ('13000000-0000-0000-0000-000000000090','Side Door','side.door@example.test','agent','Active')$$,'23514',null,'agreement: nor a new agent row inserted as Active in a business without an agreement');
+select is((select count(*)::int from public.agents where email='side.door@example.test'),0,'agreement: nothing was stored');
+select is(public.agent_agreement_covered(gen_random_uuid(),pg_temp.direct(),null),true,'agreement: SLIT''s direct business needs no agreement');
+select is(public.agent_agreement_covered((pg_temp.fa('zed+agent@example.test')).id,'13000000-0000-0000-0000-0000000000f1',null),false,'agreement: an agent with their own onboarding is not covered by the business''s agreement');
+select is(public.agent_agreement_covered(gen_random_uuid(),'13000000-0000-0000-0000-0000000000f1',null),true,'agreement: an agent with no onboarding of their own is covered by the business''s agreement (contact, earlier agents)');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000f2"}';
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed copy')$$,'42501',null,'agreement: a signed copy is recorded by an administrator only (not the business admin agent)');
+select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')$$,'42501',null,'agreement: nor does the business admin agent send it');
+reset role;
+-- A placeholder individual agent agreement (lab only; production gets the template compliance supplies).
+insert into hr.sign_templates(id,name,title,created_by,kind,audience,category,status,source_path,source_hash,source_pages,roles,fields,signing_mode)
+ values ('7f000000-0000-0000-0000-0000000000b1','Individual Agent Agreement (lab placeholder)','Individual agent agreement','33000000-0000-0000-0000-000000000002','pdf','agent','individual_agent_agreement','active',
+  'templates/7f000000-0000-0000-0000-0000000000b1/source.pdf','bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe',1,'[{"key":"agent","label":"Agent","order":1,"required":true}]',
+  '[{"type":"text","role":"sender","page":1,"x":0.1,"y":0.1,"w":0.4,"h":0.03,"value":"{{agent.name}}"},{"type":"signature","role":"agent","page":1,"x":0.1,"y":0.8,"w":0.3,"h":0.06}]','sequential');
+insert into hr.sign_requests(id,title,recipient_name,recipient_email,original_path,original_hash,state,created_by,reference,signing_mode,subject_type,subject_id,category,template_id)
+ values ('7f000000-0000-0000-0000-0000000000b2','Individual agent agreement','Zed Agent','zed+agent@example.test','7f000000-0000-0000-0000-0000000000b2/original.pdf','bfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbf','draft',
+  '33000000-0000-0000-0000-000000000002','SLIT-2026-' || lpad(nextval('hr.sign_reference_seq')::text, 6, '0'),'sequential','agent',(pg_temp.fa('zed+agent@example.test')).id,'individual_agent_agreement','7f000000-0000-0000-0000-0000000000b1');
+insert into hr.sign_recipients(request_id,role_key,role_label,name,email,signing_order,required,state) values ('7f000000-0000-0000-0000-0000000000b2','agent','Agent','Zed Agent','zed+agent@example.test',1,true,'pending');
+insert into hr.sign_requests(id,title,recipient_name,recipient_email,original_path,original_hash,state,created_by,reference,signing_mode,subject_type,subject_id,category)
+ values ('7f000000-0000-0000-0000-0000000000b3','Something else','Zed Agent','zed+agent@example.test','7f000000-0000-0000-0000-0000000000b3/original.pdf','bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd','draft',
+  '33000000-0000-0000-0000-000000000002','SLIT-2026-' || lpad(nextval('hr.sign_reference_seq')::text, 6, '0'),'sequential','agent',(pg_temp.fa('zed+agent@example.test')).id,'other');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.agent_agreement_template()->>'name','Individual Agent Agreement (lab placeholder)','agreement: Send agreement uses the active template of the new type');
+select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b3')$$,'23514',null,'agreement: a request from any other template is refused (never P06)');
+select is(public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')->>'stage','agreement_sent','agreement: Send agreement (stage agreement sent)');
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agreement: still refused while the agreement waits for a signature');
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'')$$,'22023',null,'agreement: recording a signed copy needs a reason');
+reset role;
+select is(public.agency_onboarding_request_plan('7f000000-0000-0000-0000-0000000000b2')->>'kind','agreement','agreement: the request is routed as the agent''s agreement');
+update hr.sign_recipients set signer_name='Zed Agent' where request_id='7f000000-0000-0000-0000-0000000000b2';
+select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2',pg_temp.rcp('7f000000-0000-0000-0000-0000000000b2'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,'agreement: the agent signs it');
+select is(pg_temp.fstage('zed+agent@example.test')||'|'||(pg_temp.fa('zed+agent@example.test')).status,'agreement_signed|Onboarding','agreement: signed, and nothing is activated by the signature');
+select is((select (agreement_onboarding_id is distinct from pg_temp.fo('zed+agent@example.test'))::text from public.agencies where id='13000000-0000-0000-0000-0000000000f1'),'true','agreement: the business''s own agreement is untouched');
+select is(public.agent_agreement_covered((pg_temp.fa('zed+agent@example.test')).id,'13000000-0000-0000-0000-0000000000f1',null),true,'agreement: the signed agreement covers the agent');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select (r->'onboarding'->>'received')||'|'||(r->'onboarding'->>'ready') from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-0000000000f1')) r where r->>'email'='zed+agent@example.test'),'2|true','agent flow: the Agents tab shows Ready once the agreement is signed');
+select is((public.admin_business_detail('13000000-0000-0000-0000-0000000000f1')->'counts'->>'readyAgents'),'1','agent flow: the business counts one Ready agent');
 select is(public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))->'invitation'->>'email','zed+agent@example.test','agent flow: Activate makes the invitation');
 select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agent flow: activating twice is refused');
 reset role;
@@ -1731,6 +1783,20 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select is(public.agent_onboarding_agent_add('13000000-0000-0000-0000-0000000000f1','','','',null,null,(pg_temp.fa('rex+agent2@example.test')).id)->'agent'->>'status','Onboarding','agent flow: a rejected agent''s onboarding can start again');
 select is((select count(*)::int from jsonb_array_elements(public.agency_onboarding_list('13000000-0000-0000-0000-0000000000f1')) o where o->>'kind'='agent' and o->'agent'->>'email'='rex+agent2@example.test'),2,'agent flow: both of their onboardings are listed');
+reset role;
+-- Rows made in one transaction share created_at: the restarted (not declined) onboarding by its stage.
+create function pg_temp.frex() returns uuid language sql stable security definer as $$ select o.id from public.agency_onboarding o join public.agents g on g.id = o.agent_id where g.email = 'rex+agent2@example.test' and o.kind = 'agent' and o.stage <> 'declined' $$;
+update public.agency_onboarding set stage='references_received' where id=pg_temp.frex();
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'x.pdf',encode('not a pdf','escape'),'Signed on paper at the office')$$,null,null,'agreement: only a PDF can be recorded');
+select is(public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'rex-signed.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed on paper at the office')->>'stage','agreement_signed','agreement: an administrator records a signed copy with a reason');
+select is((select o->'agreementUpload'->>'reason'||'|'||(o->'agreementUpload'->>'fileName')||'|'||(o->'files'->>'agreement') from jsonb_array_elements(public.agency_onboarding_list('13000000-0000-0000-0000-0000000000f1')) o where o->>'id'=pg_temp.frex()::text),'Signed on paper at the office|rex-signed.pdf|true','agreement: the business page shows the recorded copy, its file and reason');
+reset role;
+select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=pg_temp.frex() and event='agreement_uploaded' and detail->>'reason'='Signed on paper at the office'),1,'agreement: the upload is in the onboarding history with its reason');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.frex())$$,'23514',null,'agreement: the references are still required to activate');
 reset role;
 reset role;
 select * from finish();

@@ -290,7 +290,9 @@ export function agentOnboardingWords(o: AgentOnboardingSummary | null | undefine
   switch (o.stage) {
     case "application_sent": return "Application form sent";
     case "application_signed": case "references_pending": return `References ${o.received} of ${o.total}`;
-    case "references_received": return "Ready to activate";
+    case "references_received": return "References received: send agreement";
+    case "agreement_sent": return "Agreement sent";
+    case "agreement_signed": return "Ready to activate";
     case "activated": return "Activated";
     case "declined": return "Rejected";
     case "cancelled": case "expired": return `Onboarding ${o.stage}`;

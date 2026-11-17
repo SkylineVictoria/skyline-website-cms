@@ -7,7 +7,7 @@ import UnitDocumentsPanel from "./UnitDocumentsPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type IntakeDetail, type StaffOption } from "@/pages/admin/lib/rto";
+import { loadIntakeLoads, rto, rtoFlow, type StudyLoad, type BatchPageData, type BatchStudent, type RtoCourse, type RtoIntake, type CourseDetail, type IntakeDetail, type StaffOption } from "@/pages/admin/lib/rto";
 
 /** One Batches screen: pick course > intake > batch, then manage its students, unit dates and unit trainers, batch trainers and
  * assessments. Backed by the existing RTO, CRM enrolment and HRMS trainer APIs (formerly two screens: Batches and Batch Allocation). */
@@ -75,6 +75,8 @@ export default function LmsBatchesPage() {
   }, []);
 
   const availableIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
+  const [loads, setLoads] = useState<Record<string, StudyLoad>>({});
+  useEffect(() => { if (courseId) loadIntakeLoads(courseId).then(setLoads).catch(() => setLoads({})); }, [courseId]);
   useEffect(() => { setIntakeId(prev => availableIntakes.some(i => i.id === prev) ? prev : availableIntakes[0]?.id ?? ""); }, [availableIntakes]);
   const selectedIntake = availableIntakes.find(i => i.id === intakeId);
   const batches = useMemo(() => selectedIntake?.batchList ?? [], [selectedIntake]);
@@ -234,6 +236,18 @@ export default function LmsBatchesPage() {
     finally { setBusy(false); }
   };
   const current = data?.batch;
+  // One batch across intakes: rolling intakes continue a batch as the same-named batch of the next intake (same course and
+  // study load), and carry-over places students in it. The chain is shown here as one batch.
+  const chain = useMemo(() => {
+    const name = (current?.name ?? "").trim().toLowerCase();
+    if (!name || !intakeId) return [];
+    const load = loads[intakeId] ?? "coe";
+    return availableIntakes
+      .filter(i => (loads[i.id] ?? "coe") === load)
+      .map(i => ({ intake: i, batch: (i.batchList ?? []).find(b => b.name.trim().toLowerCase() === name) }))
+      .filter((x): x is { intake: RtoIntake; batch: NonNullable<RtoIntake["batchList"]>[number] } => !!x.batch)
+      .sort((a, b) => a.intake.startDate.localeCompare(b.intake.startDate));
+  }, [current?.name, intakeId, loads, availableIntakes]);
   const students = current?.students.filter(s => s.status === "active" || s.status === "deferred") ?? [];
   const canEnrol = !!data && (data.rtoManager || data.admin);
   const canEdit = !!data?.rtoManager;
@@ -326,6 +340,19 @@ export default function LmsBatchesPage() {
             </div>
             {canEdit && <button type="button" className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={() => void openEditor()}>Edit batch timing</button>}
           </div>
+          {chain.length > 0 && <div className="mt-4 rounded-lg border border-background-200 bg-background-100/60 px-3 py-2.5">
+            <p className="text-xs font-semibold text-foreground-600">{current.name} runs in {chain.length} intake{chain.length === 1 ? "" : "s"}
+              {chain.length > 1 ? ` · ${chain.reduce((t, x) => t + (x.batch.enrolled ?? 0), 0)} students in all` : ""}</p>
+            <div className="mt-2 flex flex-wrap gap-2">{chain.map(({ intake, batch }) => {
+              const here = intake.id === intakeId;
+              return <button key={intake.id} type="button" aria-pressed={here} disabled={here} onClick={() => { setIntakeId(intake.id); setBatchId(batch.id); }}
+                title={here ? "This intake" : `Open ${current.name} in this intake`}
+                className={`rounded-lg px-3 py-1.5 text-left text-xs ring-1 ${here ? "bg-primary-600 text-white ring-primary-600" : "bg-background-50 text-foreground-800 ring-background-300 hover:ring-primary-400"}`}>
+                <span className="block font-semibold">{shortDate(intake.startDate)} – {intake.endDate ? shortDate(intake.endDate) : "…"}</span>
+                <span className={`block ${here ? "text-white/80" : "text-foreground-500"}`}>{batch.enrolled ?? 0} student{batch.enrolled === 1 ? "" : "s"}</span>
+              </button>;
+            })}</div>
+          </div>}
           <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">
             {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
               <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>

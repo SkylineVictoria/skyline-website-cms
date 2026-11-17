@@ -490,6 +490,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   const refreshed = await call({ action: "agent_onboarding_install", which: "agreement", refresh: true }, { name: "agreement.pdf", bytes: blankBytes("agreement") }) as { id: string; refreshed: boolean; version: number; pages: number };
   assert.ok(refreshed.refreshed && refreshed.id === beforeRefresh.id && refreshed.version === 2 && refreshed.pages === 13, "the agreement template is refreshed in place at version 2");
   assert.equal(saved.length, 3, "still three templates"); assert.notEqual(saved[2].source_path, beforeRefresh.source, "with a new source file");
+  assert.ok(String(saved[2].source_path).startsWith(`templates/${beforeRefresh.id}/`), "stored under the template's own id (the kind_source check)");
   assert.ok(stored.has(String(saved[2].source_path)) && [...stored.keys()].filter((p) => p.startsWith("templates/")).length === 4, "the new source is stored (the old one stays for requests already sent)");
   // Stage 1: the application form alone.
   const sentForm = await call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001", message: "Welcome" }) as { id: string; sent: boolean; stage: string };

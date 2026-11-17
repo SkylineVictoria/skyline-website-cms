@@ -61,7 +61,8 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   let read: Awaited<ReturnType<Awaited<ReturnType<typeof onboardingPdfModule>>["readBlankTemplate"]>>;
   try { read = await (await onboardingPdfModule()).readBlankTemplate(which, ctx.upload.bytes); }
   catch (error) { throw new SigningError((error as Error).message); }
-  const id = ctx.ports.uuid();
+  // A refreshed template keeps its id: its source files live under templates/<id>/ (hr.sign_templates kind_source check).
+  const id = refresh && installed ? installed.id : ctx.ports.uuid();
   const path = `templates/${id}/source-${ctx.ports.uuid()}.pdf`;
   await ctx.store(path, read.flattened);
   const result = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: { id, name: spec.name, title: spec.title, category: spec.category, roles: [signerRole(which)], fields: read.fields,

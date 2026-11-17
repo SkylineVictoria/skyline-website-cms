@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import IntakeCalendar from "./IntakeCalendar";
+import IntakeStudentAllocation from "./IntakeStudentAllocation";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { intakeStudents } from "@/pages/admin/lib/intakeStudents";
 import { generateClassSessions, listBreaks, loadIntakeLoads, LOAD_HOURS, rto, setIntakeLoad, shortDate, todayIso, type StudyLoad, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -10,6 +13,13 @@ const longDate = (d: string) => new Date(d + "T00:00:00Z").toLocaleDateString(un
 
 /** Intakes per course. Every intake is active (status "open"); RTO Managers change its start date or delete it. */
 export default function LmsIntakesPage() {
+  const { user } = useAuth();
+  const canAllocate = user?.role === "Admin";
+  const [allocationIntakeId, setAllocationIntakeId] = useState("");
+  const [studentCounts, setStudentCounts] = useState<Record<string, number> | null>(null);
+  const [countError, setCountError] = useState("");
+  const [countRevision, setCountRevision] = useState(0);
+  const refreshCounts = () => setCountRevision(value => value + 1);
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
@@ -48,9 +58,23 @@ export default function LmsIntakesPage() {
   }, [selectedId]);
 
   useEffect(() => { if (detail) setStudyLoad(loads[detail.intake.id] ?? "coe"); }, [detail, loads]);
-  const chooseCourse = (id: string) => { setCourseId(id); setSelectedId(""); setNotice(""); };
+  useEffect(() => {
+    if (!canAllocate || !courseId) return;
+    let active = true;
+    intakeStudents<Record<string, number>>("counts", { courseId })
+      .then(rows => { if (active) { setStudentCounts(rows); setCountError(""); } })
+      .catch((error: Error) => { if (active) setCountError(error.message); });
+    return () => { active = false; };
+  }, [canAllocate, courseId, countRevision]);
+
+  const chooseCourse = (id: string) => {
+    if (id === courseId) return;
+    setCourseId(id); setSelectedId(""); setAllocationIntakeId(""); setNotice("");
+    setStudentCounts(null); setCountError("");
+  };
   const selectedCourse = courses.find(c => c.id === courseId);
   const courseIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
+  const allocationIntake = courseIntakes.find(i => i.id === allocationIntakeId);
   const filtered = courseIntakes.filter(i => (i.name + " " + i.startDate).toLowerCase().includes(search.toLowerCase()));
   const taken = useMemo(() => new Set(courseIntakes.filter(i => i.id !== selectedId).map(i => i.startDate)), [courseIntakes, selectedId]);
   const courseBreaks = breaks.filter(b => !b.courseId || b.courseId === (detail?.intake.courseId ?? courseId));
@@ -73,11 +97,12 @@ export default function LmsIntakesPage() {
     finally { setBusy(false); }
   };
   const remove = async (i: Pick<RtoIntake, "id" | "name">) => {
-    if (!canEdit || busy || !window.confirm(`Delete the intake ${i.name}? Its batches and timeline are deleted too.`)) return;
+    if (!canEdit || busy || !window.confirm(`Delete the intake ${i.name}? Its batches, timeline and student allocations are deleted too.`)) return;
     setBusy(true); setProblem(""); setNotice("");
     try {
       await rto("intake_delete", { intakeId: i.id });
       setIntakes(prev => prev.filter(x => x.id !== i.id));
+      if (allocationIntakeId === i.id) setAllocationIntakeId("");
       setNotice(`${i.name} deleted.`); if (selectedId === i.id) close();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "The intake was not deleted.";
@@ -96,8 +121,9 @@ export default function LmsIntakesPage() {
     </header>
     {loadError ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{loadError}<button onClick={() => void load()} className="ml-3 underline">Retry</button></div> : null}
     {notice && !selectedId ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</p> : null}
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-      <aside className={card + " p-3"}>
+    <div className={`grid items-start gap-4 sm:grid-cols-2 ${canAllocate ? "xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]"}`}>
+      <aside className={card + " min-w-0 p-3"} aria-label="Courses">
+        <h2 className="mb-2 px-1 text-sm font-bold text-foreground-950">Courses</h2>
         <label className="relative block"><span className="sr-only">Search courses</span>
           <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
           <input className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" aria-label="Search courses" placeholder="Search course" value={courseSearch} onChange={e => setCourseSearch(e.target.value)} />
@@ -113,37 +139,58 @@ export default function LmsIntakesPage() {
           </button>;
         })}</div>
       </aside>
-      <section className={card + " min-w-0 p-5"}>
-        {!selectedCourse ? <p className="py-10 text-center text-sm text-foreground-500">Select a course.</p> : <>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
-            <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <label className="relative min-w-48 flex-1"><span className="sr-only">Search intakes</span>
-              <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
-              <input className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" aria-label="Search intakes" placeholder="Search intakes" value={search} onChange={e => setSearch(e.target.value)} />
-            </label>
-            <span className="text-xs text-foreground-500">{filtered.length} intake{filtered.length === 1 ? "" : "s"}</span>
-          </div>
-          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm">
-            <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
-              {["Intake", "Students", "Start date", "End date", ""].map(x => <th key={x || "actions"} className="px-3 py-2">{x}</th>)}</tr></thead>
-            <tbody>{filtered.map(i => <tr key={i.id} className={"border-b border-background-100 " + (selectedId === i.id ? "bg-primary-50" : "hover:bg-background-100")}>
-              <td className="px-3 py-2 font-semibold text-foreground-950">{i.name}</td>
-              <td className="px-3 py-2"><span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold">{(loads[i.id] ?? "coe") === "voe" ? "VoE · 40 h" : "CoE · 20 h"}</span></td>
-              <td className="px-3 py-2">{shortDate(i.startDate)}</td>
-              <td className="px-3 py-2">{shortDate(i.endDate)}</td>
-              <td className="whitespace-nowrap px-3 py-2 text-right">
-                <button type="button" onClick={() => { setNotice(""); setSelectedId(i.id); }} className="inline-flex items-center gap-1 rounded-lg border border-background-300 px-2.5 py-1 text-xs font-semibold text-foreground-800 hover:bg-background-100">
-                  <i className={(canEdit ? "ri-pencil-line" : "ri-eye-line") + " text-sm"} aria-hidden="true" />{canEdit ? "Edit" : "View"}</button>
-                {canEdit ? <button type="button" disabled={busy} onClick={() => void remove(i)} className="ml-2 inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
-                  <i className="ri-delete-bin-line text-sm" aria-hidden="true" />Delete</button> : null}
-              </td>
-            </tr>)}</tbody>
-          </table>{!filtered.length ? <p className="py-10 text-center text-sm text-foreground-500">No intakes for this course yet.</p> : null}</div>
+      <section className={card + " min-w-0 p-3"} aria-label="Course intakes">
+        <h2 className="mb-2 px-1 text-sm font-bold text-foreground-950">Course intakes</h2>
+        {!selectedCourse ? <p className="px-1 text-sm text-foreground-500">Select a course.</p> : <>
+          <label className="relative block"><span className="sr-only">Search intakes</span>
+            <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
+            <input className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm"
+              placeholder="Search intakes" value={search} onChange={e => setSearch(e.target.value)} />
+          </label>
+          {canAllocate && countError && <p role="alert" className="mt-2 text-xs text-red-700">
+            Student counts are unavailable. <button type="button" className="underline" onClick={refreshCounts}>Retry</button>
+          </p>}
+          <ul className="mt-2 max-h-[65vh] space-y-1 overflow-y-auto p-1">
+            {filtered.map(i => <li key={i.id} className={`rounded-lg border ${allocationIntake?.id === i.id ? "border-primary-300 bg-primary-50" : "border-background-200"}`}>
+              <button type="button" aria-pressed={canAllocate ? allocationIntake?.id === i.id : undefined}
+                onClick={() => { setNotice(""); if (canAllocate) setAllocationIntakeId(i.id); else setSelectedId(i.id); }}
+                className="w-full rounded-lg px-2 py-2 text-left hover:bg-background-100">
+                <span className="block break-words text-sm font-semibold text-foreground-950">{i.name}</span>
+                <span className="block text-xs text-foreground-600">{shortDate(i.startDate)} – {shortDate(i.endDate)}</span>
+                {canAllocate && studentCounts && <span className="mt-1 inline-block rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold">
+                  {studentCounts[i.id] ?? 0} {(studentCounts[i.id] ?? 0) === 1 ? "student" : "students"}
+                </span>}
+              </button>
+              <div className="flex flex-wrap items-center gap-2 px-2 pb-2 text-xs">
+                <span className="me-auto text-foreground-600">{(loads[i.id] ?? "coe") === "voe" ? "VoE · 40 h" : "CoE · 20 h"}</span>
+                {(canAllocate || canEdit) && <button type="button" onClick={() => { setNotice(""); setSelectedId(i.id); }}
+                  aria-label={`${canEdit ? "Edit" : "View"} intake ${i.name}`} className="rounded-lg border border-background-300 px-2 py-1 font-semibold hover:bg-background-100">
+                  {canEdit ? "Edit" : "View"}
+                </button>}
+                {canEdit && <button type="button" disabled={busy} onClick={() => void remove(i)}
+                  aria-label={`Delete intake ${i.name}`} className="rounded-lg border border-red-200 px-2 py-1 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+                  Delete
+                </button>}
+              </div>
+            </li>)}
+          </ul>
+          {!filtered.length && <p className="px-1 py-3 text-sm text-foreground-500">
+            {courseIntakes.length ? "No matching intakes." : "No intakes for this course yet."}
+          </p>}
         </>}
       </section>
+      {canAllocate && (allocationIntake
+        ? <IntakeStudentAllocation key={allocationIntake.id} courseId={courseId} intakeId={allocationIntake.id} changed={refreshCounts} />
+        : <>
+          <section className={card + " min-w-0 p-3"} aria-label="Units">
+            <h2 className="mb-2 text-sm font-bold text-foreground-950">Units</h2>
+            <p className="text-sm text-foreground-500">Select an intake to view its units.</p>
+          </section>
+          <section className={card + " min-w-0 p-3"} aria-label="Allocated students">
+            <h2 className="mb-2 text-sm font-bold text-foreground-950">Allocated students</h2>
+            <p className="text-sm text-foreground-500">Select an intake to view its students.</p>
+          </section>
+        </>)}
     </div>
     {selectedId ? <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={close}>
       <section role="dialog" aria-modal="true" aria-label="Edit intake" className="flex h-full w-full max-w-4xl flex-col bg-background-50 shadow-xl" onClick={e => e.stopPropagation()}>
@@ -191,6 +238,6 @@ export default function LmsIntakesPage() {
         </div> : null}
       </section></div> : null}
     <NewIntakeDrawer open={creating && canEdit} onClose={() => setCreating(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined}
-      onCreated={(created: IntakeDetail) => { setCreating(false); setCourseId(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); }} />
+      onCreated={(created: IntakeDetail) => { setCreating(false); chooseCourse(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); }} />
   </div>;
 }

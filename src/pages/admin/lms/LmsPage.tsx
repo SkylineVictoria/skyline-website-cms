@@ -1,8 +1,9 @@
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import IntakesPage from "../IntakesPage";
+import LmsBatchesOverview from "./LmsBatchesOverview";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
-import LmsBatchesPage from "./LmsBatchesPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
@@ -15,16 +16,18 @@ import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
 export default function LmsPage() {
   // Retired areas stay in the URL space so old links redirect instead of 404ing.
   const { area } = useParams<{ area?: LmsArea | "dashboard" | "assessment-allocation" | "submissions" | "unit-delivery" | "room-grid" }>();
+  const [query] = useSearchParams();
   const selected = LMS_MENU.find(x => x.id === area);
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
   // Units are managed inside each course (Courses > Units tab).
   if (area === "units") return <Navigate to="/admin/lms/courses" replace />;
-  if (area === "intakes") return <LmsIntakesPage />;
+  // The intake list is the same screen as Courses › Intakes; the old unit calendar & allocation view opens for one intake (?intake=).
+  if (area === "intakes") return query.get("intake") ? <LmsIntakesPage /> : <IntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
-  if (area === "batches") return <LmsBatchesPage />;
+  if (area === "batches") return <LmsBatchesOverview />;
   // Batch Allocation is now part of Batches (one screen).
   if (area === "batch-allocation") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;

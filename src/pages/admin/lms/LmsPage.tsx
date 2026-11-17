@@ -4,7 +4,6 @@ import LmsBatchesOverview from "./LmsBatchesOverview";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
-import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsTimetablePage from "./LmsTimetablePage";
@@ -22,8 +21,8 @@ export default function LmsPage() {
   if (area === "courses") return <LmsCoursesPage />;
   // Units are managed inside each course (Courses > Units tab).
   if (area === "units") return <Navigate to="/admin/lms/courses" replace />;
-  // The intake list is the same screen as Courses › Intakes; the old unit calendar & allocation view opens for one intake (?intake=).
-  if (area === "intakes") return query.get("intake") ? <LmsIntakesPage /> : <IntakesPage />;
+  // The intake list is the same screen as Courses › Intakes; old ?intake= links open that intake in its sheet.
+  if (area === "intakes") return query.get("intake") ? <Navigate to={`/admin/lms/intakes#${query.get("intake")}`} replace /> : <IntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;

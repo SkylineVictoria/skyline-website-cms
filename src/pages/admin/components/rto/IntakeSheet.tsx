@@ -73,11 +73,6 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 </div>
                 <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p>
                 <p className="text-xs text-foreground-500">{shortDate(i.startDate)} – {shortDate(i.endDate)}{i.campus ? ` · ${i.campus}` : ""}</p>
-                {user?.role === "Admin" && <Link
-            to={`/admin/lms/intakes?intake=${encodeURIComponent(i.id)}`}
-            className="mt-2 inline-flex rounded-lg border border-primary-300 px-2.5 py-1.5 text-xs font-semibold text-primary-700 hover:bg-primary-50">
-            Unit calendar &amp; students
-          </Link>}
               </>
             ) : <div className="h-14 w-64 animate-pulse rounded bg-background-200 motion-reduce:animate-none" />}
           </div>

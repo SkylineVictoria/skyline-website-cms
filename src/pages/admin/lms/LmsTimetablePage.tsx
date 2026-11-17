@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
 import BatchCourseCalendar from "@/pages/admin/lms/BatchCourseCalendar";
-import { rto, rtoFlow, type BatchPageData, type IntakeDetail, type RtoCourse, type RtoIntake, type BatchSession } from "@/pages/admin/lib/rto";
+import { bestIntake, rto, rtoFlow, type BatchPageData, type IntakeDetail, type RtoCourse, type RtoIntake, type BatchSession } from "@/pages/admin/lib/rto";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const dayName = (n: number) => DAYS[n - 1] ?? "Unknown";
@@ -42,7 +42,7 @@ export default function LmsTimetablePage() {
   useEffect(() => { void reload(); }, [reload]);
 
   const courseIntakes = useMemo(() => intakes.filter(i => i.courseId === courseId), [intakes, courseId]);
-  useEffect(() => { setIntakeId(prev => courseIntakes.some(i => i.id === prev) ? prev : courseIntakes[0]?.id ?? ""); }, [courseIntakes]);
+  useEffect(() => { setIntakeId(prev => courseIntakes.some(i => i.id === prev) ? prev : bestIntake(courseIntakes)); }, [courseIntakes]);
   const intake = courseIntakes.find(i => i.id === intakeId);
   // The intake list may omit batchList; intake_get provides the authoritative batches.
   const batches = useMemo(() => {
@@ -103,7 +103,7 @@ export default function LmsTimetablePage() {
     </div>
     <section className={card + " min-w-0 p-5"}>
       {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading…</p>
-      : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">Select a course, intake and batch.</p>
+      : !batchId ? <p className="py-10 text-center text-sm text-foreground-500">This intake has no batch yet. Add students to the intake and a batch opens by itself, or <a className="font-semibold text-primary-700 underline" href={`/admin/lms/intakes#${intakeId}`}>open the intake</a>.</p>
       : !data ? <p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>
       : !sessions.length ? <div className="py-8 text-center">
         <i className="ri-calendar-schedule-line text-4xl text-primary-500" aria-hidden="true" />

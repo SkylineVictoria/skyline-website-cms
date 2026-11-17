@@ -4,6 +4,10 @@ export interface IntakeStudent {
   id: string;
   name: string;
   email: string | null;
+  plan?: {
+    unitId: string; code: string; intakeId: string; intakeStart: string;
+    startDate: string | null; endDate: string | null; carried: boolean; completed: boolean;
+  }[];
 }
 
 export interface AllocationUnit {
@@ -20,7 +24,7 @@ export interface IntakeStudentScope {
 }
 
 export async function intakeStudents<T>(
-  action: "counts" | "units" | "roster" | "search" | "add" | "remove_unit_student",
+  action: "counts" | "units" | "roster" | "search" | "add",
   scope: IntakeStudentScope,
   options: { ids?: string[]; search?: string } = {},
 ): Promise<T> {

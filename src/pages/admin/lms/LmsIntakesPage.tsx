@@ -29,7 +29,7 @@ export default function LmsIntakesPage() {
   const [studentCounts, setStudentCounts] = useState<Record<string, number> | null>(null);
   const [countError, setCountError] = useState("");
   const [countRevision, setCountRevision] = useState(0);
-  const refreshCounts = () => setCountRevision(value => value + 1);
+  const refreshCounts = () => { setCountRevision(value => value + 1); void load(); };
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
@@ -113,7 +113,7 @@ export default function LmsIntakesPage() {
     finally { setBusy(false); }
   };
   const remove = async (i: Pick<RtoIntake, "id" | "name">) => {
-    if (!canEdit || busy || !window.confirm(`Delete the intake ${i.name}? Its batches, timeline and student allocations are deleted too.`)) return;
+    if (!canEdit || busy || !window.confirm(`Delete the intake ${i.name}? Intakes with permanent student allocations cannot be deleted.`)) return;
     setBusy(true); setProblem(""); setNotice("");
     try {
       await rto("intake_delete", { intakeId: i.id });

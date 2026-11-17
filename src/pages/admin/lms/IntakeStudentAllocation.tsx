@@ -88,7 +88,7 @@ export function IntakeStudentPicker({ courseId, intakeId, unit, close, saved }: 
         <h2 id="intake-student-picker-title" className="font-heading text-lg font-bold">
           {unit ? `Add students to ${unit.code}` : "Add students to intake"}
         </h2>
-        {unit && <p className="mt-1 text-sm text-foreground-600">New students will also be enrolled in this intake.</p>}
+        <p className="mt-1 text-sm text-foreground-600">Enrolment assigns all outstanding units still running or upcoming. Missed units are assigned to the next intake. Assignments are permanent.</p>
       </header>
       <div className="px-4 pt-4">
         <label htmlFor="intake-student-search" className="mb-1 block text-sm font-medium">Search CRM students</label>
@@ -122,15 +122,12 @@ export function IntakeStudentPicker({ courseId, intakeId, unit, close, saved }: 
   </dialog>;
 }
 
-function StudentRoster({ courseId, intakeId, unitId, revision, changed }: Required<Pick<IntakeStudentScope, "courseId" | "intakeId">> & {
+function StudentRoster({ courseId, intakeId, unitId, revision }: Required<Pick<IntakeStudentScope, "courseId" | "intakeId">> & {
   unitId?: string;
   revision: number;
-  changed: () => void;
 }) {
   const [students, setStudents] = useState<IntakeStudent[] | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [removeError, setRemoveError] = useState("");
-  const [removing, setRemoving] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -141,21 +138,6 @@ function StudentRoster({ courseId, intakeId, unitId, revision, changed }: Requir
     return () => { active = false; };
   }, [courseId, intakeId, unitId, revision, retry]);
 
-  const remove = async (student: IntakeStudent) => {
-    if (removing || !window.confirm(`Remove ${student.name} from this unit?`)) return;
-    setRemoving(student.id);
-    setRemoveError("");
-    try {
-      await intakeStudents("remove_unit_student", { courseId, intakeId, unitId }, { ids: [student.id] });
-      setStudents(current => current?.filter(row => row.id !== student.id) ?? null);
-      changed();
-    } catch (error) {
-      setRemoveError((error as Error).message);
-    } finally {
-      setRemoving(null);
-    }
-  };
-
   if (loadError) return <p role="alert" className="mt-2 text-sm text-red-700">{loadError} <button type="button" onClick={() => {
     setLoadError(""); setRetry(value => value + 1);
   }} className="underline">Retry</button></p>;
@@ -164,15 +146,22 @@ function StudentRoster({ courseId, intakeId, unitId, revision, changed }: Requir
     {unitId ? "No students allocated to this unit." : "No students enrolled in this intake."}
   </p>;
   return <>
-    {removeError && <p role="alert" className="mt-2 text-sm text-red-700">{removeError}</p>}
     <ul className="mt-2 max-h-[65vh] divide-y divide-background-200 overflow-y-auto">
-      {students.map(student => <li key={student.id} className="flex items-start gap-2 py-2">
+      {students.map(student => <li key={student.id} className="flex flex-wrap items-start gap-2 py-2">
         <StudentIdentity student={student} />
-        {unitId && <button type="button" disabled={removing !== null} onClick={() => void remove(student)}
-          aria-label={`Remove ${student.name} from unit`} title="Remove from unit"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-red-700 hover:bg-red-50 disabled:opacity-50">
-          <i className={removing === student.id ? "ri-loader-4-line animate-spin" : "ri-close-line text-lg"} aria-hidden="true" />
-        </button>}
+        <details className="w-full text-xs">
+          <summary className="cursor-pointer font-semibold text-primary-700">
+            Study plan · {student.plan?.length ?? 0} allocated units
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {(student.plan ?? []).map(assignment => <li key={assignment.intakeId + assignment.unitId}
+              className="rounded-lg border border-background-200 p-2">
+              <span className="block font-semibold">{assignment.code} · {assignment.completed ? "Completed" : "Outstanding"}</span>
+              <span className="block">Intake {shortDate(assignment.intakeStart)}{assignment.carried ? " · Carried forward" : ""}</span>
+              <span className="block">{shortDate(assignment.startDate)} – {shortDate(assignment.endDate)}</span>
+            </li>)}
+          </ul>
+        </details>
       </li>)}
     </ul>
   </>;
@@ -278,7 +267,7 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed, s
       {unit && <p className="mt-1 px-1 text-xs text-foreground-600">{unit.code} · {unit.name}</p>}
       {notice && <p role="status" className="mt-2 text-sm text-green-800">{notice}</p>}
       <StudentRoster key={unit?.id ?? "intake"} courseId={courseId} intakeId={intakeId} unitId={unit?.id}
-        revision={intakeRevision} changed={() => { setNotice("Student removed from the unit."); changed(); }} />
+        revision={intakeRevision} />
     </section>
     {showMonthCalendar && actualSchedule !== null && units !== null && <IntakeMonthCalendar
       schedule={actualSchedule.filter(period => units.some(row => row.id === period.unitId))}
@@ -287,7 +276,7 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed, s
         if (row) { setUnitId(row.id); setNotice(""); setPicker({ unit: row }); }
       }} />}
     {picker && <IntakeStudentPicker courseId={courseId} intakeId={intakeId} unit={picker.unit} close={() => setPicker(null)} saved={() => {
-      setNotice(picker.unit ? "Students allocated to the unit." : "Students enrolled in the intake.");
+      setNotice("Students enrolled and permanent study plans assigned.");
       setPicker(null);
       changed();
     }} />}

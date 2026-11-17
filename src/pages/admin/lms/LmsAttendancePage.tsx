@@ -45,7 +45,8 @@ export default function LmsAttendancePage() {
   useEffect(()=>{setBatch(null);if(!batchId)return;let live=true;rtoFlow<BatchPageData>("batch_get",{batchId}).then(d=>{if(live)setBatch(d);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[batchId]);
   const units=batch?.batch.schedule??[];
   useEffect(()=>{setUnitId(old=>units.some(u=>u.intakeUnitId===old)?old:units[0]?.intakeUnitId??"");},[batch]);
-  const students=useMemo(()=>batch?.batch.students.filter(s=>s.status==="active"||s.status==="deferred")??[],[batch]);
+  // A student who joined late or is carried over from an earlier intake is on the roll only for the units they take in this batch.
+  const students=useMemo(()=>batch?.batch.students.filter(s=>(s.status==="active"||s.status==="deferred")&&(!s.path||!unitId||s.path.unitIds.includes(unitId)))??[],[batch,unitId]);
   useEffect(()=>{setMarks({});setState("new");setMessage("");if(!batchId||!unitId||!date)return;let live=true;
     supabase.rpc("lms_attendance",{p_action:"get",p_batch_id:batchId,p_unit_id:unitId,p_class_date:date}).then(({data,error})=>{if(!live)return;if(error)setError(error.message);else{const row=data as {state:string;marks:Record<string,Mark>};setState(row.state);setMarks(row.marks??{});}});
     return()=>{live=false;};},[batchId,unitId,date]);
@@ -103,7 +104,7 @@ export default function LmsAttendancePage() {
               </label>
               <button type="button" disabled={!batch.rtoManager} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50" onClick={()=>setMarks(Object.fromEntries(students.map(s=>[s.enrolmentId,"present" as Mark])))}>Mark all present</button>
             </div>
-            <div className="mt-3 max-h-[490px] overflow-y-auto">{!students.length?<p className="py-10 text-center text-sm text-foreground-500">No active students in this batch.</p>:students.filter(s=>s.name.toLowerCase().includes(studentSearch.toLowerCase())).map(s=><div key={s.enrolmentId} className="flex flex-wrap items-center justify-between gap-2 border-b border-background-100 px-3 py-2 hover:bg-background-100">
+            <div className="mt-3 max-h-[490px] overflow-y-auto">{!students.length?<p className="py-10 text-center text-sm text-foreground-500">No active students take this unit in this batch.</p>:students.filter(s=>s.name.toLowerCase().includes(studentSearch.toLowerCase())).map(s=><div key={s.enrolmentId} className="flex flex-wrap items-center justify-between gap-2 border-b border-background-100 px-3 py-2 hover:bg-background-100">
               <p className="min-w-0 truncate text-sm font-semibold text-foreground-950">{s.name}</p>
               <div className="flex flex-wrap gap-1">{statuses.map(st=><label key={st} className={"cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold capitalize has-[:disabled]:cursor-default has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary-400 "+(marks[s.enrolmentId]===st?markClass[st]+" ring-1":"text-foreground-500 hover:bg-background-200")}><input type="radio" className="sr-only" name={s.enrolmentId} value={st} checked={marks[s.enrolmentId]===st} disabled={!batch.rtoManager||busy} onChange={()=>setMarks(prev=>({...prev,[s.enrolmentId]:st}))}/>{st}</label>)}</div>
             </div>)}</div>

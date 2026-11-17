@@ -11,6 +11,21 @@ import { rto, rtoFlow, type BatchPageData, type BatchStudent, type RtoCourse, ty
 
 /** One Batches screen: pick course > intake > batch, then manage its students, unit dates and unit trainers, batch trainers and
  * assessments. Backed by the existing RTO, CRM enrolment and HRMS trainer APIs (formerly two screens: Batches and Batch Allocation). */
+const shortDate = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+const unitCount = (n: number) => `${n} unit${n === 1 ? "" : "s"}`;
+/** One line on a rolling-batch student: where they joined or came from, where they continue, and when they finish. */
+function pathNote(s: BatchStudent): string {
+  const p = s.path;
+  if (!p || s.status === "withdrawn" || (!p.carryOver && !p.skipped && !p.next && !p.owed)) return "";
+  const parts: string[] = [];
+  if (p.carryOver) parts.push(`Continuing${p.from ? ` from ${p.from.intake} · ${p.from.batch}` : ""}: ${unitCount(p.unitIds.length)} here from ${shortDate(s.enrolledOn)}`);
+  else if (p.skipped) parts.push(`Joined at ${p.joinedAt ?? "a later unit"}: ${unitCount(p.unitIds.length)} here`);
+  if (p.next) parts.push(`continues in ${p.next.intake} · ${p.next.batch} (${unitCount(p.next.units)}, from ${shortDate(p.next.startDate)})`);
+  if (p.owed) parts.push(`${unitCount(p.owed)} waiting for the next intake`);
+  else if (p.finishDate) parts.push(`finishes ${shortDate(p.finishDate)}`);
+  return parts.join(" · ");
+}
+
 export default function LmsBatchesPage() {
   const { push } = useToast();
   const [courses, setCourses] = useState<RtoCourse[]>([]);
@@ -329,7 +344,7 @@ export default function LmsBatchesPage() {
               <table className="w-full text-left text-sm">
                 <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500"><th className="px-3 py-2">Student</th><th className="hidden px-3 py-2 sm:table-cell">Email</th>{canEnrol && <th className="px-3 py-2"><span className="sr-only">Actions</span></th>}</tr></thead>
                 <tbody>{visibleStudents.map(s => <tr key={s.enrolmentId} className="border-b border-background-100 hover:bg-background-100">
-                  <td className="px-3 py-2"><Link to={`/admin/students/${s.id}`} className="font-semibold text-primary-700 hover:underline">{s.name}</Link><span className="block truncate text-xs text-foreground-500 sm:hidden">{s.email}</span></td>
+                  <td className="px-3 py-2"><Link to={`/admin/students/${s.id}`} className="font-semibold text-primary-700 hover:underline">{s.name}</Link><span className="block truncate text-xs text-foreground-500 sm:hidden">{s.email}</span>{pathNote(s) && <span className="block text-xs text-foreground-600">{pathNote(s)}</span>}</td>
                   <td className="hidden max-w-[260px] truncate px-3 py-2 text-foreground-600 sm:table-cell">{s.email}</td>
                   {canEnrol && <td className="px-3 py-2"><div className="flex items-center justify-end gap-3">
                     <select aria-label={`Move ${s.name}`} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1.5 text-xs" value="" disabled={busy} onChange={ev => { if (ev.target.value) void save("student_move", { enrolmentId: s.enrolmentId, toBatchId: ev.target.value }, "Student transferred"); }}><option value="">Move to…</option>{data.siblings.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>

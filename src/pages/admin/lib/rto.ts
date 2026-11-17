@@ -38,7 +38,13 @@ export interface RtoIntake {
   hours?: number | null; courseDuration?: string | null; batchList?: IntakeBatchChip[];
 }
 export interface IntakeBatchChip { id: string; name: string; capacity: number | null; isActive: boolean; enrolled: number; days: string[] }
-export interface BatchStudent { enrolmentId: string; id: string; name: string; email: string; type: EnrolmentType; status: string; enrolledOn: string }
+/** Where a student is on a rolling batch: the units taken in this batch, the enrolment it continues and the one that continues it. */
+export interface EnrolmentPath {
+  carryOver: boolean; unitIds: string[]; skipped: number; joinedAt: string | null; owed: number; finishDate: string | null;
+  from: { enrolmentId: string; batchId: string; batch: string; intake: string } | null;
+  next: { enrolmentId: string; batchId: string; batch: string; intake: string; startDate: string; units: number } | null;
+}
+export interface BatchStudent { enrolmentId: string; id: string; name: string; email: string; type: EnrolmentType; status: string; enrolledOn: string; path?: EnrolmentPath | null }
 export type EnrolmentType = "CoE" | "VoE" | "Domestic";
 export interface RtoBatch {
   id: string; intakeId: string; intakeName?: string; name: string; classroomId: string | null; classroom: string | null; classDays: string[];

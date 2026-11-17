@@ -247,27 +247,52 @@ async function sendAgentApplicationForm(ctx: OnboardingContext, added: AgentAdde
 /**
  * The agent's own agreement (2026-11-17, owner decision (a)): at both references back, staff send the active template of type Individual
  * agent agreement (CMS > Templates; never P06). The Sign module makes it as any template request for the agent (their name and email,
- * the business's name and ABN, the date; the template's one signer is the agent), then the database links it to the onboarding.
+ * the business's name and ABN, the date). Two signers in order: the agent, then a SLIT signatory chosen from the active CMS Admins (the
+ * sender by default), who is emailed their link once the agent has signed. The database links it to the onboarding.
  */
 export const AGENT_AGREEMENT_TEMPLATE_MISSING = "No individual agent agreement template yet";
-interface AgentAgreementTemplate { id: string; name: string; kind: string; roles: Array<{ key: string; label?: string; order?: number; required?: boolean }>; version: number }
+interface AgentAgreementTemplate { id: string; name: string; kind: string; roles: Array<{ key: string; label?: string; order?: number; required?: boolean }>; version: number; signatureRoles?: string[] }
+interface Countersigner { id: string; name: string; email: string; me: boolean }
+async function pickCountersigner(ctx: OnboardingContext, id: unknown): Promise<Countersigner> {
+  const people = (await ctx.rpc("agent_agreement_countersigners", {}) ?? []) as Countersigner[];
+  const chosen = typeof id === "string" && id ? people.find((p) => p.id === id) : people.find((p) => p.me);
+  if (!chosen) throw new SigningError(typeof id === "string" && id ? "The SLIT signatory must be an active CMS administrator." : "Choose who countersigns for SLIT.");
+  return chosen;
+}
 export async function sendAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
   const template = await ctx.rpc("agent_agreement_template", {}) as AgentAgreementTemplate | null;
   if (!template?.id) throw new SigningError(AGENT_AGREEMENT_TEMPLATE_MISSING, 409);
-  const roles = Array.isArray(template.roles) ? template.roles : [];
-  if (roles.length !== 1) throw new SigningError(`The ${template.name} template must have exactly one signer (the Agent). Fix it in Templates, then send again.`);
+  const roles = (Array.isArray(template.roles) ? [...template.roles] : []).sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
+  const signed = new Set(template.signatureRoles ?? []);
+  if (roles.length !== 2 || Number(roles[0].order ?? 1) === Number(roles[1].order ?? 2)) {
+    throw new SigningError(`The ${template.name} template needs two signers in order: the Agent first, then SLIT. Fix it in Templates, then send again.`, 409);
+  }
+  if (template.kind === "pdf" && roles.some((r) => !signed.has(r.key))) {
+    throw new SigningError(`The ${template.name} template needs a signature box for both signers (the Agent and SLIT). Fix it in Templates, then send again.`, 409);
+  }
   const follow = await serviceRpc(ctx.ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
   if (follow.kind !== "agent") throw new SigningError("This is the business's onboarding: send the business's agreement from its page.");
   if (follow.stage !== "references_received") throw new SigningError("The agreement can be sent once both references are back.");
   if (!follow.agent?.email) throw new SigningError("The agent has no email address.");
-  const role = roles[0];
-  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null,
-    recipients: [{ name: follow.agent.name, email: follow.agent.email, role: role.key, label: role.label || "Agent", order: 1, required: true }] }) as { id: string; reference: string };
+  const slit = await pickCountersigner(ctx, ctx.body.countersignerId);
+  if (slit.email.toLowerCase() === follow.agent.email.toLowerCase()) throw new SigningError("The agent cannot countersign for SLIT.");
+  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null, signingMode: "sequential",
+    recipients: [{ name: follow.agent.name, email: follow.agent.email, role: roles[0].key, label: roles[0].label || "Agent", order: 1, required: true },
+      { name: slit.name, email: slit.email, role: roles[1].key, label: roles[1].label || "SLIT", order: 2, required: true }] }) as { id: string; reference: string };
   const linked = await ctx.rpc("agency_onboarding_agent_agreement_create", { p_onboarding: onboardingId, p_request: record.id }) as { stage: string };
   return await sendRequest(ctx, record.id, { reference: record.reference, onboardingId, stage: linked.stage, template: { id: template.id, name: template.name, version: template.version },
-    agent: { name: follow.agent.name, email: follow.agent.email } });
+    agent: { name: follow.agent.name, email: follow.agent.email }, countersigner: { name: slit.name, email: slit.email } });
+}
+/** Change the SLIT signatory before they sign (their old links stop working; when it is their turn the new one is emailed at once). */
+export async function changeAgentCountersigner(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const slit = await pickCountersigner(ctx, ctx.body.countersignerId);
+  const changed = await ctx.rpc("agency_onboarding_agent_countersigner_change", { p_onboarding: onboardingId, p_cms_user: slit.id }) as { changed: boolean; invited?: boolean };
+  const mail = changed.invited ? await drainSigningMail(ctx.ports) : null;
+  return { onboardingId, ...changed, countersigner: { name: slit.name, email: slit.email }, mail };
 }
 /** A signed agreement received outside the Sign module, recorded by an administrator with a reason; an open online request is voided. */
 export async function uploadAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
@@ -276,10 +301,11 @@ export async function uploadAgentOwnAgreement(ctx: OnboardingContext): Promise<J
   if (!ctx.upload) throw new SigningError("Choose the signed agreement (PDF).");
   const reason = text(ctx.body.reason, 1000);
   if (reason.length < 5) throw new SigningError("Give the reason for recording a signed copy instead of the online agreement (kept on the record).");
+  if (ctx.body.bothSigned !== true) throw new SigningError("Confirm that the copy is signed by the agent and countersigned by SLIT.");
   const inspected = await (await import("../_shared/offer-pdf.ts")).inspectOfferPdf(ctx.upload.bytes);
   if (!inspected.ok) throw new SigningError(inspected.error.replaceAll("offer letter", "agreement"));
   const stored = await ctx.rpc("agency_onboarding_agent_agreement_upload", { p_onboarding: onboardingId, p_file_name: text(ctx.upload.name, 200) || "agent-agreement.pdf",
-    p_base64: toBase64(ctx.upload.bytes), p_reason: reason }) as { stage: string; previousRequestId: string | null };
+    p_base64: toBase64(ctx.upload.bytes), p_reason: reason, p_both_signed: true }) as { stage: string; previousRequestId: string | null };
   if (stored.previousRequestId) { try { await ctx.admin("void", stored.previousRequestId, { reason: "Signed agreement recorded by staff" }); } catch { /* already closed */ } }
   return { onboardingId, stage: stored.stage, voided: stored.previousRequestId ?? null };
 }
@@ -293,7 +319,7 @@ export async function notifyAgentAgreementSigned(ctx: Pick<OnboardingContext, "p
   if (!provider || !config.from || !to.length) return { notified: false };
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-agent-agreement-${onboardingId}`, from: config.from, to: to.join(", "),
     subject: `Agent ready to activate: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})`,
-    textBody: `${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) has signed their individual agent agreement, and both references are in.\n\n`
+    textBody: `The individual agent agreement of ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) is fully signed (the agent and SLIT), and both references are in. The agent has been emailed the signed copy.\n\n`
       + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to activate or reject the agent. Nothing is sent to the agent until you do.` + SIGN_OFF }));
   return { notified: outcome.state === "sent" };
 }
@@ -504,4 +530,5 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_agent_activate: activateAgent,
   agent_onboarding_agent_agreement_send: sendAgentOwnAgreement,
   agent_onboarding_agent_agreement_upload: uploadAgentOwnAgreement,
+  agent_onboarding_agent_countersigner_change: changeAgentCountersigner,
 };

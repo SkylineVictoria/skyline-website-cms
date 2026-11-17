@@ -39,6 +39,8 @@ export interface OnboardingRow {
   activation?: { at: string; invitationId: string | null; invitationStatus: "pending" | "accepted" | "revoked" | null } | null;
   /** An agent's own agreement recorded by an administrator (a signed copy received outside the Sign module): when, by whom, why. */
   agreementUpload?: { at: string; reason: string; fileName: string | null; by: string | null } | null;
+  /** The SLIT signatory of an agent's agreement (second signer); mine = the person looking at the page. */
+  countersign?: { recipientId: string; name: string; email: string; state: string; signedAt: string | null; mine: boolean } | null;
   agent: { id: string; name: string; email: string; role?: "agent" | "agency_admin"; status?: string }; answers: Record<string, string>;
   /** The merged request of a legacy onboarding. */
   request: RequestSummary | null;
@@ -54,7 +56,7 @@ export const EVENT_LABEL: Record<string, string> = {
   agent_notified_referees: "Agent told their referees were contacted", staff_notified_references: "Staff emailed: references received", override: "Agreement sent before both references (override)",
   agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
   references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
-  agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)",
+  agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)", countersigner_changed: "SLIT signatory changed",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
@@ -68,6 +70,14 @@ async function call<T>(fn: string, params: Record<string, unknown>, fallback: st
 }
 /** The template Send agreement uses for an agent: the active one of type Individual agent agreement (CMS > Templates), or null. */
 export const agentAgreementTemplate = () => call<{ id: string; name: string; kind: string; roles: Array<{ key: string; label?: string }>; version: number } | null>("agent_agreement_template", {}, "We could not check the agreement template.");
+/** Who may countersign an agent's agreement for SLIT: the active CMS Admins (me = the person looking). */
+export const agentAgreementCountersigners = () => call<Array<{ id: string; name: string; email: string; me: boolean }>>("agent_agreement_countersigners", {}, "We could not load the administrators.");
+/** An agent's agreement in plain words: sent, signed by the agent (awaiting SLIT), fully signed. */
+export function agentAgreementWords(stage: OnboardingStage, requestState: string | null | undefined): string | null {
+  if (stage === "agreement_sent") return requestState === "partial" ? "Agent signed (awaiting SLIT)" : "Agreement sent";
+  if (stage === "agreement_signed") return "Fully signed";
+  return null;
+}
 /** An agent's onboarding is open until they are activated (the agreement steps included). */
 export const AGENT_OPEN_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "agreement_sent", "agreement_signed"];
 export const prepareOnboarding = (agencyId: string, agentId?: string | null) => call<OnboardingPrepared>("agency_onboarding_prepare", { p_agency: agencyId, p_agent: agentId ?? null }, "We could not prepare the onboarding documents.");
@@ -113,8 +123,8 @@ export const formatAuDate = (iso: string | null | undefined) => { const m = /^(\
 export function stageWords(stage: OnboardingStage, received: number, total: number, kind: "business" | "agent" = "business"): string {
   if (stage === "references_pending" || (kind === "agent" && stage === "application_signed")) return `Waiting for referees (${received} of ${total || 2} received)`;
   if (kind === "agent" && stage === "references_received") return "Both references received: send the agreement";
-  if (kind === "agent" && stage === "agreement_sent") return "Agreement sent: waiting for the agent's signature";
-  if (kind === "agent" && stage === "agreement_signed") return "Ready: agreement signed";
+  if (kind === "agent" && stage === "agreement_sent") return "Agreement sent";
+  if (kind === "agent" && stage === "agreement_signed") return "Ready: agreement fully signed";
   if (kind === "agent" && stage === "declined") return "Rejected";
   return STAGE_LABEL[stage] ?? stage;
 }

@@ -283,7 +283,7 @@ export const getStudent = (id: string) => call<StudentDetail | null>("admin_stud
 export type AgentStatus = "Active" | "Invited" | "Inactive" | "Onboarding" | "Declined";
 export interface AgentCounts { all: number; active: number; invited: number; inactive: number; onboarding?: number; declined?: number }
 /** An agent's own onboarding (migration 20261118004521): its stage and the references received so far. */
-export interface AgentOnboardingSummary { id: string; stage: string; createdAt: string; received: number; total: number; ready: boolean }
+export interface AgentOnboardingSummary { id: string; stage: string; createdAt: string; received: number; total: number; ready: boolean; agreementState?: string | null }
 /** The agent's onboarding in plain words for lists. */
 export function agentOnboardingWords(o: AgentOnboardingSummary | null | undefined): string {
   if (!o) return "Onboarding";
@@ -291,8 +291,8 @@ export function agentOnboardingWords(o: AgentOnboardingSummary | null | undefine
     case "application_sent": return "Application form sent";
     case "application_signed": case "references_pending": return `References ${o.received} of ${o.total}`;
     case "references_received": return "References received: send agreement";
-    case "agreement_sent": return "Agreement sent";
-    case "agreement_signed": return "Ready to activate";
+    case "agreement_sent": return o.agreementState === "partial" ? "Agent signed (awaiting SLIT)" : "Agreement sent";
+    case "agreement_signed": return "Fully signed: ready to activate";
     case "activated": return "Activated";
     case "declined": return "Rejected";
     case "cancelled": case "expired": return `Onboarding ${o.stage}`;

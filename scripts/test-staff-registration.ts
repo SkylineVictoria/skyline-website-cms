@@ -618,7 +618,7 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
   const stored = new Map<string, Uint8Array>([["templates/form/source.pdf", pdf], ["templates/referee/source.pdf", pdf], ["templates/agreement/source.pdf", onePage]]);
   const tpl = (key: string, dir: string) => ({ id: `tpl-${dir}`, systemKey: key, status: "active", sourcePath: `templates/${dir}/source.pdf`, sourceHash: pdfHash, sourcePages: 1, fields: [], expiryDays: 30, reminderDays: 3 });
   const mails: Array<{ to: string; subject: string; textBody: string }> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = []; const adminCalls: string[] = [];
-  const opts = { templates: true, failCreate: false, invitation: "new" as "new" | "none", declineKind: "agent", agreementTemplate: false };
+  const opts = { templates: true, failCreate: false, invitation: "new" as "new" | "none", declineKind: "agent", agreementTemplate: false, twoSigners: false };
   const created: Array<Record<string, unknown>> = [];
   let n = 0;
   const referees = [
@@ -643,7 +643,10 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
       if (name === "agency_onboarding_agent_activate") return { onboardingId: args.p_onboarding, stage: "activated", agency: { id: "31000000-0000-4000-8000-000000000001", name: "ZZ Test Agency", status: "Active" },
         agent: { id: "11000000-0000-4000-8000-000000000001", name: "Zed Agent", email: "zed@example.test", role: "agent", status: "Active" }, loginExists: opts.invitation === "none",
         invitation: opts.invitation === "none" ? null : { id: "71000000-0000-4000-8000-000000000001", email: "zed@example.test", name: "Zed Agent", role: "agent", expiresAt: "2099-01-01T00:00:00Z", new: true, sent: false } };
-      if (name === "agent_agreement_template") return opts.agreementTemplate ? { id: "tpl-agreement", name: "Individual Agent Agreement", kind: "pdf", roles: [{ key: "agent", label: "Agent", order: 1, required: true }], version: 1 } : null;
+      if (name === "agent_agreement_template") return !opts.agreementTemplate ? null : { id: "tpl-agreement", name: "Individual Agent Agreement", kind: "pdf", version: 1,
+        roles: [{ key: "agent", label: "Agent", order: 1, required: true }, ...(opts.twoSigners ? [{ key: "slit", label: "SLIT", order: 2, required: true }] : [])], signatureRoles: opts.twoSigners ? ["agent", "slit"] : ["agent"] };
+      if (name === "agent_agreement_countersigners") return [{ id: "hari-admin", name: "Hari Admin", email: "hari@example.test", me: true }, { id: "ceo", name: "Chief Executive", email: "ceo@example.test", me: false }];
+      if (name === "agency_onboarding_agent_countersigner_change") return { id: args.p_onboarding, changed: true, invited: true, countersigner: { name: "Chief Executive", email: "ceo@example.test" } };
       if (name === "agency_onboarding_agent_agreement_create") { state.stage = "agreement_sent"; return { id: args.p_onboarding, requestId: args.p_request, stage: "agreement_sent" }; }
       if (name === "agency_onboarding_agent_agreement_upload") { state.stage = "agreement_signed"; return { id: args.p_onboarding, stage: "agreement_signed", previousRequestId: "7f000000-0000-4000-8000-0000000000b2" }; }
       if (name === "agency_onboarding_decline") return { id: args.p_onboarding, stage: "declined", kind: opts.declineKind, openRequestIds: [], agent: { id: "a", name: "Zed Agent", email: "zed@example.test" }, agency: { id: "b", name: "ZZ Test Agency" } };
@@ -710,21 +713,30 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
   await assert.rejects(call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }), (e: Error & { status?: number }) => e.message === "No individual agent agreement template yet" && e.status === 409);
   assert.equal(created.length, 0, "no request without the template (never P06)");
   opts.agreementTemplate = true;
+  await assert.rejects(call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }), (e: Error & { status?: number }) => /needs two signers in order: the Agent first, then SLIT/.test(e.message) && e.status === 409);
+  assert.equal(created.length, 0, "a template without the SLIT signer is refused");
+  opts.twoSigners = true;
   const sentAgreement = await call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }) as { reference: string; stage: string; sent: boolean; template: { name: string } };
   assert.deepEqual([sentAgreement.reference, sentAgreement.stage, sentAgreement.sent, sentAgreement.template.name], ["SLIT-2026-000201", "agreement_sent", true, "Individual Agent Agreement"]);
   const req = created[0] as { template_id: string; subject_type: string; recipients: Array<{ role: string; email: string }>; category: string; field_values: Record<string, string> };
-  assert.deepEqual([req.template_id, req.subject_type, req.category, req.recipients.length, req.recipients[0].role, req.recipients[0].email], ["tpl-agreement", "agent", "individual_agent_agreement", 1, "agent", "zed@example.test"], "the agent is the template's one signer");
+  assert.deepEqual([req.template_id, req.subject_type, req.category, req.recipients.length, req.recipients[0].role, req.recipients[0].email], ["tpl-agreement", "agent", "individual_agent_agreement", 2, "agent", "zed@example.test"], "the agent signs first");
+  assert.deepEqual([req.recipients[1].role, req.recipients[1].email, (req as unknown as { signing_mode: string }).signing_mode], ["slit", "hari@example.test", "sequential"], "then the sender countersigns for SLIT, in order");
+  const changedSigner = await call({ action: "agent_onboarding_agent_countersigner_change", onboardingId: "21000000-0000-4000-8000-000000000001", countersignerId: "ceo" }) as { changed: boolean; countersigner: { email: string } };
+  assert.deepEqual([changedSigner.changed, changedSigner.countersigner.email], [true, "ceo@example.test"]);
+  assert.equal(rpcs.find(([name]) => name === "agency_onboarding_agent_countersigner_change")![1].p_cms_user, "ceo");
+  await assert.rejects(call({ action: "agent_onboarding_agent_countersigner_change", onboardingId: "21000000-0000-4000-8000-000000000001", countersignerId: "stranger" }), /active CMS administrator/);
   assert.equal(req.field_values["agency.abn"], "12 345 678 901", "prefilled from the agent and the business");
   assert.ok(rpcs.some(([name, a]) => name === "agency_onboarding_agent_agreement_create" && a.p_request === (created[0] as { id?: string }).id || name === "agency_onboarding_agent_agreement_create"), "the request is linked to the onboarding");
   // Signed: staff are told to activate; the business is never activated by it.
   state.stage = "agreement_signed";
   await onboardingFn.afterCompletion({ ports, store: async () => undefined, fileBytes: async (p) => stored.get(p)!, commit: () => undefined }, { id: "21000000-0000-4000-8000-000000000001", kind: "agreement" });
   const ready = mails.find((m) => /Agent ready to activate/.test(m.subject))!;
-  assert.ok(ready && /signed their individual agent agreement/.test(ready.textBody) && /activate or reject/.test(ready.textBody), "staff are told the agent is ready to activate");
+  assert.ok(ready && /fully signed \(the agent and SLIT\)/.test(ready.textBody) && /activate or reject/.test(ready.textBody), "staff are told the agent is ready to activate");
   // A signed copy recorded by staff: reason required, the open online request voided.
   const signedCopy = { name: "zed-signed.pdf", bytes: onePage };
   await assert.rejects(signingCore.handleSigning({ body: { action: "agent_onboarding_agent_agreement_upload", onboardingId: "21000000-0000-4000-8000-000000000001", reason: "no" }, upload: signedCopy, ip: null, userAgent: null }, ports), /Give the reason/);
-  const recorded = await signingCore.handleSigning({ body: { action: "agent_onboarding_agent_agreement_upload", onboardingId: "21000000-0000-4000-8000-000000000001", reason: "Signed on paper at the office" }, upload: signedCopy, ip: null, userAgent: null }, ports) as { stage: string; voided: string };
+  await assert.rejects(signingCore.handleSigning({ body: { action: "agent_onboarding_agent_agreement_upload", onboardingId: "21000000-0000-4000-8000-000000000001", reason: "Signed on paper at the office" }, upload: signedCopy, ip: null, userAgent: null }, ports), /signed by the agent and countersigned by SLIT/);
+  const recorded = await signingCore.handleSigning({ body: { action: "agent_onboarding_agent_agreement_upload", onboardingId: "21000000-0000-4000-8000-000000000001", reason: "Signed on paper at the office", bothSigned: true }, upload: signedCopy, ip: null, userAgent: null }, ports) as { stage: string; voided: string };
   assert.deepEqual([recorded.stage, recorded.voided], ["agreement_signed", "7f000000-0000-4000-8000-0000000000b2"]);
   assert.equal(rpcs.find(([name]) => name === "agency_onboarding_agent_agreement_upload")![1].p_reason, "Signed on paper at the office");
   assert.ok(adminCalls.includes("void"), "the open online agreement is voided");

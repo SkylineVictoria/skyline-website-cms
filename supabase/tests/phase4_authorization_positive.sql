@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(938);
+select plan(954);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1732,14 +1732,14 @@ select is(public.agent_agreement_covered((pg_temp.fa('zed+agent@example.test')).
 select is(public.agent_agreement_covered(gen_random_uuid(),'13000000-0000-0000-0000-0000000000f1',null),true,'agreement: an agent with no onboarding of their own is covered by the business''s agreement (contact, earlier agents)');
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000f2"}';
-select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed copy')$$,'42501',null,'agreement: a signed copy is recorded by an administrator only (not the business admin agent)');
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed copy',true)$$,'42501',null,'agreement: a signed copy is recorded by an administrator only (not the business admin agent)');
 select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')$$,'42501',null,'agreement: nor does the business admin agent send it');
 reset role;
 -- A placeholder individual agent agreement (lab only; production gets the template compliance supplies).
 insert into hr.sign_templates(id,name,title,created_by,kind,audience,category,status,source_path,source_hash,source_pages,roles,fields,signing_mode)
  values ('7f000000-0000-0000-0000-0000000000b1','Individual Agent Agreement (lab placeholder)','Individual agent agreement','33000000-0000-0000-0000-000000000002','pdf','agent','individual_agent_agreement','active',
-  'templates/7f000000-0000-0000-0000-0000000000b1/source.pdf','bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe',1,'[{"key":"agent","label":"Agent","order":1,"required":true}]',
-  '[{"type":"text","role":"sender","page":1,"x":0.1,"y":0.1,"w":0.4,"h":0.03,"value":"{{agent.name}}"},{"type":"signature","role":"agent","page":1,"x":0.1,"y":0.8,"w":0.3,"h":0.06}]','sequential');
+  'templates/7f000000-0000-0000-0000-0000000000b1/source.pdf','bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe',1,'[{"key":"agent","label":"Agent","order":1,"required":true},{"key":"slit","label":"SLIT","order":2,"required":true}]',
+  '[{"type":"text","role":"sender","page":1,"x":0.1,"y":0.1,"w":0.4,"h":0.03,"value":"{{agent.name}}"},{"type":"signature","role":"agent","page":1,"x":0.1,"y":0.8,"w":0.3,"h":0.06},{"type":"signature","role":"slit","page":1,"x":0.6,"y":0.8,"w":0.3,"h":0.06}]','sequential');
 insert into hr.sign_requests(id,title,recipient_name,recipient_email,original_path,original_hash,state,created_by,reference,signing_mode,subject_type,subject_id,category,template_id)
  values ('7f000000-0000-0000-0000-0000000000b2','Individual agent agreement','Zed Agent','zed+agent@example.test','7f000000-0000-0000-0000-0000000000b2/original.pdf','bfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbf','draft',
   '33000000-0000-0000-0000-000000000002','SLIT-2026-' || lpad(nextval('hr.sign_reference_seq')::text, 6, '0'),'sequential','agent',(pg_temp.fa('zed+agent@example.test')).id,'individual_agent_agreement','7f000000-0000-0000-0000-0000000000b1');
@@ -1751,13 +1751,47 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select is(public.agent_agreement_template()->>'name','Individual Agent Agreement (lab placeholder)','agreement: Send agreement uses the active template of the new type');
 select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b3')$$,'23514',null,'agreement: a request from any other template is refused (never P06)');
-select is(public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')->>'stage','agreement_sent','agreement: Send agreement (stage agreement sent)');
+select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')$$,'23514',null,'countersign: an agreement with the agent alone is refused (SLIT must countersign)');
+select is((select count(*)::int from jsonb_array_elements(public.agent_agreement_countersigners()) x where x->>'email'='positive-admin@example.test' and (x->>'me')::boolean),1,'countersign: the active admins are offered, the sender marked as me');
+reset role;
+insert into hr.sign_recipients(request_id,role_key,role_label,name,email,signing_order,required,state) values ('7f000000-0000-0000-0000-0000000000b2','slit','SLIT','Stranger','stranger.slit@example.test',2,true,'pending');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')$$,'23514',null,'countersign: the SLIT signatory must be an active CMS administrator');
+reset role;
+update hr.sign_recipients set name='Positive admin', email='positive-admin@example.test' where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=2;
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.agency_onboarding_agent_agreement_create(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2')->>'stage','agreement_sent','agreement: Send agreement with the agent then SLIT (stage agreement sent)');
 select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.fo('zed+agent@example.test'))$$,'23514',null,'agreement: still refused while the agreement waits for a signature');
-select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'')$$,'22023',null,'agreement: recording a signed copy needs a reason');
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.fo('zed+agent@example.test'),'a.pdf',encode(decode('255044462d312e34','hex'),'base64'),'',true)$$,'22023',null,'agreement: recording a signed copy needs a reason');
 reset role;
 select is(public.agency_onboarding_request_plan('7f000000-0000-0000-0000-0000000000b2')->>'kind','agreement','agreement: the request is routed as the agent''s agreement');
-update hr.sign_recipients set signer_name='Zed Agent' where request_id='7f000000-0000-0000-0000-0000000000b2';
-select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2',pg_temp.rcp('7f000000-0000-0000-0000-0000000000b2'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,'agreement: the agent signs it');
+update hr.sign_recipients set state='signed', signed_at=now(), signer_name='Zed Agent', consent='lab', signature_kind='typed' where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=1;
+update hr.sign_recipients set state='sent', sent_at=now() where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=2;
+update hr.sign_requests set state='partial' where id='7f000000-0000-0000-0000-0000000000b2';
+select throws_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2',pg_temp.rcp('7f000000-0000-0000-0000-0000000000b2'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,null,'The agreement needs both signatures (the agent and SLIT)','countersign: the agent''s signature alone is not accepted');
+select is(pg_temp.fstage('zed+agent@example.test'),'agreement_sent','countersign: still waiting for SLIT');
+select is(public.agent_agreement_covered((pg_temp.fa('zed+agent@example.test')).id,'13000000-0000-0000-0000-0000000000f1',null),false,'countersign: a half-signed agreement does not count');
+select throws_ok($$update public.agents set status='Active' where email='zed+agent@example.test'$$,'23514',null,'countersign: so the agent cannot be made Active');
+select alike(pg_get_functiondef('public.agency_onboarding_decline(uuid,text)'::regprocedure),'%''partial''%','countersign: Reject voids an agreement waiting for SLIT');
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-0000000000c9','second-admin@example.test',now());
+insert into public.cms_users(id,name,email,role,status,auth_user_id) values ('phase4-second-admin','Second admin','second-admin@example.test','Admin','Active','33000000-0000-0000-0000-0000000000c9');
+insert into hr.sign_tokens(token_hash,recipient_id) select 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', id from hr.sign_recipients where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=2;
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select o->'countersign'->>'name'||'|'||(o->'countersign'->>'mine')||'|'||(o->'agreement'->>'state') from jsonb_array_elements(public.agency_onboarding_list('13000000-0000-0000-0000-0000000000f1')) o where o->>'id'=pg_temp.fo('zed+agent@example.test')::text),'Positive admin|true|partial','countersign: the business page shows Agent signed, awaiting the signatory (Countersign for them)');
+select throws_ok($$select public.agency_onboarding_agent_countersigner_change(pg_temp.fo('zed+agent@example.test'),'no-such-user')$$,'22023',null,'countersign: only an active administrator can be the signatory');
+select is(public.agency_onboarding_agent_countersigner_change(pg_temp.fo('zed+agent@example.test'),'phase4-second-admin')->>'invited','true','countersign: the signatory is changed and invited at once');
+reset role;
+select is((select email||'|'||state from hr.sign_recipients where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=2),'second-admin@example.test|sent','countersign: the new signatory holds the SLIT signature');
+select is((select count(*)::int from hr.sign_tokens t join hr.sign_recipients k on k.id=t.recipient_id where k.request_id='7f000000-0000-0000-0000-0000000000b2' and k.signing_order=2),0,'countersign: the old signatory''s link no longer works');
+select is((select count(*)::int from hr.sign_notifications n join hr.sign_recipients k on k.id=n.recipient_id where k.request_id='7f000000-0000-0000-0000-0000000000b2' and k.signing_order=2 and n.kind='invite' and n.state='queued'),1,'countersign: the new signatory is emailed');
+select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=pg_temp.fo('zed+agent@example.test') and event='countersigner_changed'),1,'countersign: the change is in the history');
+-- SLIT countersigns: the request completes with both signatures.
+update hr.sign_recipients set state='signed', signed_at=now(), signer_name='Second admin', consent='lab', signature_kind='typed' where request_id='7f000000-0000-0000-0000-0000000000b2' and signing_order=2;
+update hr.sign_requests set state='signed', signed_at=now(), signed_path='7f000000-0000-0000-0000-0000000000b2/signed-lab.pdf', signed_hash='bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc' where id='7f000000-0000-0000-0000-0000000000b2';
+select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.fo('zed+agent@example.test'),'7f000000-0000-0000-0000-0000000000b2',pg_temp.rcp('7f000000-0000-0000-0000-0000000000b2'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,'agreement: fully signed (agent and SLIT)');
 select is(pg_temp.fstage('zed+agent@example.test')||'|'||(pg_temp.fa('zed+agent@example.test')).status,'agreement_signed|Onboarding','agreement: signed, and nothing is activated by the signature');
 select is((select (agreement_onboarding_id is distinct from pg_temp.fo('zed+agent@example.test'))::text from public.agencies where id='13000000-0000-0000-0000-0000000000f1'),'true','agreement: the business''s own agreement is untouched');
 select is(public.agent_agreement_covered((pg_temp.fa('zed+agent@example.test')).id,'13000000-0000-0000-0000-0000000000f1',null),true,'agreement: the signed agreement covers the agent');
@@ -1789,8 +1823,9 @@ create function pg_temp.frex() returns uuid language sql stable security definer
 update public.agency_onboarding set stage='references_received' where id=pg_temp.frex();
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
-select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'x.pdf',encode('not a pdf','escape'),'Signed on paper at the office')$$,null,null,'agreement: only a PDF can be recorded');
-select is(public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'rex-signed.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed on paper at the office')->>'stage','agreement_signed','agreement: an administrator records a signed copy with a reason');
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'x.pdf',encode('not a pdf','escape'),'Signed on paper at the office',true)$$,null,null,'agreement: only a PDF can be recorded');
+select throws_ok($$select public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'rex-signed.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed on paper at the office',false)$$,'22023',null,'countersign: an uploaded copy must be declared signed by both parties');
+select is(public.agency_onboarding_agent_agreement_upload(pg_temp.frex(),'rex-signed.pdf',encode(decode('255044462d312e34','hex'),'base64'),'Signed on paper at the office',true)->>'stage','agreement_signed','agreement: an administrator records a signed copy with a reason');
 select is((select o->'agreementUpload'->>'reason'||'|'||(o->'agreementUpload'->>'fileName')||'|'||(o->'files'->>'agreement') from jsonb_array_elements(public.agency_onboarding_list('13000000-0000-0000-0000-0000000000f1')) o where o->>'id'=pg_temp.frex()::text),'Signed on paper at the office|rex-signed.pdf|true','agreement: the business page shows the recorded copy, its file and reason');
 reset role;
 select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=pg_temp.frex() and event='agreement_uploaded' and detail->>'reason'='Signed on paper at the office'),1,'agreement: the upload is in the onboarding history with its reason');

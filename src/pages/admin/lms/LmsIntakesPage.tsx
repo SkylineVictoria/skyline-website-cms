@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import IntakeCalendar from "./IntakeCalendar";
 import { generateClassSessions, listBreaks, loadIntakeLoads, LOAD_HOURS, rto, setIntakeLoad, shortDate, todayIso, type StudyLoad, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -145,7 +146,7 @@ export default function LmsIntakesPage() {
       </section>
     </div>
     {selectedId ? <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={close}>
-      <section role="dialog" aria-modal="true" aria-label="Edit intake" className="flex h-full w-full max-w-lg flex-col bg-background-50 shadow-xl" onClick={e => e.stopPropagation()}>
+      <section role="dialog" aria-modal="true" aria-label="Edit intake" className="flex h-full w-full max-w-4xl flex-col bg-background-50 shadow-xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 border-b border-background-200 p-5">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{canEdit ? "Edit intake" : "Intake"}</p>
@@ -161,9 +162,10 @@ export default function LmsIntakesPage() {
                 <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
               </div>)}
             </dl>
+            <IntakeCalendar detail={detail} />
             {canEdit ? <div className="space-y-1">
               <p className="text-sm font-medium text-foreground-800">Students on</p>
-              <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
+              <div className="grid max-w-md grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
                 {(["coe", "voe"] as const).map(l => <button key={l} type="button" role="radio" aria-checked={studyLoad === l} onClick={() => setStudyLoad(l)}
                   className={`rounded-lg border-2 px-3 py-2 text-left text-sm ${studyLoad === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
                   <span className="block font-bold">{l === "coe" ? "CoE" : "VoE"}</span><span className="block text-xs text-foreground-600">{LOAD_HOURS[l]} hours a week</span></button>)}

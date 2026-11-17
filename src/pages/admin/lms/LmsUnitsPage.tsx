@@ -75,6 +75,11 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     supabase.rpc("rto_course_prereqs", { p_course: courseId }).then(({ data }) => { if (live && data) setNeeds(data as Record<string, { id: string; code: string }[]>); });
     return () => { live = false; };
   }, [courseId, details]);
+  // Only the selected (active) units count: a unit is a prerequisite here when an active unit of this course needs it.
+  const activeNeeded = useMemo(() => {
+    const activeIds = new Set((details.find(d => d.course.id === courseId)?.units ?? []).filter(u => u.isActive && u.id).map(u => u.id as string));
+    return new Set(Object.entries(needs).filter(([unitId]) => activeIds.has(unitId)).flatMap(([, list]) => list.map(n => n.id)));
+  }, [needs, details, courseId]);
   const rows = useMemo(() => details.flatMap(d => d.units.map((unit, index) => ({course:d.course,unit,index}))), [details]);
   const filtered = rows.filter(r => (!courseId || r.course.id === courseId) &&
     (type === "all" || r.unit.unitType === type) && (status === "all" || (r.unit.isActive ? "active" : "inactive") === status) &&
@@ -213,9 +218,9 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
           className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
           <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
-            {r.unit.id && needs[r.unit.id]?.length ? <span className="mt-0.5 block text-xs font-medium text-amber-800" title="This unit is taught after the units it needs. A student who has not done them takes this unit later.">
+            {r.unit.isActive && r.unit.id && needs[r.unit.id]?.length ? <span className="mt-0.5 block text-xs font-medium text-amber-800" title="This unit is taught after the units it needs. A student who has not done them takes this unit later.">
               <i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {needs[r.unit.id].map(n => n.code).join(", ")}</span>
-            : Object.values(needs).some(list => list.some(n => n.id === r.unit.id)) ? <span className="mt-0.5 block text-xs font-medium text-emerald-800"><i className="ri-flag-line mr-1" aria-hidden="true" />Prerequisite unit: taught first</span> : null}</td>
+            : r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="mt-0.5 block text-xs font-medium text-emerald-800"><i className="ri-flag-line mr-1" aria-hidden="true" />Prerequisite unit: taught first</span> : null}</td>
           <td className="px-3 py-2 capitalize">{r.unit.unitType}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
           {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
             return <>

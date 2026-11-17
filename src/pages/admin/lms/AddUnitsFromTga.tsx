@@ -28,8 +28,6 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
   return data;
 }
 
-const stateClass = { met: "text-green-700", pending: "text-amber-700", broken: "text-red-700" } as const;
-const stateMark = { met: "✓", pending: "…", broken: "✕" } as const;
 
 export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
@@ -44,7 +42,6 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   const [result, setResult] = useState<AddResult | null>(null);
   // Units read from training.gov.au (Pre-req button, manual elective): undefined = not asked, null = being read.
   const [lookups, setLookups] = useState<Record<string, UnitLookup | null | { error: string }>>({});
-  const [openPrereq, setOpenPrereq] = useState<Set<string>>(new Set());
   const [manualCode, setManualCode] = useState("");
   const [manual, setManual] = useState<UnitLookup | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
@@ -84,7 +81,11 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   }, [rules, official, units, chosen, imported]);
   const selected = (code: string) => active(code) || chosen.has(code) || imported.some(unit => unit.code === code.toUpperCase());
 
-  const toggle = (code: string, on: boolean) => setChosen(s => { const next = new Set(s); if (on) next.add(code); else next.delete(code); return next; });
+  const toggle = (code: string, on: boolean) => {
+    setChosen(s => { const next = new Set(s); if (on) next.add(code); else next.delete(code); return next; });
+    // Prerequisites are read only for the units picked, and only the missing ones are shown.
+    if (on && official.get(code.toUpperCase())?.unit.hasPrerequisites !== false) lookup(code);
+  };
   const electives = (release?.electives ?? []).filter(unit => !filter.trim() || (unit.code + " " + unit.name).toLowerCase().includes(filter.trim().toLowerCase()));
   const hours = [...(release?.core ?? []), ...(release?.electives ?? [])].filter(unit => chosen.has(unit.code)).reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0)
     + imported.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
@@ -99,10 +100,6 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     call<UnitLookup>({ action: "unit_lookup", code: key })
       .then(data => setLookups(all => ({ ...all, [key]: data })))
       .catch(e => setLookups(all => ({ ...all, [key]: { error: e instanceof Error ? e.message : "Could not read the unit." } })));
-  }
-  function togglePrereq(code: string) {
-    setOpenPrereq(s => { const next = new Set(s); if (next.has(code)) next.delete(code); else next.add(code); return next; });
-    lookup(code);
   }
   /** Add a prerequisite to the selection: tick it when the qualification lists it, else add it as an outside unit. */
   function addPrerequisite(code: string) {
@@ -138,22 +135,14 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     finally { setBusy(false); }
   }
 
-  const prerequisites = (code: string) => {
-    const found = lookups[code.toUpperCase()];
-    if (found === undefined) return null;
-    if (found === null) return <p className="text-xs text-foreground-500">Reading prerequisites from Training.gov.au…</p>;
-    if ("error" in found) return <p className="text-xs text-red-700">{found.error}</p>;
-    if (!found.detailsRead) return <p className="text-xs text-amber-700">The unit's content could not be read from Training.gov.au. Try again later.</p>;
-    if (!found.prerequisites) return <p className="text-xs text-foreground-600">Training.gov.au lists no prerequisites for {found.code}.</p>;
-    const missing = found.prerequisiteCodes.filter(item => !selected(item));
-    return <div className="space-y-1 text-xs">
-      <p className="whitespace-pre-line text-foreground-800">{found.prerequisites}</p>
-      {found.prerequisiteCodes.length ? missing.length ? <p className="flex flex-wrap items-center gap-2 text-amber-700">Not on the course or selected:
-        {missing.map(item => <button key={item} type="button" disabled={busy} onClick={() => addPrerequisite(item)}
-          className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-800 hover:bg-amber-100">Add {item}</button>)}</p>
-        : <p className="text-green-700">Every prerequisite unit is on the course or selected.</p> : null}
-    </div>;
-  };
+  // What the picked units still need: prerequisites that are neither on the course nor picked.
+  const missingPrereqs = [
+    ...[...chosen].map(code => { const found = lookups[code.toUpperCase()]; return { unit: code, needs: found && !("error" in found) ? found.prerequisiteCodes.filter(item => !selected(item)) : [] }; }),
+    ...imported.map(unit => ({ unit: unit.code, needs: unit.prerequisiteCodes.filter(item => !selected(item)) })),
+  ].filter(item => item.needs.length);
+  const readingPrereqs = [...chosen].some(code => lookups[code.toUpperCase()] === null);
+  const brokenRules = check?.lines.filter(line => line.state === "broken") ?? [];
+  const pendingRules = check?.lines.filter(line => line.state === "pending") ?? [];
 
   const row = (unit: TgaUnit) => {
     const on = active(unit.code);
@@ -165,10 +154,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
             <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "hours not published",
               unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : "", on ? "already on the course" : ""].filter(Boolean).join(" · ")}</span></span>
         </label>
-        {unit.hasPrerequisites !== false ? <button type="button" onClick={() => togglePrereq(unit.code)} aria-expanded={openPrereq.has(unit.code)}
-          className="shrink-0 rounded-lg border border-background-300 px-2 py-1 text-xs font-semibold text-foreground-800 hover:bg-background-100">Pre-req</button> : null}
       </div>
-      {openPrereq.has(unit.code) ? <div className="ml-6 mt-1 rounded-lg border border-background-200 bg-background-50 p-2">{prerequisites(unit.code)}</div> : null}
     </div>;
   };
 
@@ -191,35 +177,39 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
       <p className="text-sm text-foreground-600">{release.name} · release {release.releaseNumber}.
         {release.specialisations.length ? ` Specialisations: ${release.specialisations.map(item => `${item.title} ${item.elective}`).join(", ")}.` : ""}</p>
 
-      {check && rules ? <section aria-label="Packaging rules check" className={"rounded-lg border p-3 " + (check.ok ? "border-background-200 bg-background-50" : "border-red-200 bg-red-50")}>
-        <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Elective rules (official packaging rules)</h4>
-        {check.lines.length ? <ul className="space-y-0.5 text-sm">{check.lines.map(line => <li key={line.label} className="flex flex-wrap gap-x-2">
-          <span className={"w-4 font-semibold " + stateClass[line.state]} aria-hidden="true">{stateMark[line.state]}</span>
-          <span className="text-foreground-900">{line.label}</span><span className={stateClass[line.state]}>{line.detail}</span></li>)}</ul>
-          : <p className="text-sm text-foreground-600">No countable elective rule was found in the packaging text.</p>}
-        <p className="mt-1 text-xs text-foreground-500">Counts the electives already on the course plus the ones selected here. Units cannot be added while a rule is broken (✕).</p>
-        {needsAttest ? <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">
-          <p className="font-semibold">Part of the rules could not be checked automatically:</p>
-          <ul className="ml-4 list-disc text-xs">{rules.unchecked.map(line => <li key={line}>{line}</li>)}</ul>
-          <label className="mt-1 flex items-start gap-2"><input type="checkbox" className="mt-1" checked={attested} disabled={busy} onChange={e => setAttested(e.target.checked)} />
-            <span>I have checked this selection against the official packaging rules below.</span></label>
+      <section aria-label="Your selection" className={"sticky top-0 z-10 space-y-2 rounded-lg border p-3 shadow-sm " + (brokenRules.length ? "border-red-300 bg-red-50" : missingPrereqs.length || pendingRules.length || needsAttest ? "border-amber-300 bg-amber-50" : "border-green-300 bg-green-50")}>
+        <p className="text-sm font-semibold text-foreground-950">{count ? `${count} unit${count === 1 ? "" : "s"} picked${hours ? ` · ${hours} nominal hours` : ""}` : "Tick the electives to add."}</p>
+        {brokenRules.map(line => <p key={line.label} role="alert" className="text-sm font-semibold text-red-700"><i className="ri-close-circle-line mr-1" aria-hidden="true" />{line.label}: {line.detail}</p>)}
+        {!brokenRules.length && pendingRules.map(line => <p key={line.label} className="text-sm text-amber-800"><i className="ri-time-line mr-1" aria-hidden="true" />Still to pick: {line.label} ({line.detail})</p>)}
+        {check && !brokenRules.length && !pendingRules.length && count > 0 ? <p className="text-sm text-green-800"><i className="ri-checkbox-circle-line mr-1" aria-hidden="true" />The elective rules are met.</p> : null}
+        {missingPrereqs.map(item => <p key={item.unit} className="flex flex-wrap items-center gap-2 text-sm text-amber-900">
+          <span><i className="ri-git-merge-line mr-1" aria-hidden="true" /><b>{item.unit}</b> needs</span>
+          {item.needs.map(code => <button key={code} type="button" disabled={busy} onClick={() => addPrerequisite(code)}
+            className="rounded border border-amber-400 bg-background-50 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-100">Add {code}</button>)}</p>)}
+        {readingPrereqs ? <p className="text-xs text-foreground-500">Checking the prerequisites of the units you picked…</p> : null}
+        {needsAttest && rules ? <div className="text-sm text-amber-900">
+          <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={attested} disabled={busy} onChange={e => setAttested(e.target.checked)} />
+            <span>I have checked this selection against the official packaging rules (some rules cannot be checked automatically).</span></label>
+          <details className="ml-6 text-xs"><summary className="cursor-pointer">Rules to check by hand</summary><ul className="ml-4 list-disc">{rules.unchecked.map(line => <li key={line}>{line}</li>)}</ul></details>
         </div> : null}
-      </section> : null}
-
-      <section>
-        <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Core units ({release.core.length}, all required)</h4>
-        <div className="rounded-lg border border-background-200 p-1">{release.core.map(row)}</div>
       </section>
+
       <section>
         <div className="mb-1 flex items-center justify-between gap-3">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Electives ({release.electives.length})</h4>
           <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter electives" aria-label="Filter electives" className="w-56 rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-sm" />
         </div>
-        <div className="max-h-80 overflow-auto rounded-lg border border-background-200 p-1">{electives.length ? electives.map(row) : <p className="p-2 text-sm text-foreground-500">No matching electives.</p>}</div>
+        <div className="max-h-[45vh] overflow-auto rounded-lg border border-background-200 p-1">{electives.length ? electives.map(row) : <p className="p-2 text-sm text-foreground-500">No matching electives.</p>}</div>
       </section>
 
-      <section>
-        <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Add an elective from outside this qualification</h4>
+      <details>
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Core units ({release.core.length}, all required)</summary>
+        <div className="mt-2 rounded-lg border border-background-200 p-1">{release.core.map(row)}</div>
+      </details>
+
+      <details open={imported.length > 0 || !!manual}>
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Add an elective from outside this qualification{imported.length ? ` (${imported.length} added)` : ""}</summary>
+        <div className="mt-2">
         {rules && !rules.outsideMax && !needsAttest
           ? <p className="text-sm text-foreground-600">The packaging rules of {release.code} do not allow units from outside its own lists.</p>
           : <div className="space-y-2 rounded-lg border border-background-200 p-3">
@@ -246,7 +236,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
               <button type="button" disabled={busy} onClick={() => setImported(list => list.filter(item => item.code !== unit.code))}
                 className="shrink-0 text-xs font-semibold text-red-700 hover:underline">Remove</button></li>)}</ul> : null}
           </div>}
-      </section>
+        </div>
+      </details>
 
       {release.packagingRules ? <details><summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Official packaging rules</summary>
         <p className="mt-2 max-h-60 overflow-auto whitespace-pre-line text-sm">{release.packagingRules}</p></details> : null}

@@ -48,7 +48,7 @@ export default function IntakesPage({ embedded = false }: { embedded?: boolean }
       </div>
       {error ? <Card><ListMessage icon="ri-error-warning-line" title="Intakes did not load" text={error} action={<Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>} /></Card> : null}
       <IntakesView intakes={shown} loading={rows === null} canEdit={role.rtoManager} canEnrol={role.rtoManager || role.admin} showCourse onReload={() => void load()}
-        courses={courses.filter((c) => c.isActive).map((c) => ({ id: c.id, label: c.label }))}
+        courses={[...courses].sort((a, b) => Number(b.isActive) - Number(a.isActive)).map((c) => ({ id: c.id, label: c.isActive ? c.label : `${c.label} (not active)` }))}
         empty={filtered && rows?.length ? { title: "No intakes match", text: "Clear a filter or check the spelling." } : undefined} />
     </div>
   );

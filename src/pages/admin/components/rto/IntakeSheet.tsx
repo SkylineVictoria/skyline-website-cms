@@ -11,7 +11,7 @@ import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto
 import StudentPicker, { type StudentsAdded } from "@/pages/admin/components/rto/StudentPicker";
 import { Empty, MoreMenu, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import {
-  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoPlace, shortDate, timingShort, weeksOf,
+  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoPlace, shortDate, timingShort, todayIso, weeksOf,
   type BatchStudent, type FeeItem, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
 } from "@/pages/admin/lib/rto";
 
@@ -128,8 +128,8 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
           }} />
       ) : null}
       {picker !== null && detail ? (
-        <StudentPicker courseId={detail.intake.courseId} intakeId={detail.intake.id} joinFrom={detail.intake.startDate} joinTo={detail.intake.endDate} batchId={picker || undefined} rtoManager={canEdit}
-          batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
+        <StudentPicker courseId={detail.intake.courseId} joinFrom={detail.intake.startDate} joinTo={detail.intake.endDate} batchId={picker || undefined} rtoManager={canEdit}
+          batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: detail.intake.startDate > todayIso() ? b.students.filter(active).length : b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
           onClose={() => setPicker(null)}
           onAdded={({ out, batchId, studentIds, names, movedNames }: StudentsAdded) => {
             setPicker(null); setDetail(out); onChanged();
@@ -255,18 +255,18 @@ function Batches({ detail, canEdit, onAdd, onOpenAnother }: { detail: IntakeDeta
         ) : null}
       </div>
       {detail.batches.length === 0 ? (
-        <Empty icon="ri-group-line" title="No batches yet" text="You don’t have to add one by hand: the first batch opens by itself when you add a student, using the course’s usual classes and room. Add one here only to choose its trainer, days or room yourself."
+        <Empty icon="ri-group-line" title="No batches yet" text="Students are added through a batch, and a batch belongs to this intake. Add the first batch (trainer, class days and room), then add its students."
           action={canEdit ? <Button icon="ri-add-line" onClick={onAdd}>Add batch</Button> : undefined} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {detail.batches.map((b) => <BatchCard key={b.id} batch={b} onOpen={() => navigate(`/admin/batches/${b.id}`)} />)}
+          {detail.batches.map((b) => <BatchCard key={b.id} batch={b} upcoming={detail.intake.startDate > todayIso()} onOpen={() => navigate(`/admin/batches/${b.id}`)} />)}
         </div>
       )}
     </div>
   );
 }
 
-export function BatchCard({ batch: b, onOpen }: { batch: RtoBatch; onOpen: () => void }) {
+export function BatchCard({ batch: b, onOpen, upcoming = false }: { batch: RtoBatch; onOpen: () => void; upcoming?: boolean }) {
   const enrolled = b.students.filter(active).length;
   return (
     <button type="button" onClick={onOpen}
@@ -275,7 +275,7 @@ export function BatchCard({ batch: b, onOpen }: { batch: RtoBatch; onOpen: () =>
         <span className="font-heading text-xl font-bold text-foreground-950">{b.name}</span>
         <Avatars names={b.trainers.map((t) => t.name)} max={3} />
         {b.trainers.length === 1 ? <span className="truncate text-sm text-foreground-700">{b.trainers[0].name}</span> : null}
-        <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{seatText(b.occupied ?? enrolled, b.seats ?? b.capacity)}</span>
+        <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{seatText(upcoming ? enrolled : b.occupied ?? enrolled, b.seats ?? b.capacity)}</span>
       </div>
       <p className="mt-2 text-sm text-foreground-600">{timingShort(b) || "No class times yet"}</p>
       <div className="mt-2 flex items-center justify-between">
@@ -327,20 +327,17 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
   };
 
   if (!batches.length) {
-    return <Empty icon="ri-user-add-line" title="No students yet" text="Add a student and a batch opens for them automatically, with a seat in the course’s usual room. Prefer to set the trainer and days first? Add a batch yourself."
-      action={<div className="flex flex-wrap justify-center gap-2">{canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Add students</Button> : null}{canEdit ? <Button variant="outline" icon="ri-add-line" onClick={onAddBatch}>Add batch myself</Button> : null}</div>} />;
+    return <Empty icon="ri-group-line" title="Add a batch first" text="Students join a batch, and a batch belongs to this intake. Add the batch, then add students to it." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;
   }
   const total = batches.reduce((s, b) => s + b.students.filter(active).length, 0);
   const drop = (e: DragEvent, batchId: string) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData("text/enrolment"); if (id) move(id, batchId); };
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-600">{canEnrol && batches.length > 1 ? "Drag a student onto another batch to move them." : "The students of each batch."}</p>
-        {canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Students</Button> : null}
+        <p className="text-sm text-foreground-600">{canEnrol ? `Students are added to a batch (press + Add on a batch).${batches.length > 1 ? " Drag a student onto another batch to move them." : ""}` : "The students of each batch."}</p>
       </div>
       {total === 0 ? (
-        <Empty icon="ri-user-add-line" title="No students yet" text="Add the students who applied for this course."
-          action={canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Add students</Button> : undefined} />
+        <Empty icon="ri-user-add-line" title="No students yet" text="Press + Add on a batch below to put the students who applied for this course in it." />
       ) : null}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {batches.map((b) => {
@@ -349,7 +346,7 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
             <div key={b.id} onDragOver={(e) => { if (canEnrol) { e.preventDefault(); setOver(b.id); } }} onDragLeave={() => setOver((o) => (o === b.id ? null : o))} onDrop={(e) => drop(e, b.id)}
               className={`rounded-card border bg-background-50 transition-colors duration-150 ${over === b.id ? "border-primary-400 bg-primary-50/40" : "border-background-200"}`}>
               <div className="flex items-center justify-between border-b border-background-200 px-3 py-2">
-                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{seatText(b.occupied ?? list.length, b.seats ?? b.capacity)}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
+                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{seatText(detail.intake.startDate > todayIso() ? list.length : b.occupied ?? list.length, b.seats ?? b.capacity)}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
                 {canEnrol ? <button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => onAdd(b.id)}>+ Add</button> : null}
               </div>
               <ul className="min-h-[3rem] divide-y divide-background-100">

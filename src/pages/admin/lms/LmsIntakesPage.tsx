@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
-import IntakeCalendar from "./IntakeCalendar";
 import IntakeStudentAllocation, { IntakeStudentPicker } from "./IntakeStudentAllocation";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import { intakeStudents } from "@/pages/admin/lib/intakeStudents";
@@ -232,16 +231,10 @@ export default function LmsIntakesPage() {
                 <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
               </div>)}
             </dl>
-            {canAllocate ? <>
-              <div className="grid items-start gap-4 sm:grid-cols-2">
-                <IntakeStudentAllocation key={detail.intake.id} courseId={detail.intake.courseId} intakeId={detail.intake.id}
-                  schedule={detail.schedule} changed={refreshCounts} intakeRevision={countRevision} />
-              </div>
-              {detail.batches.length > 0 && <details className="rounded-lg border border-background-200 p-3">
-                <summary className="cursor-pointer text-sm font-semibold text-foreground-900">Batch calendar</summary>
-                <div className="pt-3"><IntakeCalendar detail={detail} /></div>
-              </details>}
-            </> : <IntakeCalendar detail={detail} />}
+            {canAllocate && <div className="grid items-start gap-4 sm:grid-cols-2">
+              <IntakeStudentAllocation key={detail.intake.id} courseId={detail.intake.courseId} intakeId={detail.intake.id}
+                schedule={detail.schedule} changed={refreshCounts} intakeRevision={countRevision} />
+            </div>}
             {canEdit ? <div className="space-y-1">
               <p className="text-sm font-medium text-foreground-800">Students on</p>
               <div className="grid max-w-md grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">

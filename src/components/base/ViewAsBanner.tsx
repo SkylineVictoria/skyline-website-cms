@@ -32,11 +32,12 @@ export default function ViewAsBanner() {
   return (
     <div role="status" data-testid="view-as-banner" className="fixed inset-x-0 bottom-3 z-[1000] mx-auto flex w-fit max-w-[95vw] flex-wrap items-center gap-2 rounded-full border border-primary-300 bg-foreground-950 px-4 py-2 text-sm text-background-50 shadow-lg">
       <i className="ri-eye-line" aria-hidden="true" />
-      <span>Viewing as <b>Test {VIEW_LABELS[state.kind]}</b></span>
+      <span>{state.personName ? <>Signed in as <b>{state.personName}</b> ({VIEW_LABELS[state.kind].toLowerCase()})</> : <>Viewing as <b>Test {VIEW_LABELS[state.kind]}</b></>}</span>
       <label className="sr-only" htmlFor="view-as-switch">Switch view</label>
-      <select id="view-as-switch" disabled={busy} value={state.kind} onChange={(e) => run(() => switchView(e.target.value as ViewKind))}
+      <select id="view-as-switch" disabled={busy} value={state.personName ? "" : state.kind} onChange={(e) => run(() => switchView(e.target.value as ViewKind))}
         className="rounded-md border border-background-50/30 bg-foreground-900 px-2 py-1 text-sm text-background-50">
-        {(Object.keys(VIEW_LABELS) as ViewKind[]).map((k) => <option key={k} value={k}>{VIEW_LABELS[k]} view</option>)}
+        {state.personName ? <option value="" disabled>Switch to a test account…</option> : null}
+        {(Object.keys(VIEW_LABELS) as ViewKind[]).map((k) => <option key={k} value={k}>Test {VIEW_LABELS[k].toLowerCase()}</option>)}
       </select>
       <button type="button" disabled={busy} onClick={() => run(returnToAdmin)} className="rounded-md bg-primary-500 px-3 py-1 font-semibold text-background-50 hover:bg-primary-600 disabled:opacity-60">
         {busy ? "Switching…" : "Back to admin"}

@@ -8,7 +8,8 @@ import { requestWebsiteDomain } from "@/lib/tenantHost";
 import AdminMenu from "@/pages/admin/components/AdminMenu";
 import { hadSession, loginUrl } from "@/lib/loginRouting";
 import { useUiPrefs, type Density } from "@/pages/admin/lib/uiPrefs";
-import { VIEW_LABELS, switchView, type ViewKind } from "@/lib/viewAs";
+import { VIEW_LABELS, type ViewKind } from "@/lib/viewAs";
+import ViewAsPicker from "@/components/base/ViewAsPicker";
 import CommPopup from "@/pages/admin/components/CommPopup";
 
 /** Form and text pages read better at a set width; tables, timelines and boards use the full width. */
@@ -31,6 +32,7 @@ export default function AdminLayout() {
   const [userMenu, setUserMenu] = useState(false);
   const [switching, setSwitching] = useState<ViewKind | "">("");
   const [switchError, setSwitchError] = useState("");
+  const [picking, setPicking] = useState<ViewKind | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
   const [prefs, setPrefs] = useUiPrefs(user?.id);
@@ -165,13 +167,10 @@ export default function AdminLayout() {
                   </div>
                   {user.role === "Admin" ? (
                     <div className="border-b border-background-200 px-3 py-2.5" data-testid="switch-view">
-                      <p className="mb-1.5 text-xs font-medium text-foreground-600">Switch view (test account)</p>
+                      <p className="mb-1.5 text-xs font-medium text-foreground-600">Sign in as</p>
                       <div className="grid grid-cols-3 gap-1">
                         {(Object.keys(VIEW_LABELS) as ViewKind[]).map((k) => (
-                          <button key={k} type="button" disabled={switching !== ""} onClick={() => {
-                            setSwitching(k); setSwitchError("");
-                            void switchView(k).catch((e) => { setSwitching(""); setSwitchError(e instanceof Error ? e.message : "Switch view failed."); });
-                          }}
+                          <button key={k} type="button" disabled={switching !== ""} onClick={() => { setSwitchError(""); setPicking(k); setUserMenu(false); }}
                             className="rounded border border-background-300 px-1.5 py-1 text-xs font-medium text-foreground-800 hover:border-primary-300 hover:bg-primary-50 disabled:opacity-60">
                             {switching === k ? "Opening…" : VIEW_LABELS[k]}
                           </button>
@@ -215,6 +214,7 @@ export default function AdminLayout() {
           </main>
         </div>
       </div>
+      {picking ? <ViewAsPicker kind={picking} onClose={() => setPicking(null)} /> : null}
     </div>
     </DraftProvider>
   );

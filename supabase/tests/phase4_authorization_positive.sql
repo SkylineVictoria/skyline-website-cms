@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(768);
+select plan(774);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1205,6 +1205,17 @@ select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-
 select throws_ok($$select * from public.admin_view_accounts$$,'42501',null,'test accounts are not readable');
 reset role;
 select throws_ok($$select public.admin_view_as_seed('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')$$,'42501',null,'switch view refuses an account that is not the fixed test account');
+-- Sign in as a person (migration 20261117181523): admins only, real members of the workspace, never a CMS user, recorded.
+insert into auth.users(id,email) select '33000000-0000-0000-0000-000000000001','positive@example.test' where not exists (select 1 from auth.users where id = '33000000-0000-0000-0000-000000000001');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_view_as_person('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')$$,'42501',null,'sign in as a person is only callable by the service role');
+reset role;
+select is(jsonb_array_length(public.admin_view_as_people('agent','positive','33000000-0000-0000-0000-000000000002')),1,'an admin finds the agent by name');
+select throws_ok($$select public.admin_view_as_people('agent','','33000000-0000-0000-0000-000000000001')$$,'42501',null,'a non-admin cannot list people');
+select is(public.admin_view_as_person('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')->>'email','positive@example.test','an admin can sign in as the agent');
+select is((select count(*)::int from public.admin_view_events where target_auth_user = '33000000-0000-0000-0000-000000000001'),1,'the switch is recorded with the person');
+select throws_ok($$select public.admin_view_as_person('staff','33000000-0000-0000-0000-000000000002','33000000-0000-0000-0000-000000000002')$$,'42501',null,'an admin can never sign in as a CMS user');
 -- Messages popup (migration 20261117024731): finding a contact and sharing into a team are admin only.
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';

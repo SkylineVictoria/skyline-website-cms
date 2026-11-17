@@ -8,11 +8,11 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote, FeesEditor } from "@/pages/admin/components/rto/shared";
 import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
 import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
-import StudentPicker, { type StudentsAdded } from "@/pages/admin/components/rto/StudentPicker";
+import HoursNote from "@/pages/admin/components/rto/HoursNote";
 import { Empty, MoreMenu, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import {
-  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoPlace, shortDate, timingShort, todayIso, weeksOf,
-  type BatchStudent, type FeeItem, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
+  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoHoursCheck, rtoPlace, shortDate, timingShort, todayIso, weeksOf,
+  type BatchStudent, type FeeItem, type HoursCheck, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
 } from "@/pages/admin/lib/rto";
 
 const seatText = (used: number, seats?: number | null) => (seats ? `${used} of ${seats} seats${used >= seats ? " · full" : ""}` : `${used} student${used === 1 ? "" : "s"}`);
@@ -32,7 +32,14 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<SheetTab>(startAddBatch ? "batches" : startTab);
   const [adding, setAdding] = useState(startAddBatch);
-  const [picker, setPicker] = useState<string | null>(null);
+  const [hours, setHours] = useState<Record<string, HoursCheck>>({});
+  const batchKey = (detail?.batches ?? []).map((b) => `${b.id}:${(b.sessions ?? []).length}:${b.startTime}:${b.endTime}:${(b.classDays ?? []).join("")}`).join("|");
+  useEffect(() => {
+    let live = true;
+    void rtoHoursCheck((detail?.batches ?? []).filter((b) => b.isActive).map((b) => b.id)).then((r) => { if (live) setHours(r); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchKey]);
 
   const load = useCallback(async () => {
     try { setDetail(await rto<IntakeDetail>("intake_get", { intakeId })); setError(""); }
@@ -109,11 +116,10 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 onRegenerate={(fitEnd) => void run(() => rto<IntakeDetail>("intake_save", { id: intakeId, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}), ...(fitEnd ? { fitEnd } : {}) }))
                   .then((ok) => { if (ok) push(fitEnd ? "Timeline fitted to the course length." : "Timeline laid out again from the course."); })} />
             ) : null}
-            {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} onAdd={() => setAdding(true)}
+            {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} hours={hours} onAdd={() => setAdding(true)}
               onOpenAnother={() => { const src = [...detail.batches].filter((b) => b.isActive).pop(); if (!src) return; void run(async () => { await rtoPlace("batch_open", { batchId: src.id }); return rto<IntakeDetail>("intake_get", { intakeId }); }).then((ok) => { if (ok) { push("Another batch opened with the same classes."); onChanged(); } }); }} /> : null}
             {tab === "students" ? (
-              <Students detail={detail} canEnrol={canEnrol} setDetail={setDetail} onChanged={onChanged} reload={load} undoable={undoable}
-                onAdd={(batchId) => setPicker(batchId)} onAddBatch={() => { setTab("batches"); setAdding(true); }} canEdit={canEdit} />
+              <Students detail={detail} canEdit={canEdit} onAddBatch={() => { setTab("batches"); setAdding(true); }} />
             ) : null}
           </div>
         )}
@@ -125,21 +131,6 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             setAdding(false); setDetail(out); onChanged();
             const made = out.batches.find((b) => b.id === out.batchId);
             push(out.clashes.length ? `${made?.name ?? "Batch"} added. ${clashText(out.clashes[0])}.` : `${made?.name ?? "Batch"} added.`, out.clashes.length ? "info" : "success");
-          }} />
-      ) : null}
-      {picker !== null && detail ? (
-        <StudentPicker courseId={detail.intake.courseId} joinFrom={detail.intake.startDate} joinTo={detail.intake.endDate} batchId={picker || undefined} rtoManager={canEdit}
-          batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: detail.intake.startDate > todayIso() ? b.students.filter(active).length : b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
-          onClose={() => setPicker(null)}
-          onAdded={({ out, batchId, studentIds, names, movedNames }: StudentsAdded) => {
-            setPicker(null); setDetail(out); onChanged();
-            const placed = out.batches.flatMap((x) => x.students.filter((s) => studentIds.includes(s.id) && active(s)).map((s) => ({ id: s.enrolmentId, batch: x.name })));
-            const enrolments = placed.map((p) => p.id);
-            if (movedNames?.length && !placed.length) { push(`${movedNames.join(", ")} joined after a prerequisite unit finished, so ${movedNames.length === 1 ? "they start" : "they start"} in the next intake (see their Study card).`); return; }
-            const where = [...new Set(placed.map((p) => p.batch))].join(", ") || out.batches.find((x) => x.id === batchId)?.name || "the batch";
-            undoable(`${names.length === 1 ? names[0] : `${names.length} students`} added to ${where}.`, () => {
-              void Promise.all(enrolments.map((id) => rtoFlow("enrolment_set", { enrolmentId: id, status: "withdrawn" }))).finally(() => { void load(); onChanged(); });
-            });
           }} />
       ) : null}
     </Sheet>
@@ -241,7 +232,7 @@ function Fact({ label, value, note, action }: { label: string; value: string; no
 }
 
 // ------------------------------------------------------------------ Batches
-function Batches({ detail, canEdit, onAdd, onOpenAnother }: { detail: IntakeDetail; canEdit: boolean; onAdd: () => void; onOpenAnother: () => void }) {
+function Batches({ detail, canEdit, onAdd, onOpenAnother, hours }: { detail: IntakeDetail; canEdit: boolean; onAdd: () => void; onOpenAnother: () => void; hours: Record<string, HoursCheck> }) {
   const navigate = useNavigate();
   return (
     <div className="space-y-3">
@@ -259,14 +250,14 @@ function Batches({ detail, canEdit, onAdd, onOpenAnother }: { detail: IntakeDeta
           action={canEdit ? <Button icon="ri-add-line" onClick={onAdd}>Add batch</Button> : undefined} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {detail.batches.map((b) => <BatchCard key={b.id} batch={b} upcoming={detail.intake.startDate > todayIso()} onOpen={() => navigate(`/admin/batches/${b.id}`)} />)}
+          {detail.batches.map((b) => <BatchCard key={b.id} batch={b} hours={hours[b.id]} upcoming={detail.intake.startDate > todayIso()} onOpen={() => navigate(`/admin/batches/${b.id}`)} />)}
         </div>
       )}
     </div>
   );
 }
 
-export function BatchCard({ batch: b, onOpen, upcoming = false }: { batch: RtoBatch; onOpen: () => void; upcoming?: boolean }) {
+export function BatchCard({ batch: b, onOpen, upcoming = false, hours }: { batch: RtoBatch; onOpen: () => void; upcoming?: boolean; hours?: HoursCheck }) {
   const enrolled = b.students.filter(active).length;
   return (
     <button type="button" onClick={onOpen}
@@ -278,6 +269,7 @@ export function BatchCard({ batch: b, onOpen, upcoming = false }: { batch: RtoBa
         <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{seatText(upcoming ? enrolled : b.occupied ?? enrolled, b.seats ?? b.capacity)}</span>
       </div>
       <p className="mt-2 text-sm text-foreground-600">{timingShort(b) || "No class times yet"}</p>
+      <HoursNote check={hours} compact />
       <div className="mt-2 flex items-center justify-between">
         <span className="flex flex-wrap items-center gap-1.5">
           {b.isActive ? null : <Badge>Inactive</Badge>}
@@ -291,75 +283,30 @@ export function BatchCard({ batch: b, onOpen, upcoming = false }: { batch: RtoBa
 }
 
 // ------------------------------------------------------------------ Students: one column per batch; drag a student to move them
-function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, undoable, onAdd, onAddBatch }: {
-  detail: IntakeDetail; canEnrol: boolean; canEdit: boolean; setDetail: (f: (d: IntakeDetail | null) => IntakeDetail | null) => void; onChanged: () => void; reload: () => Promise<void>;
-  undoable: (message: string, undo: () => void) => void; onAdd: (batchId: string) => void; onAddBatch: () => void;
-}) {
-  const { push } = useToast();
-  const [over, setOver] = useState<string | null>(null);
+function Students({ detail, canEdit, onAddBatch }: { detail: IntakeDetail; canEdit: boolean; onAddBatch: () => void }) {
   const batches = detail.batches.filter((b) => b.isActive);
-
-  /** Moves a student between batches at once on screen, then on the server; Undo moves them back. */
-  const move = (enrolmentId: string, toBatchId: string, quiet = false) => {
-    const from = detail.batches.find((b) => b.students.some((s) => s.enrolmentId === enrolmentId));
-    const student = from?.students.find((s) => s.enrolmentId === enrolmentId);
-    const to = detail.batches.find((b) => b.id === toBatchId);
-    if (!from || !student || !to || from.id === to.id) return;
-    setDetail((d) => d && { ...d, batches: d.batches.map((b) => b.id === from.id ? { ...b, students: b.students.filter((s) => s.enrolmentId !== enrolmentId) }
-      : b.id === to.id ? { ...b, students: [...b.students, student].sort((x, y) => x.name.localeCompare(y.name)) } : b) });
-    rtoFlow("student_move", { enrolmentId, toBatchId }).then(() => {
-      onChanged();
-      if (!quiet) undoable(`${student.name} moved to ${to.name}.`, () => move(enrolmentId, from.id, true));
-    }).catch((e) => { push(e instanceof Error ? e.message : "Not moved.", "error"); void reload(); });
-  };
-  const remove = (enrolmentId: string) => {
-    const from = detail.batches.find((b) => b.students.some((s) => s.enrolmentId === enrolmentId));
-    const student = from?.students.find((s) => s.enrolmentId === enrolmentId);
-    if (!from || !student) return;
-    setDetail((d) => d && { ...d, batches: d.batches.map((b) => (b.id === from.id ? { ...b, students: b.students.map((s) => (s.enrolmentId === enrolmentId ? { ...s, status: "withdrawn" } : s)) } : b)) });
-    rtoFlow("enrolment_set", { enrolmentId, status: "withdrawn" }).then(() => {
-      onChanged();
-      undoable(`${student.name} removed from ${from.name}.`, () => {
-        rtoFlow("enrolment_set", { enrolmentId, status: "active" }).then(() => { void reload(); onChanged(); })
-          .catch((e) => push(e instanceof Error ? e.message : "Not brought back.", "error"));
-      });
-    }).catch((e) => { push(e instanceof Error ? e.message : "Not removed.", "error"); void reload(); });
-  };
-
   if (!batches.length) {
-    return <Empty icon="ri-group-line" title="Add a batch first" text="Students join a batch, and a batch belongs to this intake. Add the batch, then add students to it." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;
+    return <Empty icon="ri-group-line" title="No batches yet" text="Students are placed automatically when their offer is accepted: a batch opens for them from the course's usual classes. Add a batch yourself only to set its trainer, days or room." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;
   }
   const total = batches.reduce((s, b) => s + b.students.filter(active).length, 0);
-  const drop = (e: DragEvent, batchId: string) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData("text/enrolment"); if (id) move(id, batchId); };
+  const upcoming = detail.intake.startDate > todayIso();
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-600">{canEnrol ? `Students are added to a batch (press + Add on a batch).${batches.length > 1 ? " Drag a student onto another batch to move them." : ""}` : "The students of each batch."}</p>
-      </div>
-      {total === 0 ? (
-        <Empty icon="ri-user-add-line" title="No students yet" text="Press + Add on a batch below to put the students who applied for this course in it." />
-      ) : null}
+      <p className="text-sm text-foreground-600">Students are placed automatically when their offer is accepted: the first batch with a free seat, a new batch when it is full, and the next intake if they join after a prerequisite unit has finished.</p>
+      {total === 0 ? <Empty icon="ri-user-add-line" title="No students yet" text="They appear here as offers are accepted." /> : null}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {batches.map((b) => {
           const list = b.students.filter(active);
           return (
-            <div key={b.id} onDragOver={(e) => { if (canEnrol) { e.preventDefault(); setOver(b.id); } }} onDragLeave={() => setOver((o) => (o === b.id ? null : o))} onDrop={(e) => drop(e, b.id)}
-              className={`rounded-card border bg-background-50 transition-colors duration-150 ${over === b.id ? "border-primary-400 bg-primary-50/40" : "border-background-200"}`}>
-              <div className="flex items-center justify-between border-b border-background-200 px-3 py-2">
-                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{seatText(detail.intake.startDate > todayIso() ? list.length : b.occupied ?? list.length, b.seats ?? b.capacity)}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
-                {canEnrol ? <button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => onAdd(b.id)}>+ Add</button> : null}
+            <div key={b.id} className="rounded-card border border-background-200 bg-background-50">
+              <div className="border-b border-background-200 px-3 py-2">
+                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{seatText(upcoming ? list.length : b.occupied ?? list.length, b.seats ?? b.capacity)}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
               </div>
               <ul className="min-h-[3rem] divide-y divide-background-100">
-                {list.length === 0 ? <li className="px-3 py-3 text-xs text-foreground-500">{canEnrol ? "Drop a student here or add one." : "No students."}</li> : list.map((s) => (
-                  <li key={s.enrolmentId} draggable={canEnrol} onDragStart={(e) => { e.dataTransfer.setData("text/enrolment", s.enrolmentId); e.dataTransfer.effectAllowed = "move"; }}
-                    className={`flex items-center gap-2 px-3 py-2 ${canEnrol ? "cursor-grab active:cursor-grabbing" : ""}`}>
-                    {canEnrol ? <i className="ri-draggable text-foreground-300" aria-hidden="true" /> : null}
+                {list.length === 0 ? <li className="px-3 py-3 text-xs text-foreground-500">No students.</li> : list.map((s) => (
+                  <li key={s.enrolmentId} className="flex items-center gap-2 px-3 py-2">
                     <span className="min-w-0 flex-1"><span className="block truncate text-sm text-foreground-900">{s.name}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></span>
                     <Badge tone="accent">{s.type}</Badge>
-                    {canEnrol ? <MoreMenu label={`Actions for ${s.name}`} items={[
-                      ...batches.filter((o) => o.id !== b.id).map((o) => ({ label: `Move to ${o.name}`, icon: "ri-arrow-left-right-line", onClick: () => move(s.enrolmentId, o.id) })),
-                      { label: "Remove from batch", icon: "ri-user-unfollow-line", danger: true, onClick: () => remove(s.enrolmentId) },
-                    ]} /> : null}
                   </li>
                 ))}
               </ul>

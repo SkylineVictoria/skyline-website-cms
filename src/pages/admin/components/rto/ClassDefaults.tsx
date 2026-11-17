@@ -29,6 +29,7 @@ export default function ClassDefaults({ courseId, canEdit }: { courseId: string;
     catch (e) { setError(e instanceof Error ? e.message : "Not saved."); }
     finally { setBusy(false); }
   };
+  const weeklyHours = Math.round(value.sessions.reduce((sum, c) => { const [h1, m1] = c.startTime.split(":").map(Number); const [h2, m2] = c.endTime.split(":").map(Number); return sum + Math.max(0, (h2 * 60 + m2 - h1 * 60 - m1) / 60); }, 0) * 10) / 10;
   return (
     <details className="mb-4 rounded-card border border-background-200 bg-background-50" data-testid="class-defaults">
       <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-foreground-900">
@@ -37,6 +38,11 @@ export default function ClassDefaults({ courseId, canEdit }: { courseId: string;
       <div className="space-y-3 border-t border-background-200 px-4 py-3">
         <p className="text-sm text-foreground-600">A new intake without a batch gets its first batch from these (so its dated classes appear straight away), and a full batch opens the next one. Seats are the room&apos;s physical seats; the number here applies when no room is chosen.</p>
         <ErrorNote text={error} />
+        {weeklyHours > 0 && weeklyHours < 20 ? (
+          <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="defaults-hours-warning">
+            <i className="ri-error-warning-line mr-1" aria-hidden="true" />These classes give {weeklyHours} hours a week. CoE students have 20 class hours a week (VoE 40), so a batch opened from these may not finish the course by the intake&apos;s end.
+          </p>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block text-sm"><span className="mb-1 block font-medium text-foreground-800">Usual room</span>
             <Select value={value.classroomId ?? ""} disabled={!canEdit} onChange={(e) => set({ classroomId: e.target.value || null })}>

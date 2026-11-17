@@ -111,11 +111,13 @@ export async function rtoPlace<T>(action: string, data: Record<string, unknown> 
   if (error) throw new Error(error.message);
   return out as T;
 }
-/** Place a student in a chosen batch from a chosen day (public.rto_batch_join). */
-export async function rtoJoin(batchId: string, studentId: string, type: string, on: string): Promise<{ batchId: string; intakeId: string; joinedOn: string }> {
-  const { data: out, error } = await supabase.rpc("rto_batch_join", { p_batch: batchId, p_student: studentId, p_type: type, p_on: on });
-  if (error) throw new Error(error.message);
-  return out as { batchId: string; intakeId: string; joinedOn: string };
+/** Does a batch's weekly timetable give enough class hours to finish the course by the intake's end? (public.rto_batches_hours_check) */
+export interface HoursCheck { needed: number; weekly: number; weeks: number; requiredPerWeek: number; fits: boolean; message: string | null }
+export async function rtoHoursCheck(batchIds: string[]): Promise<Record<string, HoursCheck>> {
+  if (!batchIds.length) return {};
+  const { data, error } = await supabase.rpc("rto_batches_hours_check", { p_batches: batchIds });
+  if (error) return {};
+  return (data ?? {}) as Record<string, HoursCheck>;
 }
 export interface ClassDefaults { courseId: string; seats: number | null; classroomId: string | null; sessions: Array<{ weekday: number; startTime: string; endTime: string; type: SessionType }> }
 export interface Placed { enrolmentId: string; batchId: string; batch: string; intakeId: string; seats: number; occupied: number; openedBatch: boolean }

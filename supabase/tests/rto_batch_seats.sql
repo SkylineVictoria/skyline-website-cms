@@ -2,8 +2,9 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(72);
+select plan(81);
 
+select set_config('rto.auto_place', 'on', false); -- fixtures and the automatic paths; switched off to prove the hand paths are closed
 create temp table t(k text primary key, v text);
 grant all on t to public;
 create function pg_temp.v(text) returns uuid language sql stable as $$ select v::uuid from t where k = $1 $$;
@@ -22,7 +23,7 @@ insert into public.cms_users(id, name, email, role, status, auth_user_id, must_c
  ('seat-editor', 'Seat Editor', 'seat.editor@example.test', 'Editor', 'Active', 'a6000000-0000-0000-0000-000000000002', false, false);
 insert into public.agencies(id, name, code) values ('c6000000-0000-0000-0000-000000000001', 'Seat Agency', 'SEAT-AG');
 insert into public.enrollment_students(id, agency_id, full_name, email)
- select ('e6000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, 'c6000000-0000-0000-0000-000000000001', 'Seat Student ' || n, 'seat.student' || n || '@example.test' from generate_series(1, 12) n;
+ select ('e6000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, 'c6000000-0000-0000-0000-000000000001', 'Seat Student ' || n, 'seat.student' || n || '@example.test' from generate_series(1, 14) n;
 insert into public.locations(id, name, kind) values ('16000000-0000-0000-0000-000000000001', 'Seat Campus', 'theory');
 insert into public.classrooms(id, name, capacity, is_active, location_id) values
  ('17000000-0000-0000-0000-00000000000a', 'Seat Room A', 2, true, '16000000-0000-0000-0000-000000000001'),
@@ -144,13 +145,13 @@ select ok(not exists(select 1 from jsonb_array_elements(public.rto_batch_place('
 
 -- ---------------------------------------------------------------- Joins on (20261118110000)
 insert into public.batches(id, intake_id, name, capacity) values ('f6000000-0000-0000-0000-000000000020', 'f6000000-0000-0000-0000-000000000001', 'JT', 5);
-select is((select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date - 5))->>'joinedOn', (current_date - 5)::text, 'a student joins a chosen batch on a chosen day');
-select is((select enrolled_on from public.batch_enrolments where batch_id = 'f6000000-0000-0000-0000-000000000020' and student_id = 'e6000000-0000-0000-0000-000000000012'), current_date - 5, 'and the enrolment records that day');
-select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date - 60)$$, '22023', null, 'joining before the intake starts is refused');
-select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date + 400)$$, '22023', null, 'joining after the intake ends is refused');
-select pg_temp.as_user('a6000000-0000-0000-0000-000000000002');
-select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012')$$, '42501', 'Only an Admin or an RTO Manager can place students.', 'an editor cannot place students on a day');
-select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
+select set_config('rto.auto_place', 'off', false);
+select throws_ok($$insert into public.batch_enrolments(batch_id, student_id) values ('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012')$$, '42501',
+ 'Students are placed in batches automatically when their offer is accepted.', 'a student cannot be added to a batch by hand');
+select throws_ok($$select public.rto_batch_place('assign', jsonb_build_object('studentId', 'e6000000-0000-0000-0000-000000000012', 'intakeId', 'f6000000-0000-0000-0000-000000000001'))$$, '42501',
+ 'Students are placed in batches automatically when their offer is accepted.', 'nor placed through the old assign call');
+select ok(to_regprocedure('public.rto_batch_join(uuid,uuid,text,date)') is null, 'the hand-picked join no longer exists');
+select set_config('rto.auto_place', 'on', false);
 
 -- ---------------------------------------------------------------- Prerequisites first (20261118120000)
 insert into public.cms_courses(id, slug, code, name, status) values ('course-seat-4', 'seat-course-4', 'SEAT4', 'Seat Course Four', 'Published');
@@ -161,8 +162,8 @@ insert into public.intake_units(intake_id, unit_id, start_date, end_date, sort) 
  ('f6000000-0000-0000-0000-000000000004', 'unit-pa', current_date - 30, current_date - 20, 1), ('f6000000-0000-0000-0000-000000000004', 'unit-pb', current_date - 19, current_date + 30, 2),
  ('f6000000-0000-0000-0000-000000000004', 'unit-pc', current_date + 31, current_date + 60, 3);
 insert into public.batches(id, intake_id, name, capacity) values ('f6000000-0000-0000-0000-000000000040', 'f6000000-0000-0000-0000-000000000004', 'PR', 5);
-select pg_temp.put('pr_early', (public.rto_batch_join('f6000000-0000-0000-0000-000000000040', 'e6000000-0000-0000-0000-000000000011', 'CoE', current_date - 25))->>'enrolmentId');
-select pg_temp.put('pr_late', (public.rto_batch_join('f6000000-0000-0000-0000-000000000040', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date - 5))->>'enrolmentId');
+with ins as (insert into public.batch_enrolments(batch_id, student_id, enrolment_type, status, enrolled_on) values ('f6000000-0000-0000-0000-000000000040', 'e6000000-0000-0000-0000-000000000011', 'CoE', 'active', current_date - 25) returning id) select pg_temp.put('pr_early', (select id::text from ins));
+with ins as (insert into public.batch_enrolments(batch_id, student_id, enrolment_type, status, enrolled_on) values ('f6000000-0000-0000-0000-000000000040', 'e6000000-0000-0000-0000-000000000012', 'CoE', 'active', current_date - 5) returning id) select pg_temp.put('pr_late', (select id::text from ins));
 select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_early'))), 3, 'joining while the prerequisite runs: the student takes every unit');
 select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_late'))), 0, 'joining after the prerequisite ended: no unit of this intake now (prerequisites first, in the next intake)');
 select ok(exists(select 1 from public.rto_unit_requires('unit-pb') r where r = 'unit-pa'), 'the prerequisite is read from the unit''s Training.gov.au text');
@@ -194,6 +195,37 @@ select is((select jsonb_array_length(public.admin_student_schedule('e6000000-000
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000099');
 select throws_ok($$select public.admin_student_progress('e6000000-0000-0000-0000-000000000011')$$, '42501', 'Sign in to the CMS first.', 'only staff can read a student''s progress');
 select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
+
+-- ---------------------------------------------------------------- Automatic placement (20261118180000)
+select set_config('rto.auto_place', 'off', false);
+insert into public.enrollment_applications(id, agency_id, status, student_name, student_email, student_id) values
+ ('b6000000-0000-0000-0000-000000000013', 'c6000000-0000-0000-0000-000000000001', 'submitted', 'Seat Student 13', 'seat.student13@example.test', 'e6000000-0000-0000-0000-000000000013'),
+ ('b6000000-0000-0000-0000-000000000014', 'c6000000-0000-0000-0000-000000000001', 'submitted', 'Seat Student 14', 'seat.student14@example.test', 'e6000000-0000-0000-0000-000000000014');
+select set_config('portal.draft_command', 'b6000000-0000-0000-0000-000000000013', false);
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id) values ('b6000000-0000-0000-0000-000000000013', 'course-seat-2', 'SEAT2', 'Seat Course Two', 'f6000000-0000-0000-0000-000000000002');
+select set_config('portal.draft_command', 'b6000000-0000-0000-0000-000000000014', false);
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id) values ('b6000000-0000-0000-0000-000000000014', 'course-seat-3', 'SEAT3', 'Seat Course Three', 'f6000000-0000-0000-0000-000000000003');
+select is((select count(*)::int from public.batch_enrolments where student_id = 'e6000000-0000-0000-0000-000000000013'), 0, 'a submitted application places nobody');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000099');
+update public.enrollment_applications set status = 'offer_accepted' where id = 'b6000000-0000-0000-0000-000000000013';
+select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id where e.student_id = 'e6000000-0000-0000-0000-000000000013' and b.intake_id = 'f6000000-0000-0000-0000-000000000002' and e.status = 'active'), 1,
+ 'accepting the offer places the student in a batch of the application''s intake, with nobody choosing');
+select ok(exists(select 1 from public.class_sessions cs join public.batches b on b.id = cs.batch_id where b.intake_id = 'f6000000-0000-0000-0000-000000000002'), 'and the batch has its class calendar');
+update public.enrollment_applications set status = 'withdrawn' where id = 'b6000000-0000-0000-0000-000000000013';
+select is((select status from public.batch_enrolments where student_id = 'e6000000-0000-0000-0000-000000000013' order by enrolled_on desc limit 1), 'withdrawn', 'a withdrawn application withdraws the placement');
+update public.enrollment_applications set status = 'offer_accepted' where id = 'b6000000-0000-0000-0000-000000000014';
+select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id where e.student_id = 'e6000000-0000-0000-0000-000000000014'), 0, 'a course that cannot open a batch leaves the student waiting');
+select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
+select ok(exists(select 1 from jsonb_array_elements(public.rto_placement_waiting()) x where x->>'studentId' = 'e6000000-0000-0000-0000-000000000014'), 'and lists them as waiting');
+select public.rto_batch_place('defaults_set', jsonb_build_object('courseId', 'course-seat-3', 'seats', 5, 'sessions', jsonb_build_array(jsonb_build_object('weekday', 3, 'startTime', '09:00', 'endTime', '13:00', 'type', 'theory'))));
+select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id where e.student_id = 'e6000000-0000-0000-0000-000000000014' and e.status = 'active'), 1, 'setting the course''s usual classes places the waiting student by itself');
+select is(public.rto_auto_place_sweep(), 0, 'the sweep has nothing left to place');
+select set_config('rto.auto_place', 'on', false);
+
+-- ---------------------------------------------------------------- Hours check (20261118170000)
+select is((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000020'::uuid])->'f6000000-0000-0000-0000-000000000020'->>'fits')::boolean, false, 'a batch with no weekly classes cannot fit the course hours');
+select ok((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000020'::uuid])->'f6000000-0000-0000-0000-000000000020'->>'message') like '%no weekly classes%', 'and says so');
+select is((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000011'::uuid])->'f6000000-0000-0000-0000-000000000011'->>'fits')::boolean, true, 'a batch whose classes give enough hours fits');
 
 -- ---------------------------------------------------------------- the two patched functions
 select ok(pg_get_functiondef('public.rto_carry_over_plan(uuid, text)'::regprocedure) like '%rto_batch_pick(n.id%', 'the carry-over planner picks batches by free seats');

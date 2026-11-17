@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { Card, PageHeader } from "@/pages/admin/components/ui";
 import { ListMessage, SearchBox } from "@/pages/admin/components/ListControls";
 import { Empty, SkeletonCards } from "@/pages/admin/components/rto/overlay";
-import { monthYear, rto, shortDate, sortIntakes, type RtoIntake } from "@/pages/admin/lib/rto";
+import HoursNote from "@/pages/admin/components/rto/HoursNote";
+import { monthYear, rto, rtoHoursCheck, shortDate, sortIntakes, type HoursCheck, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** Every batch (class group) at a glance: students against seats, class days and its intake. A batch opens its own page; new batches are
  *  opened from an intake, or by the system when a batch is full. */
@@ -11,9 +12,15 @@ export default function LmsBatchesOverview() {
   const [rows, setRows] = useState<RtoIntake[] | null>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [hours, setHours] = useState<Record<string, HoursCheck>>({});
   useEffect(() => {
     rto<RtoIntake[]>("intake_list").then((r) => setRows(r)).catch((e) => { setError(e instanceof Error ? e.message : "Batches did not load."); setRows([]); });
   }, []);
+  useEffect(() => {
+    let live = true;
+    void rtoHoursCheck((rows ?? []).flatMap((i) => (i.batchList ?? []).filter((b) => b.isActive).map((b) => b.id))).then((r) => { if (live) setHours(r); });
+    return () => { live = false; };
+  }, [rows]);
   const groups = useMemo(() => {
     const q = search.trim().toLowerCase();
     const byCourse = new Map<string, { title: string; items: { intake: RtoIntake; batch: NonNullable<RtoIntake["batchList"]>[number] }[] }>();
@@ -51,6 +58,7 @@ export default function LmsBatchesOverview() {
                   </div>
                   <p className="mt-1 text-sm text-foreground-700">{batch.days.length ? batch.days.join(", ") : "No class days set"}</p>
                   <p className="mt-1 text-xs text-foreground-500">Intake {monthYear(intake.startDate)} · starts {shortDate(intake.startDate)}</p>
+                  <HoursNote check={hours[batch.id]} compact />
                 </Link>
               );
             })}

@@ -5,12 +5,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Badge, Button, ConfirmDialog, Field, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
+import HoursNote from "@/pages/admin/components/rto/HoursNote";
 import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
-import StudentPicker, { type StudentsAdded } from "@/pages/admin/components/rto/StudentPicker";
 import BatchAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
 import { Empty, MoreMenu, Section, SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import {
-  clashText, monthYear, rto, rtoFlow, shortDate, stepPath, timingLines, type BatchPageData, type BatchScheduleRow, type BatchSession, type BatchStudent,
+  clashText, monthYear, rto, rtoFlow, rtoHoursCheck, shortDate, stepPath, timingLines, type BatchPageData, type BatchScheduleRow, type HoursCheck, type BatchSession, type BatchStudent,
   type IntakeDetail, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
@@ -23,8 +23,8 @@ export default function BatchPage() {
   const [data, setData] = useState<BatchPageData | null>(null);
   const [error, setError] = useState("");
   const [timing, setTiming] = useState(false);
-  const [picker, setPicker] = useState(false);
   const [details, setDetails] = useState(false);
+  const [hours, setHours] = useState<HoursCheck | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(async () => {
@@ -32,6 +32,12 @@ export default function BatchPage() {
     catch (e) { setError(e instanceof Error ? e.message : "The batch did not load."); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  const timingKey = JSON.stringify(data?.batch.sessions ?? []);
+  useEffect(() => {
+    let live = true;
+    void rtoHoursCheck([id]).then((r) => { if (live) setHours(r[id]); });
+    return () => { live = false; };
+  }, [id, timingKey]);
   const undoable = (message: string, undo: () => void) => push(message, "success", { label: "Undo", onClick: undo });
   const fail = (e: unknown, text: string) => { push(e instanceof Error ? e.message : text, "error"); void load(); };
 
@@ -64,18 +70,6 @@ export default function BatchPage() {
     }).catch((e) => fail(e, "Not reset."));
   };
   // ---- 4 students
-  const move = (s: BatchStudent, toBatchId: string, toName: string, quiet = false, fromId = b.id, fromName = b.name) => {
-    rtoFlow("student_move", { enrolmentId: s.enrolmentId, toBatchId }).then(() => {
-      void load();
-      if (!quiet) undoable(`${s.name} moved to ${toName}.`, () => move(s, fromId, fromName, true));
-    }).catch((e) => fail(e, "Not moved."));
-  };
-  const setStatus = (s: BatchStudent, status: "active" | "withdrawn", quiet = false) => {
-    rtoFlow("enrolment_set", { enrolmentId: s.enrolmentId, status }).then(() => {
-      void load();
-      if (!quiet) undoable(`${s.name} removed from ${b.name}.`, () => setStatus(s, "active", true));
-    }).catch((e) => fail(e, "Not saved."));
-  };
 
   return (
     <div className="mx-auto w-full max-w-4xl min-w-0 space-y-4 pb-10">
@@ -92,6 +86,8 @@ export default function BatchPage() {
         </div>
         <p className="mt-0.5 text-sm text-foreground-600">{i.courseName} · {shortDate(b.startDate ?? i.startDate)} – {shortDate(b.endDate ?? i.endDate)}</p>
       </div>
+
+      <HoursNote check={hours} />
 
       <Section n={1} title="Class timing" helper="When and where this batch meets each week."
         action={canEdit ? <Button size="sm" variant={lines.length ? "outline" : "primary"} icon="ri-time-line" onClick={() => setTiming(true)}>{lines.length ? "Change timing" : "Set class timing"}</Button> : undefined}>
@@ -143,29 +139,15 @@ export default function BatchPage() {
         )}
       </Section>
 
-      <Section n={4} title="Students" helper="Add students, move one to another batch of this intake, or remove one."
-        action={canEnrol && b.isActive ? <Button size="sm" icon="ri-user-add-line" onClick={() => setPicker(true)}>Add students</Button> : undefined}>
+      <Section n={4} title="Students" helper="Placed automatically when their offer is accepted.">
         {students.length === 0 ? (
-          <Empty icon="ri-user-add-line" title="No students yet" text="Add the students who applied for this course."
-            action={canEnrol && b.isActive ? <Button icon="ri-user-add-line" onClick={() => setPicker(true)}>Add students</Button> : undefined} />
+          <Empty icon="ri-user-add-line" title="No students yet" text="Students are placed in this batch automatically when their offer is accepted and it has a free seat." />
         ) : (
           <ul className="divide-y divide-background-100">
             {students.map((s) => (
               <li key={s.enrolmentId} className="flex flex-wrap items-center gap-2 py-2">
                 <Link to={`/admin/students/${s.id}`} className="min-w-0 flex-1"><span className="block truncate text-sm text-foreground-900 hover:text-primary-600">{s.name}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></Link>
                 <Badge tone="accent">{s.type}</Badge>
-                {canEnrol ? (
-                  <>
-                    {data.siblings.length ? (
-                      <Select aria-label={`Move ${s.name} to another batch`} className="w-auto text-xs" value=""
-                        onChange={(e) => { const to = data.siblings.find((x) => x.id === e.target.value); if (to) move(s, to.id, to.name); }}>
-                        <option value="">Move to…</option>
-                        {data.siblings.map((o) => <option key={o.id} value={o.id}>{o.name}{o.capacity ? ` (${o.enrolled}/${o.capacity})` : ""}</option>)}
-                      </Select>
-                    ) : null}
-                    <Button size="sm" variant="ghost" icon="ri-user-unfollow-line" onClick={() => setStatus(s, "withdrawn")}>Remove</Button>
-                  </>
-                ) : null}
               </li>
             ))}
           </ul>
@@ -183,18 +165,6 @@ export default function BatchPage() {
             const restore = () => { rtoFlow("batch_setup", { batchId: b.id, sessions: previous ?? [] }).then(() => void load()).catch((e) => fail(e, "Not put back.")); };
             if (out.clashes.length) push(`Timing saved. ${clashText(out.clashes[0])}.`, "info", { label: "Undo", onClick: restore });
             else undoable("Class timing saved.", restore);
-          }} />
-      ) : null}
-      {picker ? (
-        <StudentPicker courseId={i.courseId} batchId={b.id} rtoManager={canEdit} joinFrom={i.startDate} joinTo={i.endDate}
-          batches={[{ id: b.id, name: b.name, capacity: b.capacity, enrolled: students.length, studentIds: students.map((s) => s.id) }]}
-          onClose={() => setPicker(false)}
-          onAdded={({ out, studentIds, names }: StudentsAdded) => {
-            setPicker(false); void load();
-            const added = (out.batches.find((x) => x.id === b.id)?.students ?? []).filter((s) => studentIds.includes(s.id));
-            undoable(`${names.length === 1 ? names[0] : `${names.length} students`} added to ${b.name}.`, () => {
-              void Promise.all(added.map((s) => rtoFlow("enrolment_set", { enrolmentId: s.enrolmentId, status: "withdrawn" }))).finally(() => void load());
-            });
           }} />
       ) : null}
       {details ? <DetailsDrawer name={b.name} capacity={b.capacity} isActive={b.isActive} onClose={() => setDetails(false)}

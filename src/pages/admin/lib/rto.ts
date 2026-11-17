@@ -346,3 +346,8 @@ export async function updateClassSession(id: string, change: Partial<{ status: "
   if (error) throw new Error(error.message);
   return data as { id: string; clashes: SessionClash[] };
 }
+
+/** The intake a picker should open on: one with students, else one with batches, else the first. */
+export function bestIntake<T extends { id: string; batchList?: { enrolled: number }[] }>(list: T[]): string {
+  return (list.find((i) => i.batchList?.some((b) => b.enrolled > 0)) ?? list.find((i) => i.batchList?.length) ?? list[0])?.id ?? "";
+}

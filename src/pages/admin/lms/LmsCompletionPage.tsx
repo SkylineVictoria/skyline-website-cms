@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
+import { bestIntake, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 import type { Completion } from "@/pages/CertificatePage";
 
 type Unit = { code: string; name: string; outcome: string | null; date: string | null };
@@ -27,7 +27,7 @@ export default function LmsCompletionPage() {
       .then(([c, i]) => { setCourses(c); setIntakes(i); setCourseId(c[0]?.id ?? ""); }).catch((e) => setError(e.message));
   }, []);
   const courseIntakes = useMemo(() => intakes.filter((i) => i.courseId === courseId), [intakes, courseId]);
-  useEffect(() => { setIntakeId((o) => (courseIntakes.some((i) => i.id === o) ? o : courseIntakes[0]?.id ?? "")); }, [courseIntakes]);
+  useEffect(() => { setIntakeId((o) => (courseIntakes.some((i) => i.id === o) ? o : bestIntake(courseIntakes))); }, [courseIntakes]);
   const batches = useMemo(() => courseIntakes.find((i) => i.id === intakeId)?.batchList ?? [], [courseIntakes, intakeId]);
   useEffect(() => { setBatchId((o) => (batches.some((b) => b.id === o) ? o : batches[0]?.id ?? "")); }, [batches]);
 
@@ -69,7 +69,7 @@ export default function LmsCompletionPage() {
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {message ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{message}</p> : null}
       <section className="rounded-2xl border border-background-200 bg-background-50 p-4 shadow-sm">
-        {!batchId ? <p className="py-8 text-center text-sm text-foreground-500">Choose a batch.</p> : rows === null ? <p className="py-8 text-center text-sm text-foreground-500">Loading…</p>
+        {!batchId ? <p className="py-8 text-center text-sm text-foreground-500">This intake has no batch yet. A batch opens when students are added to the intake (<a className="font-semibold text-primary-700 underline" href={`/admin/lms/intakes#${intakeId}`}>open the intake</a>).</p> : rows === null ? <p className="py-8 text-center text-sm text-foreground-500">Loading…</p>
           : !rows.length ? <p className="py-8 text-center text-sm text-foreground-500">No students in this batch.</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">

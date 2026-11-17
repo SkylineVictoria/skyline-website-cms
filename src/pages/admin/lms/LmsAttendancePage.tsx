@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AttendanceSummary from "./AttendanceSummary";
-import { rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
+import { bestIntake, rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
 
 type Mark = "present" | "absent" | "late" | "excused";
 type History = { date: string; unitId: string; state: string };
@@ -39,7 +39,7 @@ export default function LmsAttendancePage() {
   const [message,setMessage] = useState("");
   useEffect(() => { let live=true; Promise.all([rto<RtoCourse[]>("course_list"),rto<RtoIntake[]>("intake_list")]).then(([c,i])=>{if(live){setCourses(c);setIntakes(i);setCourseId(c[0]?.id??"");}}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;}; },[]);
   const filteredIntakes=useMemo(()=>intakes.filter(i=>i.courseId===courseId),[intakes,courseId]);
-  useEffect(()=>{setIntakeId(old=>filteredIntakes.some(i=>i.id===old)?old:filteredIntakes[0]?.id??"");},[filteredIntakes]);
+  useEffect(()=>{setIntakeId(old=>filteredIntakes.some(i=>i.id===old)?old:bestIntake(filteredIntakes));},[filteredIntakes]);
   const batches=filteredIntakes.find(i=>i.id===intakeId)?.batchList??[];
   useEffect(()=>{setBatchId(old=>batches.some(b=>b.id===old)?old:batches[0]?.id??"");},[intakeId,intakes]);
   useEffect(()=>{setBatch(null);if(!batchId)return;let live=true;rtoFlow<BatchPageData>("batch_get",{batchId}).then(d=>{if(live)setBatch(d);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[batchId]);
@@ -84,7 +84,7 @@ export default function LmsAttendancePage() {
           <div className={list}>{visibleBatches.length?visibleBatches.map(b=><button key={b.id} type="button" className={itemClass(b.id===batchId)} onClick={()=>setBatchId(b.id)}>{b.name}</button>):empty}</div></section>
       </aside>
       <section className={card+" min-w-0 p-5"}>
-        {!batchId?<p className="py-10 text-center text-sm text-foreground-500">Select a batch.</p>:!batch||batch.batch.id!==batchId?<p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>:<>
+        {!batchId?<p className="py-10 text-center text-sm text-foreground-500">This intake has no batch yet. Add students to the intake and a batch opens by itself.</p>:!batch||batch.batch.id!==batchId?<p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>:<>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <label className="block text-xs font-semibold text-foreground-500">Class date<input type="date" className={input+" mt-1"} value={date} onChange={e=>setDate(e.target.value)}/></label>
             <label className="block text-xs font-semibold text-foreground-500">Unit<select className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</select></label>

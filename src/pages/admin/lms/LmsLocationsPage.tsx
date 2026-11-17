@@ -79,7 +79,7 @@ export default function LmsLocationsPage() {
       {rooms.map(r => <li key={r.id} className={"flex flex-wrap items-center gap-3 px-3 py-2 text-sm " + (r.isActive ? "" : "text-foreground-400")}>
         <i className="ri-door-open-line text-foreground-500" aria-hidden="true" />
         <span className="flex-1 font-semibold">{r.name}{!r.isActive && <span className="ml-2 rounded-full bg-background-200 px-2 py-0.5 text-xs font-medium">Inactive</span>}</span>
-        <span className="text-xs text-foreground-500">{r.capacity ? `${r.capacity} places` : "No limit set"}</span>
+        <span className="text-xs text-foreground-500">{r.capacity ? `${r.capacity} seats` : "No seat count: batches here use 25"}</span>
         {canEdit && <span className="flex gap-3">
           <button type="button" disabled={busy} onClick={() => { setNotice(""); setRoom({ id: r.id, name: r.name, capacity: r.capacity ? String(r.capacity) : "", isActive: r.isActive, locationId: r.locationId }); }} className="text-xs font-semibold text-primary-700 hover:underline">Edit</button>
           <button type="button" disabled={busy} onClick={() => deleteRoom(r)} className="text-xs font-semibold text-red-700 hover:underline">Delete</button>
@@ -148,7 +148,7 @@ export default function LmsLocationsPage() {
           <h3 className="font-heading text-lg font-bold text-foreground-950">{room.id ? "Edit room" : "Add room"}</h3>
           <div className="mt-3 space-y-3">
             <label className="block text-xs font-semibold text-foreground-700">Room name<input autoFocus maxLength={120} className={field} value={room.name} placeholder="e.g. Room 8.1" onChange={e => setRoom({ ...room, name: e.target.value })} /></label>
-            <label className="block text-xs font-semibold text-foreground-700">Places<input inputMode="numeric" className={field} value={room.capacity} placeholder="e.g. 25" onChange={e => setRoom({ ...room, capacity: e.target.value.replace(/\D/g, "") })} /></label>
+            <label className="block text-xs font-semibold text-foreground-700">Seats<input inputMode="numeric" className={field} value={room.capacity} placeholder="e.g. 25" onChange={e => setRoom({ ...room, capacity: e.target.value.replace(/\D/g, "") })} /></label>
             <label className="block text-xs font-semibold text-foreground-700">Location
               <select className={field} value={room.locationId ?? ""} onChange={e => setRoom({ ...room, locationId: e.target.value || null })}>
                 <option value="">No location</option>

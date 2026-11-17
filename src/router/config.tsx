@@ -107,7 +107,6 @@ import CourseWizardPage, { CourseWizardRedirect } from "@/pages/admin/CourseWiza
 import IntakesPage from "@/pages/admin/IntakesPage";
 import IntakeDetailPage from "@/pages/admin/IntakeDetailPage";
 import BatchPage from "@/pages/admin/BatchPage";
-import ClassroomsPage from "@/pages/admin/ClassroomsPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
 import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
@@ -287,7 +286,8 @@ const routes: RouteObject[] = [
           { path: "courses/:id/:step", element: <CourseWizardPage /> },
           { path: "intakes", element: <RequireAdmin><IntakesPage /></RequireAdmin> },
           { path: "intakes/:id", element: <RequireAdmin><IntakeDetailPage /></RequireAdmin> },
-          { path: "classrooms", element: <RequireAdmin><ClassroomsPage /></RequireAdmin> },
+          // Rooms live in LMS › Locations & rooms (one place for rooms and their seats).
+          { path: "classrooms", element: <Navigate to="/admin/lms/locations" replace /> },
           { path: "batches/:id", element: <RequireAdmin><BatchPage /></RequireAdmin> },
           // Assessment Management (ASM-01): library, builder, mapping, assignments, submissions, outcomes, reports, settings, audit.
           { path: "assessments", element: <RequireAdmin><AssessmentsPage /></RequireAdmin> },

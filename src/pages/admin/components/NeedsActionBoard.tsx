@@ -16,6 +16,7 @@ const AREAS: { key: string; label: string; icon: string; to: string; tone: strin
   { key: "marking", label: "Assessments to mark", icon: "ri-edit-box-line", to: "/admin/lms/assessments", tone: "text-indigo-700 bg-indigo-50", empty: "Nothing waiting for marking." },
   { key: "tickets", label: "Open support tickets", icon: "ri-customer-service-2-line", to: "/admin/tickets", tone: "text-sky-700 bg-sky-50", empty: "No open tickets." },
   { key: "certificatesReady", label: "Ready for a certificate", icon: "ri-award-line", to: "/admin/lms/completion", tone: "text-green-700 bg-green-50", empty: "No one ready yet." },
+  { key: "batchesWithoutClasses", label: "Batches with no class dates", icon: "ri-calendar-close-line", to: "/admin/lms/intakes", tone: "text-red-700 bg-red-50", empty: "Every batch with students has classes." },
   { key: "classesToday", label: "Classes today", icon: "ri-calendar-2-line", to: "/admin/lms/timetable", tone: "text-foreground-700 bg-background-100", empty: "No classes today." },
 ];
 const ago = (iso?: string | null) => {
@@ -29,7 +30,11 @@ export default function NeedsActionBoard() {
   const [data, setData] = useState<Today | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    supabase.rpc("admin_today").then(({ data: d, error }) => { if (live) setData(error ? null : (d as Today)); });
+    Promise.all([supabase.rpc("admin_today"), supabase.rpc("lms_batches_without_classes")]).then(([today, extra]) => {
+      if (!live) return;
+      if (today.error) { setData(null); return; }
+      setData({ ...(today.data as Today), ...(extra.error || !extra.data ? {} : { batchesWithoutClasses: extra.data as Area }) });
+    });
     return () => { live = false; };
   }, []);
   if (data === null) return null;

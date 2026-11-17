@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
+import TrainerAttendanceDialog from "@/components/timetable/TrainerAttendanceDialog";
 
 type Session = { id: string; date: string; start: string; end: string; type: string; status: string; batchName: string; courseName: string; courseCode: string;
   unitCode: string | null; unitName: string | null; room: string | null; campus: string | null; trainers: string };
@@ -15,6 +16,7 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
   const [start, setStart] = useState(() => monday(new Date()));
   const [rows, setRows] = useState<Session[] | null>(null);
   const [error, setError] = useState("");
+  const [marking, setMarking] = useState<Session | null>(null);
   useEffect(() => {
     let live = true;
     setRows(null); setError("");
@@ -62,6 +64,9 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
                       {s.status === "cancelled"
                         ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Cancelled</span>
                         : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${TYPE_TONE[s.type] ?? "bg-background-200 text-foreground-700"}`}>{s.type}</span>}
+                      {who === "trainer" && s.status !== "cancelled" && s.unitCode && s.date <= today
+                        ? <button type="button" onClick={() => setMarking(s)} className="rounded-md border border-primary-300 px-2 py-0.5 text-xs font-semibold text-primary-700 hover:bg-primary-50"><i className="ri-checkbox-circle-line" aria-hidden="true" /> Attendance</button>
+                        : null}
                     </li>
                   ))}
                 </ul>
@@ -70,6 +75,7 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
           })}
         </ol>
       ) : null}
+      {marking ? <TrainerAttendanceDialog sessionId={marking.id} title={`${marking.date} ${marking.start}–${marking.end} · ${marking.unitCode ?? ""} · Class ${marking.batchName}`} onClose={() => setMarking(null)} /> : null}
     </div>
   );
 }

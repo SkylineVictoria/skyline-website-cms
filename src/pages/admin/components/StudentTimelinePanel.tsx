@@ -15,6 +15,8 @@ const KINDS: Record<string, { label: string; icon: string; tone: string }> = {
   enrolment: { label: "Study", icon: "ri-group-line", tone: "bg-indigo-100 text-indigo-800" },
   assessment: { label: "Study", icon: "ri-edit-box-line", tone: "bg-indigo-100 text-indigo-800" },
   account: { label: "Study", icon: "ri-mail-settings-line", tone: "bg-indigo-100 text-indigo-800" },
+  attendance: { label: "Study", icon: "ri-calendar-check-line", tone: "bg-red-100 text-red-700" },
+  certificate: { label: "Study", icon: "ri-award-line", tone: "bg-green-100 text-green-800" },
   message: { label: "Messages", icon: "ri-chat-3-line", tone: "bg-sky-100 text-sky-800" },
   email: { label: "Messages", icon: "ri-mail-line", tone: "bg-sky-100 text-sky-800" },
 };

@@ -2,7 +2,7 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(81);
+select plan(92);
 
 select set_config('rto.auto_place', 'on', false); -- fixtures and the automatic paths; switched off to prove the hand paths are closed
 create temp table t(k text primary key, v text);
@@ -220,6 +220,30 @@ select ok(exists(select 1 from jsonb_array_elements(public.rto_placement_waiting
 select public.rto_batch_place('defaults_set', jsonb_build_object('courseId', 'course-seat-3', 'seats', 5, 'sessions', jsonb_build_array(jsonb_build_object('weekday', 3, 'startTime', '09:00', 'endTime', '13:00', 'type', 'theory'))));
 select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id where e.student_id = 'e6000000-0000-0000-0000-000000000014' and e.status = 'active'), 1, 'setting the course''s usual classes places the waiting student by itself');
 select is(public.rto_auto_place_sweep(), 0, 'the sweep has nothing left to place');
+select set_config('rto.auto_place', 'on', false);
+
+-- ---------------------------------------------------------------- Staff override (20261118180000)
+select set_config('rto.auto_place', 'off', false);
+insert into public.batches(id, intake_id, name, capacity) values ('f6000000-0000-0000-0000-000000000050', 'f6000000-0000-0000-0000-000000000001', 'OV', 4), ('f6000000-0000-0000-0000-000000000051', 'f6000000-0000-0000-0000-000000000001', 'OV2', 4);
+select throws_ok($$select public.rto_staff_place('f6000000-0000-0000-0000-000000000050', 'e6000000-0000-0000-0000-000000000008', 'CoE', current_date, '  ')$$, '22023', 'Say why you are placing this student by hand.', 'an override needs a reason');
+select is((public.rto_staff_place('f6000000-0000-0000-0000-000000000050', 'e6000000-0000-0000-0000-000000000008', 'CoE', current_date, 'Joined late after a phone call'))->>'batch', 'OV', 'staff can place a student by hand, with a reason');
+select is((select count(*)::int from public.rto_placement_overrides where student_id = 'e6000000-0000-0000-0000-000000000008' and action = 'place' and reason = 'Joined late after a phone call'), 1, 'and it is recorded');
+select pg_temp.put('ov_enrol', (select id::text from public.batch_enrolments where batch_id = 'f6000000-0000-0000-0000-000000000050' and student_id = 'e6000000-0000-0000-0000-000000000008'));
+select is((public.rto_staff_move(pg_temp.v('ov_enrol'), 'f6000000-0000-0000-0000-000000000051', 'Timetable clash'))->>'batchId', 'f6000000-0000-0000-0000-000000000051', 'staff can move a student to another batch of the course');
+select is((select batch_id::text from public.batch_enrolments where id = pg_temp.v('ov_enrol')), 'f6000000-0000-0000-0000-000000000051', 'and the move happened');
+select throws_ok($$select public.rto_staff_remove((select id from public.batch_enrolments where batch_id = 'f6000000-0000-0000-0000-000000000051' limit 1), '')$$, '22023', 'Say why you are removing this student.', 'removing needs a reason');
+select is((public.rto_staff_remove(pg_temp.v('ov_enrol'), 'Withdrew by phone'))->>'status', 'withdrawn', 'staff can remove a student');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_staff_place('f6000000-0000-0000-0000-000000000050', 'e6000000-0000-0000-0000-000000000008', 'CoE', current_date, 'x')$$, '42501', 'Only an Admin or an RTO Manager can place a student by hand.', 'an editor cannot override');
+select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
+-- the automation leaves a removed student alone
+insert into public.enrollment_applications(id, agency_id, status, student_name, student_email, student_id) values ('b6000000-0000-0000-0000-000000000008', 'c6000000-0000-0000-0000-000000000001', 'submitted', 'Seat Student 8', 'seat.student8@example.test', 'e6000000-0000-0000-0000-000000000008');
+select set_config('portal.draft_command', 'b6000000-0000-0000-0000-000000000008', false);
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id) values ('b6000000-0000-0000-0000-000000000008', 'course-seat-1', 'SEAT1', 'Seat Course One', null);
+update public.enrollment_applications set status = 'offer_accepted' where id = 'b6000000-0000-0000-0000-000000000008';
+select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id join public.course_intakes ci on ci.id = b.intake_id where e.student_id = 'e6000000-0000-0000-0000-000000000008' and ci.course_id = 'course-seat-1' and e.status = 'active'), 0, 'a student staff removed is not placed again by the automation');
+select ok(not exists(select 1 from jsonb_array_elements(public.rto_placement_waiting()) x where x->>'studentId' = 'e6000000-0000-0000-0000-000000000008'), 'nor listed as waiting');
+select is((select jsonb_array_length(public.rto_placement_overrides_list('e6000000-0000-0000-0000-000000000008'))), 3, 'the override log shows place, move and remove');
 select set_config('rto.auto_place', 'on', false);
 
 -- ---------------------------------------------------------------- Hours check (20261118170000)

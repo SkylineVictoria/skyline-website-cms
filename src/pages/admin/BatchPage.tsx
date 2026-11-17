@@ -6,6 +6,7 @@ import { Badge, Button, ConfirmDialog, Field, Select, TextInput, Toggle } from "
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import HoursNote from "@/pages/admin/components/rto/HoursNote";
+import { OverrideStudentDrawer, PlaceByHandDrawer } from "@/pages/admin/components/rto/OverridePlacement";
 import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
 import BatchAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
 import { Empty, MoreMenu, Section, SkeletonLines } from "@/pages/admin/components/rto/overlay";
@@ -24,6 +25,8 @@ export default function BatchPage() {
   const [error, setError] = useState("");
   const [timing, setTiming] = useState(false);
   const [details, setDetails] = useState(false);
+  const [place, setPlace] = useState(false);
+  const [act, setAct] = useState<null | { mode: "move" | "remove"; enrolmentId: string; name: string }>(null);
   const [hours, setHours] = useState<HoursCheck | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -139,7 +142,8 @@ export default function BatchPage() {
         )}
       </Section>
 
-      <Section n={4} title="Students" helper="Placed automatically when their offer is accepted.">
+      <Section n={4} title="Students" helper="Placed automatically when their offer is accepted. Staff can override."
+        action={canEnrol && b.isActive ? <Button size="sm" variant="outline" icon="ri-hand-coin-line" onClick={() => setPlace(true)}>Override: place a student</Button> : undefined}>
         {students.length === 0 ? (
           <Empty icon="ri-user-add-line" title="No students yet" text="Students are placed in this batch automatically when their offer is accepted and it has a free seat." />
         ) : (
@@ -148,6 +152,10 @@ export default function BatchPage() {
               <li key={s.enrolmentId} className="flex flex-wrap items-center gap-2 py-2">
                 <Link to={`/admin/students/${s.id}`} className="min-w-0 flex-1"><span className="block truncate text-sm text-foreground-900 hover:text-primary-600">{s.name}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></Link>
                 <Badge tone="accent">{s.type}</Badge>
+                {canEnrol ? <MoreMenu label={`Override for ${s.name}`} items={[
+                  ...(data.siblings.length ? [{ label: "Move to another batch (override)…", icon: "ri-arrow-left-right-line", onClick: () => setAct({ mode: "move", enrolmentId: s.enrolmentId, name: s.name }) }] : []),
+                  { label: "Remove from batch (override)…", icon: "ri-user-unfollow-line", danger: true, onClick: () => setAct({ mode: "remove", enrolmentId: s.enrolmentId, name: s.name }) },
+                ]} /> : null}
               </li>
             ))}
           </ul>
@@ -158,6 +166,10 @@ export default function BatchPage() {
         <BatchAssessmentsPanel batchId={b.id} />
       </Section>
 
+      <PlaceByHandDrawer open={place} courseId={i.courseId} batches={[{ id: b.id, name: b.name }]} batchId={b.id} intakeStart={i.startDate} intakeEnd={i.endDate}
+        onClose={() => setPlace(false)} onDone={(m) => { setPlace(false); push(m); void load(); }} />
+      {act ? <OverrideStudentDrawer open mode={act.mode} enrolmentId={act.enrolmentId} studentName={act.name} batches={[{ id: b.id, name: b.name }, ...data.siblings.map((o) => ({ id: o.id, name: o.name }))]} currentBatchId={b.id}
+        onClose={() => setAct(null)} onDone={(m) => { setAct(null); push(m); void load(); }} /> : null}
       {timing ? (
         <BatchTimingDrawer intake={i} batch={b} onClose={() => setTiming(false)}
           onSaved={(out: BatchSaved, previous?: BatchSession[]) => {

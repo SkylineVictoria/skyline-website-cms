@@ -9,6 +9,7 @@ import { Avatars, Drawer, ErrorNote, FeesEditor } from "@/pages/admin/components
 import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
 import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
 import HoursNote from "@/pages/admin/components/rto/HoursNote";
+import { OverrideStudentDrawer, PlaceByHandDrawer } from "@/pages/admin/components/rto/OverridePlacement";
 import { Empty, MoreMenu, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import {
   addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoHoursCheck, rtoPlace, shortDate, timingShort, todayIso, weeksOf,
@@ -119,7 +120,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} hours={hours} onAdd={() => setAdding(true)}
               onOpenAnother={() => { const src = [...detail.batches].filter((b) => b.isActive).pop(); if (!src) return; void run(async () => { await rtoPlace("batch_open", { batchId: src.id }); return rto<IntakeDetail>("intake_get", { intakeId }); }).then((ok) => { if (ok) { push("Another batch opened with the same classes."); onChanged(); } }); }} /> : null}
             {tab === "students" ? (
-              <Students detail={detail} canEdit={canEdit} onAddBatch={() => { setTab("batches"); setAdding(true); }} />
+              <Students detail={detail} canEdit={canEdit} canOverride={canEnrol} onChanged={() => { void load(); onChanged(); }} notify={(m) => push(m)} onAddBatch={() => { setTab("batches"); setAdding(true); }} />
             ) : null}
           </div>
         )}
@@ -283,8 +284,10 @@ export function BatchCard({ batch: b, onOpen, upcoming = false, hours }: { batch
 }
 
 // ------------------------------------------------------------------ Students: one column per batch; drag a student to move them
-function Students({ detail, canEdit, onAddBatch }: { detail: IntakeDetail; canEdit: boolean; onAddBatch: () => void }) {
+function Students({ detail, canEdit, canOverride, onChanged, notify, onAddBatch }: { detail: IntakeDetail; canEdit: boolean; canOverride: boolean; onChanged: () => void; notify: (m: string) => void; onAddBatch: () => void }) {
   const batches = detail.batches.filter((b) => b.isActive);
+  const [place, setPlace] = useState(false);
+  const [act, setAct] = useState<null | { mode: "move" | "remove"; enrolmentId: string; name: string; batchId: string }>(null);
   if (!batches.length) {
     return <Empty icon="ri-group-line" title="No batches yet" text="Students are placed automatically when their offer is accepted: a batch opens for them from the course's usual classes. Add a batch yourself only to set its trainer, days or room." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;
   }
@@ -292,7 +295,10 @@ function Students({ detail, canEdit, onAddBatch }: { detail: IntakeDetail; canEd
   const upcoming = detail.intake.startDate > todayIso();
   return (
     <div className="space-y-3">
-      <p className="text-sm text-foreground-600">Students are placed automatically when their offer is accepted: the first batch with a free seat, a new batch when it is full, and the next intake if they join after a prerequisite unit has finished.</p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <p className="min-w-0 flex-1 text-sm text-foreground-600">Students are placed automatically when their offer is accepted: the first batch with a free seat, a new batch when it is full, and the next intake if they join after a prerequisite unit has finished.</p>
+        {canOverride ? <Button size="sm" variant="outline" icon="ri-hand-coin-line" onClick={() => setPlace(true)}>Override: place a student</Button> : null}
+      </div>
       {total === 0 ? <Empty icon="ri-user-add-line" title="No students yet" text="They appear here as offers are accepted." /> : null}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {batches.map((b) => {
@@ -307,6 +313,10 @@ function Students({ detail, canEdit, onAddBatch }: { detail: IntakeDetail; canEd
                   <li key={s.enrolmentId} className="flex items-center gap-2 px-3 py-2">
                     <span className="min-w-0 flex-1"><span className="block truncate text-sm text-foreground-900">{s.name}</span><span className="block truncate text-xs text-foreground-500">{s.email}</span></span>
                     <Badge tone="accent">{s.type}</Badge>
+                    {canOverride ? <MoreMenu label={`Override for ${s.name}`} items={[
+                      ...(batches.length > 1 ? [{ label: "Move to another batch (override)…", icon: "ri-arrow-left-right-line", onClick: () => setAct({ mode: "move", enrolmentId: s.enrolmentId, name: s.name, batchId: b.id }) }] : []),
+                      { label: "Remove from batch (override)…", icon: "ri-user-unfollow-line", danger: true, onClick: () => setAct({ mode: "remove", enrolmentId: s.enrolmentId, name: s.name, batchId: b.id }) },
+                    ]} /> : null}
                   </li>
                 ))}
               </ul>
@@ -314,6 +324,10 @@ function Students({ detail, canEdit, onAddBatch }: { detail: IntakeDetail; canEd
           );
         })}
       </div>
+      <PlaceByHandDrawer open={place} courseId={detail.intake.courseId} batches={batches.map((b) => ({ id: b.id, name: b.name, full: !!(b.seats ?? b.capacity) && b.students.filter(active).length >= (b.seats ?? b.capacity ?? 0) }))} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
+        onClose={() => setPlace(false)} onDone={(m) => { setPlace(false); notify(m); onChanged(); }} />
+      {act ? <OverrideStudentDrawer open mode={act.mode} enrolmentId={act.enrolmentId} studentName={act.name} batches={batches.map((b) => ({ id: b.id, name: b.name }))} currentBatchId={act.batchId}
+        onClose={() => setAct(null)} onDone={(m) => { setAct(null); notify(m); onChanged(); }} /> : null}
     </div>
   );
 }

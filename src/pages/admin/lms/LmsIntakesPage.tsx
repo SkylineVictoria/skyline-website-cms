@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import IntakeTimeline from "@/pages/admin/components/rto/IntakeTimeline";
 import { generateClassSessions, listBreaks, loadIntakeLoads, LOAD_HOURS, rto, setIntakeLoad, shortDate, todayIso, type StudyLoad, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -176,6 +177,8 @@ export default function LmsIntakesPage() {
               <BreakDatePicker value={start} onChange={setStart} breaks={courseBreaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
               {start !== detail.intake.startDate ? <p className="text-xs text-foreground-600">Saving a new start date lays the unit timeline out again and moves the batches' classes.</p> : null}
             </div> : null}
+            <IntakeTimeline intakeId={detail.intake.id} title={detail.intake.name} saved={detail.schedule} savedStart={detail.intake.startDate} start={start}
+              load={studyLoad} savedLoad={loads[detail.intake.id] ?? "coe"} breaks={courseBreaks} />
             {problem ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{problem}</p> : null}
           </div>}
         </div>
@@ -189,6 +192,6 @@ export default function LmsIntakesPage() {
         </div> : null}
       </section></div> : null}
     <NewIntakeDrawer open={creating && canEdit} onClose={() => setCreating(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined}
-      onCreated={(created: IntakeDetail) => { setCreating(false); setCourseId(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); }} />
+      onCreated={(created: IntakeDetail) => { setCreating(false); setCourseId(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); setSelectedId(created.intake.id); }} />
   </div>;
 }

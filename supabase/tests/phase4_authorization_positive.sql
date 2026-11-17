@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(620);
+select plan(621);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1233,6 +1233,11 @@ reset role;
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.admin_today()$$,'42501',null,'a portal user cannot read the admin dashboard');
+reset role;
+-- Intake schedule preview (migration 20261117121733): staff only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.intake_schedule_preview(gen_random_uuid(), current_date)$$,'42501',null,'a portal user cannot preview an intake schedule');
 reset role;
 select * from finish();
 rollback;

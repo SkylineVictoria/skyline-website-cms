@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
+import NeedsActionBoard from "@/pages/admin/components/NeedsActionBoard";
 import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Card, EmptyState, PageHeader, StatCard, StatusBadge } from "@/pages/admin/components/ui";
 
@@ -30,7 +31,7 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title={`Welcome back, ${user?.name.split(" ")[0] ?? "there"}`}
-        description="An overview of what's on the Skyline website and what changed recently."
+        description="What needs your attention today, then the website at a glance."
         breadcrumb="Dashboard"
         actions={
           <Link
@@ -42,6 +43,8 @@ export default function DashboardPage() {
           </Link>
         }
       />
+
+      <NeedsActionBoard />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total Courses" value={data.courses.length} icon="ri-book-2-line" hint={`${featured} featured on homepage`} />

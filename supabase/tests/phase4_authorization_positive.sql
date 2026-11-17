@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(619);
+select plan(620);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1228,6 +1228,11 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.course_completion_issue(gen_random_uuid(), 'certificate')$$,'42501',null,'a portal user cannot issue a certificate');
 select throws_ok($$select public.course_completion_list(gen_random_uuid())$$,'42501',null,'a portal user cannot list completions');
+reset role;
+-- Dashboard (migration 20261117105219): Admins and RTO Managers only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_today()$$,'42501',null,'a portal user cannot read the admin dashboard');
 reset role;
 select * from finish();
 rollback;

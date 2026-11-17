@@ -94,6 +94,10 @@ import AssessmentsPage from "@/pages/admin/assessments/AssessmentsPage";
 import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage";
 import StudentAssessmentsPage from "@/pages/agency/assessments/page";
 import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
+import StudentLearningPage from "@/pages/agency/learning/page";
+import StudentTimetablePage from "@/pages/agency/timetable/page";
+import StaffTimetablePage from "@/pages/staff/TimetablePage";
+import CertificatePage from "@/pages/CertificatePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
@@ -168,6 +172,8 @@ const routes: RouteObject[] = [
   { path: "/staff", element: <StaffHomePage /> },
   // Assessment Management for trainers / assessors (ASM-01): pending marking, assigned assessments, students, calendar.
   { path: "/staff/assessments", element: <StaffAssessmentsPage /> },
+  { path: "/staff/timetable", element: <StaffTimetablePage /> },
+  { path: "/certificate/:id", element: <CertificatePage /> },
   { path: "/staff/assessments/attempts/:id", element: <MarkingPage /> },
   // HRMS: a manager's view of their reports (outside the admin shell).
   { path: "/staff/team/timesheets", element: <TeamTimesheetsPage /> },
@@ -192,6 +198,8 @@ const routes: RouteObject[] = [
           // Assessment Management for students (ASM-01): my assessments, the form, results, calendar.
           { path: "assessments", element: <StudentAssessmentsPage /> },
           { path: "assessments/:id", element: <StudentAssessmentPage /> },
+          { path: "learning", element: <StudentLearningPage /> },
+          { path: "timetable", element: <StudentTimetablePage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
           { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <PortalTicketsPage /> },

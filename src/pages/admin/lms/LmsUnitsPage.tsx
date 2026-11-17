@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import UnitContentPanel from "./UnitContentPanel";
+import UnitAssessmentsPanel from "./UnitAssessmentsPanel";
 import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import { UnitDetail } from "./UnitTgaList";
@@ -18,7 +20,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details">("details");
+  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments">("details");
   const [hours, setHours] = useState<Record<string, UnitHours>>({});
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
@@ -230,12 +232,14 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div role="tablist" className="flex gap-5 border-b border-background-200 px-6">
-          {([["details","Details"],["content","Training.gov.au"]] as const).filter(([id]) => id !== "content" || draft.id).map(([id, label]) =>
+          {([["details","Details"],["learning","Learning content"],["assessments","Assessments"],["content","Training.gov.au"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
               className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
+          {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEdit} /> : null}
+          {drawerTab==="assessments" && draft.id && selectedCourse ? <UnitAssessmentsPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit} /> : null}
           {drawerTab==="details" ? <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
             <label className="block text-xs font-medium text-foreground-500">Unit code<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.code} /></label>

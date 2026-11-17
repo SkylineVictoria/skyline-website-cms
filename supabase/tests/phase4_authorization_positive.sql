@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(671);
+select plan(678);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1076,12 +1076,12 @@ update public.enrollment_offer_letters set payment_amount_cents=150000, payment_
 update public.enrollment_offer_letters set signing_request_id='7a000000-0000-0000-0000-0000000000a2' where application_id='43000000-0000-0000-0000-000000000037';
 insert into public.payments(id, subject_type, subject_id, description, amount_cents, currency, timing, status) values ('7b000000-0000-0000-0000-0000000000b1','sign_request','7a000000-0000-0000-0000-0000000000a1','Initial deposit',150000,'aud','after_sign','pending');
 select is(public.offer_money_label(150000,'aud'),'AUD$1,500.00','OFFER-DEPOSIT: money prints as AUD$1,500.00');
-select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student',decode('255044462d312e34','hex'),repeat('c',64),decode('255044462d312e34','hex'),repeat('d',64),'NO','203.0.113.1')$$,'signing a letter that asks for a deposit');
+select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'signing a letter that asks for a deposit');
 select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000036'),'offer_accepted','signing accepts the offer at once, deposit or not');
 select is(pg_temp.letter('43000000-0000-0000-0000-000000000036',$q$(signed_at is not null)::text||'|'||(accepted_at is not null)::text||'|'||accepted_via||'|'||(deposit_paid_at is null)::text$q$),'true|true|signing|true','the letter is signed and accepted via signing; the deposit is still pending');
 select is((select count(*)||'|'||max(payload->>'deposit') from public.enrollment_application_status_history where application_id='43000000-0000-0000-0000-000000000036' and new_status='offer_accepted' and action_key='accept_offer'),'1|pending','one accept_offer history row, noting the pending deposit');
 select is((select public.offer_letter_payment_required(l) from public.enrollment_offer_letters l where l.application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),true,'the deposit is pending');
-select throws_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student',decode('255044462d312e34','hex'),repeat('c',64),decode('255044462d312e34','hex'),repeat('d',64),'NO','203.0.113.1')$$,'P0001','This offer was already accepted','an accepted letter is not signed twice');
+select throws_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000036' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a1','Direct Student','\x255044462d312e34'::bytea,repeat('c',64),'\x255044462d312e34'::bytea,repeat('d',64),'NO','203.0.113.1')$$,'P0001','This offer was already accepted','an accepted letter is not signed twice');
 select is((select (s->>'offer')||'|'||(s->>'acceptedVia')||'|'||(s->>'paymentRequired')||'|'||(s->>'hasPayment')||'|'||(s->>'coeLabel')||'|'||(s->'institution' is not null)::text from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a1') s),'true|signing|true|true|CoE|true','offer_signing_state: accepted, deposit pending, CoE wording');
 select is((public.offer_signing_state('7a000000-0000-0000-0000-0000000000ff'))->>'offer','false','a request that is not an offer letter reports offer false');
 -- The completion email of the signer carries the deposit (amount and a fresh token); the administrator's copy does not.
@@ -1136,7 +1136,7 @@ set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select throws_ok($$select public.offer_deposit_reminder_send('43000000-0000-0000-0000-000000000036', true)$$,'22023',null,'no reminder once the deposit is paid');
 reset role;
 -- A letter without a deposit: signing accepts, nothing else happens.
-select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a2','Asha Patel',decode('255044462d312e34','hex'),repeat('e',64),decode('255044462d312e34','hex'),repeat('f',64),'YES','203.0.113.2')$$,'signing a letter without a deposit');
+select lives_ok($$select public.offer_letter_accept_signed((select id from public.enrollment_offer_letters where application_id='43000000-0000-0000-0000-000000000037' order by issued_at desc limit 1),'7a000000-0000-0000-0000-0000000000a2','Asha Patel','\x255044462d312e34'::bytea,repeat('e',64),'\x255044462d312e34'::bytea,repeat('f',64),'YES','203.0.113.2')$$,'signing a letter without a deposit');
 select is((select status from public.enrollment_applications where id='43000000-0000-0000-0000-000000000037'),'offer_accepted','a letter without a deposit: signing accepts');
 select is((select (s->>'hasPayment')||'|'||(s->>'paymentRequired') from public.offer_signing_state('7a000000-0000-0000-0000-0000000000a2') s),'false|false','and reports no deposit');
 select is(public.offer_deposit_mail_json('7a000000-0000-0000-0000-0000000000a2','completed','recipient'),null,'its completion email carries no payment link');
@@ -1210,6 +1210,29 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.comm_find_or_open('x','x@example.test',null)$$,'42501',null,'a portal user cannot look people up in the Communication Hub');
 select throws_ok($$select public.comm_send_to_team(gen_random_uuid(),gen_random_uuid(),'x')$$,'42501',null,'a portal user cannot share into a staff team');
+reset role;
+-- Unit learning content (migration 20261117064117): only RTO Managers write; only Admins / RTO Managers read.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select is((select count(*)::int from public.unit_contents),0,'a portal user sees no unit content');
+select throws_ok($$insert into public.unit_contents(unit_id,kind,title) values ((select id from public.cms_course_units limit 1),'text','x')$$,'42501',null,'a portal user cannot add unit content');
+reset role;
+-- Student timeline and attendance summary (migration 20261117081523): staff / SLIT administrators only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_student_timeline(gen_random_uuid())$$,'42501',null,'a portal user cannot read a student timeline');
+select throws_ok($$select public.lms_attendance_summary(null, gen_random_uuid())$$,'42501',null,'a portal user cannot read attendance summaries');
+reset role;
+-- Course completion (migration 20261117093847): only RTO Managers issue; only staff list.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.course_completion_issue(gen_random_uuid(), 'certificate')$$,'42501',null,'a portal user cannot issue a certificate');
+select throws_ok($$select public.course_completion_list(gen_random_uuid())$$,'42501',null,'a portal user cannot list completions');
+reset role;
+-- Dashboard (migration 20261117105219): Admins and RTO Managers only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_today()$$,'42501',null,'a portal user cannot read the admin dashboard');
 reset role;
 -- Agent onboarding documents (migration 20261117120000): both blanks as ONE signing request; the values from our records; the keys of the
 -- request's fields; the send recorded on the agency; completion stores the two PDFs and the answers; members read their own, nobody else.

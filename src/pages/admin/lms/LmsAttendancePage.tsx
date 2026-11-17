@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
+import AttendanceSummary from "./AttendanceSummary";
 import { rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
 
 type Mark = "present" | "absent" | "late" | "excused";
@@ -32,7 +33,7 @@ export default function LmsAttendancePage() {
   const [marks,setMarks] = useState<Record<string,Mark>>({});
   const [state,setState] = useState("new");
   const [history,setHistory] = useState<History[]>([]);
-  const [mode,setMode] = useState<"mark"|"history">("mark");
+  const [mode,setMode] = useState<"mark"|"history"|"summary">("mark");
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
   const [message,setMessage] = useState("");
@@ -88,8 +89,8 @@ export default function LmsAttendancePage() {
             <label className="block text-xs font-semibold text-foreground-500">Unit<select className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</select></label>
             <div className="text-xs font-semibold text-foreground-500">Trainer<p className="mt-1 truncate py-2 text-sm font-semibold text-foreground-950">{batch.batch.trainers.map(t=>t.name).join(", ")||"Not assigned"}</p></div>
           </div>
-          <div className="mt-5 flex gap-5 border-b border-background-200">{(["mark","history"] as const).map(t=><button type="button" key={t} aria-pressed={mode===t} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold "+(mode===t?"border-primary-600 text-primary-700":"border-transparent text-foreground-500 hover:text-foreground-800")} onClick={()=>setMode(t)}>{t==="mark"?"Mark attendance":"History"}</button>)}</div>
-          {mode==="history"?<div className="pt-3">{history.length?<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500"><th className="px-3 py-2">Date</th><th className="px-3 py-2">Unit</th><th className="px-3 py-2">State</th></tr></thead>
+          <div className="mt-5 flex gap-5 border-b border-background-200">{(["mark","history","summary"] as const).map(t=><button type="button" key={t} aria-pressed={mode===t} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold "+(mode===t?"border-primary-600 text-primary-700":"border-transparent text-foreground-500 hover:text-foreground-800")} onClick={()=>setMode(t)}>{t==="mark"?"Mark attendance":t==="history"?"History":"Attendance rates"}</button>)}</div>
+          {mode==="summary"?<div className="pt-3"><AttendanceSummary batchId={batchId}/></div>:mode==="history"?<div className="pt-3">{history.length?<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500"><th className="px-3 py-2">Date</th><th className="px-3 py-2">Unit</th><th className="px-3 py-2">State</th></tr></thead>
             <tbody>{history.map((h,i)=><tr key={i} className="border-b border-background-100 hover:bg-background-100">
               <td className="px-3 py-2"><button type="button" className="font-semibold text-primary-700 hover:underline" onClick={()=>{setDate(h.date);setUnitId(h.unitId);setMode("mark");}}>{h.date}</button></td>
               <td className="px-3 py-2">{units.find(u=>u.intakeUnitId===h.unitId)?.code??"Unit"}</td>

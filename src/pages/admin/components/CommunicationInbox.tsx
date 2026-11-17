@@ -178,7 +178,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
     setBody(renderTemplate(t.body, values));
   };
   const missing = templateVariables(subject, body);
-  const blocked = !c || !body.trim() || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone) || (channel === "teams" && !teamId);
+  const blocked = !c || !body.trim() || !available.includes(channel) || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone) || (channel === "teams" && !teamId);
 
   const send = async () => {
     if (!c || blocked) return;
@@ -233,14 +233,25 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
 
       <div className="space-y-2 border-t border-background-200 p-3">
         <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Send by">
-          {available.map((ch) => (
-            <button key={ch} type="button" role="radio" aria-checked={channel === ch} onClick={() => { setChannel(ch); setTemplateKey(""); }}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${channel === ch ? "bg-primary-500 text-white" : "border border-background-200 text-foreground-700"}`}>
-              <i className={`${CHANNEL_META[ch].icon} mr-1`} aria-hidden="true" />{CHANNEL_META[ch].label}
-            </button>
-          ))}
+          {(["email", "sms", "whatsapp", "teams", "note"] as SendChannel[]).map((ch) => {
+            const on = available.includes(ch);
+            return (
+              <button key={ch} type="button" role="radio" aria-checked={channel === ch} data-testid={`send-by-${ch}`}
+                title={on ? CHANNEL_META[ch].label : ch === "teams" ? "Join or create a staff team first" : "Not connected yet: set it up in Integrations"}
+                onClick={() => { setChannel(ch); setTemplateKey(""); }}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${channel === ch ? (on ? "bg-primary-500 text-white" : "bg-background-300 text-foreground-800") : on ? "border border-background-200 text-foreground-700" : "border border-dashed border-background-300 text-foreground-400"}`}>
+                <i className={`${CHANNEL_META[ch].icon} mr-1`} aria-hidden="true" />{CHANNEL_META[ch].label}
+              </button>
+            );
+          })}
         </div>
-        {available.length <= 2 ? <p className="text-xs text-foreground-600">Only email is connected. Connect SMS (ClickSend) or WhatsApp Business in <Link className="font-medium text-primary-700 underline" to="/admin/integrations">Integrations</Link> to use them here.</p> : null}
+        {!available.includes(channel) ? (
+          <p className="rounded-md bg-background-100 px-3 py-2 text-xs text-foreground-700" role="status">
+            {channel === "teams"
+              ? <>You are not in a staff team yet. Create one or join one in <b>Messages › Teams</b>, then you can share messages there.</>
+              : <>{CHANNEL_META[channel].label} is not connected yet. Connect {channel === "sms" ? "ClickSend (SMS)" : "WhatsApp Business"} in <Link className="font-medium text-primary-700 underline" to="/admin/integrations">Integrations</Link> to send from here.</>}
+          </p>
+        ) : null}
         {channel === "email" && !c.email ? <p className="text-xs text-primary-800">This person has no email address.</p> : null}
         {(channel === "sms" || channel === "whatsapp") && !c.phone ? <p className="text-xs text-primary-800">This person has no phone number.</p> : null}
         <div className="grid gap-2 sm:grid-cols-2">

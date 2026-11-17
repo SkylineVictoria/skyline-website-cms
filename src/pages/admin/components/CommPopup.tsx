@@ -60,6 +60,14 @@ export default function CommPopup() {
     return () => window.removeEventListener(COMM_POPUP_EVENT, onOpen);
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const close = () => { setOpen(false); setConversation(null); setTeam(null); setError(""); };
   const openPerson = async (p: Person) => {
     if (p.conversationId) { setConversation(p.conversationId); return; }
     const { data, error } = await supabase.rpc("comm_open_conversation", { p_kind: p.kind, p_ref: p.ref });
@@ -71,14 +79,21 @@ export default function CommPopup() {
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(!open)} aria-label={open ? "Close messages" : "Open messages"} data-testid="comm-popup-button"
-        className="fixed bottom-5 right-5 z-[900] flex h-14 w-14 items-center justify-center rounded-full bg-primary-500 text-2xl text-white shadow-lg hover:bg-primary-600">
-        <i className={open ? "ri-close-line" : "ri-chat-3-line"} aria-hidden="true" />
-        {!open && unread > 0 ? <span className="absolute -right-0.5 -top-0.5 rounded-full bg-foreground-950 px-1.5 text-xs font-semibold">{unread}</span> : null}
+      <button type="button" onClick={() => setOpen(true)} aria-label="Messages" title="Messages" data-testid="comm-popup-button"
+        className="relative flex h-9 w-9 items-center justify-center rounded-md border border-background-300 text-lg text-foreground-700 hover:border-primary-300 hover:text-primary-700">
+        <i className="ri-chat-3-line" aria-hidden="true" />
+        {unread > 0 ? <span className="absolute -right-1.5 -top-1.5 rounded-full bg-primary-500 px-1.5 text-2xs font-semibold text-white">{unread}</span> : null}
       </button>
       {open ? (
-        <section role="dialog" aria-label="Messages" data-testid="comm-popup"
-          className="fixed inset-x-2 bottom-24 top-16 z-[900] flex flex-col overflow-hidden rounded-xl border border-background-200 bg-background-50 shadow-2xl sm:inset-x-auto sm:right-5 sm:top-auto sm:h-[min(640px,calc(100vh-8rem))] sm:w-[420px]">
+        <div className="fixed inset-0 z-[900] flex items-center justify-center bg-foreground-950/40 p-2 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
+        <section role="dialog" aria-modal="true" aria-label="Messages" data-testid="comm-popup"
+          className="flex h-[min(720px,calc(100vh-1rem))] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-background-200 bg-background-50 shadow-2xl">
+          <div className="flex items-center justify-between gap-2 border-b border-background-200 bg-background-100 px-3 py-2">
+            <span className="flex items-center gap-2 text-sm font-semibold text-foreground-900"><i className="ri-chat-3-line text-primary-600" aria-hidden="true" />Messages</span>
+            <button type="button" onClick={close} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-foreground-700 hover:bg-background-200" data-testid="comm-popup-close">
+              <i className="ri-close-line text-lg" aria-hidden="true" />Close
+            </button>
+          </div>
           {conversation ? (
             <ConversationView id={conversation} compact onBack={back} onSent={() => undefined} />
           ) : team ? (
@@ -95,7 +110,7 @@ export default function CommPopup() {
             <>
               <header className="space-y-2 border-b border-background-200 p-3">
                 <div className="flex items-center justify-between">
-                  <h2 className="font-semibold text-foreground-950">Messages</h2>
+                  <h2 className="text-sm font-medium text-foreground-600">Who do you want to message?</h2>
                   {tab === "teams"
                     ? <button type="button" className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => setEditing({ id: null, name: "", description: "", memberIds: [], microsoft: false, microsoftHost: null })}>+ New team</button>
                     : <button type="button" className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => setAdding(true)}>+ Someone new</button>}
@@ -140,6 +155,7 @@ export default function CommPopup() {
             </>
           )}
         </section>
+        </div>
       ) : null}
       {editing ? <TeamEditor initial={editing} archived={false} onClose={() => setEditing(null)} onSaved={(id) => { setEditing(null); setTab("teams"); setTeam(id); void loadTeams(); }} /> : null}
       {adding ? <NewPersonDialog onClose={() => setAdding(false)} onOpened={(id) => { setAdding(false); setConversation(id); }} /> : null}

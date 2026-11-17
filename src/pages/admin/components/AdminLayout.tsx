@@ -130,7 +130,8 @@ export default function AdminLayout() {
               </div>
             </div>
 
-            <div className="relative">
+            <div className="relative flex items-center gap-2">
+              {user.role === "Admin" ? <CommPopup /> : null}
               <button
                 type="button"
                 onClick={() => setUserMenu((v) => !v)}
@@ -214,7 +215,6 @@ export default function AdminLayout() {
           </main>
         </div>
       </div>
-      {user.role === "Admin" ? <CommPopup /> : null}
     </div>
     </DraftProvider>
   );

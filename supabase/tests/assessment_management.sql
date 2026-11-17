@@ -2,7 +2,7 @@ begin;
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(363);
+select plan(366);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -710,6 +710,12 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true);
 select pg_temp.as_postgres();
 select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and session_date between date '2026-01-12' and date '2026-01-18'), 0, 'BRK no classes are generated in the course''s break');
+-- UNIT-PREREQUISITES: prerequisites come from the Training.gov.au text; prerequisite units are laid out first
+update public.cms_course_units set tga_prerequisites = 'ASMU2 Use tools' where id = 'unit-asm-1';
+select is((select array_agg(x) from public.rto_unit_requires('unit-asm-1') x), array['unit-asm-2'], 'PRE a unit''s prerequisites are read from its Training.gov.au text');
+select is((select count(*)::int from public.rto_unit_requires('unit-asm-2')), 0, 'PRE a unit without prerequisite text needs nothing');
+select public.intake_generate_schedule('f5000000-0000-0000-0000-000000000001', date '2026-01-05', null, null);
+select is((select unit_id from public.intake_units where intake_id = 'f5000000-0000-0000-0000-000000000001' order by sort limit 1), 'unit-asm-2', 'PRE the prerequisite unit is laid out first');
 
 select * from finish();
 rollback;

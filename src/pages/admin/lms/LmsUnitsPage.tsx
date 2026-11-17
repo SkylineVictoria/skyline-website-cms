@@ -3,6 +3,7 @@ import UnitContentPanel from "./UnitContentPanel";
 import UnitAssessmentsPanel from "./UnitAssessmentsPanel";
 import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
 import AddUnitsFromTga from "./AddUnitsFromTga";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
@@ -65,6 +66,15 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     }
   }, []);
   useEffect(() => { void refreshHours(courseId); }, [courseId, refreshHours]);
+  // The units each unit needs first, read from its Training.gov.au prerequisites (empty until the UNIT-PREREQUISITES update).
+  const [needs, setNeeds] = useState<Record<string, { id: string; code: string }[]>>({});
+  useEffect(() => {
+    setNeeds({});
+    if (!courseId) return;
+    let live = true;
+    supabase.rpc("rto_course_prereqs", { p_course: courseId }).then(({ data }) => { if (live && data) setNeeds(data as Record<string, { id: string; code: string }[]>); });
+    return () => { live = false; };
+  }, [courseId, details]);
   const rows = useMemo(() => details.flatMap(d => d.units.map((unit, index) => ({course:d.course,unit,index}))), [details]);
   const filtered = rows.filter(r => (!courseId || r.course.id === courseId) &&
     (type === "all" || r.unit.unitType === type) && (status === "all" || (r.unit.isActive ? "active" : "inactive") === status) &&
@@ -202,7 +212,10 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
           className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
-          <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}</td>
+          <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
+            {r.unit.id && needs[r.unit.id]?.length ? <span className="mt-0.5 block text-xs font-medium text-amber-800" title="This unit is taught after the units it needs. A student who has not done them takes this unit later.">
+              <i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {needs[r.unit.id].map(n => n.code).join(", ")}</span>
+            : Object.values(needs).some(list => list.some(n => n.id === r.unit.id)) ? <span className="mt-0.5 block text-xs font-medium text-emerald-800"><i className="ri-flag-line mr-1" aria-hidden="true" />Prerequisite unit: taught first</span> : null}</td>
           <td className="px-3 py-2 capitalize">{r.unit.unitType}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
           {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
             return <>

@@ -739,6 +739,8 @@ LMS → Courses → Add New calls the JWT-protected `tga-course-import` function
 
 - COURSE-BREAKS (migration 20261116140000, APPLIED hosted 2026-11-16 via the SQL editor): `academic_breaks.course_id` (null = every course). `rto_break_on(date)` reads the course from the transaction setting `rto.course`, which `intake_generate_schedule` and `rto_class_sessions_generate` set; `rto_is_working_day` and `rto_is_teaching_day` use it. Tests: BRK block in `supabase/tests/assessment_management.sql` (plan 363).
 
+- UNIT-PREREQUISITES (migration 20261117213518, APPLIED hosted 2026-11-17 via the SQL editor): a unit's prerequisites are the active units of its course whose code appears in `cms_course_units.tga_prerequisites` (`rto_unit_requires`, `rto_unit_requires_all`). `intake_generate_schedule` lays prerequisite units out first; `rto_enrolment_units` leaves out a unit whose prerequisite ended before the student joined (unless Competent by the unit's start); `rto_carry_over_plan` places a unit only after its owed prerequisites (`rto_prereq_ready`). `rto_course_prereqs(course)` (staff) feeds Courses > Units. Tests: PRE block in `supabase/tests/assessment_management.sql` (plan 366).
+
 ## SLIT unit hours (UNIT-HOURS 2026-11-16; migration 20261116100000 APPLIED hosted 2026-11-16)
 - `cms_course_units` gains `slit_hours`, `theory_hours`, `practical_hours`, `assessment_hours` (the three parts must add up to `slit_hours`) and `hours_confirmed_at` / `hours_confirmed_by`.
 - `rto_unit_hours_list(course_id)` (any CMS staff) and `rto_unit_hours_save(unit_id, slit, theory, practical, assessment)` (RTO Manager only; marks the unit reviewed).

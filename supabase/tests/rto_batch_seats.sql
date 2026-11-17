@@ -2,7 +2,7 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(67);
+select plan(72);
 
 create temp table t(k text primary key, v text);
 grant all on t to public;
@@ -168,6 +168,14 @@ select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_la
 select ok(exists(select 1 from public.rto_unit_requires('unit-pb') r where r = 'unit-pa'), 'the prerequisite is read from the unit''s Training.gov.au text');
 select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id join public.course_intakes ci on ci.id = b.intake_id where e.student_id = 'e6000000-0000-0000-0000-000000000012' and ci.course_id = 'course-seat-4' and e.carry_over and ci.id <> 'f6000000-0000-0000-0000-000000000004'), 1, 'the late joiner is carried into the next intake of the course');
 select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_early')) where unit_id = 'unit-pa'), 1, 'the running prerequisite is among the early joiner''s units');
+
+-- ---------------------------------------------------------------- Late joiner goes to the next intake (20261118150000)
+select ok(public.rto_prereq_missed('e6000000-0000-0000-0000-000000000009', 'f6000000-0000-0000-0000-000000000004', current_date), 'joining today, the prerequisite unit has ended: missed');
+select ok(not public.rto_prereq_missed('e6000000-0000-0000-0000-000000000009', 'f6000000-0000-0000-0000-000000000004', current_date - 25), 'joining while it runs: not missed');
+select pg_temp.put('late', public.rto_batch_place('assign', jsonb_build_object('studentId', 'e6000000-0000-0000-0000-000000000009', 'intakeId', 'f6000000-0000-0000-0000-000000000004', 'type', 'CoE'))::text);
+select isnt((select v::jsonb->>'intakeId' from t where k = 'late'), 'f6000000-0000-0000-0000-000000000004', 'a late joiner is placed in the next intake');
+select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id where b.intake_id = 'f6000000-0000-0000-0000-000000000004' and e.student_id = 'e6000000-0000-0000-0000-000000000009'), 0, 'and takes no seat in the intake they missed');
+select is((select count(*)::int from public.rto_enrolment_units((select (v::jsonb->>'enrolmentId')::uuid from t where k = 'late'))), 3, 'where they take every unit, prerequisite first');
 
 -- ---------------------------------------------------------------- Student study card (20261118130000)
 select is((select jsonb_array_length(public.admin_student_study('e6000000-0000-0000-0000-000000000011'))), 1, 'the student page lists where the student studies');

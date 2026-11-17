@@ -7,7 +7,7 @@ import { ErrorNote } from "@/pages/admin/components/rto/shared";
 import { rto, rtoJoin, rtoPlace, type EnrolmentType, type IntakeDetail, type Placed, type StudentOption } from "@/pages/admin/lib/rto";
 
 export interface PickerBatch { id: string; name: string; capacity: number | null; enrolled: number; studentIds: string[] }
-export interface StudentsAdded { out: IntakeDetail; batchId: string; studentIds: string[]; names: string[] }
+export interface StudentsAdded { out: IntakeDetail; batchId: string; studentIds: string[]; names: string[]; /** Students who joined after a prerequisite unit ended: placed in the next intake instead. */ movedNames?: string[] }
 
 export default function StudentPicker({ courseId, intakeId, batches, batchId, rtoManager, onClose, onAdded, joinFrom, joinTo }: {
   /** The intake's first and last day: "Joins on" stays inside them. */
@@ -54,9 +54,14 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
       const ids = [...picked.keys()];
       if (target === "auto" && intakeId) {
         let last = "";
-        for (const id of ids) last = (await rtoPlace<Placed>("assign", { studentId: id, intakeId, type, ...(dated ? { on: joinOn } : {}) })).batchId;
+        const moved: string[] = [];
+        for (const id of ids) {
+          const placed = await rtoPlace<Placed>("assign", { studentId: id, intakeId, type, ...(dated ? { on: joinOn } : {}) });
+          last = placed.batchId;
+          if (placed.intakeId !== intakeId) moved.push(picked.get(id)?.name ?? "A student");
+        }
         const out = await rto<IntakeDetail>("intake_get", { intakeId });
-        onAdded({ out, batchId: last, studentIds: ids, names: [...picked.values()].map((s) => s.name) });
+        onAdded({ out, batchId: last, studentIds: ids, names: [...picked.values()].map((s) => s.name), movedNames: moved });
         return;
       }
       if (dated) {

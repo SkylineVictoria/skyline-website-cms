@@ -131,10 +131,11 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
         <StudentPicker courseId={detail.intake.courseId} intakeId={detail.intake.id} joinFrom={detail.intake.startDate} joinTo={detail.intake.endDate} batchId={picker || undefined} rtoManager={canEdit}
           batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
           onClose={() => setPicker(null)}
-          onAdded={({ out, batchId, studentIds, names }: StudentsAdded) => {
+          onAdded={({ out, batchId, studentIds, names, movedNames }: StudentsAdded) => {
             setPicker(null); setDetail(out); onChanged();
             const placed = out.batches.flatMap((x) => x.students.filter((s) => studentIds.includes(s.id) && active(s)).map((s) => ({ id: s.enrolmentId, batch: x.name })));
             const enrolments = placed.map((p) => p.id);
+            if (movedNames?.length && !placed.length) { push(`${movedNames.join(", ")} joined after a prerequisite unit finished, so ${movedNames.length === 1 ? "they start" : "they start"} in the next intake (see their Study card).`); return; }
             const where = [...new Set(placed.map((p) => p.batch))].join(", ") || out.batches.find((x) => x.id === batchId)?.name || "the batch";
             undoable(`${names.length === 1 ? names[0] : `${names.length} students`} added to ${where}.`, () => {
               void Promise.all(enrolments.map((id) => rtoFlow("enrolment_set", { enrolmentId: id, status: "withdrawn" }))).finally(() => { void load(); onChanged(); });

@@ -32,7 +32,8 @@ export async function resendInvitation(agent: { invitationId: string | null; ema
  * Every call is a SQL function that checks for a SLIT administrator itself (migration 20261104090000), so nothing here relies on hiding UI.
  */
 
-export type BusinessStatus = "Active" | "Inactive";
+/** Stored status; "Onboarding" is a business made by staff whose agent agreement is not signed yet (migration 20261117220000). */
+export type BusinessStatus = "Active" | "Inactive" | "Onboarding";
 export type StatusCounts = Record<string, number>;
 export interface ListCounts { all: number; active: number; inactive: number }
 
@@ -65,6 +66,14 @@ export interface BusinessDetail {
   id: string;
   name: string;
   status: BusinessStatus;
+  /**
+   * What the business is for its agents (agency_effective_status): Active only with a signed, unexpired agent agreement (or SLIT's own direct
+   * business); otherwise Onboarding or Inactive. `operational` is that test; `gateReason` says, in staff words, why agents cannot be added.
+   */
+  effectiveStatus?: BusinessStatus;
+  operational?: boolean;
+  gateReason?: string | null;
+  isDirect?: boolean;
   createdAt: string;
   agency: {
     id: string; code: string; name: string; status: BusinessStatus; email: string; phone: string; address: string;
@@ -76,10 +85,13 @@ export interface BusinessDetail {
   onboarding?: {
     completedAt: string | null;
     agreementReady: boolean;
+    /** The latest onboarding's stage (agency_onboarding.stage), if any. */
+    stage?: string | null;
+    onboardingId?: string | null;
     contact: { agentId: string; name: string; email: string; hasLogin: boolean } | null;
   };
   /** The agent agreement sent through the onboarding documents (2026-11-17): where it is up to and its two-year term. */
-  agreement?: { status: "none" | "sent" | "signed"; commencementDate: string | null; expiryDate: string | null; onboardingId: string | null };
+  agreement?: { status: "none" | "sent" | "signed"; commencementDate: string | null; expiryDate: string | null; onboardingId: string | null; expired?: boolean };
   /** What the agent entered on the Agent Application Form, by the form's variable names. */
   profile?: Record<string, string>;
 }

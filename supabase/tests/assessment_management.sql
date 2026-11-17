@@ -29,6 +29,8 @@ insert into hr.staff_profiles(id, auth_user_id, first_name, last_name, email, ph
 alter table hr.staff_profiles enable trigger staff_status_guard;
 insert into hr.staff_roles(profile_id, role, granted_by) values ('b5000000-0000-0000-0000-000000000003', 'trainer', 'a5000000-0000-0000-0000-000000000001');
 insert into public.agencies(id, name, code) values ('c5000000-0000-0000-0000-000000000001', 'ASM Agency', 'ASM-AG');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id, auth_user_id, full_name, email) values
  ('d5000000-0000-0000-0000-000000000011', 'a5000000-0000-0000-0000-000000000011', 'Sam Student', 'asm.student1@example.test'),
  ('d5000000-0000-0000-0000-000000000012', 'a5000000-0000-0000-0000-000000000012', 'Sue Student', 'asm.student2@example.test'),

@@ -2,7 +2,7 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
-import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
+import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { changeBusinessStatus, invitedBusinesses, listBusinesses, listPendingRegistrations, resendInvitation, setBusinessStatus, type BusinessRow, type BusinessStatus, type DirectoryAgent, type ListCounts, type PendingRegistration } from "@/pages/admin/lib/businessData";
@@ -22,7 +22,7 @@ export default function BusinessesPage() {
   // Tabs and each row's dropdown use the backend's business statuses.
   const businessStatuses = useStatusCatalog().business;
   // Active is the default tab; "all" in the address shows every business.
-  const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Invited" ? "Invited" : values.status === "Pending" ? "Pending" : "Active";
+  const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Onboarding" ? "Onboarding" : values.status === "Invited" ? "Invited" : values.status === "Pending" ? "Pending" : "Active";
   // Invited: active, but nobody in it has signed in yet (its agents are all still invited).
   const [invited, setInvited] = useState<Map<string, DirectoryAgent[]>>(new Map());
   // Pending review: businesses that registered themselves from the sign-in page (migration 119).
@@ -216,6 +216,8 @@ export default function BusinessesPage() {
                       {(() => {
                         const isInvited = row.status === "Active" && invited.has(row.id);
                         const shown = isInvited ? "Invited" : row.status;
+                        // Onboarding: not a choice; it ends by itself when the agent agreement is signed (or the business is deactivated on its page).
+                        if (row.status === "Onboarding") return <AgencyStatusBadge status="Onboarding" />;
                         return (
                           <>
                             <select id={`business-status-${row.id}`} value={shown} disabled={busyId === row.id}

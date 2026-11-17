@@ -6,6 +6,8 @@ select plan(25);
 insert into public.agencies(id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Extraction test A', 'EXT-A'),
   ('10000000-0000-0000-0000-000000000002', 'Extraction test B', 'EXT-B');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id, auth_user_id, full_name, email) values
   ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Agent A', 'a@example.test'),
   ('20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002', 'Agent B', 'b@example.test'),

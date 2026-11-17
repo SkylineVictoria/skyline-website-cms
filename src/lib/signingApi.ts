@@ -232,6 +232,8 @@ export interface AgentAgreementSendInput {
 }
 /** Stage 3: the agreement to the agent (at References received, or earlier with a typed reason). */
 export const sendAgentAgreement = (input: AgentAgreementSendInput) => onboardingAction<AgentOnboardingSendResult>({ action: "agent_onboarding_send_agreement", ...input });
+/** Reject the references: the onboarding is declined (reason kept for staff), its open requests voided, the agent emailed a polite decline. */
+export const rejectOnboarding = (input: { onboardingId: string; reason: string }) => onboardingAction<{ id: string; stage: string; emailed: boolean; agent: { name: string; email: string } }>({ action: "agent_onboarding_reject", ...input });
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

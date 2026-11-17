@@ -1,6 +1,8 @@
 begin;
 select plan(34);
 insert into public.agencies(id,name,code) values('14000000-0000-0000-0000-000000000001','Fence fixture','P2-FENCE');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.enrollment_applications(id,agency_id,status,data) values('44000000-0000-0000-0000-000000000001','14000000-0000-0000-0000-000000000001','draft','{"values":{"first_name":"Manual"},"fieldProvenance":{"first_name":{"kind":"manual"}},"wizard":{"confirmed":["first_name"]}}');
 -- Checked categories (20261112100000): a document in a category whose contents are read needs its Storage object and the uploader's
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.

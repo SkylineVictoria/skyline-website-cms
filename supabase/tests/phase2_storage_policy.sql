@@ -4,6 +4,8 @@ begin;
 set local storage.allow_delete_query = 'true';
 select plan(6);
 insert into public.agencies(id,name,code) values('15000000-0000-0000-0000-000000000001','Storage fixture','P2-STORAGE');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values('25000000-0000-0000-0000-000000000001','35000000-0000-0000-0000-000000000001','Storage agent','storage@example.test');
 insert into public.agency_memberships(user_id,agency_id,role) values('25000000-0000-0000-0000-000000000001','15000000-0000-0000-0000-000000000001','agent');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status) values

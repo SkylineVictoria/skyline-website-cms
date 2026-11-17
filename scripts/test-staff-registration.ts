@@ -54,6 +54,7 @@ const signingPdf = await load.import<typeof import("../supabase/functions/_share
 const signingCore = await load.import<typeof import("../supabase/functions/document-signing/core.ts")>("../supabase/functions/document-signing/core.ts");
 const onboarding = await load.import<typeof import("../supabase/functions/_shared/agent-onboarding.ts")>("../supabase/functions/_shared/agent-onboarding.ts");
 const onboardingPdf = await load.import<typeof import("../supabase/functions/_shared/agent-onboarding-pdf.ts")>("../supabase/functions/_shared/agent-onboarding-pdf.ts");
+const onboardingFn = await load.import<typeof import("../supabase/functions/document-signing/onboarding.ts")>("../supabase/functions/document-signing/onboarding.ts");
 /** Every text item of a PDF with its page and position (pdf.js), to check where a field was printed. */
 async function pdfText(bytes: Uint8Array) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -568,6 +569,45 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   const early = await call({ ...agreementInput, overrideReason: "Referee 2 confirmed by phone" }) as { override: boolean };
   assert.equal(early.override, true);
   assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_agreement_create").pop()![1].p_data as Record<string, unknown>).override_reason, "Referee 2 confirmed by phone");
+});
+
+test("agent onboarding gate (2026-11-17): the signed agreement activates the business and sends ONE set-password link; a rejection declines, voids the open requests and tells the agent politely", async () => {
+  const mails: Array<{ to: string; subject: string; textBody: string }> = []; const services: Array<[string, Record<string, unknown>]> = []; const voided: string[] = []; const rpcs: Array<[string, Record<string, unknown>]> = [];
+  let linkSent = false; let issuedHash = "";
+  const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => "00000000-0000-4000-8000-00000000ffff",
+    admin: async (action: string, id: string | null) => { if (action === "subject_search") return []; if (action === "void") { voided.push(id!); return { id, state: "void" }; } throw new Error(`unexpected ${action}`); },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agency_onboarding_decline") return { id: args.p_onboarding, stage: "declined", openRequestIds: ["90000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000002"], agent: { id: "a", name: "Ravi Kumar", email: "ravi@example.test" }, agency: { id: "b", name: "Acme Education Pty Ltd" } };
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      services.push([name, args]);
+      if (name === "agency_onboarding_activation") return { onboardingId: args.p_onboarding, agency: { id: "b", name: "Acme Education Pty Ltd", status: "Active" }, agent: { id: "a", name: "Ravi Kumar", email: "ravi@example.test", role: "agency_admin", status: "Active" }, loginExists: false,
+        invitation: { id: "70000000-0000-4000-8000-000000000001", email: "ravi@example.test", name: "Ravi Kumar", role: "agency_admin", expiresAt: "2099-01-01T00:00:00Z", new: !linkSent, sent: linkSent } };
+      if (name === "portal_invitation_link_issue") { issuedHash = String(args.p_token_hash); linkSent = true; return { email: "ravi@example.test" }; }
+      throw new Error(`unexpected service ${name}`);
+    },
+    service: async () => false,
+    storage: { download: async () => null, upload: async () => true, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: [], siteUrl: "https://site.example.test/", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  // The agreement is signed: one activation, one email with our own set-password page and a one-time token whose hash the database keeps.
+  const first = await onboardingFn.activateBusiness({ ports }, "20000000-0000-4000-8000-000000000001");
+  assert.deepEqual(first, { activated: true, invited: true });
+  assert.equal(mails.length, 1); assert.equal(mails[0].to, "ravi@example.test"); assert.match(mails[0].subject, /Set your password/);
+  const link = mails[0].textBody.match(/https:\/\/site\.example\.test\/agency\/accept-invite#t=([A-Za-z0-9_-]{40,100})/);
+  assert.ok(link, "the email carries the set-password link on our own page");
+  assert.equal(issuedHash, createHash("sha256").update(link![1]).digest("hex"), "the database holds the SHA-256 of the token, not the token");
+  const again = await onboardingFn.activateBusiness({ ports }, "20000000-0000-4000-8000-000000000001");
+  assert.deepEqual(again, { activated: true, invited: false }); assert.equal(mails.length, 1, "a second run after the signature sends nothing more");
+  // A rejection: the decline RPC, every open request voided, the agent told without the reason.
+  const rejected = await signingCore.handleSigning({ body: { action: "agent_onboarding_reject", onboardingId: "20000000-0000-4000-8000-000000000001", reason: "Referee 2 could not confirm the agency" }, upload: null, ip: null, userAgent: null }, ports) as { stage: string; emailed: boolean };
+  assert.equal(rejected.stage, "declined"); assert.equal(rejected.emailed, true);
+  assert.deepEqual(voided, ["90000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000002"], "the open requests are voided");
+  assert.equal(rpcs[0][1].p_reason, "Referee 2 could not confirm the agency");
+  assert.equal(mails.length, 2); assert.equal(mails[1].to, "ravi@example.test");
+  assert.ok(!mails[1].textBody.includes("Referee 2") && /unable to proceed/.test(mails[1].textBody), "the decline email is polite and never shows the reason");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

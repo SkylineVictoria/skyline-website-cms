@@ -31,6 +31,8 @@ reset role;
 insert into public.agencies(id,name,code) values
  ('12000000-0000-0000-0000-000000000001','Security A','P2-SEC-A'),
  ('12000000-0000-0000-0000-000000000002','Security B','P2-SEC-B');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('22000000-0000-0000-0000-000000000001','32000000-0000-0000-0000-000000000001','Security agent','security@example.test');
 insert into public.agency_memberships(user_id,agency_id,role) values
@@ -84,6 +86,8 @@ insert into auth.users(id,email,email_confirmed_at) values
  ('a0000000-0000-0000-0000-000000000003','platform@example.test',now()),('a0000000-0000-0000-0000-000000000004','editor-a@example.test',now()),
  ('a0000000-0000-0000-0000-000000000005','newcomer@example.test',now());
 insert into public.agencies(id,name,code) values ('12000000-0000-0000-0000-0000000000a1','P06 shared agency','P6-SHARED');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.tenants(id,slug,name) values ('1a000000-0000-0000-0000-000000000001','p06-a','Institution A'),('1a000000-0000-0000-0000-000000000002','p06-b','Institution B');
 insert into public.tenant_memberships(tenant_id,auth_user_id,role) values
  ('1a000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000001','tenant_admin'),
@@ -889,6 +893,8 @@ insert into public.cms_users(id,name,email,role,status,auth_user_id,must_change_
 insert into public.agencies(id,name,code,status,country) values
  ('a9000000-0000-0000-0000-000000000002','Directory Fixture Alpha','DIR-FIX-ALPHA','Inactive','Australia'),
  ('a9000000-0000-0000-0000-000000000003','Directory Fixture Local','DIR-FIX-LOCAL','Active','Australia');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 set local request.headers='{}';
 set local request.jwt.claim.sub='a9000000-0000-0000-0000-000000000001';
 set local role authenticated;

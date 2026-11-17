@@ -1,8 +1,9 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { ACTIVE_STAGES, STAGE_LABEL, type OnboardingStage } from "@/pages/admin/lib/agentOnboarding";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
 import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage } from "@/pages/admin/components/ListControls";
@@ -30,6 +31,8 @@ export default function BusinessDetailPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  // Summary strip "Start onboarding": opens the onboarding panel's dialog (each press counts up).
+  const [startSignal, setStartSignal] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +79,13 @@ export default function BusinessDetailPage() {
   const agency = business.agency;
   const c = business.counts;
   const people = c.admins + c.agents;
+  // The gate (migration 20261117220000): agents, invites and the workspace need an operational business (Active with a signed, unexpired agreement, or SLIT's own).
+  const operational = business.operational ?? business.status === "Active";
+  const stage = (business.onboarding?.stage ?? null) as OnboardingStage | null;
+  const onboardingRunning = !!stage && ACTIVE_STAGES.includes(stage);
+  const onboardingWords = operational ? "No active business admin agent yet."
+    : onboardingRunning ? `Onboarding: ${STAGE_LABEL[stage!] ?? stage}.`
+    : stage ? `Onboarding ${(STAGE_LABEL[stage] ?? stage).toLowerCase()}; start it again.` : "Onboarding not started.";
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: "details", label: "Details" },
     { id: "agents", label: "Agents", count: people + c.inactiveAgents },
@@ -93,7 +103,8 @@ export default function BusinessDetailPage() {
         description={[agency.registrationNumber ? `ABN ${agency.registrationNumber}` : agency.code, agency.address, `since ${formatDate(agency.createdAt)}`].filter(Boolean).join(", ")}
         actions={
           <>
-            <AgencyStatusBadge status={business.status} />
+            <AgencyStatusBadge status={business.effectiveStatus ?? business.status} />
+            {business.status === "Active" && business.operational === false && business.gateReason ? <span className="text-xs font-medium text-amber-700" data-testid="business-gate-reason">{business.gateReason}</span> : null}
             <MessagePersonButton kind="agency" refId={agency.id} name={business.name} />
             {business.status === "Active"
               ? <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate business</Button>
@@ -104,12 +115,14 @@ export default function BusinessDetailPage() {
       />
 
       {business.status !== "Active" ? (
-        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} />
+        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} startSignal={startSignal} />
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
         <Summary label="Agents" value={people} note={`${c.admins} business admin agent${c.admins === 1 ? "" : "s"}, ${c.agents} other agent${c.agents === 1 ? "" : "s"}${c.inactiveAgents ? `, ${c.inactiveAgents} inactive` : ""}`}
-          warn={c.admins === 0} onClick={() => setParams({ tab: "agents" })} />
+          warnText={c.admins === 0 ? onboardingWords : undefined}
+          action={c.admins === 0 && !operational && !onboardingRunning ? <Button size="sm" icon="ri-quill-pen-line" onClick={() => { setParams({}); setStartSignal((n) => n + 1); }} data-testid="summary-start-onboarding">Start onboarding</Button> : undefined}
+          onClick={() => setParams({ tab: "agents" })} />
         <Summary label="Students" value={c.students} onClick={() => setParams({ tab: "students" })} />
         <div className="bg-background-50 px-4 py-3">
           <dt className="text-xs text-foreground-500">Applications</dt>
@@ -132,7 +145,7 @@ export default function BusinessDetailPage() {
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
       {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
-      {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status }} onChanged={load} /> : null}
+      {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
       {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
 
@@ -148,13 +161,14 @@ export default function BusinessDetailPage() {
   );
 }
 
-function Summary({ label, value, note, warn = false, onClick }: { label: string; value: number; note?: string; warn?: boolean; onClick: () => void }) {
+function Summary({ label, value, note, warnText, action, onClick }: { label: string; value: number; note?: string; warnText?: string; action?: ReactNode; onClick: () => void }) {
   return (
     <div className="bg-background-50 px-4 py-3">
       <dt className="text-xs text-foreground-500">{label}</dt>
       <dd className="mt-1">
         <button type="button" onClick={onClick} className="font-heading text-xl font-bold tabular-nums text-foreground-950 hover:text-primary-700">{value}</button>
-        {note ? <p className={`mt-0.5 text-xs ${warn ? "font-medium text-amber-700" : "text-foreground-600"}`}>{warn ? `No active business admin agent yet. ${note}` : note}</p> : null}
+        {note ? <p className={`mt-0.5 text-xs ${warnText ? "font-medium text-amber-700" : "text-foreground-600"}`} data-testid={warnText ? "summary-onboarding-stage" : undefined}>{warnText ? `${warnText} ${note}` : note}</p> : null}
+        {action ? <div className="mt-1.5">{action}</div> : null}
       </dd>
     </div>
   );
@@ -171,7 +185,7 @@ function DetailsSection({ agencyId, onSaved }: { agencyId: string; onSaved: () =
 }
 
 /** The business's agents: add, activate, deactivate, and resend a sign-in invitation still waiting. */
-function AgentsSection({ business, onChanged }: { business: { id: string; name: string; status: BusinessStatus }; onChanged: () => Promise<void> }) {
+function AgentsSection({ business, onChanged }: { business: { id: string; name: string; status: BusinessStatus; operational: boolean; gateReason: string | null }; onChanged: () => Promise<void> }) {
   const { push } = useToast();
   const [rows, setRows] = useState<DirectoryAgent[] | null>(null);
   const [error, setError] = useState("");
@@ -215,12 +229,13 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
         <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students; activating an agent can send their sign-in invitation.</p>
-        {business.status === "Active" ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button>
-          : <span className="text-xs font-medium text-amber-700">Agents can be added once the business is activated.</span>}
+        {business.operational ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })} data-testid="add-agent">Add agent</Button>
+          : <span className="flex items-center gap-2"><Button size="sm" icon="ri-user-add-line" disabled title={business.gateReason ?? "Available once the business is active with a signed agent agreement."} data-testid="add-agent">Add agent</Button>
+            <span className="text-xs font-medium text-amber-700" data-testid="add-agent-reason">{business.gateReason ?? "Agents can be added once the business is active with a signed, unexpired agent agreement."}</span></span>}
       </div>
       {error ? <ListMessage icon="ri-error-warning-line" title="Agents did not load" text={error} action={<Button size="sm" variant="outline" onClick={() => setReload((n) => n + 1)}>Try again</Button>} />
         : rows === null ? <p className="p-6 text-sm text-foreground-500">Loading agents…</p>
-        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text={business.status === "Active" ? "Add this business's first agent." : "Activate the business first."} action={business.status === "Active" ? <Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button> : undefined} /> : (
+        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text={business.operational ? "Add this business's first agent." : "Complete the onboarding first."} action={business.operational ? <Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button> : undefined} /> : (
           <ResponsiveTable>
             <thead>
               <tr>
@@ -243,12 +258,12 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
-                  <td><AgentStatusBadge status={r.status} />{r.status === "Active" && !r.profileId ? <p className="mt-1 text-2xs font-medium text-amber-700">Hasn't set a password yet</p> : null}</td>
+                  <td><AgentStatusBadge status={r.status} />{r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Invited, waiting for password</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
                       {r.status === "Inactive"
-                        ? business.status !== "Active" ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
+                        ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
                         : <Button size="sm" variant="ghost" disabled={busyId === r.agentId} onClick={() => setConfirm(r)}>Deactivate</Button>}
                     </div>
                   </td>

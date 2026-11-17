@@ -3,6 +3,8 @@ begin;
 select plan(8);
 insert into public.agencies(id,name,code) values
  ('11000000-0000-0000-0000-000000000001','Identity fixture','P2-ID');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('21000000-0000-0000-0000-000000000001','31000000-0000-0000-0000-000000000001','Identity agent','identity@example.test');
 insert into public.agency_memberships(user_id,agency_id,role) values

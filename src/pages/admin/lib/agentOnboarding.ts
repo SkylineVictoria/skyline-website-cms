@@ -31,6 +31,10 @@ export interface OnboardingRow {
   applicationSignedAt: string | null; referencesReceivedAt: string | null; message: string | null;
   commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null; adminName: string; adminPosition: string;
   override: { reason: string; at: string; by: string | null } | null;
+  /** Staff approval of the references (2026-11-17), the decline (its reason is for staff only) and the activation after the signed agreement. */
+  approval?: { at: string; by: string | null } | null;
+  decline?: { at: string; reason: string; by: string | null } | null;
+  activation?: { at: string; invitationId: string | null; invitationStatus: "pending" | "accepted" | "revoked" | null } | null;
   agent: { id: string; name: string; email: string }; answers: Record<string, string>;
   /** The merged request of a legacy onboarding. */
   request: RequestSummary | null;
@@ -45,9 +49,12 @@ export const EVENT_LABEL: Record<string, string> = {
   referee_uploaded: "Reference received (uploaded)", referee_email_changed: "Referee email changed", referee_check_closed: "Referee check closed", references_received: "References received",
   agent_notified_referees: "Agent told their referees were contacted", staff_notified_references: "Staff emailed: references received", override: "Agreement sent before both references (override)",
   agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
+  references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
 };
 /** Stages that are still in progress (one at a time per business). */
-export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "agreement_sent"];
+export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
+/** Staff approve the references (then the Send agreement dialog opens) or decline the onboarding with a reason kept for staff. */
+export const approveReferences = (onboardingId: string) => call<{ id: string; stage: OnboardingStage; approvedAt: string }>("agency_onboarding_approve_references", { p_onboarding: onboardingId }, "The references could not be approved.");
 
 async function call<T>(fn: string, params: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.rpc(fn, params);

@@ -14,14 +14,16 @@ export function AgencyStatusBadge({ status, imported = false }: { status: string
     );
   }
   const active = status === "Active";
+  // Onboarding (amber): made by staff, its agent agreement not signed yet; nobody in it can sign in until then.
+  const onboarding = status === "Onboarding";
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-        active ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200" : "bg-background-200 text-foreground-600"
+        active ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200" : onboarding ? "bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-200" : "bg-background-200 text-foreground-600"
       }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-foreground-400"}`} aria-hidden="true" />
-      {active ? "Active" : "Inactive"}
+      <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-emerald-500" : onboarding ? "bg-amber-500" : "bg-foreground-400"}`} aria-hidden="true" />
+      {active ? "Active" : onboarding ? "Onboarding" : "Inactive"}
     </span>
   );
 }

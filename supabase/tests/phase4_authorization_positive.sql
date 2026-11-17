@@ -1,7 +1,9 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(787);
+select plan(835);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
 insert into public.agency_memberships(user_id,agency_id,role) values ('23000000-0000-0000-0000-000000000001','13000000-0000-0000-0000-000000000001','agent');
@@ -95,7 +97,7 @@ select throws_ok($$select public.portal_invitation_revoke('33000000-0000-0000-00
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select lives_ok($$select public.admin_business_create('{"name":"Atomic Agency","code":"ATOMIC-1","registration_number":"12 345 678 901"}'::jsonb,'atomic.admin@example.test','Atomic Admin')$$,'organization admin adds a business with its point of contact');
-select is((select a.status||'|'||g.role||'|'||g.status from public.agencies a join public.agents g on g.business_id=a.id where a.code='ATOMIC-1' and g.email='atomic.admin@example.test'),'Inactive|agency_admin|Inactive','the business starts in onboarding with its contact as an inactive agency admin');
+select is((select a.status||'|'||g.role||'|'||g.status from public.agencies a join public.agents g on g.business_id=a.id where a.code='ATOMIC-1' and g.email='atomic.admin@example.test'),'Onboarding|agency_admin|Inactive','the business starts in onboarding with its contact as an inactive agency admin');
 select throws_ok($$select public.admin_business_create('{"name":"Bad Agency","code":"ATOMIC-BAD","registration_number":"12 345 678 901"}'::jsonb,'not-an-email','Bad')$$,'22023',null,'invalid contact email fails the whole creation');
 select is((select count(*)::int from public.agencies where code='ATOMIC-BAD'),0,'no agency is left behind without its point of contact');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000010';
@@ -697,6 +699,8 @@ select is(public.notification_invalid_recipients('1b000000-0000-0000-0000-000000
 reset role;
 -- Agency detail isolation: one agency's agents and applications never appear under another agency.
 insert into public.agencies(id,name,code) values ('1c000000-0000-0000-0000-00000000000a','Isolation A','ISO-A'),('1c000000-0000-0000-0000-00000000000b','Isolation B','ISO-B');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('2c000000-0000-0000-0000-00000000000a','3c000000-0000-0000-0000-00000000000a','Agent A1','a1@example.test'),
  ('2c000000-0000-0000-0000-00000000000b','3c000000-0000-0000-0000-00000000000b','Agent B1','b1@example.test');
@@ -820,11 +824,13 @@ reset role;
 insert into public.agents(id,business_id,full_name,email,role,status) values
  ('53000000-0000-0000-0000-000000000090','13000000-0000-0000-0000-000000000001','No Password Yet','no.password@example.test','agent','Active');
 insert into public.agencies(id,name,code,status,registration_requested_at) values ('13000000-0000-0000-0000-000000000090','Waiting Co','P2-WAIT','Inactive',now());
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.agents(id,business_id,full_name,email,role,status) values
  ('53000000-0000-0000-0000-000000000091','13000000-0000-0000-0000-000000000090','Waiting Admin','waiting.admin@example.test','agency_admin','Active');
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
-select is((select r->>'status' from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-000000000001')) r where r->>'email'='no.password@example.test'),'Active','an approved agent without a password yet is Active');
+select is((select r->>'status' from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-000000000001')) r where r->>'email'='no.password@example.test'),'Invited','an approved agent without a password yet is Invited (waiting for their password)');
 select is((select r->>'status' from jsonb_array_elements(public.admin_business_agents('13000000-0000-0000-0000-000000000090')) r where r->>'email'='waiting.admin@example.test'),'Invited','an agent of a business waiting for approval is Invited');
 -- Agent sign-up checks (20261105140000): the ABN first, then the email and phone against agents of other companies.
 reset role;
@@ -836,6 +842,8 @@ reset role;
 -- ---------------------------------------------------------------- INT-01 course intakes (20261113200000, 20261113210000)
 reset role;
 insert into public.agencies(id, name, code) values ('13000000-0000-0000-0000-0000000000a1', 'Intake agency', 'INT-AGENCY');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into public.portal_profiles(id, auth_user_id, full_name, email) values ('23000000-0000-0000-0000-0000000000a1', '33000000-0000-0000-0000-0000000000a1', 'Intake agent', 'intake.agent@example.test');
 insert into public.agency_memberships(user_id, agency_id, role) values ('23000000-0000-0000-0000-0000000000a1', '13000000-0000-0000-0000-0000000000a1', 'agent');
 insert into public.cms_courses(id, slug, code, name, status) values ('int-course-a', 'int-course-a', 'INTA1', 'Intake course A', 'Published'), ('int-course-b', 'int-course-b', 'INTB1', 'Intake course B', 'Published');
@@ -944,6 +952,8 @@ end $$;
 grant execute on function pg_temp.email_err(text) to authenticated, anon;
 insert into public.agencies(id, name, code) values
  ('ee000000-0000-0000-0000-0000000000a1', 'Identity X', 'IDX-X'), ('ee000000-0000-0000-0000-0000000000a2', 'Identity Y', 'IDX-Y');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into auth.users(id, email, email_confirmed_at) values
  ('ee000000-0000-0000-0000-0000000000b1', 'idx.admin.x@example.test', now()),
  ('ee000000-0000-0000-0000-0000000000b2', 'agent.one@example.test', now()),
@@ -1360,6 +1370,7 @@ select is((select status from public.agency_onboarding where request_id='7300000
 -- References received by signature or by upload, the agreement gated (or an override with a reason), legacy rows untouched, members
 -- never see a referee's form. Direct table reads stay outside the authenticated role; pg_temp helpers give ids to the member checks.
 create function pg_temp.onb2(p_request uuid) returns uuid language sql stable security definer as $$ select id from public.agency_onboarding where application_request_id = p_request $$;
+create function pg_temp.onb_activated(p_request uuid) returns boolean language sql stable security definer as $$ select activated_at is not null and activation_invitation_id is not null from public.agency_onboarding where application_request_id = p_request $$;
 create function pg_temp.ref(p_request uuid, p_position integer) returns uuid language sql stable security definer as $$ select f.id from public.agency_onboarding_referees f join public.agency_onboarding o on o.id = f.onboarding_id where o.application_request_id = p_request and f.position = p_position $$;
 create function pg_temp.rcp(p_request uuid) returns uuid language sql stable security definer as $$ select id from hr.sign_recipients where request_id = p_request order by signing_order limit 1 $$;
 select is((select stage from public.agency_onboarding where request_id='73000000-0000-0000-0000-000000000001'),'legacy','an onboarding made before the stages is legacy');
@@ -1375,7 +1386,7 @@ select lives_ok($$select public.signing_admin('create','73000000-0000-0000-0000-
 select throws_ok($$select public.agency_onboarding_create('13000000-0000-0000-0000-000000000001','53000000-0000-0000-0000-000000000001','73000000-0000-0000-0000-000000000004','{"form_pages":2}')$$,null,'This business already has an onboarding in progress. Cancel its open request first, or continue it.','one onboarding in progress per business');
 select is(public.agency_onboarding_list('13000000-0000-0000-0000-000000000001')->0->>'stage','application_sent','the business page shows the stage');
 select is(public.agency_onboarding_list('13000000-0000-0000-0000-000000000001')->0->'application'->>'reference',(select public.signing_admin('detail','73000000-0000-0000-0000-000000000003')->>'reference'),'and the form''s request');
-select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000004','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","override_reason":"too early"}')$$,null,'The agreement can be sent once the application form is signed and the referees are back','no agreement before the form is signed, reason or not');
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000004','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","override_reason":"too early"}')$$,null,'The agreement can be sent once the application form is signed and the references are approved','no agreement before the form is signed, reason or not');
 reset role;
 select is(public.agency_onboarding_request_plan('73000000-0000-0000-0000-000000000003')->>'kind','application','the request is the application kind');
 -- The agent signs the form: the referees are checked before anything is stored.
@@ -1422,8 +1433,8 @@ select throws_ok($$select public.agency_onboarding_accept_signed(pg_temp.onb2('7
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select lives_ok($$select public.signing_admin('create','73000000-0000-0000-0000-000000000007','{"title":"Agent agreement: Positive A","original_hash":"abababababababababababababababababababababababababababababababab","recipients":[{"name":"Ravi Kumar","email":"ravi.agent@example.test","role":"agent","label":"Agent","order":1,"required":true}],"fields":[{"type":"signature","role":"agent","page":11,"x":0.6,"y":0.25,"w":0.3,"h":0.02,"required":true,"label":"Agent signature","key":"agent_signature"}],"subject_type":"agent","subject_id":"53000000-0000-0000-0000-000000000001","category":"agency_agreement"}'::jsonb)$$,'a draft agreement request');
-select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","territory":"India","commission_percent":"25","admin_name":"Positive admin","admin_position":"CEO"}')$$,null,'Give a reason for sending the agreement before both references are back','no agreement at 1 of 2 without a reason');
-select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","override_reason":"ok"}')$$,null,'Give a reason for sending the agreement before both references are back','a two-letter reason is no reason');
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","territory":"India","commission_percent":"25","admin_name":"Positive admin","admin_position":"CEO"}')$$,null,'Give a reason for sending the agreement before the references are approved','no agreement at 1 of 2 without a reason');
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","override_reason":"ok"}')$$,null,'Give a reason for sending the agreement before the references are approved','a two-letter reason is no reason');
 -- Change referee 2's email: pending again, logged; the function voids the old request.
 select throws_ok($$select public.agency_onboarding_referee_change_email(pg_temp.ref('73000000-0000-0000-0000-000000000003',2),'priya@harbour.edu.au')$$,null,'The two references need different email addresses','the new address must differ from the other referee');
 select throws_ok($$select public.agency_onboarding_referee_change_email(pg_temp.ref('73000000-0000-0000-0000-000000000003',1),'other@example.test')$$,null,'This reference is already received','a received reference cannot be changed');
@@ -1461,6 +1472,12 @@ select throws_ok($$select public.agency_onboarding_referee_request_create(pg_tem
 select throws_ok($$select public.agency_onboarding_referee_upload(pg_temp.ref('73000000-0000-0000-0000-000000000003',1),'x.pdf','x')$$,'42501',null,'nor uploading a referee form');
 select throws_ok($$select public.agency_onboarding_referee_change_email(pg_temp.ref('73000000-0000-0000-0000-000000000003',1),'x@example.test')$$,'42501',null,'nor changing a referee');
 select throws_ok($$select public.signing_mine('token',pg_temp.rcp('73000000-0000-0000-0000-000000000005'))$$,'42501',null,'a referee''s link is not the agent''s: signing_mine refuses the referee''s recipient');
+-- Staff approval (migration 20261117220000): at References received the agreement needs the approval or a typed reason; Approve records who and when.
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","territory":"India","commission_percent":"25","admin_name":"Positive admin","admin_position":"CEO"}')$$,null,'Give a reason for sending the agreement before the references are approved','no agreement at References received without the approval or a reason');
+select is(public.agency_onboarding_approve_references(pg_temp.onb2('73000000-0000-0000-0000-000000000003'))->>'stage','references_approved','staff approve the references');
+select is(public.agency_onboarding_list('13000000-0000-0000-0000-000000000001')->0->'approval'->>'by','Positive admin','the approval records who');
+select is(public.agency_onboarding_approve_references(pg_temp.onb2('73000000-0000-0000-0000-000000000003'))->>'stage','references_approved','approving again changes nothing');
 -- Now the agreement goes without a reason.
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select is(public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","territory":"India","commission_percent":"25","admin_name":"Positive admin","admin_position":"CEO"}')->>'override','false','at References received the agreement goes without a reason');
@@ -1472,9 +1489,20 @@ select is((select agreement_status from public.agencies where id='13000000-0000-
 update hr.sign_recipients set signer_name='Ravi Kumar' where request_id='73000000-0000-0000-0000-000000000007';
 select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000007',pg_temp.rcp('73000000-0000-0000-0000-000000000007'),decode('255044462d312e39','hex'),decode('255044462d322e30','hex'),'{}')$$,'the agent signs the agreement');
 select is((select stage||'|'||status||'|'||agreement_content::text from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000003'),'agreement_signed|signed|\x255044462d312e39','stage: agreement signed, the signed agreement stored');
+-- Activation (migration 20261117220000): the business is Active, the agent who signed is its active business admin agent, one invitation waits for their password.
+select is((select status from public.agencies where id='13000000-0000-0000-0000-000000000001'),'Active','the signed agreement keeps business A active');
+select is((select status||'|'||role from public.agents where id='53000000-0000-0000-0000-000000000001'),'Active|agency_admin','the agent who signed is the active business admin agent');
+select is((select count(*)::int from public.agency_invitations where email='ravi.agent@example.test' and status='pending' and role='agency_admin' and agency_id='13000000-0000-0000-0000-000000000001'),1,'ONE invitation for the business admin agent');
+select is(pg_temp.onb_activated('73000000-0000-0000-0000-000000000003'),true,'the activation is on the record');
+select is(public.agency_onboarding_activation(pg_temp.onb2('73000000-0000-0000-0000-000000000003'))->'invitation'->>'new','false','running the activation again makes no second invitation');
+select is((select count(*)::int from public.agency_invitations where email='ravi.agent@example.test' and status='pending'),1,'still one invitation');
+select is(public.portal_invitation_self_resend('ravi.agent@example.test',repeat('a',64))->>'sent','true','the person can ask for a set-password link');
+select is(public.portal_invitation_self_resend('ravi.agent@example.test',repeat('b',64))->>'why','recent','but not twice within two minutes');
+select is((select link_token_hash from public.agency_invitations where email='ravi.agent@example.test' and status='pending'),repeat('a',64),'the first link stands: the refused resend did not replace it');
+select is(public.portal_invitation_self_resend('nobody@example.test',repeat('c',64))->>'sent','false','an unknown address gets nothing (and the same answer from the function)');
 select is((select agreement_status||' '||agreement_commencement_date||' '||agreement_expiry_date from public.agencies where id='13000000-0000-0000-0000-000000000001'),'signed 2026-11-17 2028-11-16','the agency keeps the status and the two-year term');
 select is((select array_agg(event order by id) from public.agency_onboarding_events where onboarding_id=pg_temp.onb2('73000000-0000-0000-0000-000000000003'))::text,
- '{application_sent,application_signed,referee_check_sent,referee_check_sent,referee_received,referee_email_changed,referee_check_sent,referee_uploaded,references_received,agreement_sent,agreement_signed}','the history tells the whole story');
+ '{application_sent,application_signed,referee_check_sent,referee_check_sent,referee_received,referee_email_changed,referee_check_sent,referee_uploaded,references_received,references_approved,agreement_sent,agreement_signed,activated}','the history tells the whole story');
 -- A second business: the override (a reason at 0 of 2) is logged; cancelling its agreement request cancels the onboarding.
 insert into public.agents(id,business_id,profile_id,full_name,email,role,status) values ('53000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-000000000002',null,'Bea Agent','bea.agent@example.test','agency_admin','Active');
 set local role authenticated;
@@ -1496,5 +1524,71 @@ select is((select count(*)::int from public.agency_onboarding_events where onboa
 update hr.sign_requests set state='void', closed_reason='test' where id='73000000-0000-0000-0000-000000000010';
 select is((select stage||'|'||status from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000009'),'cancelled|closed','voiding the agreement request cancels the onboarding');
 select is((select agreement_status from public.agencies where id='13000000-0000-0000-0000-000000000002'),'none','and the agency is back to no agreement');
+-- The gate (migration 20261117220000): a staff-made business starts Onboarding; no invitation, no Add agent, no workspace until the agreement is signed;
+-- reject declines the onboarding (restartable); an expired agreement closes the workspace but staff keep seeing the records; SLIT-DIRECT is exempt.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.admin_business_create('{"name":"Gate Co","code":"GATE-1","registration_number":"12 345 678 902"}'::jsonb,'gate.admin@example.test','Gate Admin')->>'onboarding','true','staff add Gate Co');
+reset role;
+create function pg_temp.gate() returns uuid language sql stable security definer as $$ select id from public.agencies where code = 'GATE-1' $$;
+update public.agents set id='53000000-0000-0000-0000-000000000021' where email='gate.admin@example.test';
+select is((select status from public.agencies where code='GATE-1'),'Onboarding','a staff-made business starts as Onboarding');
+select is(public.agency_is_operational(pg_temp.gate()),false,'and is not operational');
+select is((select public.agency_effective_status(a) from public.agencies a where a.code='GATE-1'),'Onboarding','its effective status is Onboarding');
+select is((select public.agency_is_operational(a.id) from public.agencies a where coalesce(a.is_direct,false)),true,'SLIT-DIRECT is exempt: operational without an agreement');
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002',pg_temp.gate(),'gate.admin@example.test','Gate Admin','agency_admin')$$,'22023',null,'no invitation into an onboarding business');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_agent_activate(null,pg_temp.gate(),'Extra Agent','extra.gate@example.test','','','agent')$$,'23514',null,'Add agent is refused until the agreement is signed');
+select is(public.admin_business_detail(pg_temp.gate())->>'operational','false','the business page says it is not operational');
+select alike(public.admin_business_detail(pg_temp.gate())->>'gateReason','%onboarding%','with the reason');
+select is(public.agency_onboarding_prepare(pg_temp.gate())->'agent'->>'email','gate.admin@example.test','Start onboarding offers the point of contact');
+select is(public.admin_agency_directory('Gate Co','Onboarding',25,0)->>'total','1','the businesses list filters Onboarding');
+-- The point of contact somehow signed in (a login from elsewhere): still no workspace.
+reset role;
+insert into auth.users(id,email,email_confirmed_at) values ('33000000-0000-0000-0000-0000000000c1','gate.admin@example.test',now());
+insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-0000000000c1','33000000-0000-0000-0000-0000000000c1','Gate Admin','gate.admin@example.test');
+insert into public.agency_memberships(user_id,agency_id,role) select '23000000-0000-0000-0000-0000000000c1',pg_temp.gate(),'agency_admin';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
+select is(public.portal_agency_id(),null,'a member of an onboarding business has no workspace');
+select is(public.portal_resolve_access()->>'state','agency_onboarding','and is told the onboarding is not complete');
+select throws_ok($$insert into public.enrollment_students(agency_id,agent_id,full_name,email,created_by) values (pg_temp.gate(),'53000000-0000-0000-0000-000000000021','Gate Student','gate.student@example.test','23000000-0000-0000-0000-0000000000c1')$$,'42501',null,'and cannot add a student');
+-- Reject: the onboarding is declined with a reason kept for staff; it can start again.
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select lives_ok($$select public.signing_admin('create','73000000-0000-0000-0000-000000000021','{"title":"Agent application form: Gate Co","original_hash":"2121212121212121212121212121212121212121212121212121212121212121","recipients":[{"name":"Gate Admin","email":"gate.admin@example.test","role":"agent","label":"Agent","order":1,"required":true}],"fields":[],"subject_type":"agent","subject_id":"53000000-0000-0000-0000-000000000021","category":"other"}'::jsonb)$$,'the form request for Gate Co');
+select is(public.agency_onboarding_create(pg_temp.gate(),'53000000-0000-0000-0000-000000000021','73000000-0000-0000-0000-000000000021','{"form_pages":2}')->>'stage','application_sent','Gate Co starts its onboarding');
+select throws_ok($$select public.agency_onboarding_decline(pg_temp.onb2('73000000-0000-0000-0000-000000000021'),'no')$$,null,'Give the reason for declining (kept for staff; the agent is not shown it)','a decline needs a reason');
+select is(public.agency_onboarding_decline(pg_temp.onb2('73000000-0000-0000-0000-000000000021'),'Referee 2 could not confirm the agency')->>'stage','declined','staff decline it');
+select is(public.agency_onboarding_list(pg_temp.gate())->0->'decline'->>'reason','Referee 2 could not confirm the agency','the reason is on the record for staff');
+select is(public.agency_onboarding_list(pg_temp.gate())->0->'decline'->>'by','Positive admin','with who declined');
+select throws_ok($$select public.agency_onboarding_decline(pg_temp.onb2('73000000-0000-0000-0000-000000000021'),'again and again')$$,null,'This onboarding is not open','a declined onboarding is not declined twice');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
+select is(public.portal_agency_id(),null,'the declined business still has no workspace');
+select is(jsonb_array_length(public.portal_agency_onboarding(pg_temp.gate())->'documents'),0,'the agency dashboard does not list the declined onboarding');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select lives_ok($$select public.signing_admin('create','73000000-0000-0000-0000-000000000022','{"title":"Agent application form: Gate Co (again)","original_hash":"2222222222222222222222222222222222222222222222222222222222222222","recipients":[{"name":"Gate Admin","email":"gate.admin@example.test","role":"agent","label":"Agent","order":1,"required":true}],"fields":[],"subject_type":"agent","subject_id":"53000000-0000-0000-0000-000000000021","category":"other"}'::jsonb)$$,'a second form request');
+select is(public.agency_onboarding_create(pg_temp.gate(),'53000000-0000-0000-0000-000000000021','73000000-0000-0000-0000-000000000022','{"form_pages":2}')->>'stage','application_sent','after a decline the onboarding can start again');
+-- Expiry: an Active business whose agreement has run out shows Inactive for its agents; staff keep its records.
+reset role;
+update public.agencies set status='Active', agreement_status='signed', agreement_commencement_date=current_date-interval '2 years', agreement_expiry_date=current_date-1 where code='GATE-1';
+select is((select public.agency_effective_status(a) from public.agencies a where a.code='GATE-1'),'Inactive','an expired agreement makes the business Inactive for its agents');
+select alike((select public.agency_gate_reason(a) from public.agencies a where a.code='GATE-1'),'%expired%','and says so');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
+select is(public.portal_agency_id(),null,'its agent has no workspace');
+select is(public.portal_resolve_access()->>'state','agreement_expired','and is told the agreement expired');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.admin_business_detail(pg_temp.gate())->>'effectiveStatus','Inactive','staff see it as Inactive');
+select is(public.admin_business_detail(pg_temp.gate())->'counts'->>'students','0','and still see its records');
+select throws_ok($$select public.admin_agent_activate(null,pg_temp.gate(),'Extra Agent','extra.gate@example.test','','','agent')$$,'23514',null,'Add agent is refused while the agreement is expired');
+reset role;
+update public.agencies set agreement_expiry_date=current_date+interval '1 year' where code='GATE-1';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
+select is(public.portal_agency_id(),pg_temp.gate(),'renewed: the workspace is back');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is(public.admin_agent_activate(null,pg_temp.gate(),'Extra Agent','extra.gate@example.test','','','agent')->>'role','agent','and Add agent works again');
+reset role;
 select * from finish();
 rollback;

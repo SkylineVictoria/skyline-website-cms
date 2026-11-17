@@ -273,10 +273,68 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   return { notified: true };
 }
 
-/** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee. */
+/** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee, the activation after the agreement. */
 export async function afterCompletion(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, plan: { id: string; kind?: string }): Promise<void> {
   if (plan.kind === "application") await sendRefereeChecks(ctx, plan.id);
   else if (plan.kind === "referee") await notifyReferencesReceived(ctx, plan.id);
+  else if (plan.kind === "agreement") await activateBusiness(ctx, plan.id);
+}
+
+interface Activation {
+  onboardingId: string; agency: { id: string; name: string; status: string }; agent: { id: string; name: string; email: string; role: string; status: string } | null; loginExists: boolean;
+  invitation: { id: string; email: string; name: string; role: string; expiresAt: string | null; new: boolean; sent: boolean } | null;
+}
+const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/**
+ * The agreement is signed (2026-11-17): the database makes the business Active and the agent who signed its active business admin agent
+ * (agency_onboarding_activation, service role); the ONE set-password email goes out here when an invitation was made and nothing was
+ * sent for it yet. The link is our own page (/agency/accept-invite#t=…): the token is checked only when the person presses the button
+ * there, so a mail scanner that opens the link does not use it up. A later resend (staff or the person) issues a new token and the old
+ * link stops working.
+ */
+export async function activateBusiness(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ activated: boolean; invited: boolean }> {
+  const { ports } = ctx;
+  const result = await serviceRpc(ports, "agency_onboarding_activation", { p_onboarding: onboardingId }) as Activation;
+  const invitation = result.invitation;
+  if (!invitation || invitation.sent) return { activated: true, invited: false };
+  const invited = await sendSetPasswordEmail(ports, { invitationId: invitation.id, email: invitation.email, name: invitation.name, role: invitation.role, agencyName: result.agency.name, expiresAt: invitation.expiresAt });
+  return { activated: true, invited };
+}
+
+/** A new one-time link for an invitation, mailed through the signing mail provider; the database keeps only the token's hash. */
+export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null }): Promise<boolean> {
+  const { provider, config } = ports.mail;
+  if (!provider || !config.from || !config.siteUrl) return false;
+  const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const hash = await sha256Hex(new TextEncoder().encode(token));
+  await serviceRpc(ports, "portal_invitation_link_issue", { p_invitation: inv.invitationId, p_token_hash: hash });
+  const link = `${config.siteUrl.replace(/\/+$/, "")}/agency/accept-invite#t=${token}`;
+  const role = inv.role === "agency_admin" ? "the business admin agent" : "an agent";
+  const until = inv.expiresAt && isoToday() <= inv.expiresAt.slice(0, 10) ? ` This link works until ${inv.expiresAt.slice(0, 10).split("-").reverse().join("/")}.` : "";
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-${hash.slice(0, 8)}`, from: config.from, to: inv.email, subject: "Set your password for the Skyline agent portal",
+    textBody: `Hello ${text(inv.name, 80) || "there"},\n\nYour agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. You are ${role} for it.\n\n`
+      + `Set your password to open the agent portal:\n${link}\n\nOpen the link and press the button on the page to continue.${until} If the link has expired, the page lets you ask for a new one.` + SIGN_OFF }));
+  return outcome.state === "sent";
+}
+
+/** Business page: the references are rejected; the onboarding is declined (reason for staff only), its open requests voided, the agent told politely. */
+export async function rejectOnboarding(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const declined = await ctx.rpc("agency_onboarding_decline", { p_onboarding: onboardingId, p_reason: text(ctx.body.reason, 1000) }) as
+    { id: string; stage: string; openRequestIds: string[]; agent: { id: string; name: string; email: string }; agency: { id: string; name: string } };
+  for (const id of declined.openRequestIds ?? []) { try { await ctx.admin("void", id, { reason: "Onboarding declined" }); } catch { /* already closed */ } }
+  const { provider, config } = ctx.ports.mail;
+  let emailed = false;
+  if (provider && config.from && declined.agent?.email) {
+    const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-declined-${onboardingId}`, from: config.from, to: declined.agent.email, subject: "Your agent application with Skyline Institute of Technology",
+      textBody: `Hello ${text(declined.agent.name, 80) || "there"},\n\nThank you for your interest in representing Skyline Institute of Technology and for the time you put into the application for ${text(declined.agency.name, 120)}. `
+        + "After reviewing it, we are unable to proceed with an agent agreement at this time.\n\nWe appreciate your interest and wish you every success. If you have any questions, please reply to this email." + SIGN_OFF }));
+    emailed = outcome.state === "sent";
+  }
+  return { ...declined, emailed };
 }
 
 /** Business page: send the referee checks still outstanding (after a failed automatic send, or a changed email address). */
@@ -316,6 +374,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_send_application: sendApplication,
   agent_onboarding_send_agreement: sendAgreement,
   agent_onboarding_send_referees: sendRefereesNow,
+  agent_onboarding_reject: rejectOnboarding,
   agent_onboarding_referee_change: changeReferee,
   agent_onboarding_referee_upload: uploadRefereeForm,
 };

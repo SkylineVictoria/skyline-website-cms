@@ -11,11 +11,13 @@ const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
  * The business's agent agreement: upload a signed copy, or send it to the business admin agent through Skyline Sign.
  * While the business is inactive it is shown as the onboarding checklist, ending with Activate & invite.
  */
-export default function BusinessOnboarding({ business, onChanged, onActivate, activating }: {
+export default function BusinessOnboarding({ business, onChanged, onActivate, activating, startSignal = 0 }: {
   business: BusinessDetail;
   onChanged: () => Promise<void>;
   onActivate?: () => void;
   activating?: boolean;
+  /** Counts up when the page's "Start onboarding" is pressed: the panel opens its dialog. */
+  startSignal?: number;
 }) {
   const { push } = useToast();
   const [docs, setDocs] = useState<BusinessDocument[] | null>(null);
@@ -59,22 +61,22 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
       {inactive ? (
         <Card className="p-5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding</h2>
-          <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until it is activated. Activating it invites the business admin agent.</p>
+          <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until its agent agreement is signed. The point of contact only receives signing links (application form, then agreement); when the agreement is signed the business becomes active, they become its business admin agent and get one email to set their password.</p>
           <ol className="mt-4 space-y-2 text-sm">
-            <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add a business admin agent on the Agents tab."} />
-            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Send the onboarding documents (application form and agreement) for e-signature below, or upload a signed copy."} />
-            <Step done={false} label="Activate and invite" detail={contact ? `Activates the business and emails ${contact.email} a link to set their password.` : "Needs a point of contact."} />
+            <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add business creates one; contact SLIT IT if it is missing."} />
+            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Start the onboarding below (application form, referee checks, staff review, agreement), or upload a signed copy."} />
+            <Step done={business.status === "Active"} label="Active, business admin agent invited" detail={contact ? `Automatic when the agreement is signed online: the business goes Active and ${contact.email} gets the set-password email. With an uploaded copy, press Activate & invite.` : "Needs a point of contact."} />
           </ol>
           {onActivate ? (
             <div className="mt-4">
               <Button icon="ri-mail-send-line" disabled={!ready || !contact || activating} onClick={onActivate}>{activating ? "Activating…" : "Activate & invite business admin agent"}</Button>
-              {!ready ? <p className="mt-1 text-xs text-foreground-500">Available once the signed agent agreement is in.</p> : null}
+              {!ready ? <p className="mt-1 text-xs text-foreground-500">Available once a signed agent agreement is in (uploaded copies only; the online agreement activates the business by itself).</p> : null}
             </div>
           ) : null}
         </Card>
       ) : null}
 
-      <AgentOnboardingPanel business={business} onChanged={onChanged} />
+      <AgentOnboardingPanel business={business} onChanged={onChanged} startSignal={startSignal} />
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">

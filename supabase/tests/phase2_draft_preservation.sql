@@ -1,6 +1,8 @@
 begin;
 select plan(8);
 insert into agencies(id,name,code) values('16000000-0000-0000-0000-000000000001','Draft preservation','DRAFT-PRESERVE');
+-- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
+insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
 insert into portal_profiles(id,auth_user_id,email) values('26000000-0000-0000-0000-000000000001','36000000-0000-0000-0000-000000000001','draft-preserve@example.test');
 insert into agency_memberships(user_id,agency_id) values('26000000-0000-0000-0000-000000000001','16000000-0000-0000-0000-000000000001');
 insert into enrollment_applications(id,agency_id,assigned_agent_id,data) values('46000000-0000-0000-0000-000000000001','16000000-0000-0000-0000-000000000001','26000000-0000-0000-0000-000000000001','{"wizard":{"confirmed":["first_name"]},"provenance":{"first_name":"Reviewed passport"}}');

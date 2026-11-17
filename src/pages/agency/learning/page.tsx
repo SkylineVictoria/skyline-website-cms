@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Completion } from "@/pages/CertificatePage";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
+import StudyProgress, { type ProgressCourse } from "@/pages/admin/components/StudyProgress";
 import { RateBadge } from "@/pages/admin/lms/AttendanceSummary";
 import type { AttendanceCounts } from "@/pages/admin/lms/attendanceRate";
 
@@ -20,6 +21,8 @@ export default function StudentLearningPage() {
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [certs, setCerts] = useState<Completion[]>([]);
+  const [progress, setProgress] = useState<ProgressCourse[]>([]);
+  useEffect(() => { void supabase.rpc("student_my_progress").then(({ data }) => { if (data) setProgress(data as ProgressCourse[]); }); }, []);
   useEffect(() => { void supabase.rpc("my_course_completions").then(({ data }) => setCerts((data ?? []) as Completion[])); }, []);
   const load = useCallback(async () => {
     const { data, error: e } = await supabase.rpc("student_my_learning");
@@ -47,6 +50,13 @@ export default function StudentLearningPage() {
       {error ? <div className="mt-4"><PortalError message={error} onRetry={() => void load()} /></div> : null}
       {courses === null && !error ? <PortalLoading label="Loading your courses…" /> : null}
       {courses && !courses.length ? <PortalEmpty icon="ri-book-open-line" title="No course yet" message="Once you are enrolled in a class, your units and learning materials appear here." /> : null}
+      {progress.length ? (
+        <section className="mt-6 rounded-card border border-background-200 bg-background-50 p-4">
+          <h2 className="font-heading text-base font-semibold text-foreground-950">My progress</h2>
+          <p className="mb-3 text-sm text-foreground-600">How much of your course you have finished and what is left.</p>
+          <StudyProgress courses={progress} />
+        </section>
+      ) : null}
       {certs.length ? (
         <section className="mt-6 rounded-card border border-green-200 bg-green-50 p-4">
           <h2 className="font-heading text-base font-semibold text-green-900">My certificates</h2>

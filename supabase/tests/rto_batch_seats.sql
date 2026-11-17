@@ -2,7 +2,7 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(62);
+select plan(67);
 
 create temp table t(k text primary key, v text);
 grant all on t to public;
@@ -174,6 +174,17 @@ select is((select jsonb_array_length(public.admin_student_study('e6000000-0000-0
 select is((select jsonb_array_length(public.admin_student_study('e6000000-0000-0000-0000-000000000011')->0->'units')), 3, 'with the units they take');
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000099');
 select throws_ok($$select public.admin_student_study('e6000000-0000-0000-0000-000000000011')$$, '42501', 'Sign in to the CMS first.', 'only staff can read it');
+select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
+
+-- ---------------------------------------------------------------- Student progress (20261118140000)
+select is((select (public.admin_student_progress('e6000000-0000-0000-0000-000000000011')->0->>'total')::int), 3, 'progress counts every unit of the student''s intake');
+select is((select (public.admin_student_progress('e6000000-0000-0000-0000-000000000011')->0->>'competent')::int), 0, 'and none are competent without a result');
+select ok((select count(*) from jsonb_array_elements(public.admin_student_progress('e6000000-0000-0000-0000-000000000012')) c, jsonb_array_elements(c->'units') u
+ where c->>'courseCode' = 'SEAT4' and u->>'code' = 'SPA1' and u->>'status' = 'competent') = 0 and (select count(*) from jsonb_array_elements(public.admin_student_progress('e6000000-0000-0000-0000-000000000012')) c, jsonb_array_elements(c->'units') u
+ where c->>'courseCode' = 'SEAT4' and u->>'code' = 'SPA1') = 1, 'the late joiner''s missed prerequisite is listed once and not as finished');
+select is((select jsonb_array_length(public.admin_student_schedule('e6000000-0000-0000-0000-000000000011', current_date, current_date + 30))), 0, 'the staff schedule reads (no classes generated for the fixture)');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000099');
+select throws_ok($$select public.admin_student_progress('e6000000-0000-0000-0000-000000000011')$$, '42501', 'Sign in to the CMS first.', 'only staff can read a student''s progress');
 select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
 
 -- ---------------------------------------------------------------- the two patched functions

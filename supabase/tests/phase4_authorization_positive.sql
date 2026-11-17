@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(615);
+select plan(617);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1216,6 +1216,12 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select is((select count(*)::int from public.unit_contents),0,'a portal user sees no unit content');
 select throws_ok($$insert into public.unit_contents(unit_id,kind,title) values ((select id from public.cms_course_units limit 1),'text','x')$$,'42501',null,'a portal user cannot add unit content');
+reset role;
+-- Student timeline and attendance summary (migration 20261117081523): staff / SLIT administrators only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_student_timeline(gen_random_uuid())$$,'42501',null,'a portal user cannot read a student timeline');
+select throws_ok($$select public.lms_attendance_summary(null, gen_random_uuid())$$,'42501',null,'a portal user cannot read attendance summaries');
 reset role;
 select * from finish();
 rollback;

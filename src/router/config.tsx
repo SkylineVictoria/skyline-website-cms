@@ -94,6 +94,7 @@ import AssessmentsPage from "@/pages/admin/assessments/AssessmentsPage";
 import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage";
 import StudentAssessmentsPage from "@/pages/agency/assessments/page";
 import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
+import StudentLearningPage from "@/pages/agency/learning/page";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
 import StaffOfferPage from "@/pages/staff/StaffOfferPage";
 import StaffWelcomePage from "@/pages/staff/StaffWelcomePage";
@@ -192,6 +193,7 @@ const routes: RouteObject[] = [
           // Assessment Management for students (ASM-01): my assessments, the form, results, calendar.
           { path: "assessments", element: <StudentAssessmentsPage /> },
           { path: "assessments/:id", element: <StudentAssessmentPage /> },
+          { path: "learning", element: <StudentLearningPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
           { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <PortalTicketsPage /> },

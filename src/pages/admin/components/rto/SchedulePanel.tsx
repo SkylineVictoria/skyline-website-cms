@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, ConfirmDialog, TextInput } from "@/pages/admin/components/ui";
 import { listHolidays } from "@/lib/hrmsApi";
+import IntakeCalendarModal from "@/pages/admin/components/rto/IntakeCalendarModal";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { addDays, daysBetween, listBreaks, parseDay, registeredWeeks, shortDate, todayIso, weeksOf, type AcademicBreak, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
 
@@ -35,6 +36,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
   const [confirm, setConfirm] = useState<null | { fitEnd?: string; text: string }>(null);
   const [popover, setPopover] = useState<number | null>(null);
   const [holidays, setHolidays] = useState<{ date: string; name: string }[]>([]);
+  const [calendar, setCalendar] = useState(false);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
   useEffect(() => { let live = true; listBreaks(detail.intake.courseId).then((b) => { if (live) setBreaks(b); }).catch(() => undefined); return () => { live = false; }; }, [detail.intake.courseId]);
 
@@ -186,7 +188,12 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
     <div className="w-full min-w-0 rounded-card border border-background-200 bg-background-50">
       {/* Header */}
       <div className="min-w-0 border-b border-background-200 px-4 py-3">
-        <p className="break-words font-heading text-sm font-semibold text-foreground-950">{label}</p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <p className="min-w-0 break-words font-heading text-sm font-semibold text-foreground-950">{label}</p>
+          <button type="button" onClick={() => setCalendar(true)} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-background-300 bg-white px-2.5 py-1 text-xs font-semibold text-foreground-800 hover:bg-background-100">
+            <i className="ri-calendar-2-line" aria-hidden="true" />Calendar</button>
+        </div>
+        {calendar ? <IntakeCalendarModal title={label} units={rows} holidays={holidays} breaks={breaks} preview={dirty} onClose={() => setCalendar(false)} /> : null}
         <p className="mt-0.5 text-xs text-foreground-600">
           {shortDate(first)} – {shortDate(last)} · {weeks} weeks · {rows.length} units · {i.enrolled}{i.capacity ? ` / ${i.capacity}` : ""} enrolled{hours ? ` · ${hours} hours` : ""}
           {intakeDiffers ? <span className="text-foreground-500"> · intake dates {shortDate(i.startDate)} – {shortDate(i.endDate)}</span> : null}

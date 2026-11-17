@@ -15,6 +15,8 @@ import {
   type BatchStudent, type FeeItem, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
 } from "@/pages/admin/lib/rto";
 
+const seatText = (used: number, seats?: number | null) => (seats ? `${used} of ${seats} seats${used >= seats ? " · full" : ""}` : `${used} student${used === 1 ? "" : "s"}`);
+
 export type SheetTab = "overview" | "timeline" | "batches" | "students";
 const TABS: { id: SheetTab; label: string }[] = [{ id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "batches", label: "Batches" }, { id: "students", label: "Students" }];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
@@ -277,7 +279,7 @@ export function BatchCard({ batch: b, onOpen }: { batch: RtoBatch; onOpen: () =>
         <span className="font-heading text-xl font-bold text-foreground-950">{b.name}</span>
         <Avatars names={b.trainers.map((t) => t.name)} max={3} />
         {b.trainers.length === 1 ? <span className="truncate text-sm text-foreground-700">{b.trainers[0].name}</span> : null}
-        <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{b.occupied ?? enrolled}{b.seats ? `/${b.seats}` : b.capacity ? `/${b.capacity}` : ""}</span>
+        <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{seatText(b.occupied ?? enrolled, b.seats ?? b.capacity)}</span>
       </div>
       <p className="mt-2 text-sm text-foreground-600">{timingShort(b) || "No class times yet"}</p>
       <div className="mt-2 flex items-center justify-between">
@@ -351,7 +353,7 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
             <div key={b.id} onDragOver={(e) => { if (canEnrol) { e.preventDefault(); setOver(b.id); } }} onDragLeave={() => setOver((o) => (o === b.id ? null : o))} onDrop={(e) => drop(e, b.id)}
               className={`rounded-card border bg-background-50 transition-colors duration-150 ${over === b.id ? "border-primary-400 bg-primary-50/40" : "border-background-200"}`}>
               <div className="flex items-center justify-between border-b border-background-200 px-3 py-2">
-                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{b.occupied ?? list.length}{b.seats ? `/${b.seats}` : b.capacity ? `/${b.capacity}` : ""}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
+                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{seatText(b.occupied ?? list.length, b.seats ?? b.capacity)}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
                 {canEnrol ? <button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => onAdd(b.id)}>+ Add</button> : null}
               </div>
               <ul className="min-h-[3rem] divide-y divide-background-100">

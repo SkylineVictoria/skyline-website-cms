@@ -14,6 +14,7 @@ import {
 import ApplicationsTable from "@/pages/agency/components/ApplicationsTable";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import MySigningDocuments from "@/components/signing/MySigningDocuments";
+import AgencyAgreementCard from "@/pages/agency/components/AgencyAgreementCard";
 
 interface CardDef {
   key: keyof Pick<DashboardStats, "total" | "drafts" | "submitted" | "offerAccepted" | "actionRequired" | "enrolled">;
@@ -114,6 +115,8 @@ export default function PortalDashboardPage() {
       </header>
       {/* Agreements and other documents sent to this agent or student for signature (their own email only). */}
       <MySigningDocuments className="mt-6" />
+      {/* The agency's agent agreement (sent as the onboarding documents): its term and the signed copies, for the agency's own members. */}
+      {isAgent && agency?.id ? <AgencyAgreementCard agencyId={agency.id} className="mt-4" /> : null}
 
       <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-background-200 bg-background-50 px-3 py-1 text-xs font-medium text-foreground-600">
         <i className="ri-shield-user-line text-primary-500" aria-hidden="true" />

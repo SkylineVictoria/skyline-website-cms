@@ -1,7 +1,7 @@
 // Documents & Signatures: the signed PDF and the completion certificate (SIGN-02). Runtime-neutral (Deno function and the offline tests
 // run the same code; pdf-lib comes from the function's import map or node_modules). Everything is drawn from the ORIGINAL document every
 // time somebody signs, so a signed copy never depends on an earlier signed copy. The PDFs exist only in memory here; nothing is logged.
-import { degrees, rgb } from "pdf-lib";
+import { degrees, rgb, type PDFFont } from "pdf-lib";
 import { PdfWriter, type ImageData, type Row } from "./notification/pdf-layout.ts";
 import { formatDateTime } from "./notification/submission-pdf.ts";
 import { paletteOf } from "./offer-letter-pdf.ts";
@@ -30,6 +30,31 @@ export function signatureImageBytes(base64: unknown): Uint8Array {
 const INK = rgb(0.05, 0.1, 0.3);
 
 /**
+ * A text field's layout: one line, shrunk to fit its box (down to 5 pt); when that would be smaller than 7 pt and the box is tall
+ * enough, the text wraps onto several lines at a readable size instead (the answer boxes of a form).
+ */
+export function layoutText(font: PDFFont, text: string, width: number, height: number): { font: PDFFont; size: number; lines: string[] } {
+  let size = Math.min(11, height * 0.72);
+  while (size > 5 && font.widthOfTextAtSize(text, size) > width) size -= 0.5;
+  if (size >= 7 || height < 14) return { font, size, lines: [text] };
+  for (let wrapped = Math.min(10, height * 0.72); wrapped >= 6; wrapped -= 0.5) {
+    const lines = wrapWords(font, text, width, wrapped);
+    if (lines.length * wrapped * 1.2 <= height && lines.every((line) => font.widthOfTextAtSize(line, wrapped) <= width)) return { font, size: wrapped, lines };
+  }
+  return { font, size, lines: [text] };
+}
+function wrapWords(font: PDFFont, text: string, width: number, size: number): string[] {
+  const lines: string[] = []; let line = "";
+  for (const word of text.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(next, size) <= width || !line) line = next;
+    else { lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
  * The original with every completed field drawn where it was placed (x, y, w, h are fractions of the page, from its top-left corner) and,
  * for a signer who signed without a signature field on a page, a "Signatures" page at the end. Fields of people who have not signed yet stay empty.
  * A field without a recipient is text the sender printed (a template variable on a PDF template).
@@ -52,6 +77,11 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
     return { font, size };
   };
   const placedSignature = new Set<string>();
+  const drawPng = async (page: (typeof pages)[number], box: { x: number; y: number; w: number; h: number }, bytes: Uint8Array) => {
+    const image = await pdf.embedPng(bytes);
+    const scale = Math.min(box.w / image.width, box.h / image.height);
+    page.drawImage(image, { x: box.x, y: box.y + (box.h - image.height * scale) / 2, width: image.width * scale, height: image.height * scale });
+  };
   for (const field of input.fields) {
     if (!field.done) continue;
     const page = pages[field.page - 1];
@@ -59,6 +89,16 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
     const { width: W, height: H } = page.getSize();
     const box = { x: field.x * W, y: H - (field.y + field.h) * H, w: field.w * W, h: field.h * H };
     const signer = field.recipient_id ? signers.get(field.recipient_id) : null;
+    if (field.type === "signature" && !field.recipient_id) {
+      // A signature the sender prints (the institution's signatory on an agent agreement): a PNG picture, or a typed name slanted like a typed signature.
+      const value = String(field.value ?? "").trim();
+      if (!value) continue;
+      if (value.startsWith("data:image/png;base64,")) { await drawPng(page, box, signatureImageBytes(value)); continue; }
+      const text = writer.clean(value, true);
+      const { font, size } = fit(text, true, box.w - 4, box.h);
+      page.drawText(text, { x: box.x + 2, y: box.y + (box.h - size) / 2 + size * 0.22, size, font, color: INK, ySkew: degrees(12) });
+      continue;
+    }
     if (field.type === "signature" || field.type === "initials") {
       if (!signer || signer.state !== "signed") continue;
       if (field.type === "signature") placedSignature.add(signer.id);
@@ -80,8 +120,10 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
     } else {
       const text = writer.clean(String(field.value ?? "")).trim();
       if (!text) continue;
-      const { font, size } = fit(text, false, box.w - 2, box.h, 11);
-      page.drawText(text, { x: box.x + 1, y: box.y + (box.h - size) / 2 + size * 0.22, size, font, color: rgb(0, 0, 0) });
+      // One line when it fits at a readable size; a longer answer in a tall box (the form's answer boxes) wraps onto several lines.
+      const { font, size, lines } = layoutText(writer.regular, text, box.w - 2, box.h);
+      const lineHeight = size * 1.2, top = box.y + box.h - (box.h - lines.length * lineHeight) / 2;
+      lines.forEach((line, i) => page.drawText(line, { x: box.x + 1, y: top - lineHeight * (i + 1) + size * 0.3, size, font, color: rgb(0, 0, 0) }));
     }
   }
   const loose = input.recipients.filter((r) => r.state === "signed" && !placedSignature.has(r.id));

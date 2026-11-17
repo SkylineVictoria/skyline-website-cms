@@ -113,8 +113,11 @@ export interface SigningView {
   /** Offer letters: the emailed 6-digit code confirms the signer before signing (codeTo: the masked address it goes to). */
   requireCode?: boolean; codeTo?: string | null; offer?: { studentName: string; applicationReference: string; prepaidMore: "YES" | "NO" | null } | null;
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };
+  /** Agent onboarding (2026-11-17): the application form (the first `formPages` pages) and the agreement, sent as one document. */
+  onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
-  fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null }>;
+  // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
+  fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;
   signers: Array<{ name: string; role: string; state: string; order: number; required: boolean; me: boolean }>;
 }
 export interface MySigningDocument { recipient_id: string; reference: string; title: string; status: string; my_state: string; role: string; sent_at: string | null; signed_at: string | null; expires_at: string | null; completed_at: string | null }
@@ -189,6 +192,44 @@ export async function signWithRetry<T>(body: Record<string, unknown>, wait = (ms
     }
   }
 }
+/* ------------------------------------------------------------------ agent onboarding documents (2026-11-17) */
+/** The two blanks shipped with the site, uploaded once to the Sign module as PDF templates (document-signing `agent_onboarding_install`). */
+export const AGENT_ONBOARDING_BLANKS: ReadonlyArray<{ which: "form" | "agreement"; name: string; path: string }> = [
+  { which: "form", name: "Agent Application Form", path: "/templates/agent_application_form_template_blank.pdf" },
+  { which: "agreement", name: "Agent Agreement", path: "/templates/agent_agreement_template_blank.pdf" },
+];
+export const ONBOARDING_TEMPLATES_MISSING = /Install the agent onboarding templates first/i;
+export async function installAgentOnboardingTemplates(): Promise<Array<{ id: string; systemKey: string; fields: number; pages: number }>> {
+  const out = [];
+  for (const blank of AGENT_ONBOARDING_BLANKS) {
+    const response = await fetch(blank.path);
+    if (!response.ok) throw new Error(`The ${blank.name} blank is missing from the site (${blank.path}).`);
+    const file = new File([await response.blob()], blank.path.split("/").pop() ?? "blank.pdf", { type: "application/pdf" });
+    out.push(await signingAction<{ id: string; systemKey: string; fields: number; pages: number }>({ action: "agent_onboarding_install", which: blank.which }, file));
+  }
+  return out;
+}
+export interface AgentOnboardingSendInput {
+  agencyId: string; agentId?: string | null; commencementDate: string; territory: string; commissionPercent: string; adminName: string; adminPosition: string; adminWitnessName?: string; message?: string;
+  adminSignature: { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
+}
+export interface AgentOnboardingSendResult { id: string; reference: string; onboardingId: string; sent: boolean; state?: string; warning?: string; agent?: { name: string; email: string }; printed?: number; fields?: number }
+/** Sends both onboarding documents as one request; installs the two blanks first when the Sign module does not have them yet. */
+export async function sendAgentOnboarding(input: AgentOnboardingSendInput): Promise<AgentOnboardingSendResult> {
+  const body = { action: "agent_onboarding_send", ...input };
+  try { return await signingAction<AgentOnboardingSendResult>(body); }
+  catch (error) {
+    if (!ONBOARDING_TEMPLATES_MISSING.test((error as Error).message)) throw error;
+    await installAgentOnboardingTemplates();
+    return await signingAction<AgentOnboardingSendResult>(body);
+  }
+}
+/** A tick box that answers a question together with its siblings ("litigation_involved:YES"): the question and this box's answer. */
+export function fieldGroup(key: string | null | undefined): { key: string; answer: string } | null {
+  const text = String(key ?? ""); const colon = text.indexOf(":");
+  return colon > 0 ? { key: text.slice(0, colon), answer: text.slice(colon + 1) } : null;
+}
+
 /** A saved header or footer (TPL-02); picking one copies its HTML into the template. */
 export interface TemplatePart { id: string; kind: "header" | "footer"; name: string; html: string; updated_at: string }
 export const listTemplateParts = () => signingAdmin<TemplatePart[]>("part_list");

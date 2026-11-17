@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Field, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { safeLogo } from "@/lib/brandCache";
 import PdfPages from "@/components/signing/PdfPages";
+import SignaturePad from "@/components/signing/SignaturePad";
+import { pictureToPng } from "@/components/signing/signatureImage";
 import LegacySignPage from "@/components/signing/LegacySignPage";
-import { formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type OfferSigningState, type PaymentView, type SigningView } from "@/lib/signingApi";
+import { fieldGroup, formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type OfferSigningState, type PaymentView, type SigningView } from "@/lib/signingApi";
 const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
@@ -91,36 +93,6 @@ function PaymentCard({ pay, note, busy, showPay, afterSigning, polling, coeLabel
   </section>;
 }
 type Method = "typed" | "drawn" | "uploaded";
-const SIGNATURE_W = 600, SIGNATURE_H = 200;
-/** Any picture, scaled into a 600 x 200 PNG (base64 without the data: prefix): the one format the server accepts. */
-async function pictureToPng(file: File): Promise<string> {
-  if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 5 * 1024 * 1024) throw new Error("Choose a PNG or JPEG picture of your signature, 5 MB or smaller.");
-  const image = await createImageBitmap(file);
-  const scale = Math.min(SIGNATURE_W / image.width, SIGNATURE_H / image.height, 1);
-  const canvas = document.createElement("canvas"); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
-  canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/png").split(",")[1];
-}
-
-/** A pad to draw a signature with a finger, a pen or the mouse. Reports the PNG after every stroke, or null when it is empty. */
-function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef(false);
-  const point = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const box = event.currentTarget.getBoundingClientRect();
-    return { x: (event.clientX - box.left) * SIGNATURE_W / box.width, y: (event.clientY - box.top) * SIGNATURE_H / box.height };
-  };
-  const context = () => { const c = canvas.current!.getContext("2d")!; c.lineWidth = 3; c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = "#0d1a4d"; return c; };
-  return <div>
-    <canvas ref={canvas} width={SIGNATURE_W} height={SIGNATURE_H} data-testid="signature-pad" aria-label="Draw your signature here" className="w-full max-w-xl touch-none rounded-md border-2 border-dashed border-background-400 bg-white" style={{ aspectRatio: "3 / 1" }}
-      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drawing.current = true; const p = point(e); const c = context(); c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x + 0.1, p.y + 0.1); c.stroke(); }}
-      onPointerMove={(e) => { if (!drawing.current) return; const p = point(e); const c = context(); c.lineTo(p.x, p.y); c.stroke(); }}
-      onPointerUp={() => { if (!drawing.current) return; drawing.current = false; onChange(canvas.current!.toDataURL("image/png").split(",")[1]); }}
-      onPointerCancel={() => { drawing.current = false; }} />
-    <button type="button" className="mt-2 text-sm font-medium text-primary-700 underline" onClick={() => { const c = canvas.current!; c.getContext("2d")!.clearRect(0, 0, c.width, c.height); onChange(null); }}>Clear and draw again</button>
-  </div>;
-}
-
 /** An expired, replaced or unknown link: nothing about the document is shown; the signer can ask admissions for a new one. */
 function LinkProblem({ token, message }: { token: string; message: string }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
@@ -214,6 +186,8 @@ export default function SigningPage() {
       // The released first-stage function answers without the recipient and fields: its own page handles that version.
       if (!next.recipient) { setLegacy(true); return; }
       setView(next); setName((current) => current || next.recipient.name);
+      // A field the sender prefilled (agent onboarding: the signatory's name, the contact details we hold) starts with that text; the signer may change it.
+      setValues((current) => { const seeded = { ...current }; for (const f of next.fields) if (f.type === "text" && f.value && seeded[f.id] === undefined) seeded[f.id] = f.value; return seeded; });
       await loadPay();
     } catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
   }, [token, loadPay]);
@@ -292,8 +266,17 @@ export default function SigningPage() {
   const showPay = !!pay?.canPay && (!afterSigning || mine || complete);
   // Fields the server fills at signing (offer accepted, payment made, payment date...) are shown greyed and never asked for or sent.
   const auto = (f: { label: string; type: string }) => (f.type === "text" || f.type === "checkbox") && isAutoField(f.label);
-  const missing = canSign ? view.fields.filter((f) => f.required && !auto(f) && ((f.type === "text" && !(values[f.id] ?? "").trim()) || (f.type === "checkbox" && values[f.id] !== "true")
-    || (f.type === "choice" && !values[f.id]))) : [];
+  // A question answered by tick boxes ("Involved in litigation: Yes / No") is one answer: ticking a box clears its siblings, any ticked box satisfies the question.
+  const groupTicked = (f: { key?: string | null }) => { const g = fieldGroup(f.key); return !!g && !!view && view.fields.some((o) => fieldGroup(o.key)?.key === g.key && values[o.id] === "true"); };
+  const setTick = (f: { id: string; key?: string | null }, on: boolean) => setValues((current) => {
+    const next = { ...current, [f.id]: on ? "true" : "false" };
+    const g = fieldGroup(f.key);
+    if (g && on && view) for (const o of view.fields) if (o.id !== f.id && fieldGroup(o.key)?.key === g.key) next[o.id] = "false";
+    return next;
+  });
+  const seenGroups = new Set<string>();
+  const missing = canSign ? view.fields.filter((f) => f.required && !auto(f) && ((f.type === "text" && !(values[f.id] ?? "").trim()) || (f.type === "checkbox" && values[f.id] !== "true" && !groupTicked(f))
+    || (f.type === "choice" && !values[f.id]))).filter((f) => { const g = fieldGroup(f.key); if (!g) return true; if (seenGroups.has(g.key)) return false; seenGroups.add(g.key); return true; }) : [];
   const sentValues = () => Object.fromEntries(Object.entries(values).filter(([id]) => !view?.fields.some((f) => f.id === id && auto(f))));
   const signatureReady = method === "typed" ? name.trim().length >= 2 : !!picture;
   const choices = canSign ? view.fields.filter((f) => f.type === "choice") : [];
@@ -409,6 +392,7 @@ export default function SigningPage() {
           </div> : mine ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">{justSigned ? "Thank you, your signature is recorded. " : "You have signed this document. "}
             It will be complete when everyone required has signed, and a copy will be emailed to you then.</p>
             : offer ? <p className={`${card} text-sm text-foreground-700`}>Hello {view.recipient.name}. Read every page of your offer letter. Your initials go on every page, your signature and the date in the signature block, and you answer whether you elect to pay more than the required pre-paid fee. Then confirm the code we email you and sign at the bottom.{hasPayment || offerState?.hasPayment ? ` Your offer is accepted as soon as you sign; the ${depositLabel} initial deposit is paid by card on this page afterwards.` : ""}</p>
+            : view.onboarding ? <p className={`${card} text-sm text-foreground-700`} data-testid="onboarding-intro">Hello {view.recipient.name}. These are the agent onboarding documents for <strong>{view.onboarding.agencyName}</strong>: the Agent Application Form (pages 1 to {view.onboarding.formPages}) and the Agent Agreement (from page {view.onboarding.formPages + 1}). What we already hold is printed. Fill in the highlighted fields, answer each Yes / No question, give two references, then sign once at the bottom: your signature goes on both documents.</p>
             : <p className={`${card} text-sm text-foreground-700`}>Hello {view.recipient.name}. You are signing as <strong>{view.recipient.role}</strong>. Read the complete document, fill in the highlighted fields, then sign at the bottom.</p>}
           {view.message && !mine && !complete && <p className="whitespace-pre-wrap rounded-xl border border-background-200 bg-white p-3 text-sm"><span className="font-semibold">Message from the sender: </span>{view.message}</p>}
           {view.signers.length > 1 && <ol className="flex flex-wrap gap-2 text-xs" aria-label="Signers">{view.signers.map((s, i) => <li key={i} className={`rounded-full border bg-white px-3 py-1 ${s.me ? "border-primary-500 font-semibold" : "border-background-300"}`}>
@@ -420,7 +404,7 @@ export default function SigningPage() {
           <section className="overflow-hidden rounded-xl border border-background-200 bg-white" aria-label="Document">
             <div className="flex flex-wrap items-center gap-2 border-b border-background-200 px-3 py-2 sm:px-4">
               <i className="ri-file-text-line text-base text-foreground-500" aria-hidden="true" />
-              <span className="text-sm font-medium text-foreground-900">{offer ? "Offer letter" : "Document"}</span>
+              <span className="text-sm font-medium text-foreground-900">{offer ? "Offer letter" : view.onboarding ? "Application form and agreement" : "Document"}</span>
               {pages > 0 && <span className="text-xs text-foreground-500" data-testid="page-count">{pages} page{pages === 1 ? "" : "s"}</span>}
               <div className="ml-auto flex items-center gap-1" role="group" aria-label="Zoom">
                 <button type="button" aria-label="Zoom out" disabled={zoom <= ZOOMS[0]} onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)])} className="flex h-8 w-8 items-center justify-center rounded-md border border-background-300 text-foreground-700 hover:bg-background-100 disabled:opacity-40"><i className="ri-zoom-out-line" aria-hidden="true" /></button>
@@ -440,7 +424,7 @@ export default function SigningPage() {
                 if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
                   onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} />;
                 if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>
-                  <input type="checkbox" aria-label={f.label || "Checkbox"} checked={values[f.id] === "true"} onChange={(e) => setValues({ ...values, [f.id]: e.target.checked ? "true" : "false" })} className="h-full w-full cursor-pointer" /></label>;
+                  <input type="checkbox" aria-label={f.label || "Checkbox"} checked={values[f.id] === "true"} onChange={(e) => setTick(f, e.target.checked)} className="h-full w-full cursor-pointer" /></label>;
                 if (f.type === "choice") return <div key={f.id} data-field={f.id} role="radiogroup" aria-label={f.label} title={f.label} className={`${frame} flex items-stretch gap-0.5 p-0.5`} style={style}>
                   {(["YES", "NO"] as const).map((answer) => <button key={answer} type="button" role="radio" aria-checked={values[f.id] === answer} onClick={() => setChoice(f.id, answer)}
                     className={`flex-1 rounded-sm text-2xs font-semibold leading-none sm:text-xs ${values[f.id] === answer ? "bg-primary-600 text-white" : "bg-white/90 text-primary-800"}`}>{answer}</button>)}

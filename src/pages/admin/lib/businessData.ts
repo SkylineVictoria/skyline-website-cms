@@ -78,6 +78,10 @@ export interface BusinessDetail {
     agreementReady: boolean;
     contact: { agentId: string; name: string; email: string; hasLogin: boolean } | null;
   };
+  /** The agent agreement sent through the onboarding documents (2026-11-17): where it is up to and its two-year term. */
+  agreement?: { status: "none" | "sent" | "signed"; commencementDate: string | null; expiryDate: string | null; onboardingId: string | null };
+  /** What the agent entered on the Agent Application Form, by the form's variable names. */
+  profile?: Record<string, string>;
 }
 
 export interface BusinessDocument { id: string; kind: "agent_agreement" | "other"; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string }

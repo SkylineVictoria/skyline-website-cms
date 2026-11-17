@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import SubjectSigningPanel from "@/pages/admin/components/signing/SubjectSigningPanel";
+import AgentOnboardingPanel from "@/pages/admin/components/AgentOnboardingPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { listBusinessDocuments, openBusinessDocument, removeBusinessDocument, uploadBusinessDocument, type BusinessDetail, type BusinessDocument } from "@/pages/admin/lib/businessData";
 
@@ -61,7 +62,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
           <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until it is activated. Activating it invites the business admin agent.</p>
           <ol className="mt-4 space-y-2 text-sm">
             <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add a business admin agent on the Agents tab."} />
-            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Upload the signed copy below, or send it for signature through Skyline Sign."} />
+            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Send the onboarding documents (application form and agreement) for e-signature below, or upload a signed copy."} />
             <Step done={false} label="Activate and invite" detail={contact ? `Activates the business and emails ${contact.email} a link to set their password.` : "Needs a point of contact."} />
           </ol>
           {onActivate ? (
@@ -73,10 +74,12 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
         </Card>
       ) : null}
 
+      <AgentOnboardingPanel business={business} onChanged={onChanged} />
+
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="font-heading text-base font-semibold text-foreground-950">Agent agreement</h2>
+            <h2 className="font-heading text-base font-semibold text-foreground-950">Agent agreement (uploaded copies)</h2>
             <p className="text-sm text-foreground-600">Signed copies uploaded for this business (PDF, image or Word, up to 15 MB).</p>
           </div>
           <div className="flex items-center gap-2">

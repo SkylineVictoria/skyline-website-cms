@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createJiti } from "jiti";
 import * as PdfLib from "pdf-lib";
 
@@ -51,6 +52,8 @@ test("signing values are plain text and cannot introduce HTML", () => {
 });
 const signingPdf = await load.import<typeof import("../supabase/functions/_shared/signing-pdf.ts")>("../supabase/functions/_shared/signing-pdf.ts");
 const signingCore = await load.import<typeof import("../supabase/functions/document-signing/core.ts")>("../supabase/functions/document-signing/core.ts");
+const onboarding = await load.import<typeof import("../supabase/functions/_shared/agent-onboarding.ts")>("../supabase/functions/_shared/agent-onboarding.ts");
+const onboardingPdf = await load.import<typeof import("../supabase/functions/_shared/agent-onboarding-pdf.ts")>("../supabase/functions/_shared/agent-onboarding-pdf.ts");
 /** Every text item of a PDF with its page and position (pdf.js), to check where a field was printed. */
 async function pdfText(bytes: Uint8Array) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -329,6 +332,153 @@ test("signing function: a sectioned template's preview and request carry the hea
   const linkPorts = { ...ports, service: async (action: string) => { if (action === "open") return record; throw new Error(`unexpected ${action}`); } } as typeof ports;
   await assert.rejects(signingCore.handleSigning({ body: { action: "sign", token: "a".repeat(64), name: "Asha Patel", agreed: true, values: { f1: "Ravi", f2: "Someone else" } }, upload: null, ip: null, userAgent: null }, linkPorts),
     /one answer for \[Guardian Name\]/);
+});
+
+/* ------------------------------------------------------------------ agent onboarding documents (2026-11-17) */
+
+const BLANKS = { form: "public/templates/agent_application_form_template_blank.pdf", agreement: "public/templates/agent_agreement_template_blank.pdf" } as const;
+const blankBytes = (which: keyof typeof BLANKS) => new Uint8Array(readFileSync(path.resolve(BLANKS[which])));
+test("agent onboarding: the registry and the two blanks agree; every widget becomes a placed field with its page, type and key; a different PDF is refused", async () => {
+  for (const which of ["form", "agreement"] as const) {
+    const bytes = blankBytes(which);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), onboarding.AGENT_ONBOARDING_DOCS[which].sha256, `${which}: the shipped blank is the registered one`);
+    const read = await onboardingPdf.readBlankTemplate(which, bytes);
+    assert.equal(read.pages, onboarding.AGENT_ONBOARDING_DOCS[which].pages);
+    for (const f of read.fields) assert.ok(f.x >= 0 && f.y >= 0 && f.x + f.w <= 1.0001 && f.y + f.h <= 1.0001 && f.w > 0 && f.h > 0 && f.page >= 1 && f.page <= read.pages, JSON.stringify(f));
+    const flat = await PdfLib.PDFDocument.load(read.flattened);
+    assert.equal(flat.getForm().getFields().length, 0, "the stored template has no interactive fields left");
+    assert.equal(flat.getPageCount(), read.pages);
+    const keys = new Set(read.fields.map((f) => f.key));
+    for (const [key, spec] of Object.entries(onboarding.AGENT_ONBOARDING_FIELDS)) if (spec.doc === which) assert.ok(keys.has(key), `${which}: ${key} is placed`);
+    if (which === "agreement") {
+      assert.deepEqual(read.fields.filter((f) => f.key === "agent_organisation_name").map((f) => f.page).sort((a, b) => a - b), [1, 1, 10, 11, 11], "the organisation name prints on pages 1, 10 and 11");
+      const sign = read.fields.find((f) => f.key === "agent_signature")!; assert.ok(sign.role === "agent" && sign.type === "signature" && sign.page === 11 && sign.required);
+      const slit = read.fields.find((f) => f.key === "admin_signature")!; assert.ok(slit.role === "sender" && slit.type === "signature" && slit.value === "{{admin_signature}}");
+      assert.equal(read.fields.find((f) => f.key === "agent_signed_date")!.type, "date");
+    } else {
+      assert.deepEqual(read.fields.filter((f) => f.key.startsWith("litigation_involved")).map((f) => `${f.key}:${f.type}:${f.required}`).sort(), ["litigation_involved:NO:checkbox:true", "litigation_involved:YES:checkbox:true"], "a radio group is one tick box per option");
+      assert.equal(read.fields.filter((f) => f.key === "org_chart_attached:YES").length, 1);
+      assert.equal(read.fields.find((f) => f.key === "agent_gst_registered:YES")!.role, "sender");
+      assert.equal(read.fields.find((f) => f.key === "agent_signature_form")!.page, 2);
+      assert.equal(read.fields.filter((f) => f.key.startsWith("ref2_")).length, 6);
+    }
+  }
+  const other = await PdfLib.PDFDocument.create(); other.addPage(); other.addPage();
+  await assert.rejects(onboardingPdf.readBlankTemplate("form", await other.save()), /lacks/);
+});
+test("agent onboarding: values resolve into what the sender prints and what the agent fills; answers come back by key; the term is two years", () => {
+  const box = { page: 1, x: 0.3, y: 0.3, w: 0.3, h: 0.03, required: false, label: "" };
+  const fields = [
+    { ...box, key: "agent_abn_form", type: "text", role: "sender", required: true, value: "{{agent_abn}}" },
+    { ...box, key: "agent_website", type: "text", role: "sender", value: "{{agent_website}}" },
+    { ...box, key: "agent_gst_registered:YES", type: "checkbox", role: "sender", value: "{{agent_gst_registered}}" },
+    { ...box, key: "agent_gst_registered:NO", type: "checkbox", role: "sender", value: "{{agent_gst_registered}}" },
+    { ...box, key: "agent_signatory_name", type: "text", role: "agent", required: true, value: "" },
+    { ...box, key: "admin_signature", type: "signature", role: "sender", value: "{{admin_signature}}" },
+    { ...box, key: "admin_witness_name", type: "text", role: "sender", value: "{{admin_witness_name}}" },
+    { ...box, key: "agreement_commencement_date", type: "text", role: "sender", value: "{{agreement_commencement_date}}" },
+    { ...box, key: "agent_commission_percent", type: "text", role: "sender", value: "{{agent_commission_percent}}" },
+  ] as Parameters<typeof onboarding.resolveFields>[0];
+  const r = onboarding.resolveFields(fields, { agent_abn: "12345678901", agent_gst_registered: "YES", agent_signatory_name: "Ravi Kumar", admin_signature: "data:image/png;base64,x", agreement_commencement_date: "2026-11-17", agent_commission_percent: "25" });
+  assert.deepEqual(r.printed.map((f) => `${f.key}=${f.value}`), ["agent_abn_form=12 345 678 901", "agent_gst_registered:YES=true", "admin_signature=data:image/png;base64,x", "agreement_commencement_date=17/11/2026", "agent_commission_percent=25%"]);
+  assert.deepEqual(r.recipient.map((f) => `${f.key}:${f.role}:${f.required}:${f.value}`), ["agent_website:agent:false:", "agent_signatory_name:agent:true:Ravi Kumar"], "no website on record: the agent's optional field; the signatory prefilled");
+  assert.deepEqual(onboarding.collectAnswers([{ key: "litigation_involved:YES", type: "checkbox", value: "true" }, { key: "litigation_involved:NO", type: "checkbox", value: "false" },
+    { key: "ref1_email", type: "text", value: " a@b.test " }, { key: "agent_signature_form", type: "signature", value: "signed" }, { key: "agent_signed_date_form", type: "date", value: "17/11/2026" }]),
+    { litigation_involved: "YES", ref1_email: "a@b.test", agent_signed_date: "17/11/2026" });
+  assert.equal(onboarding.expiryDate("2026-11-17"), "2028-11-16");
+  assert.equal(onboarding.expiryDate("2028-02-29"), "2030-02-28", "no 29 February two years on: the anniversary is 1 March, the term ends the day before");
+  assert.deepEqual(onboarding.acroFieldName("eatc_completed:NO"), { name: "eatc_completed_no", option: null });
+  assert.deepEqual(onboarding.acroFieldName("works_with_sub_agents:NO"), { name: "works_with_sub_agents", option: "Choice2" });
+  assert.equal(onboarding.registryKey("form", "agent_abn", null), "agent_abn_form");
+  assert.equal(onboarding.registryKey("agreement", "agent_abn", null), "agent_abn");
+  assert.equal(signingPdf.layoutText({ widthOfTextAtSize: (t: string, s: number) => t.length * s * 0.5 } as never, "a long answer that will not fit on one line of this box", 100, 30).lines.length > 1, true, "a long answer wraps in a tall box");
+});
+test("agent onboarding: install stores both blanks as PDF templates; send merges them into one request with the sender's values printed and the agent's fields placed; signing splits the signed PDF back", async () => {
+  const stored = new Map<string, Uint8Array>(); const saved: Array<Record<string, unknown>> = []; const rpcs: Array<[string, Record<string, unknown>]> = [];
+  let created: Record<string, unknown> | null = null; let sent: Record<string, unknown> | null = null; let n = 0;
+  const templates = () => saved.map((t, i) => ({ id: t.id, systemKey: i === 0 ? "agent_application_form" : "agent_agreement", status: "active", sourcePath: t.source_path, sourceHash: t.source_hash, sourcePages: t.source_pages, fields: t.fields, expiryDays: 30, reminderDays: 3 }));
+  const ports = { isServiceCaller: false, later: () => undefined, letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+    admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
+      if (action === "subject_search") return [];
+      if (action === "template_save") { saved.push({ ...data, id }); return { id }; }
+      if (action === "create") { created = { ...data, id }; return { id, reference: "SLIT-2026-000777" }; }
+      if (action === "send") { sent = { id }; return { id, state: "sent" }; }
+      throw new Error(`unexpected ${action}`);
+    },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agency_onboarding_template_register") return { id: args.p_template };
+      if (name === "agency_onboarding_templates") return templates();
+      if (name === "agency_onboarding_prepare") return { agency: { id: args.p_agency, name: "Acme Education Pty Ltd", abn: null }, agent: { id: "10000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" },
+        admin: { name: "Hari Admin", position: "", signaturePng: null }, values: { agent_organisation_name: "Acme Education Pty Ltd", agent_abn: "12345678901", agent_agency_name: "Acme Education Pty Ltd", contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", agent_signatory_name: "Ravi Kumar", declarant_name: "Ravi Kumar" } };
+      if (name === "agency_onboarding_create") return { id: "20000000-0000-4000-8000-000000000001", reference: "SLIT-2026-000777" };
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    service: async () => true,
+    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: null, config: { from: null, adminTo: [], siteUrl: "", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const call = (body: Record<string, unknown>, upload: { name: string; bytes: Uint8Array } | null = null) => signingCore.handleSigning({ body, upload, ip: null, userAgent: null }, ports);
+  await assert.rejects(call({ action: "agent_onboarding_send", agencyId: "30000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India", commissionPercent: "25", adminPosition: "CEO" }), /Install the agent onboarding templates first/);
+  await assert.rejects(call({ action: "agent_onboarding_install", which: "form" }, { name: "x.pdf", bytes: blankBytes("agreement") }), /checksum mismatch/);
+  const form = await call({ action: "agent_onboarding_install", which: "form" }, { name: "f.pdf", bytes: blankBytes("form") }) as { fields: number; pages: number };
+  const agreement = await call({ action: "agent_onboarding_install", which: "agreement" }, { name: "a.pdf", bytes: blankBytes("agreement") }) as { fields: number; pages: number };
+  assert.equal(form.pages, 2); assert.equal(agreement.pages, 13);
+  assert.deepEqual(saved.map((t) => `${t.kind}:${t.audience}:${t.category}:${(t.roles as unknown[]).length}`), ["pdf:agent:other:1", "pdf:agent:agency_agreement:1"]);
+  assert.deepEqual(rpcs.filter(([name]) => name === "agency_onboarding_template_register").map(([, a]) => a.p_key), ["agent_application_form", "agent_agreement"]);
+  const result = await call({ action: "agent_onboarding_send", agencyId: "30000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India and Nepal", commissionPercent: "25", adminPosition: "Chief Executive Officer",
+    adminSignature: { kind: "typed", name: "Hari Admin" }, message: "Welcome aboard" }) as { id: string; sent: boolean; warning?: string; fields: number; printed: number };
+  assert.equal(result.sent, false, "no mail provider in the test: the request is kept as a draft"); assert.match(result.warning ?? "", /not configured/);
+  assert.equal(sent, null);
+  const request = created as unknown as { title: string; subject_type: string; subject_id: string; category: string; recipients: Array<{ email: string; role: string }>; fields: Array<{ key: string; role: string; page: number; type: string; required: boolean; value: string }>; field_values: Record<string, string> };
+  assert.equal(request.title, "Agent onboarding documents: Acme Education Pty Ltd");
+  assert.ok(request.subject_type === "agent" && request.category === "agency_agreement" && request.recipients[0].email === "ravi@example.test" && request.recipients[0].role === "agent");
+  assert.ok(request.fields.every((f) => f.role === "agent" && f.page >= 1 && f.page <= 15), "every placed field is the agent's, on one of the 15 pages");
+  assert.ok(request.fields.some((f) => f.key === "agent_signature" && f.page === 13 && f.type === "signature"), "the agreement's signature sits on page 11 + 2");
+  assert.ok(request.fields.some((f) => f.key === "agent_signature_form" && f.page === 2));
+  assert.ok(request.fields.some((f) => f.key === "litigation_involved:YES" && f.required) && request.fields.some((f) => f.key === "ref2_email" && f.required));
+  assert.equal(request.fields.find((f) => f.key === "agent_signatory_name")!.value, "Ravi Kumar", "prefilled, editable by the agent");
+  assert.ok(request.fields.some((f) => f.key === "agent_website" && !f.required), "no website on record: the agent may type it");
+  assert.ok(!request.fields.some((f) => f.key === "contact_email"), "the email we hold is printed, not asked");
+  assert.equal(request.field_values.admin_signature, undefined, "the signature never goes into the stored values");
+  assert.equal(request.field_values.agent_territory, "India and Nepal");
+  const onboardingCall = rpcs.find(([name]) => name === "agency_onboarding_create")![1].p_data as Record<string, unknown>;
+  assert.equal(onboardingCall.form_pages, 2); assert.equal(onboardingCall.expiry_date, "2028-11-16"); assert.equal(onboardingCall.commission_percent, "25");
+  const original = stored.get(`${result.id}/original.pdf`)!;
+  assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the form's 2 pages then the agreement's 13");
+  const text = await pdfText(original);
+  const on = (needle: string) => text.filter((t) => t.text.includes(needle)).map((t) => t.page);
+  assert.deepEqual([...new Set(on("Acme Education Pty Ltd"))].sort((a, b) => a - b), [1, 3, 12, 13], "the agency name prints on the form and on the agreement's pages 1, 10 and 11");
+  assert.ok(on("12 345 678 901").includes(1) && on("12 345 678 901").includes(3), "the ABN prints on both documents");
+  assert.ok(on("17/11/2026").includes(13) && on("India and Nepal").includes(13) && on("25%").includes(13) && on("Chief Executive Officer").includes(13), "Items 3 to 5 and the signatory print on the agreement");
+  assert.ok(on("Hari Admin").includes(13), "the typed SLIT signature prints");
+  // Signing: the agent's signature goes on both documents; completion splits the signed PDF back into the two files.
+  const recipient = { id: "r1", name: "Ravi Kumar", email: "ravi@example.test", role: "Agent", state: "sent" };
+  const fieldRows = request.fields.map((f, i) => ({ id: `f${i}`, recipient_id: "r1", type: f.type, page: f.page, x: 0.5, y: 0.8, w: 0.3, h: 0.03, label: f.key, key: f.key, value: f.value, required: f.required }));
+  const record = { id: result.id, state: "sent", original_hash: await signingCore.sha256Hex(original), recipient, fields: fieldRows, signers: [], onboarding: { id: "o1", formPages: 2, agencyName: "Acme" } };
+  let signData: Record<string, unknown> | null = null;
+  const linkPorts = { ...ports, service: async (action: string, args: { data?: Record<string, unknown> }) => {
+    if (action === "rate") return true;
+    if (action === "open") return record;
+    if (action === "sign_plan") return { id: result.id, reference: "SLIT-2026-000777", title: request.title, revision: 1, complete: true, signed_at: "2026-11-17T01:00:00Z", original_path: `${result.id}/original.pdf`, original_hash: record.original_hash,
+      created_at: "2026-11-17T00:00:00Z", sent_at: "2026-11-17T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: { formPages: 2 },
+      fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String(args.data?.values && (args.data.values as Record<string, string>)[f.id] === "true") : f.type === "date" ? "17/11/2026" : f.value || ((args.data?.values as Record<string, string>)?.[f.id] ?? "") })),
+      recipients: [{ ...recipient, state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-17T01:00:00Z", signature_kind: "typed" }], events: [] };
+    if (action === "sign") { signData = args.data ?? null; return { state: "signed" }; }
+    if (action === "path_referenced") return false;
+    throw new Error(`unexpected ${action}`);
+  } } as typeof ports;
+  const values = Object.fromEntries(fieldRows.filter((f) => f.type === "text").map((f) => [f.id, f.value || "x"]));
+  const yes = fieldRows.find((f) => f.key === "litigation_involved:YES")!.id; values[yes] = "true";
+  const signed = await signingCore.handleSigning({ body: { action: "sign", token: "b".repeat(64), name: "Ravi Kumar", agreed: true, values, documentHash: record.original_hash }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts) as { signed: boolean; complete: boolean };
+  assert.ok(signed.signed && signed.complete);
+  const data = signData as unknown as { form_base64: string; agreement_base64: string; signed_base64: string; certificate_base64: string };
+  assert.ok(data.form_base64 && data.agreement_base64 && data.signed_base64 && data.certificate_base64, "both split documents, the signed file and the certificate go to the database together");
+  const formPdf = await PdfLib.PDFDocument.load(Buffer.from(data.form_base64, "base64")), agreementPdf = await PdfLib.PDFDocument.load(Buffer.from(data.agreement_base64, "base64"));
+  assert.equal(formPdf.getPageCount(), 2); assert.equal(agreementPdf.getPageCount(), 13);
+  const signedText = await pdfText(Uint8Array.from(Buffer.from(data.signed_base64, "base64")));
+  const signatures = signedText.filter((t) => t.text === "Ravi Kumar").map((t) => t.page);
+  assert.ok(signatures.includes(2) && signatures.includes(13), `the one signature is drawn on both documents (pages ${signatures.join(", ")})`);
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

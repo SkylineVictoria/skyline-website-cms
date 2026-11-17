@@ -1,6 +1,7 @@
 import { Link, Navigate, useParams } from "react-router-dom";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
+import LmsCompletionPage from "./LmsCompletionPage";
 import LmsBatchesPage from "./LmsBatchesPage";
 import LmsIntakesPage from "./LmsIntakesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
@@ -33,6 +34,7 @@ export default function LmsPage() {
   if (area === "timetable-templates") return <LmsTimetableTemplatesPage />;
   if (area === "room-grid") return <Navigate to="/admin/lms/timetable" replace />;
   if (area === "attendance") return <LmsAttendancePage />;
+  if (area === "completion") return <LmsCompletionPage />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],
     attendance: [{ label: "Open batch and student list", to: "/admin/intakes", note: "Student attendance requires a dedicated dated-session register before marking can be enabled." }],

@@ -128,7 +128,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
           }} />
       ) : null}
       {picker !== null && detail ? (
-        <StudentPicker courseId={detail.intake.courseId} intakeId={detail.intake.id} batchId={picker || undefined} rtoManager={canEdit}
+        <StudentPicker courseId={detail.intake.courseId} intakeId={detail.intake.id} joinFrom={detail.intake.startDate} joinTo={detail.intake.endDate} batchId={picker || undefined} rtoManager={canEdit}
           batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
           onClose={() => setPicker(null)}
           onAdded={({ out, batchId, studentIds, names }: StudentsAdded) => {

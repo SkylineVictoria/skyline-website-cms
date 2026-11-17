@@ -2,7 +2,7 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(49);
+select plan(54);
 
 create temp table t(k text primary key, v text);
 grant all on t to public;
@@ -141,6 +141,16 @@ select is((select count(*)::int from public.batch_enrolments e join public.batch
 select ok((select public.rto_batch_place('unplaced') @> jsonb_build_array(jsonb_build_object('studentId', 'e6000000-0000-0000-0000-000000000011')) is not null
  and exists(select 1 from jsonb_array_elements(public.rto_batch_place('unplaced')) x where x->>'studentId' = 'e6000000-0000-0000-0000-000000000011')), 'and lists the student under "needs a batch"');
 select ok(not exists(select 1 from jsonb_array_elements(public.rto_batch_place('unplaced')) x where x->>'studentId' = 'e6000000-0000-0000-0000-000000000010'), 'a placed student is not listed');
+
+-- ---------------------------------------------------------------- Joins on (20261118110000)
+insert into public.batches(id, intake_id, name, capacity) values ('f6000000-0000-0000-0000-000000000020', 'f6000000-0000-0000-0000-000000000001', 'JT', 5);
+select is((select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date - 5))->>'joinedOn', (current_date - 5)::text, 'a student joins a chosen batch on a chosen day');
+select is((select enrolled_on from public.batch_enrolments where batch_id = 'f6000000-0000-0000-0000-000000000020' and student_id = 'e6000000-0000-0000-0000-000000000012'), current_date - 5, 'and the enrolment records that day');
+select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date - 60)$$, '22023', null, 'joining before the intake starts is refused');
+select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012', 'CoE', current_date + 400)$$, '22023', null, 'joining after the intake ends is refused');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000002');
+select throws_ok($$select public.rto_batch_join('f6000000-0000-0000-0000-000000000020', 'e6000000-0000-0000-0000-000000000012')$$, '42501', 'Only an Admin or an RTO Manager can place students.', 'an editor cannot place students on a day');
+select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
 
 -- ---------------------------------------------------------------- the two patched functions
 select ok(pg_get_functiondef('public.rto_carry_over_plan(uuid, text)'::regprocedure) like '%rto_batch_pick(n.id%', 'the carry-over planner picks batches by free seats');

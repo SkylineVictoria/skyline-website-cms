@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Button, Select, Toggle } from "@/pages/admin/components/ui";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
-import { rto, rtoPlace, type EnrolmentType, type IntakeDetail, type Placed, type StudentOption } from "@/pages/admin/lib/rto";
+import { rto, rtoJoin, rtoPlace, type EnrolmentType, type IntakeDetail, type Placed, type StudentOption } from "@/pages/admin/lib/rto";
 
 export interface PickerBatch { id: string; name: string; capacity: number | null; enrolled: number; studentIds: string[] }
 export interface StudentsAdded { out: IntakeDetail; batchId: string; studentIds: string[]; names: string[] }
 
-export default function StudentPicker({ courseId, intakeId, batches, batchId, rtoManager, onClose, onAdded }: {
+export default function StudentPicker({ courseId, intakeId, batches, batchId, rtoManager, onClose, onAdded, joinFrom, joinTo }: {
+  /** The intake's first and last day: "Joins on" stays inside them. */
+  joinFrom?: string; joinTo?: string | null;
   courseId: string; intakeId?: string; batches: PickerBatch[]; batchId?: string; rtoManager: boolean; onClose: () => void; onAdded: (added: StudentsAdded) => void;
 }) {
   // "auto": the first batch with a free seat; when every batch is full a new one is opened (G2, G3, ...).
@@ -19,6 +21,9 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
   const [found, setFound] = useState<StudentOption[] | null>(null);
   const [picked, setPicked] = useState<Map<string, StudentOption>>(new Map());
   const [type, setType] = useState<EnrolmentType>("CoE");
+  const today = new Date().toISOString().slice(0, 10);
+  const [joinOn, setJoinOn] = useState(today);
+  const dated = !!joinOn && joinOn !== today;
   const [cursor, setCursor] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -49,9 +54,16 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
       const ids = [...picked.keys()];
       if (target === "auto" && intakeId) {
         let last = "";
-        for (const id of ids) last = (await rtoPlace<Placed>("assign", { studentId: id, intakeId, type })).batchId;
+        for (const id of ids) last = (await rtoPlace<Placed>("assign", { studentId: id, intakeId, type, ...(dated ? { on: joinOn } : {}) })).batchId;
         const out = await rto<IntakeDetail>("intake_get", { intakeId });
         onAdded({ out, batchId: last, studentIds: ids, names: [...picked.values()].map((s) => s.name) });
+        return;
+      }
+      if (dated) {
+        let joinedIntake = intakeId ?? "";
+        for (const id of ids) joinedIntake = (await rtoJoin(target, id, type, joinOn)).intakeId;
+        const out = await rto<IntakeDetail>("intake_get", { intakeId: joinedIntake });
+        onAdded({ out, batchId: target, studentIds: ids, names: [...picked.values()].map((s) => s.name) });
         return;
       }
       const out = await rto<IntakeDetail>("enrol", { batchId: target, students: ids.map((id) => ({ id, type })) });
@@ -109,6 +121,7 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
         <div className="space-y-2 border-t border-background-200 bg-background-100/60 px-4 py-3">
           <ErrorNote text={error} />
           {rtoManager ? <Toggle checked={all} onChange={setAll} label="Also show students who have not applied for this course" /> : null}
+          {dated ? <p className="text-xs text-foreground-600">They join on {new Date(joinOn + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}: units that finish before then are skipped and a seat is held only from that day.</p> : null}
           {tooMany ? <p className="text-xs text-amber-800">{batch?.name} has {free} place{free === 1 ? "" : "s"} left.</p> : null}
           <div className="flex flex-wrap items-center gap-2">
             <Select aria-label="Batch" className="w-auto" value={target} onChange={(e) => setTarget(e.target.value)}>
@@ -118,7 +131,11 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
             <Select aria-label="How they study" className="w-auto" value={type} onChange={(e) => setType(e.target.value as EnrolmentType)}>
               <option value="CoE">CoE</option><option value="VoE">VoE</option><option value="Domestic">Domestic</option>
             </Select>
-            <Button className="ml-auto" disabled={busy || !picked.size || !target || tooMany} onClick={() => void add()}>
+            <label className="flex items-center gap-2 text-sm text-foreground-700">Joins on
+              <input type="date" aria-label="Joins on" className="rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" value={joinOn} min={joinFrom} max={joinTo ?? undefined}
+                onChange={(e) => setJoinOn(e.target.value)} />
+            </label>
+            <Button className="ml-auto" disabled={busy || !joinOn || !picked.size || !target || tooMany} onClick={() => void add()}>
               {busy ? "Adding…" : picked.size ? `Add ${picked.size} student${picked.size === 1 ? "" : "s"}` : "Add students"}
             </Button>
           </div>

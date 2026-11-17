@@ -186,7 +186,7 @@ export default function BatchPage() {
           }} />
       ) : null}
       {picker ? (
-        <StudentPicker courseId={i.courseId} batchId={b.id} rtoManager={canEdit}
+        <StudentPicker courseId={i.courseId} batchId={b.id} rtoManager={canEdit} joinFrom={i.startDate} joinTo={i.endDate}
           batches={[{ id: b.id, name: b.name, capacity: b.capacity, enrolled: students.length, studentIds: students.map((s) => s.id) }]}
           onClose={() => setPicker(false)}
           onAdded={({ out, studentIds, names }: StudentsAdded) => {

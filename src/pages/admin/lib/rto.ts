@@ -111,6 +111,12 @@ export async function rtoPlace<T>(action: string, data: Record<string, unknown> 
   if (error) throw new Error(error.message);
   return out as T;
 }
+/** Place a student in a chosen batch from a chosen day (public.rto_batch_join). */
+export async function rtoJoin(batchId: string, studentId: string, type: string, on: string): Promise<{ batchId: string; intakeId: string; joinedOn: string }> {
+  const { data: out, error } = await supabase.rpc("rto_batch_join", { p_batch: batchId, p_student: studentId, p_type: type, p_on: on });
+  if (error) throw new Error(error.message);
+  return out as { batchId: string; intakeId: string; joinedOn: string };
+}
 export interface ClassDefaults { courseId: string; seats: number | null; classroomId: string | null; sessions: Array<{ weekday: number; startTime: string; endTime: string; type: SessionType }> }
 export interface Placed { enrolmentId: string; batchId: string; batch: string; intakeId: string; seats: number; occupied: number; openedBatch: boolean }
 export interface UnplacedStudent { studentId: string; name: string; intakeId: string; courseId: string; course: string; intakeStart: string }

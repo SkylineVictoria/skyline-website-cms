@@ -39,15 +39,21 @@ export default function AgencyAgreementCard({ agencyId, className = "" }: { agen
     try { await openOnboardingFile(id, kind); } catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); } finally { setBusy(""); }
   };
   const signed = data.documents.filter((d) => d.status === "signed");
+  const latest = data.documents[0];
+  // An onboarding under way (a first one, or a renewal while an earlier agreement is still in force) shows its stage; otherwise the agreement.
+  const inProgress = latest && latest.status !== "signed" && !["agreement_signed", "cancelled", "expired"].includes(latest.stage);
+  const badge = inProgress
+    ? latest.stage === "references_pending" ? `Waiting for referees (${latest.referees.received} of ${latest.referees.total || 2})` : latest.stage === "references_received" ? "References received" : latest.stage === "agreement_sent" ? "Agreement to sign" : "In progress"
+    : data.agreementStatus === "signed" ? "Signed" : "Not signed yet";
   return <section className={`rounded-xl border border-background-300 bg-background-50 p-5 ${className}`} data-testid="agency-agreement">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-base font-semibold">Agent agreement</h2>
-      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${data.agreementStatus === "signed" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`} data-testid="agency-agreement-stage">
-        {data.agreementStatus === "signed" ? "Signed" : data.documents[0]?.stage === "references_pending" ? `Waiting for referees (${data.documents[0].referees.received} of ${data.documents[0].referees.total || 2})` : data.documents[0]?.stage === "references_received" ? "References received" : "In progress"}</span>
+      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${!inProgress && data.agreementStatus === "signed" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`} data-testid="agency-agreement-stage">{badge}</span>
     </div>
+    {inProgress ? <p className="mt-1 text-sm text-foreground-700" data-testid="agency-agreement-sentence">{stageSentence(latest)}</p> : null}
     {data.agreementStatus === "signed" && data.commencementDate
-      ? <p className="mt-1 text-sm text-foreground-700">In force from {formatAuDate(data.commencementDate)} to {formatAuDate(data.expiryDate)}.</p>
-      : <p className="mt-1 text-sm text-foreground-700">{(data.documents[0] && stageSentence(data.documents[0])) || "Open the onboarding documents under \"Documents to sign\" above."}</p>}
+      ? <p className="mt-1 text-sm text-foreground-700">{inProgress ? "Your current agreement is in force" : "In force"} from {formatAuDate(data.commencementDate)} to {formatAuDate(data.expiryDate)}.</p>
+      : !inProgress ? <p className="mt-1 text-sm text-foreground-700">{(latest && stageSentence(latest)) || "Open the onboarding documents under \"Documents to sign\" above."}</p> : null}
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {signed.length > 0 && <ul className="mt-2 divide-y divide-background-200 text-sm">{signed.map((d) => <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
       <span>Signed {d.signedAt ? new Date(d.signedAt).toLocaleDateString() : ""} · {formatAuDate(d.commencementDate)} to {formatAuDate(d.expiryDate)}</span>

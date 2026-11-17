@@ -1327,7 +1327,7 @@ update hr.sign_requests set state='void', closed_reason='test' where id='7300000
 select is((select status||':'||closed_reason from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000002'),'closed:void','a voided request closes its onboarding');
 update public.agency_onboarding set created_at = now() - interval '1 hour' where application_request_id='73000000-0000-0000-0000-000000000002';
 select is((select status from public.agency_onboarding where request_id='73000000-0000-0000-0000-000000000001'),'signed','the signed one is untouched');
--- Agent onboarding in stages (migration 20261117130000): the form alone, the referees it names, their checks made from the database,
+-- Agent onboarding in stages (migration 20261117140000): the form alone, the referees it names, their checks made from the database,
 -- References received by signature or by upload, the agreement gated (or an override with a reason), legacy rows untouched, members
 -- never see a referee's form. Direct table reads stay outside the authenticated role; pg_temp helpers give ids to the member checks.
 create function pg_temp.onb2(p_request uuid) returns uuid language sql stable security definer as $$ select id from public.agency_onboarding where application_request_id = p_request $$;

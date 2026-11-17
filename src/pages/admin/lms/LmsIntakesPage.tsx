@@ -202,7 +202,7 @@ export default function LmsIntakesPage() {
         </>}
       </section>
       {canAllocate && (allocationIntake
-        ? <IntakeStudentAllocation key={allocationIntake.id} courseId={courseId} intakeId={allocationIntake.id} changed={refreshCounts} intakeRevision={countRevision} calendarRevision={calendarRevision} />
+        ? <IntakeStudentAllocation key={allocationIntake.id} courseId={courseId} intakeId={allocationIntake.id} changed={refreshCounts} intakeRevision={countRevision} calendarRevision={calendarRevision} showMonthCalendar />
         : <>
           <section className={card + " min-w-0 p-3"} aria-label="Unit calendar">
             <h2 className="mb-2 text-sm font-bold text-foreground-950">Unit calendar</h2>
@@ -268,7 +268,17 @@ export default function LmsIntakesPage() {
         setIntakePicker(null);
         refreshCounts();
       }} />}
-    <NewIntakeDrawer open={creating && canEdit} onClose={() => setCreating(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined}
-      onCreated={(created: IntakeDetail) => { setCreating(false); chooseCourse(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); }} />
+    <NewIntakeDrawer open={creating && canEdit} onClose={() => setCreating(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined} allowBatch={false} requireUnitSchedule
+      onCreated={(created: IntakeDetail) => {
+        setCreating(false);
+        setCourseId(created.intake.courseId);
+        setIntakes(previous => previous.some(i => i.id === created.intake.id)
+          ? previous.map(i => i.id === created.intake.id ? created.intake : i)
+          : [...previous, created.intake]);
+        setSearch("");
+        selectAllocationIntake(created.intake.id);
+        setNotice(`${created.intake.name} created with ${created.schedule.length} scheduled units.`);
+        void load();
+      }} />
   </div>;
 }

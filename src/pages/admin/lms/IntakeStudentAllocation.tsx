@@ -7,6 +7,8 @@ import {
 } from "@/pages/admin/lib/intakeStudents";
 import { rto, shortDate, todayIso, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
 
+import IntakeMonthCalendar from "./IntakeMonthCalendar";
+
 const panel = "min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm";
 const secondary = "rounded-lg border border-background-300 px-3 py-2 text-xs font-semibold hover:bg-background-100 disabled:opacity-50";
 const primary = "rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50";
@@ -176,13 +178,14 @@ function StudentRoster({ courseId, intakeId, unitId, revision, changed }: Requir
   </>;
 }
 
-export default function IntakeStudentAllocation({ courseId, intakeId, changed, schedule, intakeRevision = 0, calendarRevision = 0 }: {
+export default function IntakeStudentAllocation({ courseId, intakeId, changed, schedule, intakeRevision = 0, calendarRevision = 0, showMonthCalendar = false }: {
   courseId: string;
   intakeId: string;
   changed: () => void;
   schedule?: ScheduleRow[];
   intakeRevision?: number;
   calendarRevision?: number;
+  showMonthCalendar?: boolean;
 }) {
   const [units, setUnits] = useState<AllocationUnit[] | null>(null);
   const [unitId, setUnitId] = useState<string>();
@@ -227,7 +230,10 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed, s
 
   return <>
     <section className={panel} aria-label="Unit calendar">
-      <h2 className="mb-2 px-1 text-sm font-bold text-foreground-950">Unit calendar</h2>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-1 px-1">
+        <h2 className="text-sm font-bold text-foreground-950">Unit calendar</h2>
+        {showMonthCalendar && actualSchedule !== null && <a href="#intake-calendar" className="text-xs font-semibold text-primary-700 underline">Month view</a>}
+      </div>
       {calendarError ? <p role="alert" className="mb-2 px-1 text-xs text-red-700">
         Could not load unit dates. <button type="button" className="underline" onClick={() => {
           setCalendarError(""); setCalendarRetry(value => value + 1);
@@ -274,6 +280,12 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed, s
       <StudentRoster key={unit?.id ?? "intake"} courseId={courseId} intakeId={intakeId} unitId={unit?.id}
         revision={intakeRevision} changed={() => { setNotice("Student removed from the unit."); changed(); }} />
     </section>
+    {showMonthCalendar && actualSchedule !== null && units !== null && <IntakeMonthCalendar
+      schedule={actualSchedule.filter(period => units.some(row => row.id === period.unitId))}
+      onAdd={id => {
+        const row = units.find(item => item.id === id);
+        if (row) { setUnitId(row.id); setNotice(""); setPicker({ unit: row }); }
+      }} />}
     {picker && <IntakeStudentPicker courseId={courseId} intakeId={intakeId} unit={picker.unit} close={() => setPicker(null)} saved={() => {
       setNotice(picker.unit ? "Students allocated to the unit." : "Students enrolled in the intake.");
       setPicker(null);

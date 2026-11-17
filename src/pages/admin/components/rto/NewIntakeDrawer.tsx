@@ -18,7 +18,7 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: "the next free Monday" };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, zIndex }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
@@ -27,6 +27,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   onCreated: (detail: IntakeDetail, addBatch: boolean) => void;
   /** "Create & add batch" is for the LMS pages; the enrolment wizard only creates the intake. */
   allowBatch?: boolean;
+  requireUnitSchedule?: boolean;
   /** Stacking layer when opened over another dialog (the wizard). */
   zIndex?: string;
 }) {
@@ -39,7 +40,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const [busy, setBusy] = useState<"" | "create" | "batch">("");
   const [error, setError] = useState("");
 
-  useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); } }, [open, courseId]);
+  useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); if (requireUnitSchedule) setStart(""); } }, [open, courseId, requireUnitSchedule]);
   useEffect(() => { if (open) listBreaks(chosen || null).then(setBreaks).catch(() => undefined); }, [open, chosen]);
   useEffect(() => {
     if (!open || !chosen) { setCourse(null); return; }
@@ -51,15 +52,17 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
 
   const taken = useMemo(() => new Set((course?.intakes ?? []).map((i) => i.startDate)), [course]);
   const suggestion = useMemo(() => (course ? suggestStart(breaks, taken) : null), [course, breaks, taken]);
-  useEffect(() => { if (suggestion && !touched) setStart(suggestion.date); }, [suggestion, touched]);
+  useEffect(() => { if (suggestion && !touched && !requireUnitSchedule) setStart(suggestion.date); }, [suggestion, touched, requireUnitSchedule]);
 
   const units = (course?.units ?? []).filter((u) => u.isActive);
   const weeks = units.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
   const inBreak = breaks.find((b) => start >= b.startDate && start <= b.endDate);
   const clash = start && taken.has(start);
+  const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak
+    || (requireUnitSchedule && (course?.course.id !== chosen || !units.length));
 
   const create = async (addBatch: boolean) => {
-    if (!chosen || !start || !load) { setError("Choose a course, CoE or VoE, and a start date."); return; }
+    if (blocked) return;
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
       let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "" });
@@ -73,13 +76,13 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   return (
     <Drawer open={open} title="New intake" onClose={onClose} zIndex={zIndex}
       footer={<>
-        <Button variant={allowBatch ? "outline" : undefined} disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : "Create"}</Button>
-        {allowBatch ? <Button disabled={!!busy || !chosen || !start || !load || !!clash || !!inBreak} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button> : null}
+        <Button variant={allowBatch ? "outline" : undefined} disabled={blocked} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : "Create"}</Button>
+        {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (
         <Field label="Course" required>
-          <Select value={chosen} onChange={(e) => { setChosen(e.target.value); setTouched(false); }}>
+          <Select value={chosen} onChange={(e) => { setChosen(e.target.value); setTouched(false); if (requireUnitSchedule) setStart(""); }}>
             <option value="">Choose a course</option>
             {courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </Select>
@@ -96,9 +99,12 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           ))}
         </div>
       </Field>
-      <Field label="Start date" required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
+      <Field label={requireUnitSchedule ? "Intake start date" : "Start date"} required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
         <div className="space-y-2">
           <p className="text-sm font-semibold text-foreground-900">{start ? new Date(start + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "Pick a day below"}</p>
+          {requireUnitSchedule && suggestion && !start && <button type="button" onClick={() => {
+            setStart(suggestion.date); setTouched(true);
+          }} className="text-sm font-semibold text-primary-700 underline">Use {shortDate(suggestion.date)}</button>}
           <BreakDatePicker value={start} onChange={(d) => { setStart(d); setTouched(true); }} breaks={breaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
         </div>
       </Field>
@@ -108,7 +114,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
         <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">
           {units.length
             ? <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It is active as soon as it is created.</>
-            : <>This course has no units yet, so the intake starts without a timeline. Add the units in the course’s Units &amp; Timetable step.</>}
+            : <>{requireUnitSchedule ? "Add active units to this course before creating its intake calendar." : "This course has no units yet. Add the units in the course’s Units & Timetable step."}</>}
         </p>
       ) : chosen ? <p className="text-sm text-foreground-500">Loading the course…</p> : null}
     </Drawer>

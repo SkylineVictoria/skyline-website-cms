@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, ConfirmDialog, TextInput } from "@/pages/admin/components/ui";
 import { listHolidays } from "@/lib/hrmsApi";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { addDays, daysBetween, listBreaks, parseDay, registeredWeeks, shortDate, todayIso, weeksOf, type AcademicBreak, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
 
 const ROW = 56; // px, the same in both columns
@@ -82,6 +83,29 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
     return out;
   }, [months, first, px]);
 
+  // ---- order: a unit moves up or down one place; the units keep their lengths and the gaps between slots, so the dates are laid out again.
+  const [needs, setNeeds] = useState<Record<string, { id: string; code: string }[]>>({});
+  useEffect(() => {
+    let live = true;
+    void supabase.rpc("rto_course_prereqs", { p_course: detail.intake.courseId }).then(({ data }) => { if (live && data) setNeeds(data as Record<string, { id: string; code: string }[]>); });
+    return () => { live = false; };
+  }, [detail.intake.courseId]);
+  const move = (index: number, dir: -1 | 1) => setRows((list) => {
+    const to = index + dir;
+    if (to < 0 || to >= list.length) return list;
+    const spans = list.map((r) => daysBetween(r.startDate, r.endDate));
+    const gaps = list.slice(0, -1).map((r, x) => daysBetween(r.endDate, list[x + 1].startDate));
+    const order = list.map((_, x) => x);
+    [order[index], order[to]] = [order[to], order[index]];
+    let cursor = list[0].startDate;
+    return order.map((from, k) => {
+      const startDate = k === 0 ? list[0].startDate : cursor;
+      const endDate = addDays(startDate, spans[from]);
+      cursor = addDays(endDate, gaps[k] ?? 0);
+      return { ...list[from], startDate, endDate };
+    });
+  });
+  const early = rows.flatMap((r, x) => (needs[r.unitId] ?? []).filter((n) => rows.findIndex((y) => y.unitId === n.id) > x).map((n) => `${r.code} needs ${n.code} first`));
   // ---- edits: move a unit (later units follow) or change its end (later units follow)
   const shift = (index: number, startDays: number, endDays: number) => setRows((list) => list.map((r, x) => {
     if (x < index) return r;
@@ -167,6 +191,11 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
           {shortDate(first)} – {shortDate(last)} · {weeks} weeks · {rows.length} units · {i.enrolled}{i.capacity ? ` / ${i.capacity}` : ""} enrolled{hours ? ` · ${hours} hours` : ""}
           {intakeDiffers ? <span className="text-foreground-500"> · intake dates {shortDate(i.startDate)} – {shortDate(i.endDate)}</span> : null}
         </p>
+        {early.length ? (
+          <div role="status" className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <i className="ri-error-warning-line mr-1" aria-hidden="true" />A unit is taught before its prerequisite: {early.join("; ")}. Students would have to take them in this order; move the prerequisite up.
+          </div>
+        ) : null}
         {registered && weeks && registered !== weeks ? (
           <div role="status" className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <span><i className="ri-error-warning-line mr-1" aria-hidden="true" />Schedule is {weeks} weeks; course duration is {registered} weeks. CoE dates should match the registered duration.</span>
@@ -182,8 +211,14 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
           {rows.map((r, idx) => {
             const s = shown(r, idx);
             return (
-              <div key={r.id} className="relative flex min-w-0 flex-col justify-center border-t border-background-100 px-4" style={{ height: ROW }}>
+              <div key={r.id} className="relative flex min-w-0 flex-col justify-center border-t border-background-100 pl-4 pr-10" style={{ height: ROW }}>
                 <p className="line-clamp-2 min-w-0 text-label leading-tight text-foreground-800" title={`${r.code} ${r.name}`}><strong className="font-semibold text-foreground-950">{r.code}</strong> {r.name}</p>
+                {readOnly ? null : (
+                  <span className="absolute right-2 top-1/2 flex -translate-y-1/2 flex-col">
+                    <button type="button" aria-label={`Move ${r.code} up`} title="Move up" disabled={idx === 0 || busy} onClick={() => move(idx, -1)} className="flex h-5 w-6 items-center justify-center rounded text-foreground-500 hover:bg-background-100 hover:text-foreground-900 disabled:opacity-25"><i className="ri-arrow-up-s-line" aria-hidden="true" /></button>
+                    <button type="button" aria-label={`Move ${r.code} down`} title="Move down" disabled={idx === rows.length - 1 || busy} onClick={() => move(idx, 1)} className="flex h-5 w-6 items-center justify-center rounded text-foreground-500 hover:bg-background-100 hover:text-foreground-900 disabled:opacity-25"><i className="ri-arrow-down-s-line" aria-hidden="true" /></button>
+                  </span>
+                )}
                 <button type="button" disabled={readOnly} onClick={() => setPopover((p) => (p === idx ? null : idx))}
                   className={`mt-0.5 self-start text-xs tabular-nums ${readOnly ? "text-foreground-500" : "text-primary-700 hover:underline"}`}>
                   {dayMonth(s.start)} – {shortDate(s.end)} · {weeksOf(s.start, s.end)} wks
@@ -248,7 +283,7 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2 bg-amber-200" />Public holiday</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 bg-sky-200" />Term break</span>
         <span className="flex items-center gap-1.5"><span className="h-3 border-l-2 border-red-400" />Today</span>
-        {readOnly ? null : <span className="text-foreground-500">Drag a bar to move it, its right edge to change its length; later units follow.{autosave ? " Changes save when you let go." : ""}</span>}
+        {readOnly ? null : <span className="text-foreground-500">Use the arrows to change the order, drag a bar to move it, its right edge to change its length; later units follow.{autosave ? " Changes save when you let go." : ""}</span>}
       </div>
 
       {/* sticky footer */}

@@ -72,6 +72,8 @@ async function call<T>(fn: string, params: Record<string, unknown>, fallback: st
 export const agentAgreementTemplate = () => call<{ id: string; name: string; kind: string; roles: Array<{ key: string; label?: string }>; version: number } | null>("agent_agreement_template", {}, "We could not check the agreement template.");
 /** Who may countersign an agent's agreement for SLIT: the active CMS Admins (me = the person looking). */
 export const agentAgreementCountersigners = () => call<Array<{ id: string; name: string; email: string; me: boolean }>>("agent_agreement_countersigners", {}, "We could not load the administrators.");
+/** Countersign (any administrator, once the agent has signed): the caller becomes the SLIT signer; then their own signing link opens. */
+export const claimCountersign = (onboardingId: string) => call<{ recipientId: string; changed: boolean; countersigner: { name: string; email: string } }>("agency_onboarding_agent_countersign_claim", { p_onboarding: onboardingId }, "The agreement could not be opened for countersigning.");
 /** An agent's agreement in plain words: sent, signed by the agent (awaiting SLIT), fully signed. */
 export function agentAgreementWords(stage: OnboardingStage, requestState: string | null | undefined): string | null {
   if (stage === "agreement_sent") return requestState === "partial" ? "Agent signed (awaiting SLIT)" : "Agreement sent";

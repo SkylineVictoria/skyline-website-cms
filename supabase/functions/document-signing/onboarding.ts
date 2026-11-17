@@ -3,7 +3,7 @@
 // checks go out when the agent has signed the form; staff are told when both referees are back). Everything goes through the Sign
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
-import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, printAbn, printDate, printPercent, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -276,9 +276,14 @@ export async function sendAgentOwnAgreement(ctx: OnboardingContext): Promise<Jso
   if (follow.kind !== "agent") throw new SigningError("This is the business's onboarding: send the business's agreement from its page.");
   if (follow.stage !== "references_received") throw new SigningError("The agreement can be sent once both references are back.");
   if (!follow.agent?.email) throw new SigningError("The agent has no email address.");
+  // What the P06-based agreement prints from the business (refused, never guessed, without an ABN or a signed agreement to copy from):
+  // [Agent Organisation], ABN, Item 1 = the business agreement's commencement (so both terms end together), Item 3, Item 4, the agent's name.
+  const schedule = await ctx.rpc("agent_agreement_schedule", { p_onboarding: onboardingId }) as { businessName: string; abn: string; commencementDate: string; territory: string; commissionPercent: number | string; agentName: string };
+  const values = { agent_organisation_name: text(schedule.businessName, 200), agent_abn: printAbn(String(schedule.abn ?? "")), agreement_commencement_date: printDate(String(schedule.commencementDate ?? "")),
+    agent_territory: text(schedule.territory, 200), agent_commission_percent: printPercent(String(schedule.commissionPercent ?? "")), agent_signatory_name: text(schedule.agentName, 150) };
   const slit = await pickCountersigner(ctx, ctx.body.countersignerId);
   if (slit.email.toLowerCase() === follow.agent.email.toLowerCase()) throw new SigningError("The agent cannot countersign for SLIT.");
-  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null, signingMode: "sequential",
+  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null, signingMode: "sequential", values,
     recipients: [{ name: follow.agent.name, email: follow.agent.email, role: roles[0].key, label: roles[0].label || "Agent", order: 1, required: true },
       { name: slit.name, email: slit.email, role: roles[1].key, label: roles[1].label || "SLIT", order: 2, required: true }] }) as { id: string; reference: string };
   const linked = await ctx.rpc("agency_onboarding_agent_agreement_create", { p_onboarding: onboardingId, p_request: record.id }) as { stage: string };
@@ -293,6 +298,25 @@ export async function changeAgentCountersigner(ctx: OnboardingContext): Promise<
   const changed = await ctx.rpc("agency_onboarding_agent_countersigner_change", { p_onboarding: onboardingId, p_cms_user: slit.id }) as { changed: boolean; invited?: boolean };
   const mail = changed.invited ? await drainSigningMail(ctx.ports) : null;
   return { onboardingId, ...changed, countersigner: { name: slit.name, email: slit.email }, mail };
+}
+/** The agent has signed their agreement: every active administrator is emailed; any of them countersigns from the business page. */
+export async function notifyAdminsToCountersign(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ sent: number }> {
+  const { ports } = ctx;
+  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  if (follow.kind !== "agent" || follow.stage !== "agreement_sent") return { sent: 0 };
+  const { provider, config } = ports.mail;
+  const admins = (await serviceRpc(ports, "agent_agreement_countersigners", {}) ?? []) as Countersigner[];
+  if (!provider || !config.from || !admins.length) return { sent: 0 };
+  const link = config.siteUrl ? `${config.siteUrl.replace(/\/+$/, "")}/admin/businesses/${follow.agency.id}?tab=agents` : "";
+  let sent = 0;
+  for (const person of admins) {
+    const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-countersign-${onboardingId}-${(await sha256Hex(new TextEncoder().encode(person.email))).slice(0, 12)}`, from: config.from, to: person.email,
+      subject: `Countersign needed: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})`,
+      textBody: `Hello ${text(person.name, 80) || "there"},\n\n${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) has signed their individual agent agreement. It now needs a SLIT countersignature; any administrator can give it.\n\n`
+        + `Open Businesses > ${text(follow.agency.name, 120)} > Agents in the CMS and press Countersign${link ? `:\n${link}` : "."}\n\nThe agent can be activated once SLIT has countersigned.` + SIGN_OFF }));
+    if (outcome.state === "sent") sent++;
+  }
+  return { sent };
 }
 /** A signed agreement received outside the Sign module, recorded by an administrator with a reason; an open online request is voided. */
 export async function uploadAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {

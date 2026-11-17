@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(954);
+select plan(967);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1833,6 +1833,41 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select throws_ok($$select public.agency_onboarding_agent_activate(pg_temp.frex())$$,'23514',null,'agreement: the references are still required to activate');
 reset role;
+reset role;
+-- The individual agent agreement made from P06 (migration 20261118104513): the copy, the printed schedule, any administrator countersigns.
+reset role;
+update hr.sign_templates set system_key = null where system_key = 'agent_agreement';
+update hr.sign_templates set deleted_at = now() where category = 'individual_agent_agreement' and deleted_at is null;
+insert into hr.sign_templates(id,name,title,created_by,kind,audience,category,status,source_path,source_hash,source_pages,roles,fields,signing_mode,system_key)
+ values ('7f000000-0000-0000-0000-0000000000c1','Agent Agreement','Education Agent Agreement (P06)','33000000-0000-0000-0000-000000000002','pdf','agent','agency_agreement','active','templates/7f000000-0000-0000-0000-0000000000c1/source.pdf',
+  'cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca',13,'[{"key":"agent","label":"Agent","order":1,"required":true}]','[{"key":"agent_organisation_name","role":"sender","type":"text","page":1,"x":0.1,"y":0.1,"w":0.4,"h":0.02,"value":"{{agent_organisation_name}}"},{"key":"agent_signatory_name","role":"agent","type":"text","page":11,"x":0.5,"y":0.2,"w":0.3,"h":0.02,"value":""},{"key":"agent_signatory_position","role":"agent","type":"text","page":11,"x":0.5,"y":0.25,"w":0.3,"h":0.02,"value":""},{"key":"agent_signature","role":"agent","type":"signature","page":11,"x":0.5,"y":0.15,"w":0.3,"h":0.04,"value":""},{"key":"admin_name","role":"sender","type":"text","page":11,"x":0.1,"y":0.2,"w":0.3,"h":0.02,"value":"{{admin_name}}"},{"key":"admin_position","role":"sender","type":"text","page":11,"x":0.1,"y":0.25,"w":0.3,"h":0.02,"value":"{{admin_position}}"},{"key":"admin_signature","role":"sender","type":"signature","page":11,"x":0.1,"y":0.15,"w":0.3,"h":0.04,"value":"{{admin_signature}}"},{"key":"admin_signed_date","role":"sender","type":"text","page":11,"x":0.1,"y":0.3,"w":0.3,"h":0.02,"value":"{{admin_signed_date}}"},{"key":"admin_witness_name","role":"sender","type":"text","page":11,"x":0.1,"y":0.35,"w":0.3,"h":0.02,"value":"{{admin_witness_name}}"},{"key":"agent_witness_signature","role":"agent","type":"text","page":11,"x":0.5,"y":0.4,"w":0.3,"h":0.02,"value":""}]','sequential','agent_agreement');
+create temp table p06_before as select md5(t::text) h from hr.sign_templates t where id='7f000000-0000-0000-0000-0000000000c1';
+select throws_ok($$select public.agent_agreement_individual_template_create('7f000000-0000-0000-0000-0000000000c2','templates/elsewhere/x.pdf')$$,null,null,'p06 copy: the source file must sit under the new template');
+select is(public.agent_agreement_individual_template_create('7f000000-0000-0000-0000-0000000000c2','templates/7f000000-0000-0000-0000-0000000000c2/source.pdf')->>'created','true','p06 copy: made from the installed Agent Agreement');
+select is((select category||'|'||status||'|'||(roles->0->>'key')||'>'||(roles->1->>'key')||'|'||source_hash from hr.sign_templates where id='7f000000-0000-0000-0000-0000000000c2'),'individual_agent_agreement|active|agent>slit|cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca','p06 copy: Individual agent agreement, Active, Agent then SLIT, the same PDF');
+select is((select string_agg((f->>'key')||'='||(f->>'role')||'/'||(f->>'type')||'/'||coalesce(f->>'value',''), ',' order by f->>'key') from hr.sign_templates t, jsonb_array_elements(t.fields) f where t.id='7f000000-0000-0000-0000-0000000000c2'),
+  'admin_name=slit/name/,admin_position=slit/text/,admin_signature=slit/signature/,admin_signed_date=slit/date/,agent_organisation_name=sender/text/{{agent_organisation_name}},agent_signatory_name=sender/text/{{agent_signatory_name}},agent_signatory_position=sender/text/Agent,agent_signature=agent/signature/','p06 copy: the field mapping (no witness field)');
+select is((select (f->>'required')::boolean from hr.sign_templates t, jsonb_array_elements(t.fields) f where t.id='7f000000-0000-0000-0000-0000000000c2' and f->>'key'='admin_position'),true,'p06 copy: the SLIT officer must type their position');
+select is(public.agent_agreement_individual_template_create(gen_random_uuid(),'x')->>'created','false','p06 copy: made once');
+select is((select md5(t::text) from hr.sign_templates t where id='7f000000-0000-0000-0000-0000000000c1'),(select h from p06_before),'p06 copy: the Agent Agreement template itself is unchanged');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agent_agreement_individual_template_create(gen_random_uuid(),'x')$$,'42501',null,'p06 copy: not callable from the CMS session');
+select throws_ok($$select public.agent_agreement_schedule(pg_temp.frex())$$,'23514',null,'schedule: a business without a signed agreement with territory, commission and commencement is refused');
+reset role;
+update public.agencies set registration_number='' where id='13000000-0000-0000-0000-0000000000f1';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agent_agreement_schedule(pg_temp.frex())$$,'23514',null,'schedule: a business without an ABN is refused');
+select throws_ok($$select public.agency_onboarding_agent_countersign_claim(pg_temp.frex())$$,'22023',null,'countersign: nothing to countersign until the agent has signed');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000f2"}';
+select throws_ok($$select public.agency_onboarding_agent_countersign_claim(pg_temp.frex())$$,'42501',null,'countersign: only a CMS administrator countersigns for SLIT');
+reset role;
+update public.agencies set registration_number='11 111 111 111' where id='13000000-0000-0000-0000-0000000000f1';
+insert into public.agency_onboarding(kind,agency_id,agent_id,stage,status,form_pages,commencement_date,expiry_date,territory,commission_percent,signed_at) values ('business','13000000-0000-0000-0000-0000000000f1',(pg_temp.fa('zed+agent@example.test')).id,'agreement_signed','signed',1,'2026-11-17','2028-11-16','India and Nepal',25,now());
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select x->>'abn'||'|'||(x->>'commencementDate')||'|'||(x->>'territory')||'|'||(x->>'commissionPercent') from (select public.agent_agreement_schedule(pg_temp.frex()) x) q),'11 111 111 111|2026-11-17|India and Nepal|25.00','schedule: copied from the business''s signed agreement');
 reset role;
 select * from finish();
 rollback;

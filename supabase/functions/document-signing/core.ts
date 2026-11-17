@@ -11,7 +11,7 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
-import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
+import { afterCompletion, notifyAdminsToCountersign, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -217,6 +217,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             await ports.later(drainSigningMail(ports));
             // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.
             if (onboarding && after.state === "signed") await ports.later(afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, onboarding).catch(() => undefined));
+            // An agent's own agreement signed by the agent: every administrator is asked to countersign.
+            else if (onboarding && after.state === "partial" && onboarding.kind === "agreement") await ports.later(notifyAdminsToCountersign({ ports }, onboarding.id).catch(() => undefined));
             return { signed: true, complete: after.state === "signed", state: after.state };
           } catch (error) {
             const e = error as RpcError;

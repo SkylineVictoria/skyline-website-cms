@@ -3,8 +3,8 @@ import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { activateOnboardedAgent, addAgentForOnboarding, changeAgentCountersigner, changeReferee, rejectOnboarding, signingMine, sendAgentAgreement, sendAgentApplication, sendAgentOwnAgreement, sendRefereeChecks, signingAction, signingStatus, uploadAgentOwnAgreement, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
-import { ACTIVE_STAGES, AGENT_OPEN_STAGES, agentAgreementCountersigners, agentAgreementTemplate, agentAgreementWords, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
+import { activateOnboardedAgent, addAgentForOnboarding, changeReferee, rejectOnboarding, signingMine, sendAgentAgreement, sendAgentApplication, sendAgentOwnAgreement, sendRefereeChecks, signingAction, signingStatus, uploadAgentOwnAgreement, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
+import { ACTIVE_STAGES, AGENT_OPEN_STAGES, agentAgreementTemplate, agentAgreementWords, claimCountersign, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 
@@ -187,7 +187,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
     </div>
     {agentMode ? <div className="space-y-1 rounded-lg border border-background-200 p-3" data-testid="agent-own-agreement">
       <p className="text-sm font-medium text-foreground-900">3. Individual agent agreement (the agent, then SLIT){agentAgreementWords(row.stage, row.agreement?.state) && !row.agreementUpload ? <span className="ml-2" data-testid="agent-agreement-status"><Badge tone={row.stage === "agreement_signed" ? "success" : "warn"}>{agentAgreementWords(row.stage, row.agreement?.state)}</Badge></span> : null}</p>
-      {row.countersign && !row.agreementUpload ? <p className="text-xs text-foreground-600" data-testid="agent-agreement-countersigner">SLIT signatory: {row.countersign.name} ({row.countersign.email}){row.countersign.state === "signed" ? ` · countersigned ${row.countersign.signedAt ? new Date(row.countersign.signedAt).toLocaleDateString() : ""}` : row.agreement?.state === "partial" ? " · their turn to sign" : " · signs after the agent"}{row.countersign.mine ? " (you)" : ""}</p> : null}
+      {row.countersign && !row.agreementUpload ? <p className="text-xs text-foreground-600" data-testid="agent-agreement-countersigner">SLIT signer: {row.countersign.name} ({row.countersign.email}){row.countersign.state === "signed" ? ` · countersigned ${row.countersign.signedAt ? new Date(row.countersign.signedAt).toLocaleDateString() : ""}` : row.agreement?.state === "partial" ? " · awaiting a countersignature: any administrator can press Countersign" : " · any administrator can countersign once the agent has signed"}{row.countersign.mine ? " (you)" : ""}</p> : null}
       {row.agreementUpload ? <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="agreement-upload-note">Signed copy recorded{row.agreementUpload.by ? ` by ${row.agreementUpload.by}` : ""} on {new Date(row.agreementUpload.at).toLocaleDateString()}{row.agreementUpload.fileName ? ` (${row.agreementUpload.fileName})` : ""}: “{row.agreementUpload.reason}”</p>
         : <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />}
       {row.signedAt && (row.stage === "agreement_signed" || row.stage === "activated") && !row.agreementUpload ? <p className="text-xs text-foreground-600">Signed {new Date(row.signedAt).toLocaleDateString()}{row.signerName ? ` by ${row.signerName}` : ""}.</p> : null}
@@ -223,8 +223,6 @@ export function AgentOnboardings({ businessId, reloadKey = 0, onChanged }: { bus
   const [changing, setChanging] = useState<OnboardingReferee | null>(null);
   const [rejecting, setRejecting] = useState<OnboardingRow | null>(null);
   const [uploading, setUploading] = useState<OnboardingRow | null>(null);
-  // Send agreement / change the SLIT signatory: the picker of active CMS Admins.
-  const [signatory, setSignatory] = useState<{ row: OnboardingRow; mode: "send" | "change" } | null>(null);
   // The template Send agreement uses (CMS > Templates, type Individual agent agreement); never P06.
   const [template, setTemplate] = useState<{ id: string; name: string } | null | undefined>(undefined);
   const load = useCallback(async () => {
@@ -258,13 +256,12 @@ export function AgentOnboardings({ businessId, reloadKey = 0, onChanged }: { bus
     return <>
       {row.stage === "references_received" ? <span className="flex flex-col gap-1">
         <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy || !template} title={template ? `Sends “${template.name}” to ${row.agent.email}, then to the SLIT signatory` : "No individual agent agreement template yet"}
-          onClick={() => setSignatory({ row, mode: "send" })} data-testid="send-agent-agreement">{busy === `agreement:${row.id}` ? "Sending…" : "Send agreement…"}</Button>
+          onClick={() => void act(`agreement:${row.id}`, async () => { const r = await sendAgentOwnAgreement({ onboardingId: row.id }); return r.sent ? `Agreement ${r.reference} sent to ${row.agent.email}. Once they sign, every administrator is emailed to countersign.` : r.warning ?? `Agreement ${r.reference} saved as a draft.`; })} data-testid="send-agent-agreement">{busy === `agreement:${row.id}` ? "Sending…" : "Send agreement"}</Button>
         {template === null ? <span className="text-2xs font-medium text-amber-800" data-testid="agent-agreement-template-missing">No individual agent agreement template yet</span> : null}
       </span> : null}
-      {waitingForSlit && row.countersign?.mine ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy}
-        onClick={() => void act(`countersign:${row.id}`, async () => { const { token } = await signingMine<{ token: string }>("token", row.countersign!.recipientId); window.open(`/sign#t=${token}`, "_blank", "noopener"); return "The agreement opened in a new tab for your countersignature."; })}
+      {waitingForSlit ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy}
+        onClick={() => void act(`countersign:${row.id}`, async () => { const claimed = await claimCountersign(row.id); const { token } = await signingMine<{ token: string }>("token", claimed.recipientId); window.open(`/sign#t=${token}`, "_blank", "noopener"); return "The agreement opened in a new tab for your countersignature."; })}
         data-testid="countersign-agent-agreement">Countersign</Button> : null}
-      {row.stage === "agreement_sent" && row.countersign && row.countersign.state !== "signed" ? <Button size="sm" variant="outline" icon="ri-user-shared-line" disabled={!!busy} onClick={() => setSignatory({ row, mode: "change" })} data-testid="change-countersigner">Change SLIT signatory…</Button> : null}
       {row.stage === "references_received" || row.stage === "agreement_sent" ? <Button size="sm" variant="outline" icon="ri-upload-2-line" disabled={!!busy} onClick={() => setUploading(row)} data-testid="upload-agent-agreement">Record signed copy…</Button> : null}
       {isOpen ? <Button size="sm" icon="ri-user-follow-line" variant={signed ? undefined : "outline"} disabled={!!busy || !signed} title={activateHint}
         onClick={() => void act(`activate:${row.id}`, async () => { const r = await activateOnboardedAgent(row.id); return `${row.agent.name} is active. ${r.invited ? `The congratulations email with their sign-in link was sent to ${row.agent.email}.` : r.loginExists ? "They already sign in." : "The sign-in email could not be sent; use Resend invite."}`; })}
@@ -296,51 +293,9 @@ export function AgentOnboardings({ businessId, reloadKey = 0, onChanged }: { bus
     </details> : null}
     {rejecting ? <RejectAgentDialog row={rejecting} onClose={() => setRejecting(null)} onDone={async (m) => { setRejecting(null); push(m); await refresh(); }} /> : null}
     {uploading ? <RecordAgreementDialog row={uploading} onClose={() => setUploading(null)} onDone={async (m) => { setUploading(null); push(m); await refresh(); }} /> : null}
-    {signatory ? <SignatoryDialog row={signatory.row} mode={signatory.mode} templateName={template?.name ?? ""} onClose={() => setSignatory(null)} onDone={async (m) => { setSignatory(null); push(m); await refresh(); }} /> : null}
     {changing ? <ChangeRefereeDialog referee={changing} onClose={() => setChanging(null)} onDone={async (m) => { setChanging(null); push(m); await refresh(); }} /> : null}
     {openId ? <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void refresh()} /> : null}
   </div>;
-}
-
-/** Send agreement (pick who countersigns for SLIT; the sender by default) or change that signatory before they sign. */
-function SignatoryDialog({ row, mode, templateName, onClose, onDone }: { row: OnboardingRow; mode: "send" | "change"; templateName: string; onClose: () => void; onDone: (message: string) => Promise<void> }) {
-  const [people, setPeople] = useState<Array<{ id: string; name: string; email: string; me: boolean }> | null>(null);
-  const [chosen, setChosen] = useState(""); const [working, setWorking] = useState(false); const [error, setError] = useState("");
-  useEffect(() => {
-    void agentAgreementCountersigners().then((list) => {
-      setPeople(list);
-      const current = mode === "change" ? list.find((p) => p.email === row.countersign?.email && !p.me) ?? list.find((p) => p.me) : list.find((p) => p.me);
-      setChosen(current?.id ?? list[0]?.id ?? "");
-    }).catch((e) => setError(e instanceof Error ? e.message : "We could not load the administrators."));
-  }, [mode, row.countersign?.email]);
-  const go = async () => {
-    if (working || !chosen) return;
-    setWorking(true); setError("");
-    try {
-      if (mode === "send") {
-        const r = await sendAgentOwnAgreement({ onboardingId: row.id, countersignerId: chosen });
-        await onDone(r.sent ? `Agreement ${r.reference} sent to ${row.agent.email}. ${r.countersigner?.name ?? "The SLIT signatory"} is emailed to countersign once the agent has signed.` : r.warning ?? `Agreement ${r.reference} saved as a draft.`);
-      } else {
-        const r = await changeAgentCountersigner(row.id, chosen);
-        await onDone(!r.changed ? "The SLIT signatory is unchanged." : `${r.countersigner.name} now countersigns for SLIT${r.invited ? "; they were emailed the signing link" : " once the agent has signed"}.`);
-      }
-    } catch (e) { setError(e instanceof Error ? e.message : "That did not work."); setWorking(false); }
-  };
-  return <Modal open title={mode === "send" ? `Send ${row.agent.name}'s agreement` : "Change the SLIT signatory"} onClose={() => { if (!working) onClose(); }} width="max-w-lg"
-    footer={<div className="flex justify-end gap-2"><Button variant="outline" disabled={working} onClick={onClose}>Cancel</Button>
-      <Button icon={mode === "send" ? "ri-quill-pen-line" : "ri-user-shared-line"} disabled={working || !chosen} onClick={() => void go()} data-testid="signatory-confirm">{working ? "Working…" : mode === "send" ? "Send agreement" : "Change signatory"}</Button></div>}>
-    <div className="space-y-3 text-sm">
-      <p className="text-foreground-700">{mode === "send"
-        ? <>“{templateName}” goes to {row.agent.name} ({row.agent.email}) first. Once they have signed, the SLIT signatory below is emailed to countersign (and sees a Countersign button here). When both have signed, the agent is emailed the fully signed agreement and can be activated.</>
-        : <>The current signatory&apos;s link stops working. If it is already SLIT&apos;s turn, the new signatory is emailed now.</>}</p>
-      {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700">{error}</p> : null}
-      <Field label="Countersigns for SLIT" required>
-        <Select value={chosen} onChange={(e) => setChosen(e.target.value)} disabled={!people} data-testid="signatory-select">
-          {!people ? <option value="">Loading…</option> : people.length ? people.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.email}){p.me ? " (you)" : ""}</option>) : <option value="">No active administrators</option>}
-        </Select>
-      </Field>
-    </div>
-  </Modal>;
 }
 
 /** An administrator records a signed agreement received outside the Sign module: a PDF signed by both parties, the reason (kept in the onboarding history). */

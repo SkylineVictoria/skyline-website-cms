@@ -618,7 +618,7 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
   const stored = new Map<string, Uint8Array>([["templates/form/source.pdf", pdf], ["templates/referee/source.pdf", pdf], ["templates/agreement/source.pdf", onePage]]);
   const tpl = (key: string, dir: string) => ({ id: `tpl-${dir}`, systemKey: key, status: "active", sourcePath: `templates/${dir}/source.pdf`, sourceHash: pdfHash, sourcePages: 1, fields: [], expiryDays: 30, reminderDays: 3 });
   const mails: Array<{ to: string; subject: string; textBody: string }> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = []; const adminCalls: string[] = [];
-  const opts = { templates: true, failCreate: false, invitation: "new" as "new" | "none", declineKind: "agent", agreementTemplate: false, twoSigners: false };
+  const opts = { templates: true, failCreate: false, invitation: "new" as "new" | "none", declineKind: "agent", agreementTemplate: false, twoSigners: false, noAbn: false };
   const created: Array<Record<string, unknown>> = [];
   let n = 0;
   const referees = [
@@ -645,6 +645,7 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
         invitation: opts.invitation === "none" ? null : { id: "71000000-0000-4000-8000-000000000001", email: "zed@example.test", name: "Zed Agent", role: "agent", expiresAt: "2099-01-01T00:00:00Z", new: true, sent: false } };
       if (name === "agent_agreement_template") return !opts.agreementTemplate ? null : { id: "tpl-agreement", name: "Individual Agent Agreement", kind: "pdf", version: 1,
         roles: [{ key: "agent", label: "Agent", order: 1, required: true }, ...(opts.twoSigners ? [{ key: "slit", label: "SLIT", order: 2, required: true }] : [])], signatureRoles: opts.twoSigners ? ["agent", "slit"] : ["agent"] };
+      if (name === "agent_agreement_schedule") { if (opts.noAbn) throw { message: "ZZ Test Agency has no ABN: add it on the business before sending the agreement.", code: "23514" }; return { businessName: "ZZ Test Agency", abn: "11111111111", commencementDate: "2026-11-17", territory: "India and Nepal", commissionPercent: "25.00", agentName: "Zed Agent" }; }
       if (name === "agent_agreement_countersigners") return [{ id: "hari-admin", name: "Hari Admin", email: "hari@example.test", me: true }, { id: "ceo", name: "Chief Executive", email: "ceo@example.test", me: false }];
       if (name === "agency_onboarding_agent_countersigner_change") return { id: args.p_onboarding, changed: true, invited: true, countersigner: { name: "Chief Executive", email: "ceo@example.test" } };
       if (name === "agency_onboarding_agent_agreement_create") { state.stage = "agreement_sent"; return { id: args.p_onboarding, requestId: args.p_request, stage: "agreement_sent" }; }
@@ -662,6 +663,7 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
         sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: [], values: { agent_agency_name: "ZZ Test Agency" }, referees: referees.map((r) => ({ ...r })),
         received: referees.filter((r) => r.status === "received").length, total: 2, template: tpl("agent_referee_check_form", "referee"), notified: { agentReferees: state.notifiedAgent, staffReferences: state.notifiedStaff } };
       if (name === "agency_onboarding_referee_request_create") { const r = referees.find((x) => x.id === args.p_referee)!; r.status = "sent"; r.requestId = String((args.p_data as Record<string, unknown>).id); state.stage = "references_pending"; return { requestId: r.requestId, reference: `SLIT-2026-R${r.position}` }; }
+      if (name === "agent_agreement_countersigners") return [{ id: "hari-admin", name: "Hari Admin", email: "hari@example.test", me: false }, { id: "ceo", name: "Chief Executive", email: "ceo@example.test", me: false }];
       if (name === "agency_onboarding_activation") throw new Error("an agent's own agreement must never activate the business");
       if (name === "agency_onboarding_mark_notified") { if (args.p_kind === "agent_notified_referees") state.notifiedAgent = true; else state.notifiedStaff = true; return null; }
       throw new Error(`unexpected service ${name}`);
@@ -716,6 +718,10 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
   await assert.rejects(call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }), (e: Error & { status?: number }) => /needs two signers in order: the Agent first, then SLIT/.test(e.message) && e.status === 409);
   assert.equal(created.length, 0, "a template without the SLIT signer is refused");
   opts.twoSigners = true;
+  opts.noAbn = true;
+  await assert.rejects(call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }), /has no ABN/);
+  assert.equal(created.length, 0, "nothing is made for a business without an ABN");
+  opts.noAbn = false;
   const sentAgreement = await call({ action: "agent_onboarding_agent_agreement_send", onboardingId: "21000000-0000-4000-8000-000000000001" }) as { reference: string; stage: string; sent: boolean; template: { name: string } };
   assert.deepEqual([sentAgreement.reference, sentAgreement.stage, sentAgreement.sent, sentAgreement.template.name], ["SLIT-2026-000201", "agreement_sent", true, "Individual Agent Agreement"]);
   const req = created[0] as { template_id: string; subject_type: string; recipients: Array<{ role: string; email: string }>; category: string; field_values: Record<string, string> };
@@ -726,6 +732,13 @@ test("agent-level onboarding (2026-11-17, fourth brief): Add agent records the a
   assert.equal(rpcs.find(([name]) => name === "agency_onboarding_agent_countersigner_change")![1].p_cms_user, "ceo");
   await assert.rejects(call({ action: "agent_onboarding_agent_countersigner_change", onboardingId: "21000000-0000-4000-8000-000000000001", countersignerId: "stranger" }), /active CMS administrator/);
   assert.equal(req.field_values["agency.abn"], "12 345 678 901", "prefilled from the agent and the business");
+  assert.deepEqual([req.field_values.agent_organisation_name, req.field_values.agent_abn, req.field_values.agreement_commencement_date, req.field_values.agent_territory, req.field_values.agent_commission_percent, req.field_values.agent_signatory_name],
+    ["ZZ Test Agency", "11 111 111 111", "17/11/2026", "India and Nepal", "25%", "Zed Agent"], "the P06 schedule is printed from the business's signed agreement (Item 1 = its commencement)");
+  // The agent signed: every active administrator is asked to countersign.
+  state.stage = "agreement_sent";
+  const asked = await onboardingFn.notifyAdminsToCountersign({ ports }, "21000000-0000-4000-8000-000000000001");
+  assert.equal(asked.sent, 2, "both administrators are emailed");
+  assert.ok(mails.some((m) => m.to === "ceo@example.test" && /Countersign needed: Zed Agent/.test(m.subject) && /any administrator can give it/.test(m.textBody)));
   assert.ok(rpcs.some(([name, a]) => name === "agency_onboarding_agent_agreement_create" && a.p_request === (created[0] as { id?: string }).id || name === "agency_onboarding_agent_agreement_create"), "the request is linked to the onboarding");
   // Signed: staff are told to activate; the business is never activated by it.
   state.stage = "agreement_signed";

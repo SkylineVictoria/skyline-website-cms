@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(967);
+select plan(968);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1868,6 +1868,11 @@ insert into public.agency_onboarding(kind,agency_id,agent_id,stage,status,form_p
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select is((select x->>'abn'||'|'||(x->>'commencementDate')||'|'||(x->>'territory')||'|'||(x->>'commissionPercent') from (select public.agent_agreement_schedule(pg_temp.frex()) x) q),'11 111 111 111|2026-11-17|India and Nepal|25.00','schedule: copied from the business''s signed agreement');
+reset role;
+-- Intake schedule preview (migration 20261117121733): staff only.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.intake_schedule_preview(gen_random_uuid(), current_date)$$,'42501',null,'a portal user cannot preview an intake schedule');
 reset role;
 select * from finish();
 rollback;

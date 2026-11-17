@@ -38,12 +38,22 @@ const serviceRpc = async (ports: SigningPorts, name: string, args: Record<string
 };
 const numbered = (fields: PlacedField[], offset = 0) => fields.map((f) => ({ ...f, page: Number(f.page) + offset, x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h) }));
 
-/** One of the three blanks (uploaded by the CMS from public/templates) as a PDF template of the Sign module, marked by its system key. */
+/**
+ * One of the three blanks (uploaded by the CMS from public/templates) as a PDF template of the Sign module, marked by its system key.
+ * Installing is idempotent: a template already holding the key is reused (an archived one comes back active) and the upload is ignored;
+ * otherwise the blank is stored and the database claims the key (insert ... on conflict do nothing, then select), so two sends installing
+ * at once end with one template and the loser removes its copy of the file.
+ */
 export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   await ctx.admin("subject_search", null, { type: "none" });
   const which = String(ctx.body.which ?? "") as OnboardingDoc;
   const spec = AGENT_ONBOARDING_DOCS[which];
   if (!spec) throw new SigningError("Say which blank to install: form, referee or agreement.");
+  const installed = ((await ctx.rpc("agency_onboarding_templates", {})) as OnboardingTemplate[]).find((t) => t.systemKey === spec.key);
+  if (installed) {
+    const kept = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: null });
+    if (kept?.id) return { id: kept.id, systemKey: spec.key, fields: Number(kept.fields ?? installed.fields?.length ?? 0), pages: Number(kept.pages ?? installed.sourcePages), reused: true };
+  }
   if (!ctx.upload) throw new SigningError(`Choose the ${spec.name} PDF.`);
   if (await sha256Hex(ctx.upload.bytes) !== spec.sha256) throw new SigningError(`This file is not the ${spec.name} blank (checksum mismatch). Use the copy shipped with the site.`);
   let read: Awaited<ReturnType<Awaited<ReturnType<typeof onboardingPdfModule>>["readBlankTemplate"]>>;
@@ -52,11 +62,16 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   const id = ctx.ports.uuid();
   const path = `templates/${id}/source-${ctx.ports.uuid()}.pdf`;
   await ctx.store(path, read.flattened);
-  await ctx.admin("template_save", id, { name: spec.name, title: spec.title, kind: "pdf", audience: "agent", category: spec.category, roles: [signerRole(which)], fields: read.fields,
-    signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages });
-  await ctx.rpc("agency_onboarding_template_register", { p_template: id, p_key: spec.key });
+  const result = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: { id, name: spec.name, title: spec.title, category: spec.category, roles: [signerRole(which)], fields: read.fields,
+    signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages } });
+  if (result?.reused) {
+    // Another send installed this blank first: its template is the one; this upload is not referenced by anything.
+    try { await ctx.ports.storage.remove([path]); } catch { /* left for a later clean-up */ }
+    ctx.commit();
+    return { id: result.id, systemKey: spec.key, fields: Number(result.fields ?? 0), pages: Number(result.pages ?? read.pages), reused: true };
+  }
   ctx.commit();
-  return { id, systemKey: spec.key, fields: read.fields.length, pages: read.pages };
+  return { id: result?.id ?? id, systemKey: spec.key, fields: read.fields.length, pages: read.pages, reused: false };
 }
 
 async function installedTemplate(ctx: OnboardingContext, which: OnboardingDoc): Promise<OnboardingTemplate> {

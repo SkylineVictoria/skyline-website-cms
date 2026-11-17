@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(774);
+select plan(784);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1270,7 +1270,7 @@ set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.agency_onboarding_prepare('13000000-0000-0000-0000-000000000001')$$,'42501',null,'an agent cannot prepare the onboarding send');
 select throws_ok($$select public.agency_onboarding_list('13000000-0000-0000-0000-000000000001')$$,'42501',null,'an agent cannot list sends');
 select throws_ok($$select public.agency_onboarding_templates()$$,'42501',null,'an agent cannot read the onboarding templates');
-select throws_ok($$select public.agency_onboarding_template_register(gen_random_uuid(),'agent_agreement')$$,'42501',null,'an agent cannot register a template');
+select throws_ok($$select public.agency_onboarding_template_install('agent_agreement',null)$$,'42501',null,'an agent cannot install a template');
 select throws_ok($$select public.cms_user_signature_save('x')$$,'42501',null,'an agent has no saved CMS signature');
 select throws_ok($$select * from public.agency_onboarding$$,'42501',null,'the onboarding table is not readable');
 select is(public.portal_agency_onboarding('13000000-0000-0000-0000-000000000001')->>'agreementStatus','none','a member reads their agency''s agreement status');
@@ -1282,6 +1282,20 @@ select is(public.agency_onboarding_prepare('13000000-0000-0000-0000-000000000001
 select is(public.cms_user_signature_save(null)->>'saved','false','a saved signature can be cleared');
 select throws_ok($$select public.cms_user_signature_save('notapng')$$,null,'Draw or upload a PNG signature first','a saved signature must be a PNG');
 select is(jsonb_typeof(public.agency_onboarding_templates()),'array','the onboarding templates are listed (none installed in the lab)');
+-- Installing a blank is idempotent (migration 20261117190000): one template per key, reused by every later install, brought back when archived.
+select is(public.agency_onboarding_template_install('agent_agreement',null),null,'nothing to reuse before the blank is installed');
+select throws_ok($$select public.agency_onboarding_template_install('student_offer_letter','{}')$$,null,'Unknown onboarding template','only the three agent blanks have a key');
+select is(public.agency_onboarding_template_install('agent_agreement','{"id":"73000000-0000-0000-0000-000000000040","name":"Agent Agreement","title":"Agent Agreement","category":"agency_agreement","roles":[{"key":"agent","label":"Agent","order":1,"required":true}],"fields":[],"source_path":"templates/73000000-0000-0000-0000-000000000040/source.pdf","source_hash":"4040404040404040404040404040404040404040404040404040404040404040","source_pages":13}')->>'reused','false','the first install makes the template');
+select is(public.agency_onboarding_template_install('agent_agreement','{"id":"73000000-0000-0000-0000-000000000041","name":"Agent Agreement","title":"Agent Agreement","category":"agency_agreement","roles":[{"key":"agent","label":"Agent","order":1,"required":true}],"fields":[],"source_path":"templates/73000000-0000-0000-0000-000000000041/source.pdf","source_hash":"4141414141414141414141414141414141414141414141414141414141414141","source_pages":13}')->>'id','73000000-0000-0000-0000-000000000040','installing again reuses the first template');
+select is(public.agency_onboarding_template_install('agent_agreement',null)->>'reused','true','a bare lookup reuses it too');
+select is((select count(*) from jsonb_array_elements(public.agency_onboarding_templates()) x where x->>'systemKey'='agent_agreement')::int,1,'one Agent Agreement template is listed');
+select lives_ok($$select public.signing_admin('template_archive','73000000-0000-0000-0000-000000000040')$$,'staff archive it');
+select is(public.agency_onboarding_template_install('agent_agreement',null)->>'status','active','installing brings an archived template back');
+reset role;
+select throws_ok($$insert into hr.sign_templates(id,name,title,kind,audience,category,system_key,source_path,source_hash,source_pages,created_by) values ('73000000-0000-0000-0000-000000000042','Agent Agreement','Agent Agreement','pdf','agent','agency_agreement','agent_agreement','templates/73000000-0000-0000-0000-000000000042/source.pdf','4242424242424242424242424242424242424242424242424242424242424242',13,'33000000-0000-0000-0000-000000000002')$$,'23505',null,'the unique index refuses a second live template with the key');
+select is((select count(*)::int from hr.sign_templates where system_key='agent_agreement' and deleted_at is null),1,'one live template per key');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select lives_ok($$select public.signing_admin('create','73000000-0000-0000-0000-000000000001','{"title":"Agent onboarding documents: Positive A","original_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recipients":[{"name":"Ravi Kumar","email":"ravi.agent@example.test","role":"agent","label":"Agent","order":1,"required":true}],"fields":[{"type":"checkbox","role":"agent","page":1,"x":0.7,"y":0.3,"w":0.02,"h":0.01,"required":true,"label":"Involved in litigation: Yes","key":"litigation_involved:YES"},{"type":"checkbox","role":"agent","page":1,"x":0.75,"y":0.3,"w":0.02,"h":0.01,"required":true,"label":"Involved in litigation: No","key":"litigation_involved:NO"},{"type":"text","role":"agent","page":13,"x":0.6,"y":0.2,"w":0.3,"h":0.02,"required":true,"label":"Agent signatory name","key":"agent_signatory_name","value":"Ravi Kumar"},{"type":"signature","role":"agent","page":13,"x":0.6,"y":0.25,"w":0.3,"h":0.02,"required":true,"label":"Agent signature","key":"agent_signature"}],"subject_type":"agent","subject_id":"53000000-0000-0000-0000-000000000001","category":"agency_agreement","signing_mode":"sequential"}'::jsonb)$$,'the administrator makes the request as the function does');
 reset role;
 select is((select count(*)::int from hr.sign_fields where request_id='73000000-0000-0000-0000-000000000001' and key is not null),4,'the request''s fields keep their keys');

@@ -420,7 +420,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
     { id: "40000000-0000-4000-8000-000000000001", position: 1, name: "Priya Nair", organisation: "Harbour College", positionTitle: "Admissions Lead", email: "priya@example.test", phone: "0400 111 222", address: "2 Harbour Rd", status: "pending", requestId: null as string | null },
     { id: "40000000-0000-4000-8000-000000000002", position: 2, name: "Sam Lee", organisation: "Metro Institute", positionTitle: "", email: "sam@example.test", phone: "0400 333 444", address: "", status: "pending", requestId: null as string | null },
   ];
-  const state = { stage: "application_sent", notifiedAgent: false, notifiedStaff: false, lastKey: "" };
+  const state = { stage: "application_sent", notifiedAgent: false, notifiedStaff: false };
   const follow = () => ({ id: "20000000-0000-4000-8000-000000000001", stage: state.stage, agency: { id: "30000000-0000-4000-8000-000000000001", name: "Acme Education Pty Ltd" },
     agent: { id: "10000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" }, sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: ["admissions@example.test"],
     values: { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St, Melbourne, VIC, 3000, Australia" }, referees: referees.map((r) => ({ ...r })),
@@ -428,7 +428,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
     admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
       if (action === "subject_search") return [];
-      if (action === "template_save") { saved.push({ ...data, id, __key: state.lastKey }); return { id }; }
+      if (action === "template_save") throw new Error("the blanks install through agency_onboarding_template_install, not template_save");
       if (action === "create") { created.push({ ...data, id }); return { id, reference: `SLIT-2026-00${created.length}` }; }
       if (action === "send") { sent.push(id!); return { id, state: "sent" }; }
       if (action === "void") { voided.push(id!); return { id, state: "void" }; }
@@ -436,7 +436,14 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
     },
     callerRpc: async (name: string, args: Record<string, unknown>) => {
       rpcs.push([name, args]);
-      if (name === "agency_onboarding_template_register") { state.lastKey = String(args.p_key); saved[saved.length - 1].__key = args.p_key; return { id: args.p_template }; }
+      if (name === "agency_onboarding_template_install") {
+        // The database's claim of the key: the first insert wins (unique index), every later call reuses it.
+        const key = String(args.p_key); const have = saved.find((t) => t.__key === key);
+        if (have) return { id: have.id, systemKey: key, reused: true, fields: (have.fields as unknown[]).length, pages: have.source_pages, status: "active" };
+        if (!args.p_data) return null;
+        const d = args.p_data as Record<string, unknown>; saved.push({ ...d, __key: key });
+        return { id: d.id, systemKey: key, reused: false, fields: (d.fields as unknown[]).length, pages: d.source_pages, status: "active" };
+      }
       if (name === "agency_onboarding_templates") return templates();
       if (name === "agency_onboarding_prepare") return { agency: { id: args.p_agency, name: "Acme Education Pty Ltd", abn: null }, agent: { id: "10000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" },
         admin: { name: "Hari Admin", position: "", signaturePng: null }, values: { agent_agency_name: "Acme Education Pty Ltd", agent_organisation_name: "Acme Education Pty Ltd", contact_email: "ravi@example.test", agent_signatory_name: "Ravi Kumar", declarant_name: "Ravi Kumar" } };
@@ -462,8 +469,18 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
     mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: ["admin@example.test"], siteUrl: "https://site.example.test", problems: [] } },
   } as unknown as Parameters<typeof signingCore.handleSigning>[1];
   const call = (body: Record<string, unknown>, upload: { name: string; bytes: Uint8Array } | null = null) => signingCore.handleSigning({ body, upload, ip: null, userAgent: null }, ports);
-  for (const which of ["form", "referee", "agreement"] as const) await call({ action: "agent_onboarding_install", which }, { name: `${which}.pdf`, bytes: blankBytes(which) });
-  assert.deepEqual(saved.map((t) => `${t.__key}:${(t.roles as Array<{ key: string }>)[0].key}`), ["agent_application_form:agent", "agent_referee_check_form:referee", "agent_agreement:agent"], "three blanks, the referee check signed by a referee");
+  const install = (which: "form" | "referee" | "agreement") => call({ action: "agent_onboarding_install", which }, { name: `${which}.pdf`, bytes: blankBytes(which) }) as Promise<{ id: string; reused: boolean }>;
+  for (const which of ["form", "referee"] as const) await install(which);
+  // Two sends installing the agreement at once: both upload, the database gives the key to one, the other reuses it and drops its file.
+  const [winner, loser] = await Promise.all([install("agreement"), install("agreement")]);
+  assert.equal(winner.id, loser.id, "two concurrent installs end with the same template");
+  assert.deepEqual([winner.reused, loser.reused], [false, true], "the first claims the key, the second reuses it");
+  // Installing again (the CMS retries on every "missing" error) reuses the template without a new row or a new file.
+  const reinstall = await install("form");
+  assert.ok(reinstall.reused && reinstall.id === saved[0].id, "a second install of the form reuses the first template");
+  assert.deepEqual(saved.map((t) => `${t.__key}:${(t.roles as Array<{ key: string }>)[0].key}`), ["agent_application_form:agent", "agent_referee_check_form:referee", "agent_agreement:agent"], "three blanks, one template per key, the referee check signed by a referee");
+  assert.equal([...stored.keys()].filter((p) => p.startsWith("templates/")).length, 3, "one stored source per template: the losing upload was removed");
+  assert.ok(saved.every((t) => stored.has(String(t.source_path))), "every template's source is the stored one");
   // Stage 1: the application form alone.
   const sentForm = await call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001", message: "Welcome" }) as { id: string; sent: boolean; stage: string };
   assert.ok(sentForm.sent && sentForm.stage === "application_sent" && sent.includes(sentForm.id));

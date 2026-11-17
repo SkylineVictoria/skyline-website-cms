@@ -2,7 +2,7 @@ begin;
 -- BATCH-SEATS (20261118100000): physical seats, the seat guard on every path, automatic new batches (own room, else "needs a room"), idempotent
 -- placement, course class defaults (first batch and its calendar), permissions, and the LMS intake link getting a seat. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(59);
+select plan(62);
 
 create temp table t(k text primary key, v text);
 grant all on t to public;
@@ -168,6 +168,13 @@ select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_la
 select ok(exists(select 1 from public.rto_unit_requires('unit-pb') r where r = 'unit-pa'), 'the prerequisite is read from the unit''s Training.gov.au text');
 select is((select count(*)::int from public.batch_enrolments e join public.batches b on b.id = e.batch_id join public.course_intakes ci on ci.id = b.intake_id where e.student_id = 'e6000000-0000-0000-0000-000000000012' and ci.course_id = 'course-seat-4' and e.carry_over and ci.id <> 'f6000000-0000-0000-0000-000000000004'), 1, 'the late joiner is carried into the next intake of the course');
 select is((select count(*)::int from public.rto_enrolment_units(pg_temp.v('pr_early')) where unit_id = 'unit-pa'), 1, 'the running prerequisite is among the early joiner''s units');
+
+-- ---------------------------------------------------------------- Student study card (20261118130000)
+select is((select jsonb_array_length(public.admin_student_study('e6000000-0000-0000-0000-000000000011'))), 1, 'the student page lists where the student studies');
+select is((select jsonb_array_length(public.admin_student_study('e6000000-0000-0000-0000-000000000011')->0->'units')), 3, 'with the units they take');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000099');
+select throws_ok($$select public.admin_student_study('e6000000-0000-0000-0000-000000000011')$$, '42501', 'Sign in to the CMS first.', 'only staff can read it');
+select pg_temp.as_admin_session('a6000000-0000-0000-0000-000000000001');
 
 -- ---------------------------------------------------------------- the two patched functions
 select ok(pg_get_functiondef('public.rto_carry_over_plan(uuid, text)'::regprocedure) like '%rto_batch_pick(n.id%', 'the carry-over planner picks batches by free seats');

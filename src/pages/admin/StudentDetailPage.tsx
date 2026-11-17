@@ -7,6 +7,7 @@ import { Button, Card, PageHeader } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import StudentTimelinePanel from "@/pages/admin/components/StudentTimelinePanel";
+import StudentStudyPanel from "@/pages/admin/components/StudentStudyPanel";
 import AttendanceSummary from "@/pages/admin/lms/AttendanceSummary";
 import StudentOffice365Panel from "@/pages/admin/components/StudentOffice365Panel";
 import StudiesPanel from "@/pages/admin/components/rto/StudiesPanel";
@@ -102,6 +103,7 @@ export default function StudentDetailPage() {
           </dl>
         </Card>
       </div>
+      <div className="mt-4"><StudentStudyPanel studentId={id} /></div>
       <div className="mt-4"><StudentTimelinePanel studentId={id} /></div>
       <div className="mt-4"><StudiesPanel studentId={id} /></div>
       <div className="mt-4"><Card className="p-5"><h2 className="mb-2 font-heading text-base font-semibold text-foreground-900">Attendance</h2><AttendanceSummary studentId={id} /></Card></div>

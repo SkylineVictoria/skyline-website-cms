@@ -94,3 +94,52 @@ Deno.test("RTO scope lists current qualifications whatever the field names", asy
   assert(items.find(i => i.code === "CPC30220")?.current === false, "ended scope is not current");
   assert(items.find(i => i.code === "ICT60220")?.current === true, "nested component inherits the parent end date");
 });
+
+Deno.test("elective packaging rules: read from the official text and checked against a selection", async () => {
+  const { parseElectiveRules, checkElectives, prerequisiteCodes } = await import("./packaging.ts");
+  const assert = (ok: boolean, message: string) => { if (!ok) throw new Error(message); };
+  const brief = (text: string[], required: number | null, groups: string[]) => {
+    const rules = parseElectiveRules(text.join("\n"), required, groups);
+    return [rules.groupMin.map(rule => rule.groups.join("") + ":" + rule.count).join(" "), rules.groupMax.map(rule => rule.groups.join("") + ":" + rule.count).join(" "),
+      rules.outsideMax, rules.unchecked.length].join(" | ");
+  };
+  const same = (got: string, want: string, name: string) => assert(got === want, `${name}: got "${got}", want "${want}"`);
+  const rii = ["Total number of units = 12", "5 core units", "7 elective units,", "at least two (2) must be chosen from Group A",
+    "at least three (3) must be chosen from Group B",
+    "no more than two (2) units from elsewhere within this training package, or from another endorsed training package, or from an accredited course.",
+    "All elective units selected from outside this qualification must reflect current occupational and learning outcomes of this AQF qualification level.",
+    "Core units of competency", "RIICWD507D Prepare detailed geotechnical design"];
+  same(brief(rii, 7, ["A", "B"]), "A:2 B:3 |  | 2 | 0", "RII60520");
+  same(brief(["15 elective units consisting of:", "1 unit only from Group A", "at least 8 units in any combination from Groups B, C, D or E", "Core units"], 15, ["A", "B", "C", "D", "E"]),
+    "A:1 BCDE:8 | A:1 | 0 | 0", "MSF30422: one only, a combination of groups, no outside units");
+  same(brief(["7 elective units,", "2 elective units must be selected from Group A", "for the remaining 5 elective units:", "up to 5 units may be selected from Groups A – I",
+    "if not listed, up to 2 units may be selected from a Certificate IV, Diploma or Advanced Diploma from this or any other currently endorsed Training Package qualification or accredited course.",
+    "Specialisations", "4 elective units must be selected from Group B", "Core units"], 7, "ABCDEFGHI".split("")),
+    "A:2 |  | 2 | 0", "BSB50120: the remaining units are not a group cap; specialisation rules are not read");
+  same(brief(["3 elective units.", "3 from the listed electives", "2 from listed electives and 1 from any endorsed Training Package or accredited course, as long as it contributes", "Core units"], 3, []),
+    " |  | 1 | 0", "CPC30620: one outside unit");
+  same(brief(["7 elective units", "a minimum of five (5) units must be selected from Group A",
+    "the remaining two (2) maybe selected from Group A or Group B or from any group or current training package, as long as it contributes", "Core Units"], 7, ["A", "B"]),
+    "A:5 |  | 2 | 0", "CPC30326");
+  same(brief(["17 elective units, consisting of:", "8 to 13 units from Groups A to F", "3 to 8 units from Group G", "1 or 2 units from Group H",
+    "up to 5 units not listed below from any endorsed Training Package or accredited course. These units:", "must not include any unit coded MSFFP", "CORE UNITS"], 17, "ABCDEFGH".split("")),
+    "ABCDEF:8 G:3 H:1 | ABCDEF:13 G:8 H:2 | 5 | 0", "MSF30322: ranges");
+  same(brief(["16 elective units", "Elective units chosen must be relevant to the work environment and the qualification.", "Core Units"], 16, []), " |  | 0 | 0", "AUR30620: plain");
+  assert(parseElectiveRules(["8 elective units.", "All Group A elective units", "Up to two elective units from either Group B or general electives.", "Core Units"].join("\n"), 8, ["A", "B"]).unchecked.length > 0,
+    "a stream rule (all of a group) is flagged for confirmation by hand");
+  assert(parseElectiveRules("Total number of units = 10\nCore Units", null, []).unchecked.length === 1, "no elective count: confirmation by hand");
+
+  const rules = parseElectiveRules(rii.join("\n"), 7, ["A", "B"]);
+  const pick = (count: number, group: string | null) => Array.from({ length: count }, (_, index) => ({ code: `${group ?? "X"}${index}`, groups: group === null ? null : [group] }));
+  const state = (list: { code: string; groups: string[] | null }[]) => { const check = checkElectives(rules, list); return `${check.ok}/${check.complete}`; };
+  same(state([]), "true/false", "nothing chosen is allowed but not complete");
+  same(state([...pick(2, "A"), ...pick(3, "B"), ...pick(2, null)]), "true/true", "2 A + 3 B + 2 outside is complete");
+  same(state([...pick(2, "A"), ...pick(3, "B"), ...pick(3, null)]), "false/false", "8 electives is blocked");
+  same(state([...pick(2, "A"), ...pick(2, "B"), ...pick(3, null)]), "false/false", "3 outside units is blocked");
+  same(state(pick(5, "A")), "false/false", "5 from A leaves no room for 3 from B");
+  same(state(pick(4, "A")), "true/false", "4 from A can still be completed");
+  const streams = parseElectiveRules(["8 elective units.", "All Group A elective units", "Up to two elective units from either Group B or general electives.", "Core Units"].join("\n"), 8, ["A", "B"]);
+  assert(checkElectives(streams, pick(3, "B")).ok && !checkElectives(streams, pick(9, "B")).ok, "with unread rules only the total blocks");
+  same(prerequisiteCodes("CPCCWHS2001 Apply WHS requirements\nCPCCCM2012* Work safely at heights", "CPCCCM2012").join(), "CPCCWHS2001", "prerequisite codes");
+  same(prerequisiteCodes("Nil").join(), "", "Nil");
+});

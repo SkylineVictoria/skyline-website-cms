@@ -93,6 +93,24 @@ async function getJson(url: string): Promise<unknown> {
   return await response.json();
 }
 
+export interface UnitSummary { code: string; title: string; usage: string; current: boolean; packageCode: string; packageTitle: string }
+/** What a code is on training.gov.au: null when it is not there or is not a unit of competency. */
+export async function unitSummary(code: string): Promise<UnitSummary | null> {
+  let main: Json;
+  try {
+    main = await getJson(`${API}${encodeURIComponent(code)}`) as Json;
+  } catch (error) {
+    if (error instanceof Error && error.message === "HTTP 404") return null;
+    throw error;
+  }
+  if (String(main.type ?? "").toLowerCase() !== "unit" || String(main.code ?? "").toUpperCase() !== code.toUpperCase()) return null;
+  const parent = (main.parent ?? {}) as Json;
+  const usage = String(main.usageRecommendationLabel ?? main.usageRecommendation ?? "");
+  return { code: String(main.code).toUpperCase(), title: text(String(main.title ?? "")), usage,
+    current: String(main.usageRecommendation ?? usage).toLowerCase() === "current",
+    packageCode: String(parent.code ?? ""), packageTitle: String(parent.title ?? "") };
+}
+
 export async function unitDetails(code: string): Promise<UnitDetails> {
   const main = await getJson(`${API}${encodeURIComponent(code)}`) as Json;
   const releases = list(main.releases);

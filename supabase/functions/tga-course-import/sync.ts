@@ -1,6 +1,21 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
 import { type HoursLookup, ImportError, qualificationDetails } from "./tga.ts";
-import { unitDetails } from "./units.ts";
+import { unitDetails, unitSummary, type UnitSummary } from "./units.ts";
+import { checkElectives, type ElectiveUnit, parseElectiveRules, prerequisiteCodes } from "./packaging.ts";
+
+/** How an elective from outside the qualification's own lists is labelled on the course. */
+const IMPORTED_GROUP = "Imported";
+
+/** One unit for the Add units dialog: what it is on training.gov.au, its nominal hours and its prerequisites. */
+export async function lookupUnit(code: string, hoursLookup: HoursLookup) {
+  const unit = code.trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]{4,19}$/.test(unit)) throw new ImportError("Enter a valid unit code.", 400);
+  const summary = await unitSummary(unit).catch(() => { throw new ImportError("Training.gov.au could not be reached."); });
+  if (!summary) throw new ImportError(`${unit} is not a unit of competency on Training.gov.au.`, 404);
+  const [details, hours] = await Promise.all([unitDetails(unit).catch(() => null), hoursLookup([unit]).catch(() => new Map<string, number>())]);
+  return reply({ ...summary, nominalHours: hours.get(unit) ?? null, prerequisites: details?.prerequisites ?? null,
+    prerequisiteCodes: prerequisiteCodes(details?.prerequisites, unit), detailsRead: details !== null });
+}
 
 const headers = {
   "Access-Control-Allow-Origin": "*", "Content-Type": "application/json", "Cache-Control": "no-store",
@@ -170,7 +185,8 @@ export async function fillUnitContent(db: SupabaseClient, active: { id: string; 
 
 /** Add Unit: the chosen units of the course's current release are put on the course (inactive ones switched on,
  *  missing ones added active) and get their training.gov.au content. */
-export async function addUnits(db: SupabaseClient, tenantId: string | null, courseId: string, codes: string[], hoursLookup: HoursLookup) {
+export async function addUnits(db: SupabaseClient, tenantId: string | null, courseId: string, codes: string[], hoursLookup: HoursLookup,
+  options: { imported?: string[]; attested?: boolean } = {}) {
   let query = db.from("cms_courses").select("id,code").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
   const { data: course } = await query.maybeSingle();
@@ -180,14 +196,49 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
   const review = await qualificationDetails(code, null, hoursLookup);
   const official = new Map([...review.core.map(unit => ({ unit, core: true })), ...review.electives.map(unit => ({ unit, core: false }))]
     .map(item => [item.unit.code.toUpperCase(), item]));
-  const wanted = [...new Set(codes.map(item => item.trim().toUpperCase()))];
+  const clean = (list: string[]) => [...new Set(list.map(item => item.trim().toUpperCase()).filter(Boolean))];
+  // An elective typed by hand that is in the qualification's own lists is an ordinary listed unit.
+  const typed = clean(options.imported ?? []);
+  const wanted = clean([...codes, ...typed.filter(item => official.has(item))]);
+  const imported = typed.filter(item => !official.has(item));
   const unknown = wanted.filter(item => !official.has(item));
   if (unknown.length) throw new ImportError(`Not in the current ${code} release: ${unknown.join(", ")}.`, 422);
+  const invalid = imported.filter(item => !/^[A-Z][A-Z0-9]{4,19}$/.test(item));
+  if (invalid.length) throw new ImportError(`Not a unit code: ${invalid.join(", ")}.`, 422);
 
-  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active").eq("course_id", courseId);
-  const existing = new Map(((units ?? []) as { id: string; code: string; sort: number | null; is_active: boolean }[])
-    .map(unit => [unit.code.trim().toUpperCase(), unit]));
-  const activate = wanted.map(item => existing.get(item)).filter((unit): unit is { id: string; code: string; sort: number | null; is_active: boolean } => !!unit && !unit.is_active);
+  type Row = { id: string; code: string; sort: number | null; is_active: boolean; unit_type: string | null };
+  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active,unit_type").eq("course_id", courseId);
+  const existing = new Map(((units ?? []) as Row[]).map(unit => [unit.code.trim().toUpperCase(), unit]));
+
+  // Units from outside the qualification must be current units of competency on training.gov.au.
+  const summaries = new Map<string, UnitSummary>();
+  for (const item of imported.filter(item => !existing.has(item))) {
+    const summary = await unitSummary(item).catch(() => { throw new ImportError(`Training.gov.au could not be reached to check ${item}.`); });
+    if (!summary) throw new ImportError(`${item} is not a unit of competency on Training.gov.au.`, 422);
+    if (!summary.current) throw new ImportError(`${item} is ${summary.usage.toLowerCase() || "not current"} on Training.gov.au and cannot be added.`, 422);
+    summaries.set(item, summary);
+  }
+
+  // The packaging rules apply to the electives the course will have: those active on it now plus the ones being added.
+  const electives = new Map<string, ElectiveUnit>();
+  const elective = (item: string) => {
+    const listed = official.get(item);
+    if (!listed) electives.set(item, { code: item, groups: null });
+    else if (!listed.core) electives.set(item, { code: item, groups: listed.unit.groups });
+  };
+  for (const [item, unit] of existing) if (unit.is_active && unit.unit_type !== "core") elective(item);
+  [...wanted, ...imported].forEach(elective);
+  const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups));
+  const check = checkElectives(rules, [...electives.values()]);
+  if (!check.ok) {
+    throw new ImportError("The packaging rules do not allow this selection. " + check.lines.filter(line => line.state === "broken")
+      .map(line => `${line.label}: ${line.detail}.`).join(" "), 422);
+  }
+  if (rules.unchecked.length && options.attested !== true) {
+    throw new ImportError("Part of the packaging rules could not be checked automatically. Tick the confirmation that the selection follows the official packaging rules.", 422);
+  }
+
+  const activate = [...wanted, ...imported].map(item => existing.get(item)).filter((unit): unit is Row => !!unit && !unit.is_active);
   if (activate.length) {
     const { error } = await db.from("cms_course_units").update({ is_active: true }).in("id", activate.map(unit => unit.id)).eq("course_id", courseId);
     if (error) return reply({ error: "The units could not be switched on." }, 500);
@@ -201,11 +252,22 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
     has_prerequisites: unit.hasPrerequisites, usage_recommendation: unit.usageRecommendation || null,
     elective_groups: unit.groups.length ? unit.groups.join(", ") : null,
   }));
+  const importedHours = summaries.size ? await hoursLookup([...summaries.keys()]) : new Map<string, number>();
+  for (const summary of summaries.values()) {
+    const nominal = importedHours.get(summary.code) ?? null;
+    inserted.push({
+      id: "unit-" + crypto.randomUUID().replaceAll("-", ""), course_id: courseId, code: summary.code, name: summary.title,
+      category: "Elective", unit_type: "elective", is_active: true, sort: ++sort,
+      nominal_hours: nominal, nominal_hours_source: nominal === null ? null : HOURS_SOURCE,
+      has_prerequisites: null, usage_recommendation: summary.usage || null, elective_groups: IMPORTED_GROUP,
+    });
+  }
   if (inserted.length) {
     const { error } = await db.from("cms_course_units").insert(inserted);
     if (error) return reply({ error: "The units could not be added." }, 500);
   }
   const content = await fillUnitContent(db, [...activate, ...inserted].map(unit => ({ id: unit.id, code: unit.code })));
   return reply({ courseId, code, added: inserted.length, activated: activate.length,
-    alreadyOn: wanted.length - inserted.length - activate.length, ...content });
+    alreadyOn: wanted.length + imported.length - inserted.length - activate.length, imported: summaries.size,
+    rulesComplete: check.complete, ...content });
 }

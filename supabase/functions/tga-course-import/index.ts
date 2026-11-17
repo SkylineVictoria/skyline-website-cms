@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { coreUnits, ImportError, qualificationDetails, rtoScope, searchQualifications, selectedUnits } from "./tga.ts";
-import { addUnits, syncCourse } from "./sync.ts";
+import { addUnits, lookupUnit, syncCourse } from "./sync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -94,13 +94,22 @@ Deno.serve(async req => {
       stage = "sync";
       return await syncCourse(db, scope.tenantId ?? null, input.courseId, providerCode, hoursLookup);
     }
+    if (input.action === "unit_lookup") {
+      if (!("code" in input) || typeof input.code !== "string") return json({ error: "Enter a unit code." }, 400);
+      stage = "unit_lookup";
+      return await lookupUnit(input.code, hoursLookup);
+    }
     if (input.action === "add_units") {
+      // `codes`: units from the qualification's own lists; `imported`: electives from elsewhere, typed by hand.
+      const imported = "imported" in input && Array.isArray(input.imported) ? input.imported : [];
       if (!("courseId" in input) || typeof input.courseId !== "string" || !input.courseId || !("codes" in input) || !Array.isArray(input.codes)
-          || !input.codes.length || input.codes.length > 250 || input.codes.some(code => typeof code !== "string")) {
+          || !(input.codes.length + imported.length) || input.codes.length > 250 || imported.length > 30
+          || [...input.codes, ...imported].some(code => typeof code !== "string")) {
         return json({ error: "Choose the units to add." }, 400);
       }
       stage = "add_units";
-      return await addUnits(db, scope.tenantId ?? null, input.courseId, input.codes as string[], hoursLookup);
+      return await addUnits(db, scope.tenantId ?? null, input.courseId, input.codes as string[], hoursLookup,
+        { imported: imported as string[], attested: "attested" in input && input.attested === true });
     }
     if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
       return json({ error: "Invalid qualification request." }, 400);

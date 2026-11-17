@@ -29,6 +29,7 @@ Deno.serve(async (req) => {
     service: async (action, args = {}) => unwrap(await service.rpc("signing_service", { p_action: action, p_hash: args.hash ?? null, p_id: args.id ?? null, p_data: args.data ?? {} })),
     admin: async (action, id = null, data = {}) => unwrap(await caller.rpc("signing_admin", { p_action: action, p_id: id, p_data: data })),
     callerRpc: async (name, args) => unwrap(await caller.rpc(name, args)),
+    serviceRpc: async (name, args) => unwrap(await service.rpc(name, args)),
     assets: {
       download: async (path) => { const { data, error } = await assets.download(path); return error || !data ? null : new Uint8Array(await data.arrayBuffer()); },
     },

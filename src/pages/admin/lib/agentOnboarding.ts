@@ -1,11 +1,16 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { STAGE_LABEL, type OnboardingStage } from "../../../../supabase/functions/_shared/agent-onboarding";
 
 /*
- * Agent onboarding documents (2026-11-17): the Agent Application Form and the Agent Agreement, sent from the business page as ONE
- * signing request of the Sign module to the business's agent. The database keeps one row per send (public.agency_onboarding) with the
- * dates, the signatory, the agent's answers and, once signed, both PDFs and the completion certificate.
+ * Agent onboarding documents (2026-11-17), in stages: the Agent Application Form (F04) to the business's agent; when signed, an Agent
+ * Referee Check Form (F05) to each of the two referees it names; at "References received" (or earlier with a typed reason) the Agent
+ * Agreement (P06). The database keeps one row per onboarding (public.agency_onboarding: stage, each document's request, the signed PDFs,
+ * the answers), one row per referee (their request, their signed or uploaded F05) and a history. Rows of the first version (one merged
+ * request) have stage "legacy" and keep showing as they did.
  */
 
+export type { OnboardingStage };
+export { STAGE_LABEL };
 export interface OnboardingAgent { id: string; name: string; email: string; role: "agency_admin" | "agent"; status?: string }
 export interface OnboardingPrepared {
   agency: { id: string; name: string; abn: string | null; email: string | null; phone: string | null; address: string | null; country: string | null; status: string; agreementStatus: AgreementStatus; commencementDate: string | null; expiryDate: string | null; profile: Record<string, string> };
@@ -15,15 +20,34 @@ export interface OnboardingPrepared {
   values: Record<string, string>;
 }
 export type AgreementStatus = "none" | "sent" | "signed";
-export interface OnboardingRow {
-  id: string; status: "sent" | "signed" | "closed"; createdAt: string; signedAt: string | null; signerName: string | null; closedReason: string | null;
-  commencementDate: string; expiryDate: string; territory: string; commissionPercent: number | null; adminName: string; adminPosition: string;
-  agent: { id: string; name: string; email: string }; answers: Record<string, string>;
-  request: { id: string; reference: string; state: string; expiresAt: string | null; sentAt: string | null; viewedAt: string | null; recipientId: string | null; recipientState: string | null; lastNotifiedAt: string | null; reminderCount: number | null };
-  files: { form: boolean; agreement: boolean; certificate: boolean };
+export interface RequestSummary { id: string; reference: string; state: string; expiresAt: string | null; sentAt: string | null; viewedAt: string | null; signedAt: string | null; recipientId: string | null; recipientState: string | null; lastNotifiedAt: string | null; reminderCount: number | null }
+export interface OnboardingReferee {
+  id: string; position: 1 | 2; name: string; organisation: string; positionTitle: string; email: string; phone: string; status: "pending" | "sent" | "received" | "cancelled"; domainWarning: boolean;
+  receivedAt: string | null; receivedVia: "signed" | "upload" | null; fileName: string | null; files: { form: boolean; certificate: boolean }; answers: Record<string, string>; request: RequestSummary | null;
 }
-export type OnboardingFileKind = "form" | "agreement" | "certificate";
-export const ONBOARDING_FILE_LABEL: Record<OnboardingFileKind, string> = { form: "Application form (signed)", agreement: "Agent agreement (signed)", certificate: "Completion certificate" };
+export interface OnboardingEvent { id: number; at: string; actor: string; event: string; detail: Record<string, unknown> }
+export interface OnboardingRow {
+  id: string; status: "sent" | "signed" | "closed"; stage: OnboardingStage; createdAt: string; signedAt: string | null; signerName: string | null; closedReason: string | null;
+  applicationSignedAt: string | null; referencesReceivedAt: string | null; message: string | null;
+  commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null; adminName: string; adminPosition: string;
+  override: { reason: string; at: string; by: string | null } | null;
+  agent: { id: string; name: string; email: string }; answers: Record<string, string>;
+  /** The merged request of a legacy onboarding. */
+  request: RequestSummary | null;
+  application: RequestSummary | null; agreement: RequestSummary | null; referees: OnboardingReferee[]; events: OnboardingEvent[];
+  files: { form: boolean; agreement: boolean; certificate: boolean; application_certificate: boolean };
+}
+/** form / agreement / certificate / application_certificate, or "referee:<id>" / "referee_certificate:<id>" (administrators only). */
+export type OnboardingFileKind = string;
+export const ONBOARDING_FILE_LABEL: Record<string, string> = { form: "Application form (signed)", agreement: "Agent agreement (signed)", certificate: "Completion certificate", application_certificate: "Application form certificate" };
+export const EVENT_LABEL: Record<string, string> = {
+  application_sent: "Application form sent", application_signed: "Application form signed", referee_check_sent: "Referee check sent", referee_received: "Reference received (signed online)",
+  referee_uploaded: "Reference received (uploaded)", referee_email_changed: "Referee email changed", referee_check_closed: "Referee check closed", references_received: "References received",
+  agent_notified_referees: "Agent told their referees were contacted", staff_notified_references: "Staff emailed: references received", override: "Agreement sent before both references (override)",
+  agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
+};
+/** Stages that are still in progress (one at a time per business). */
+export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "agreement_sent"];
 
 async function call<T>(fn: string, params: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.rpc(fn, params);
@@ -63,5 +87,14 @@ export const PROFILE_LABELS: Array<[string, string]> = [
   ["ref2_position", "Reference 2: position"], ["ref2_email", "Reference 2: email"], ["ref2_phone", "Reference 2: phone"], ["ref2_address", "Reference 2: address"],
   ["agent_signatory_name", "Agreement signatory"], ["agent_signatory_position", "Signatory position"], ["agent_witness_name", "Agent's witness"], ["declarant_name", "Declarant"], ["declarant_role", "Declarant role"],
 ];
+/** The F05 answers as the referee left them. */
+export const REFEREE_LABELS: Array<[string, string]> = [
+  ["referee_organisation", "Organisation"], ["referee_address", "Address"], ["referee_contact_person_1", "Contact person"], ["referee_contact_person_2", "Second contact"], ["referee_phone", "Phone"], ["referee_fax", "Fax"],
+];
 export const todayIso = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 export const formatAuDate = (iso: string | null | undefined) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso ?? ""; };
+/** The stage in plain words, with the referee count while waiting for them. */
+export function stageWords(stage: OnboardingStage, received: number, total: number): string {
+  if (stage === "references_pending") return `Waiting for referees (${received} of ${total || 2} received)`;
+  return STAGE_LABEL[stage] ?? stage;
+}

@@ -11,8 +11,7 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
-import { AGENT_ONBOARDING_DOCS, ONBOARDING_SIGNER_ROLE, expiryDate, isPdfDate, resolveFields, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
+import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -32,6 +31,9 @@ export interface SigningPorts {
   /** public.signing_admin as the caller (their JWT): the database refuses anyone who is not a CMS Admin. */
   // deno-lint-ignore no-explicit-any
   admin(action: string, id?: string | null, data?: unknown): Promise<any>;
+  /** Any other RPC with the service role (the onboarding follow-up after a signature: public.agency_onboarding_* service functions). */
+  // deno-lint-ignore no-explicit-any
+  serviceRpc?(name: string, args: Record<string, unknown>): Promise<any>;
   /** Any other RPC as the caller (the staff record's letter variables, hr_admin_template_values: Admin only in the database). */
   // deno-lint-ignore no-explicit-any
   callerRpc?(name: string, args: Record<string, unknown>): Promise<any>;
@@ -199,11 +201,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           }
           // An offer letter: the signed copy and the certificate are also kept on the application (Documents), in the same transaction.
           // Agent onboarding: the one signed document is split back into the application form and the agreement, kept on the agency.
-          const onboarding = plan.onboarding && typeof plan.onboarding === "object" ? plan.onboarding as { formPages: number } : null;
+          const onboarding = plan.onboarding && typeof plan.onboarding === "object" ? plan.onboarding as { id: string; kind?: string; formPages: number } : null;
           let documents: Record<string, string> = {};
           if ((plan.offer || onboarding) && plan.complete && certificateBytes) {
             documents = { signed_base64: toBase64(signed), certificate_base64: toBase64(certificateBytes) };
-            if (onboarding) {
+            if (onboarding && (onboarding.kind ?? "merged") === "merged") {
               const [form, agreement] = await (await onboardingPdfModule()).splitPdf(signed, Number(onboarding.formPages));
               documents = { ...documents, form_base64: toBase64(form), agreement_base64: toBase64(agreement) };
             }
@@ -213,6 +215,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
               certificate_path: certificatePath, certificate_hash: certificateHash, ...documents } });
             staged.length = 0; // Committed: these files are the record now and are never removed on a later error.
             await ports.later(drainSigningMail(ports));
+            // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.
+            if (onboarding && after.state === "signed") await ports.later(afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, onboarding).catch(() => undefined));
             return { signed: true, complete: after.state === "signed", state: after.state };
           } catch (error) {
             const e = error as RpcError;
@@ -334,119 +338,13 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return inspected.pages;
     };
 
-    if (action === "agent_onboarding_install") {
-      // One of the two agent onboarding blanks (the CMS uploads the copy shipped with the site): its checksum must be the registry's,
-      // every AcroForm field becomes a placed field through the registry, the form is flattened and saved as a PDF template of the Sign
-      // module (editable like any other), then marked by its system key so sending finds it however it is renamed.
-      await admin("subject_search", null, { type: "none" });
+    if (Object.hasOwn(ONBOARDING_ACTIONS, action)) {
+      // Agent onboarding (2026-11-17): install a blank, send the application form / the referee checks / the agreement, change or upload a referee's form.
       if (!ports.callerRpc) throw new SigningError("Not available.");
-      const which = String(body.which ?? "") as OnboardingDoc;
-      const spec = AGENT_ONBOARDING_DOCS[which];
-      if (!spec) throw new SigningError("Say which blank to install: form or agreement.");
-      if (!call.upload) throw new SigningError(`Choose the ${spec.name} PDF.`);
-      if (await sha256Hex(call.upload.bytes) !== spec.sha256) throw new SigningError(`This file is not the ${spec.name} blank (checksum mismatch). Use the copy shipped with the site.`);
-      let read: Awaited<ReturnType<Awaited<ReturnType<typeof onboardingPdfModule>>["readBlankTemplate"]>>;
-      try { read = await (await onboardingPdfModule()).readBlankTemplate(which, call.upload.bytes); }
-      catch (error) { throw new SigningError((error as Error).message); }
-      const id = ports.uuid();
-      const path = `templates/${id}/source-${ports.uuid()}.pdf`;
-      await store(path, read.flattened);
-      await admin("template_save", id, { name: spec.name, title: spec.title, kind: "pdf", audience: "agent", category: spec.category, roles: [ONBOARDING_SIGNER_ROLE], fields: read.fields,
-        signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages });
-      await ports.callerRpc("agency_onboarding_template_register", { p_template: id, p_key: spec.key });
-      staged.length = 0;
-      return { id, systemKey: spec.key, fields: read.fields.length, pages: read.pages };
-    }
-    if (action === "agent_onboarding_send") {
-      // Send onboarding documents (the business page): both blanks become ONE request to the business's agent. The sender's values (the
-      // agency record, the ABN Lookup, the dialog: commencement date, territory, commission, the signatory and their signature) are printed
-      // into the document before anyone sees it; what we hold no value for, and the agent's own answers, are the agent's fields.
-      if (!ports.callerRpc) throw new SigningError("Not available.");
-      const agencyId = String(body.agencyId ?? "");
-      if (!UUID.test(agencyId)) throw new SigningError("Choose a business.");
       const callerRpc = ports.callerRpc;
-      const rpc = async (name: string, args: Record<string, unknown>) => {
-        try { return await callerRpc(name, args); }
-        catch (error) { const e = error as RpcError; throw new SigningError(e.message, e.code === "42501" ? 403 : 400); }
-      };
-      const prepared = await rpc("agency_onboarding_prepare", { p_agency: agencyId, p_agent: UUID.test(String(body.agentId ?? "")) ? body.agentId : null }) as {
-        agency: { id: string; name: string; abn: string | null }; agent: { id: string; name: string; email: string } | null; admin: { name: string; position: string; signaturePng: string | null }; values: Record<string, unknown> };
-      if (!prepared?.agent) throw new SigningError("This business has no active agent to send the documents to. Add its business admin agent first.");
-      type OnboardingTemplate = { id: string; systemKey: string; status: string; sourcePath: string; sourceHash: string; sourcePages: number; fields: PlacedField[]; expiryDays: number; reminderDays: number };
-      const templates = (await rpc("agency_onboarding_templates", {})) as OnboardingTemplate[];
-      const form = templates.find((t) => t.systemKey === AGENT_ONBOARDING_DOCS.form.key && t.status === "active");
-      const agreement = templates.find((t) => t.systemKey === AGENT_ONBOARDING_DOCS.agreement.key && t.status === "active");
-      if (!form || !agreement) throw new SigningError(ONBOARDING_TEMPLATES_MISSING);
-      const text = (value: unknown, max: number) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max); // eslint-disable-line no-control-regex
-      const commencement = text(body.commencementDate, 10);
-      if (!isPdfDate(commencement) || Number.isNaN(Date.parse(commencement))) throw new SigningError("Enter the commencement date.");
-      const territory = text(body.territory, 200);
-      if (!territory) throw new SigningError("Enter the territory (Item 3).");
-      const commission = text(body.commissionPercent, 10).replace(/%/g, "");
-      if (!/^\d{1,3}(\.\d{1,2})?$/.test(commission) || Number(commission) > 100) throw new SigningError("Enter the commission as a percentage, for example 25.");
-      const adminName = text(body.adminName ?? prepared.admin?.name, 150);
-      const adminPosition = text(body.adminPosition ?? prepared.admin?.position, 150);
-      if (!adminName) throw new SigningError("Enter the name of the SLIT signatory.");
-      if (!adminPosition) throw new SigningError("Enter the position of the SLIT signatory.");
-      // The SLIT signature: the administrator's saved picture, one drawn now, or their typed name.
-      const signature = body.adminSignature && typeof body.adminSignature === "object" ? body.adminSignature as { kind?: string; png?: string; name?: string; save?: boolean } : {};
-      const pdf = await signingPdfModule();
-      let adminSignature = "";
-      if (signature.kind === "saved") {
-        if (!prepared.admin?.signaturePng) throw new SigningError("You have no saved signature yet. Draw one, or type your name.");
-        adminSignature = `data:image/png;base64,${prepared.admin.signaturePng}`;
-      } else if (signature.kind === "drawn") {
-        const bytes = pdf.signatureImageBytes(signature.png);
-        adminSignature = `data:image/png;base64,${toBase64(bytes)}`;
-        if (signature.save === true) await rpc("cms_user_signature_save", { p_png: toBase64(bytes) });
-      } else {
-        adminSignature = text(signature.name ?? adminName, 150);
-        if (!signingNameValid(adminSignature)) throw new SigningError("Type the signatory's name as the signature, or draw one.");
-      }
-      const values: Record<string, string> = {};
-      for (const [key, value] of Object.entries(prepared.values ?? {})) if (typeof value === "string" && value.trim()) values[key] = value.trim();
-      // The ABN Lookup (as the agent sign-up uses it): legal entity, trading name, GST registration, state and postcode. Unavailable: left for the agent.
-      if (prepared.agency.abn) {
-        try {
-          const abr = await lookupAgencyAbn(prepared.agency.abn);
-          if (abr.legalName) { values.agent_legal_entity ||= abr.legalName; values.agent_organisation_name = abr.legalName; }
-          if (abr.businessNames?.[0]) values.agent_trading_name ||= abr.businessNames[0];
-          if (/^registered/i.test(abr.gstStatus ?? "")) values.agent_gst_registered ||= "YES"; else if (/not/i.test(abr.gstStatus ?? "")) values.agent_gst_registered ||= "NO";
-          if (abr.state) values.office_state ||= abr.state;
-          if (abr.postcode) values.office_province ||= abr.postcode;
-        } catch { /* the lookup is a convenience: the agent types what it would have printed */ }
-      }
-      const today = isoToday();
-      Object.assign(values, { agreement_commencement_date: commencement, agent_territory: territory, agent_commission_percent: commission, admin_name: adminName, admin_position: adminPosition,
-        admin_signed_date: today, admin_witness_name: text(body.adminWitnessName, 150), admin_witness_signature: text(body.adminWitnessName, 150), admin_signature: adminSignature });
-      const [formBytes, agreementBytes] = await Promise.all([fileBytes(form.sourcePath, form.sourceHash), fileBytes(agreement.sourcePath, agreement.sourceHash)]);
-      const onboardingPdf = await onboardingPdfModule();
-      let bytes = await onboardingPdf.mergePdfs([formBytes, agreementBytes]);
-      const offset = Number(form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
-      const placed: PlacedField[] = [...form.fields, ...agreement.fields.map((f) => ({ ...f, page: Number(f.page) + offset }))].map((f) => ({ ...f, page: Number(f.page), x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h) }));
-      const { printed, recipient } = resolveFields(placed, values);
-      const title = `Agent onboarding documents: ${text(prepared.agency.name, 150)}`.slice(0, 200);
-      if (printed.length) {
-        bytes = await pdf.stampDocument(bytes, { reference: "", title, recipients: [],
-          fields: printed.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) });
-      }
-      const recipients = checkRecipients([{ name: prepared.agent.name, email: prepared.agent.email, role: ONBOARDING_SIGNER_ROLE.key, label: ONBOARDING_SIGNER_ROLE.label, order: 1, required: true }]);
-      const fields = recipient.map((f) => ({ type: f.type, role: ONBOARDING_SIGNER_ROLE.key, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, key: f.key, value: f.value }));
-      const sentValues = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "admin_signature"));
-      const id = ports.uuid();
-      await store(`${id}/original.pdf`, bytes);
-      const record = await admin("create", id, { title, template_id: agreement.id, rendered_text: null, field_values: sentValues, original_hash: await sha256Hex(bytes), recipients, fields,
-        subject_type: "agent", subject_id: prepared.agent.id, category: AGENT_ONBOARDING_DOCS.agreement.category, message: text(body.message, 2000) || null, edited: false, template_text: null,
-        signing_mode: "sequential", expiry_days: agreement.expiryDays ?? 30, reminder_days: agreement.reminderDays ?? 3 });
-      const onboarding = await rpc("agency_onboarding_create", { p_agency: agencyId, p_agent: prepared.agent.id, p_request: id, p_data: { commencement_date: commencement, expiry_date: expiryDate(commencement),
-        territory, commission_percent: commission, admin_name: adminName, admin_position: adminPosition, form_pages: offset, values: sentValues } }) as { id: string; reference: string };
-      staged.length = 0;
-      if (!ports.mail.provider || !ports.mail.config.siteUrl || !ports.mail.config.from) {
-        return { id, reference: record.reference, onboardingId: onboarding.id, sent: false, warning: "Signing email is not configured, so nothing was emailed. The request was kept as a draft: send it from the request." };
-      }
-      const sent = await admin("send", id, {});
-      const mail = await drainSigningMail(ports);
-      return { id, reference: record.reference, onboardingId: onboarding.id, sent: true, state: sent.state, mail, agent: { name: prepared.agent.name, email: prepared.agent.email }, printed: printed.length, fields: fields.length };
+      const ctx: OnboardingContext = { ports, body, upload: call.upload, admin, store, fileBytes, commit: () => { staged.length = 0; },
+        rpc: async (name, args) => { try { return await callerRpc(name, args); } catch (error) { const e = error as RpcError; throw new SigningError(e.message, e.code === "42501" ? 403 : 400); } } };
+      return await ONBOARDING_ACTIONS[action](ctx);
     }
     if (action === "template_upload") {
       await admin("subject_search", null, { type: "none" });

@@ -336,7 +336,7 @@ test("signing function: a sectioned template's preview and request carry the hea
 
 /* ------------------------------------------------------------------ agent onboarding documents (2026-11-17) */
 
-const BLANKS = { form: "public/templates/agent_application_form_template_blank.pdf", agreement: "public/templates/agent_agreement_template_blank.pdf" } as const;
+const BLANKS = { form: "public/templates/agent_application_form_template_blank.pdf", agreement: "public/templates/agent_agreement_template_blank.pdf", referee: "public/templates/agent_referee_check_form_template_blank.pdf" } as const;
 const blankBytes = (which: keyof typeof BLANKS) => new Uint8Array(readFileSync(path.resolve(BLANKS[which])));
 test("agent onboarding: the registry and the two blanks agree; every widget becomes a placed field with its page, type and key; a different PDF is refused", async () => {
   for (const which of ["form", "agreement"] as const) {
@@ -393,92 +393,153 @@ test("agent onboarding: values resolve into what the sender prints and what the 
   assert.equal(onboarding.registryKey("agreement", "agent_abn", null), "agent_abn");
   assert.equal(signingPdf.layoutText({ widthOfTextAtSize: (t: string, s: number) => t.length * s * 0.5 } as never, "a long answer that will not fit on one line of this box", 100, 30).lines.length > 1, true, "a long answer wraps in a tall box");
 });
-test("agent onboarding: install stores both blanks as PDF templates; send merges them into one request with the sender's values printed and the agent's fields placed; signing splits the signed PDF back", async () => {
-  const stored = new Map<string, Uint8Array>(); const saved: Array<Record<string, unknown>> = []; const rpcs: Array<[string, Record<string, unknown>]> = [];
-  let created: Record<string, unknown> | null = null; let sent: Record<string, unknown> | null = null; let n = 0;
-  const templates = () => saved.map((t, i) => ({ id: t.id, systemKey: i === 0 ? "agent_application_form" : "agent_agreement", status: "active", sourcePath: t.source_path, sourceHash: t.source_hash, sourcePages: t.source_pages, fields: t.fields, expiryDays: 30, reminderDays: 3 }));
-  const ports = { isServiceCaller: false, later: () => undefined, letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+test("agent onboarding: the referee check blank (F05) is registered and placed; a referee's fields resolve from the application form's reference", async () => {
+  const bytes = blankBytes("referee");
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), onboarding.AGENT_ONBOARDING_DOCS.referee.sha256, "the shipped F05 blank is the registered one");
+  const read = await onboardingPdf.readBlankTemplate("referee", bytes);
+  assert.equal(read.pages, 1);
+  assert.deepEqual(read.fields.map((f) => `${f.key}:${f.role}:${f.type}:${f.required}`).sort(), [
+    "agent_agency_name_referee:sender:text:false", "agent_office_address:sender:text:false", "referee_address:referee:text:false", "referee_contact_person_1:referee:text:true", "referee_contact_person_2:referee:text:false",
+    "referee_email:sender:text:false", "referee_fax:referee:text:false", "referee_organisation:referee:text:true", "referee_phone:referee:text:true", "referee_signature:referee:signature:true"].sort());
+  assert.equal((await PdfLib.PDFDocument.load(read.flattened)).getForm().getFields().length, 0);
+  assert.equal(onboarding.signerRole("referee").key, "referee"); assert.equal(onboarding.signerRole("form").key, "agent");
+  const r = onboarding.resolveFields(read.fields, { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St, Melbourne VIC 3000", referee_email: "priya@example.test",
+    referee_organisation: "Harbour College", referee_contact_person_1: "Priya Nair, Admissions Lead", referee_phone: "0400 111 222" });
+  assert.deepEqual(r.printed.map((f) => `${f.key}=${f.value}`).sort(), ["agent_agency_name_referee=Acme Education Pty Ltd", "agent_office_address=1 Test St, Melbourne VIC 3000", "referee_email=priya@example.test"], "the agency and the referee's email are printed (read-only)");
+  assert.deepEqual(r.recipient.map((f) => `${f.key}:${f.value}`).sort(), ["referee_address:", "referee_contact_person_1:Priya Nair, Admissions Lead", "referee_contact_person_2:", "referee_fax:", "referee_organisation:Harbour College", "referee_phone:0400 111 222", "referee_signature:"],
+    "the referee's fields are prefilled where the form gave them and editable");
+  assert.equal(onboarding.answerKey("agent_agency_name_referee"), "agent_agency_name");
+  assert.equal(onboarding.STAGE_LABEL.references_pending, "Waiting for referees");
+});
+test("agent onboarding (staged): the form goes alone; signing it sends a prefilled referee check to each referee; the agreement needs References received or a reason; a changed email voids and resends; an uploaded form counts and staff are told", async () => {
+  const stored = new Map<string, Uint8Array>(); const saved: Array<Record<string, unknown>> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = [];
+  const created: Array<Record<string, unknown>> = []; const sent: string[] = []; const voided: string[] = []; const mails: Array<{ to: string; subject: string; textBody: string }> = []; let n = 0;
+  const templates = () => saved.map((t) => ({ id: t.id, systemKey: t.__key, status: "active", sourcePath: t.source_path, sourceHash: t.source_hash, sourcePages: t.source_pages, fields: t.fields, expiryDays: 30, reminderDays: 3 }));
+  const refereeTemplate = () => templates().find((t) => t.systemKey === "agent_referee_check_form") ?? null;
+  const referees = [
+    { id: "40000000-0000-4000-8000-000000000001", position: 1, name: "Priya Nair", organisation: "Harbour College", positionTitle: "Admissions Lead", email: "priya@example.test", phone: "0400 111 222", address: "2 Harbour Rd", status: "pending", requestId: null as string | null },
+    { id: "40000000-0000-4000-8000-000000000002", position: 2, name: "Sam Lee", organisation: "Metro Institute", positionTitle: "", email: "sam@example.test", phone: "0400 333 444", address: "", status: "pending", requestId: null as string | null },
+  ];
+  const state = { stage: "application_sent", notifiedAgent: false, notifiedStaff: false, lastKey: "" };
+  const follow = () => ({ id: "20000000-0000-4000-8000-000000000001", stage: state.stage, agency: { id: "30000000-0000-4000-8000-000000000001", name: "Acme Education Pty Ltd" },
+    agent: { id: "10000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" }, sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: ["admissions@example.test"],
+    values: { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St, Melbourne, VIC, 3000, Australia" }, referees: referees.map((r) => ({ ...r })),
+    received: referees.filter((r) => r.status === "received").length, total: referees.length, template: refereeTemplate(), notified: { agentReferees: state.notifiedAgent, staffReferences: state.notifiedStaff } });
+  const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
     admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
       if (action === "subject_search") return [];
-      if (action === "template_save") { saved.push({ ...data, id }); return { id }; }
-      if (action === "create") { created = { ...data, id }; return { id, reference: "SLIT-2026-000777" }; }
-      if (action === "send") { sent = { id }; return { id, state: "sent" }; }
+      if (action === "template_save") { saved.push({ ...data, id, __key: state.lastKey }); return { id }; }
+      if (action === "create") { created.push({ ...data, id }); return { id, reference: `SLIT-2026-00${created.length}` }; }
+      if (action === "send") { sent.push(id!); return { id, state: "sent" }; }
+      if (action === "void") { voided.push(id!); return { id, state: "void" }; }
       throw new Error(`unexpected ${action}`);
     },
     callerRpc: async (name: string, args: Record<string, unknown>) => {
       rpcs.push([name, args]);
-      if (name === "agency_onboarding_template_register") return { id: args.p_template };
+      if (name === "agency_onboarding_template_register") { state.lastKey = String(args.p_key); saved[saved.length - 1].__key = args.p_key; return { id: args.p_template }; }
       if (name === "agency_onboarding_templates") return templates();
       if (name === "agency_onboarding_prepare") return { agency: { id: args.p_agency, name: "Acme Education Pty Ltd", abn: null }, agent: { id: "10000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" },
-        admin: { name: "Hari Admin", position: "", signaturePng: null }, values: { agent_organisation_name: "Acme Education Pty Ltd", agent_abn: "12345678901", agent_agency_name: "Acme Education Pty Ltd", contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", agent_signatory_name: "Ravi Kumar", declarant_name: "Ravi Kumar" } };
-      if (name === "agency_onboarding_create") return { id: "20000000-0000-4000-8000-000000000001", reference: "SLIT-2026-000777" };
+        admin: { name: "Hari Admin", position: "", signaturePng: null }, values: { agent_agency_name: "Acme Education Pty Ltd", agent_organisation_name: "Acme Education Pty Ltd", contact_email: "ravi@example.test", agent_signatory_name: "Ravi Kumar", declarant_name: "Ravi Kumar" } };
+      if (name === "agency_onboarding_create") return { id: "20000000-0000-4000-8000-000000000001", reference: "SLIT-2026-001", stage: "application_sent" };
+      if (name === "agency_onboarding_agreement_create") {
+        const d = args.p_data as Record<string, unknown>;
+        if (state.stage !== "references_received" && !(typeof d.override_reason === "string" && d.override_reason.length >= 5)) throw { message: "Give a reason for sending the agreement before both references are back" };
+        state.stage = "agreement_sent"; return { id: args.p_onboarding, stage: "agreement_sent", override: !!d.override_reason };
+      }
+      if (name === "agency_onboarding_referee_change_email") { const r = referees.find((x) => x.id === args.p_referee)!; const prev = r.requestId; r.email = String(args.p_email); r.status = "pending"; r.requestId = null; return { id: r.id, onboardingId: "20000000-0000-4000-8000-000000000001", previousRequestId: prev, email: r.email }; }
+      if (name === "agency_onboarding_referee_upload") { const r = referees.find((x) => x.id === args.p_referee)!; const prev = r.requestId; r.status = "received"; state.stage = referees.every((x) => x.status === "received") ? "references_received" : "references_pending"; return { id: r.id, onboardingId: "20000000-0000-4000-8000-000000000001", previousRequestId: prev, stage: state.stage, base64Length: String(args.p_base64).length }; }
       throw new Error(`unexpected rpc ${name}`);
     },
-    service: async () => true,
-    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async () => undefined, signedUrl: async () => null },
-    mail: { provider: null, config: { from: null, adminTo: [], siteUrl: "", problems: [] } },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      services.push([name, args]);
+      if (name === "agency_onboarding_followup") return follow();
+      if (name === "agency_onboarding_referee_request_create") { const r = referees.find((x) => x.id === args.p_referee)!; r.status = "sent"; r.requestId = String((args.p_data as Record<string, unknown>).id); state.stage = "references_pending"; return { requestId: r.requestId, reference: `SLIT-2026-R${r.position}` }; }
+      if (name === "agency_onboarding_mark_notified") { if (args.p_kind === "agent_notified_referees") state.notifiedAgent = true; else state.notifiedStaff = true; return null; }
+      throw new Error(`unexpected service ${name}`);
+    },
+    service: async (action: string) => { if (action === "notify_claim") return []; if (action === "path_referenced") return false; return true; },
+    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async (paths: string[]) => { for (const p of paths) stored.delete(p); }, signedUrl: async () => null },
+    mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: ["admin@example.test"], siteUrl: "https://site.example.test", problems: [] } },
   } as unknown as Parameters<typeof signingCore.handleSigning>[1];
   const call = (body: Record<string, unknown>, upload: { name: string; bytes: Uint8Array } | null = null) => signingCore.handleSigning({ body, upload, ip: null, userAgent: null }, ports);
-  await assert.rejects(call({ action: "agent_onboarding_send", agencyId: "30000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India", commissionPercent: "25", adminPosition: "CEO" }), /Install the agent onboarding templates first/);
-  await assert.rejects(call({ action: "agent_onboarding_install", which: "form" }, { name: "x.pdf", bytes: blankBytes("agreement") }), /checksum mismatch/);
-  const form = await call({ action: "agent_onboarding_install", which: "form" }, { name: "f.pdf", bytes: blankBytes("form") }) as { fields: number; pages: number };
-  const agreement = await call({ action: "agent_onboarding_install", which: "agreement" }, { name: "a.pdf", bytes: blankBytes("agreement") }) as { fields: number; pages: number };
-  assert.equal(form.pages, 2); assert.equal(agreement.pages, 13);
-  assert.deepEqual(saved.map((t) => `${t.kind}:${t.audience}:${t.category}:${(t.roles as unknown[]).length}`), ["pdf:agent:other:1", "pdf:agent:agency_agreement:1"]);
-  assert.deepEqual(rpcs.filter(([name]) => name === "agency_onboarding_template_register").map(([, a]) => a.p_key), ["agent_application_form", "agent_agreement"]);
-  const result = await call({ action: "agent_onboarding_send", agencyId: "30000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India and Nepal", commissionPercent: "25", adminPosition: "Chief Executive Officer",
-    adminSignature: { kind: "typed", name: "Hari Admin" }, message: "Welcome aboard" }) as { id: string; sent: boolean; warning?: string; fields: number; printed: number };
-  assert.equal(result.sent, false, "no mail provider in the test: the request is kept as a draft"); assert.match(result.warning ?? "", /not configured/);
-  assert.equal(sent, null);
-  const request = created as unknown as { title: string; subject_type: string; subject_id: string; category: string; recipients: Array<{ email: string; role: string }>; fields: Array<{ key: string; role: string; page: number; type: string; required: boolean; value: string }>; field_values: Record<string, string> };
-  assert.equal(request.title, "Agent onboarding documents: Acme Education Pty Ltd");
-  assert.ok(request.subject_type === "agent" && request.category === "agency_agreement" && request.recipients[0].email === "ravi@example.test" && request.recipients[0].role === "agent");
-  assert.ok(request.fields.every((f) => f.role === "agent" && f.page >= 1 && f.page <= 15), "every placed field is the agent's, on one of the 15 pages");
-  assert.ok(request.fields.some((f) => f.key === "agent_signature" && f.page === 13 && f.type === "signature"), "the agreement's signature sits on page 11 + 2");
-  assert.ok(request.fields.some((f) => f.key === "agent_signature_form" && f.page === 2));
-  assert.ok(request.fields.some((f) => f.key === "litigation_involved:YES" && f.required) && request.fields.some((f) => f.key === "ref2_email" && f.required));
-  assert.equal(request.fields.find((f) => f.key === "agent_signatory_name")!.value, "Ravi Kumar", "prefilled, editable by the agent");
-  assert.ok(request.fields.some((f) => f.key === "agent_website" && !f.required), "no website on record: the agent may type it");
-  assert.ok(!request.fields.some((f) => f.key === "contact_email"), "the email we hold is printed, not asked");
-  assert.equal(request.field_values.admin_signature, undefined, "the signature never goes into the stored values");
-  assert.equal(request.field_values.agent_territory, "India and Nepal");
-  const onboardingCall = rpcs.find(([name]) => name === "agency_onboarding_create")![1].p_data as Record<string, unknown>;
-  assert.equal(onboardingCall.form_pages, 2); assert.equal(onboardingCall.expiry_date, "2028-11-16"); assert.equal(onboardingCall.commission_percent, "25");
-  const original = stored.get(`${result.id}/original.pdf`)!;
-  assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the form's 2 pages then the agreement's 13");
-  const text = await pdfText(original);
-  const on = (needle: string) => text.filter((t) => t.text.includes(needle)).map((t) => t.page);
-  assert.deepEqual([...new Set(on("Acme Education Pty Ltd"))].sort((a, b) => a - b), [1, 3, 12, 13], "the agency name prints on the form and on the agreement's pages 1, 10 and 11");
-  assert.ok(on("12 345 678 901").includes(1) && on("12 345 678 901").includes(3), "the ABN prints on both documents");
-  assert.ok(on("17/11/2026").includes(13) && on("India and Nepal").includes(13) && on("25%").includes(13) && on("Chief Executive Officer").includes(13), "Items 3 to 5 and the signatory print on the agreement");
-  assert.ok(on("Hari Admin").includes(13), "the typed SLIT signature prints");
-  // Signing: the agent's signature goes on both documents; completion splits the signed PDF back into the two files.
+  for (const which of ["form", "referee", "agreement"] as const) await call({ action: "agent_onboarding_install", which }, { name: `${which}.pdf`, bytes: blankBytes(which) });
+  assert.deepEqual(saved.map((t) => `${t.__key}:${(t.roles as Array<{ key: string }>)[0].key}`), ["agent_application_form:agent", "agent_referee_check_form:referee", "agent_agreement:agent"], "three blanks, the referee check signed by a referee");
+  // Stage 1: the application form alone.
+  const sentForm = await call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001", message: "Welcome" }) as { id: string; sent: boolean; stage: string };
+  assert.ok(sentForm.sent && sentForm.stage === "application_sent" && sent.includes(sentForm.id));
+  const form = created[0] as { title: string; fields: Array<{ key: string; page: number }>; category: string };
+  assert.equal(form.title, "Agent application form: Acme Education Pty Ltd");
+  assert.ok(form.fields.every((f) => f.page <= 2) && form.fields.some((f) => f.key === "ref2_email") && !form.fields.some((f) => f.key === "agent_signature"), "only the form's 2 pages and fields, no agreement");
+  assert.equal((await PdfLib.PDFDocument.load(stored.get(`${sentForm.id}/original.pdf`)!)).getPageCount(), 2);
+  assert.equal((rpcs.find(([name]) => name === "agency_onboarding_create")![1].p_data as Record<string, unknown>).form_pages, 2);
+  // The agent signs the form: the link-holder path completes it and the referee checks go out by themselves.
+  const original = stored.get(`${sentForm.id}/original.pdf`)!; const originalHash = await signingCore.sha256Hex(original);
   const recipient = { id: "r1", name: "Ravi Kumar", email: "ravi@example.test", role: "Agent", state: "sent" };
-  const fieldRows = request.fields.map((f, i) => ({ id: `f${i}`, recipient_id: "r1", type: f.type, page: f.page, x: 0.5, y: 0.8, w: 0.3, h: 0.03, label: f.key, key: f.key, value: f.value, required: f.required }));
-  const record = { id: result.id, state: "sent", original_hash: await signingCore.sha256Hex(original), recipient, fields: fieldRows, signers: [], onboarding: { id: "o1", formPages: 2, agencyName: "Acme" } };
+  const fieldRows = form.fields.map((f, i) => ({ id: `f${i}`, recipient_id: "r1", type: (f as { type: string }).type, page: f.page, x: 0.5, y: 0.8, w: 0.3, h: 0.03, label: f.key, key: f.key, value: (f as { value: string }).value, required: (f as { required: boolean }).required }));
+  const record = { id: sentForm.id, state: "sent", original_hash: originalHash, recipient, fields: fieldRows, signers: [], onboarding: { id: "20000000-0000-4000-8000-000000000001", kind: "application", formPages: 2 } };
   let signData: Record<string, unknown> | null = null;
   const linkPorts = { ...ports, service: async (action: string, args: { data?: Record<string, unknown> }) => {
     if (action === "rate") return true;
     if (action === "open") return record;
-    if (action === "sign_plan") return { id: result.id, reference: "SLIT-2026-000777", title: request.title, revision: 1, complete: true, signed_at: "2026-11-17T01:00:00Z", original_path: `${result.id}/original.pdf`, original_hash: record.original_hash,
-      created_at: "2026-11-17T00:00:00Z", sent_at: "2026-11-17T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: { formPages: 2 },
-      fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String(args.data?.values && (args.data.values as Record<string, string>)[f.id] === "true") : f.type === "date" ? "17/11/2026" : f.value || ((args.data?.values as Record<string, string>)?.[f.id] ?? "") })),
+    if (action === "sign_plan") return { id: sentForm.id, reference: "SLIT-2026-001", title: form.title, revision: 1, complete: true, signed_at: "2026-11-17T01:00:00Z", original_path: `${sentForm.id}/original.pdf`, original_hash: originalHash,
+      created_at: "2026-11-17T00:00:00Z", sent_at: "2026-11-17T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: record.onboarding,
+      fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String((args.data?.values as Record<string, string>)?.[f.id] === "true") : f.type === "date" ? "17/11/2026" : ((args.data?.values as Record<string, string>)?.[f.id] ?? f.value ?? "") })),
       recipients: [{ ...recipient, state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-17T01:00:00Z", signature_kind: "typed" }], events: [] };
-    if (action === "sign") { signData = args.data ?? null; return { state: "signed" }; }
+    if (action === "sign") { signData = args.data ?? null; state.stage = "application_signed"; return { state: "signed" }; }
+    if (action === "notify_claim") return [];
     if (action === "path_referenced") return false;
     throw new Error(`unexpected ${action}`);
   } } as typeof ports;
   const values = Object.fromEntries(fieldRows.filter((f) => f.type === "text").map((f) => [f.id, f.value || "x"]));
-  const yes = fieldRows.find((f) => f.key === "litigation_involved:YES")!.id; values[yes] = "true";
-  const signed = await signingCore.handleSigning({ body: { action: "sign", token: "b".repeat(64), name: "Ravi Kumar", agreed: true, values, documentHash: record.original_hash }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts) as { signed: boolean; complete: boolean };
+  values[fieldRows.find((f) => f.key === "litigation_involved:NO")!.id] = "true"; values[fieldRows.find((f) => f.key === "eatc_completed:YES")!.id] = "true";
+  const signed = await signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values, documentHash: originalHash }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts) as { signed: boolean; complete: boolean };
   assert.ok(signed.signed && signed.complete);
-  const data = signData as unknown as { form_base64: string; agreement_base64: string; signed_base64: string; certificate_base64: string };
-  assert.ok(data.form_base64 && data.agreement_base64 && data.signed_base64 && data.certificate_base64, "both split documents, the signed file and the certificate go to the database together");
-  const formPdf = await PdfLib.PDFDocument.load(Buffer.from(data.form_base64, "base64")), agreementPdf = await PdfLib.PDFDocument.load(Buffer.from(data.agreement_base64, "base64"));
-  assert.equal(formPdf.getPageCount(), 2); assert.equal(agreementPdf.getPageCount(), 13);
-  const signedText = await pdfText(Uint8Array.from(Buffer.from(data.signed_base64, "base64")));
-  const signatures = signedText.filter((t) => t.text === "Ravi Kumar").map((t) => t.page);
-  assert.ok(signatures.includes(2) && signatures.includes(13), `the one signature is drawn on both documents (pages ${signatures.join(", ")})`);
+  assert.equal((signData as unknown as { form_base64?: string }).form_base64, undefined, "a staged request is not split: its signed PDF is the document");
+  const refereeCreates = services.filter(([name]) => name === "agency_onboarding_referee_request_create");
+  assert.equal(refereeCreates.length, 2, "one referee check per referee, sent when the form was signed");
+  const first = refereeCreates[0][1].p_data as { title: string; message: string; fields: Array<{ key: string; role: string; value: string; required: boolean }>; original_hash: string; id: string };
+  assert.equal(refereeCreates[0][1].p_referee, referees[0].id);
+  assert.match(first.title, /^Agent referee check: Acme Education Pty Ltd \(reference 1\)/);
+  assert.match(first.message, /Ravi Kumar of Acme Education Pty Ltd .* named you as a referee/);
+  assert.ok(first.fields.every((f) => f.role === "referee") && first.fields.find((f) => f.key === "referee_organisation")!.value === "Harbour College" && first.fields.find((f) => f.key === "referee_contact_person_1")!.value === "Priya Nair, Admissions Lead", "prefilled from the form's reference 1, editable");
+  assert.ok(!first.fields.some((f) => f.key === "referee_email"), "the referee's email is printed, not editable");
+  const refereeText = (await pdfText(stored.get(`${first.id}/original.pdf`)!)).map((t) => t.text).join(" ");
+  assert.ok(refereeText.includes("priya@example.test") && refereeText.includes("Acme Education Pty Ltd") && refereeText.includes("1 Test St, Melbourne"), "the F05 prints the agency, its office address and the referee's email");
+  assert.equal(await signingCore.sha256Hex(stored.get(`${first.id}/original.pdf`)!), first.original_hash);
+  assert.ok(mails.some((m) => m.to === "ravi@example.test" && /referees have been contacted/i.test(m.subject) && m.textBody.includes("Priya Nair (Harbour College) and Sam Lee (Metro Institute)")), "the agent is told once");
+  assert.ok(state.notifiedAgent && services.some(([name, a]) => name === "agency_onboarding_mark_notified" && a.p_kind === "agent_notified_referees"));
+  assert.equal(state.stage, "references_pending");
+  // Stage 3 is gated: no reason, no agreement; a reason passes it to the database and is reported.
+  const agreementInput = { action: "agent_onboarding_send_agreement", agencyId: "30000000-0000-4000-8000-000000000001", onboardingId: "20000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India", commissionPercent: "25", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" } };
+  await assert.rejects(call(agreementInput), /Give a reason for sending the agreement/);
+  assert.equal(stored.size, 3 + 1 + 2 + 2, "the refused agreement's PDF is removed again (three sources, the form, two referee checks, the signed form and its certificate stay)");
+  // A referee's email changes: the old request is voided and a new check goes out.
+  const changed = await call({ action: "agent_onboarding_referee_change", refereeId: referees[1].id, email: "sam.lee@newplace.test", name: "Sam Lee" }) as { sent: number; email: string };
+  assert.ok(changed.sent === 1 && changed.email === "sam.lee@newplace.test" && voided.length === 1 && voided[0] === (refereeCreates[1][1].p_data as { id: string }).id, "the old request is voided");
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 3);
+  assert.equal(mails.filter((m) => /referees have been contacted/i.test(m.subject)).length, 1, "the agent is not told again");
+  // Reference 1 arrives by email: staff upload it; reference 2 is also uploaded, so both are in and staff are told once.
+  const pdf = await PdfLib.PDFDocument.create(); pdf.addPage([595.28, 841.89]); const uploadBytes = await pdf.save();
+  const up1 = await call({ action: "agent_onboarding_referee_upload", refereeId: referees[0].id }, { name: "ref1.pdf", bytes: uploadBytes }) as { stage: string; notified: boolean };
+  assert.ok(up1.stage === "references_pending" && up1.notified === false && voided.length === 2, "the first upload voids its open request; nothing to tell staff yet");
+  const up2 = await call({ action: "agent_onboarding_referee_upload", refereeId: referees[1].id }, { name: "ref2.pdf", bytes: uploadBytes }) as { stage: string; notified: boolean };
+  assert.ok(up2.stage === "references_received" && up2.notified === true);
+  const staffMail = mails.find((m) => /References received/.test(m.subject))!;
+  assert.ok(staffMail && staffMail.to.includes("hari@example.test") && staffMail.to.includes("admissions@example.test") && !staffMail.to.includes("admin@example.test"), "the staff member who started it and the admissions contact");
+  assert.ok(state.notifiedStaff);
+  await assert.rejects(call({ action: "agent_onboarding_referee_upload", refereeId: referees[0].id }, { name: "x.pdf", bytes: new TextEncoder().encode("not a pdf") }), /PDF/i);
+  // Now the agreement goes without a reason, prefilled as before.
+  const agreement = await call(agreementInput) as { sent: boolean; stage: string; override: boolean; id: string };
+  assert.ok(agreement.sent && agreement.stage === "agreement_sent" && agreement.override === false);
+  const agreementCreate = rpcs.filter(([name]) => name === "agency_onboarding_agreement_create").pop()![1].p_data as Record<string, unknown>;
+  assert.equal(agreementCreate.override_reason, null); assert.equal(agreementCreate.expiry_date, "2028-11-16");
+  const agreementText = await pdfText(stored.get(`${agreement.id}/original.pdf`)!);
+  assert.ok(agreementText.some((t) => t.page === 11 && t.text.includes("India")) && agreementText.some((t) => t.page === 1 && t.text.includes("Acme Education Pty Ltd")), "the agreement prints Items 3 to 5 and the agency");
+  // Earlier with a reason: the override goes to the database.
+  state.stage = "references_pending";
+  const early = await call({ ...agreementInput, overrideReason: "Referee 2 confirmed by phone" }) as { override: boolean };
+  assert.equal(early.override, true);
+  assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_agreement_create").pop()![1].p_data as Record<string, unknown>).override_reason, "Referee 2 confirmed by phone");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

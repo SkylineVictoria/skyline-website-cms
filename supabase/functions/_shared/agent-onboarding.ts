@@ -4,9 +4,9 @@
 // on the signing page, exactly as the student offer letter. This registry says, per key, who fills it and where the value comes from.
 // Runtime-neutral: the Edge Function (install, send, completion), the offline tests and the browser (labels, groups) share it.
 
-export type OnboardingDoc = "form" | "agreement";
-/** Who fills the field: the sender (printed when the request is made) or the agent (a field on the signing page). */
-export type OnboardingRole = "sender" | "agent";
+export type OnboardingDoc = "form" | "agreement" | "referee";
+/** Who fills the field: the sender (printed when the request is made), the agent or the referee (a field on the signing page). */
+export type OnboardingRole = "sender" | "agent" | "referee";
 /**
  * auto: the value comes from our records (printed; when we hold no value the agent types it on the signing page).
  * admin: entered on the send dialog. agent: the agent fills it. signing: the Sign engine fills it when the agent signs (date, signature).
@@ -29,15 +29,26 @@ export interface OnboardingField {
   format?: "abn" | "date" | "percent";
 }
 
-export interface OnboardingDocument { key: "agent_application_form" | "agent_agreement"; name: string; title: string; sha256: string; pages: number; category: string; file: string }
+export interface OnboardingDocument { key: "agent_application_form" | "agent_agreement" | "agent_referee_check_form"; name: string; title: string; sha256: string; pages: number; category: string; file: string }
 /** The two blanks, with the checksum of the files in public/templates: a different file is refused by the installer. */
 export const AGENT_ONBOARDING_DOCS: Record<OnboardingDoc, OnboardingDocument> = {
   form: { key: "agent_application_form", name: "Agent Application Form", title: "Agent Application Form (F04)", sha256: "53cf0ab79594d0f0f8d47db112a39d443ff959f9797d48cbd796c7f4ae1368f4", pages: 2, category: "other", file: "agent_application_form_template_blank.pdf" },
   agreement: { key: "agent_agreement", name: "Agent Agreement", title: "Education Agent Agreement (P06)", sha256: "55441cb56b7ad8b6d298d7faafb5dba7c240b224bff222463babc435cc7fd249", pages: 13, category: "agency_agreement", file: "agent_agreement_template_blank.pdf" },
+  referee: { key: "agent_referee_check_form", name: "Agent Referee Check Form", title: "Agent Referee Check Form (F05)", sha256: "fe609be45c91a7b0f44e4a7d881ed5d088a66322df8a56313e61af6212a0ce20", pages: 1, category: "other", file: "agent_referee_check_form_template_blank.pdf" },
 };
 /** The agreement runs for two years from its commencement (Item 5). */
 export const AGREEMENT_TERM_YEARS = 2;
 export const ONBOARDING_SIGNER_ROLE = { key: "agent", label: "Agent", order: 1, required: true };
+export const REFEREE_SIGNER_ROLE = { key: "referee", label: "Referee", order: 1, required: true };
+/** The one signer of each document: the agent (application form, agreement) or the referee (referee check). */
+export const signerRole = (doc: OnboardingDoc) => doc === "referee" ? REFEREE_SIGNER_ROLE : ONBOARDING_SIGNER_ROLE;
+/** The onboarding runs in stages (2026-11-17): the form, then a referee check per reference, then the agreement. */
+export const ONBOARDING_STAGES = ["application_sent", "application_signed", "references_pending", "references_received", "agreement_sent", "agreement_signed"] as const;
+export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired";
+export const STAGE_LABEL: Record<OnboardingStage, string> = {
+  legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
+  references_received: "References received", agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
+};
 
 const auto = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", ...extra });
 const autoOrAgent = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", autoOrAgent: true, ...extra });
@@ -125,7 +136,19 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
   declarant_role: autoOrAgent("form", "Declarant role", { required: true }),
   agent_signed_date_form: agent("form", "Agent signed date", { type: "date", source: "signing" }),
   agent_signature_form: agent("form", "Agent signature", { type: "signature", source: "signing", required: true }),
+  // ------------------------------------------------------------- Agent Referee Check Form (F05): one per reference named on the F04
+  agent_agency_name_referee: auto("referee", "Agency name"),
+  agent_office_address: auto("referee", "Agency office address"),
+  referee_organisation: referee("Referee organisation", { required: true }),
+  referee_address: referee("Referee address"),
+  referee_contact_person_1: referee("Contact person", { required: true }),
+  referee_contact_person_2: referee("Second contact person (optional)"),
+  referee_phone: referee("Referee phone", { required: true }),
+  referee_fax: referee("Referee fax (optional)"),
+  referee_email: auto("referee", "Referee email"),
+  referee_signature: referee("Referee signature", { type: "signature", source: "signing", required: true }),
 };
+function referee(label: string, extra: Partial<OnboardingField> = {}): OnboardingField { return { doc: "referee", label, type: "text", role: "referee", source: "agent", ...extra }; }
 
 /**
  * The AcroForm field name behind a registry key. Two names exist in both PDFs (agent_abn, agent_signed_date, agent_signature): the
@@ -133,7 +156,7 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
  */
 export function acroFieldName(key: string): { name: string; option: string | null } {
   const field = AGENT_ONBOARDING_FIELDS[key];
-  const base = key.replace(/_form$/, "");
+  const base = key.replace(/_(form|referee)$/, "");
   const colon = base.indexOf(":");
   if (colon > 0) {
     const group = base.slice(0, colon), answer = base.slice(colon + 1);
@@ -152,7 +175,7 @@ export function registryKey(doc: OnboardingDoc, name: string, option: string | n
   return null;
 }
 /** The value key of a signing field: the group's question for a tick box ("litigation_involved"), the key itself otherwise. */
-export const answerKey = (key: string) => key.replace(/_form$/, "").replace(/:.*$/, "");
+export const answerKey = (key: string) => key.replace(/_(form|referee)$/, "").replace(/:.*$/, "");
 /** A tick box that belongs to a question answered by one of several boxes: "litigation_involved:YES" -> { key, answer }. */
 export function groupOf(key: string | null | undefined): { key: string; answer: string } | null {
   const text = String(key ?? "");
@@ -232,7 +255,7 @@ export function resolveFields(fields: PlacedField[], values: Record<string, stri
   for (const f of fields) {
     const spec = AGENT_ONBOARDING_FIELDS[f.key];
     const key = answerKey(f.key);
-    if (f.role === "agent") {
+    if (f.role !== "sender") {
       const prefill = spec?.type === "text" ? printedValue(f.key, values[key] ?? "") : "";
       recipient.push({ ...f, value: prefill.slice(0, 500) });
       continue;
@@ -242,7 +265,7 @@ export function resolveFields(fields: PlacedField[], values: Record<string, stri
     const value = group ? (answered.toUpperCase() === group.answer ? "true" : "") : printedValue(f.key, values[key] ?? "");
     if (value) printed.push({ ...f, value });
     // The other box of an answered question stays empty; a question with no answer at all is the agent's to tick.
-    else if (spec?.autoOrAgent && !answered) recipient.push({ ...f, role: "agent", required: spec.required === true, value: "" });
+    else if (spec?.autoOrAgent && !answered) recipient.push({ ...f, role: signerRole(spec.doc).key as OnboardingRole, required: spec.required === true, value: "" });
   }
   return { printed, recipient };
 }

@@ -194,8 +194,9 @@ export async function signWithRetry<T>(body: Record<string, unknown>, wait = (ms
 }
 /* ------------------------------------------------------------------ agent onboarding documents (2026-11-17) */
 /** The two blanks shipped with the site, uploaded once to the Sign module as PDF templates (document-signing `agent_onboarding_install`). */
-export const AGENT_ONBOARDING_BLANKS: ReadonlyArray<{ which: "form" | "agreement"; name: string; path: string }> = [
+export const AGENT_ONBOARDING_BLANKS: ReadonlyArray<{ which: "form" | "agreement" | "referee"; name: string; path: string }> = [
   { which: "form", name: "Agent Application Form", path: "/templates/agent_application_form_template_blank.pdf" },
+  { which: "referee", name: "Agent Referee Check Form", path: "/templates/agent_referee_check_form_template_blank.pdf" },
   { which: "agreement", name: "Agent Agreement", path: "/templates/agent_agreement_template_blank.pdf" },
 ];
 export const ONBOARDING_TEMPLATES_MISSING = /Install the agent onboarding templates first/i;
@@ -209,21 +210,31 @@ export async function installAgentOnboardingTemplates(): Promise<Array<{ id: str
   }
   return out;
 }
-export interface AgentOnboardingSendInput {
-  agencyId: string; agentId?: string | null; commencementDate: string; territory: string; commissionPercent: string; adminName: string; adminPosition: string; adminWitnessName?: string; message?: string;
-  adminSignature: { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
-}
-export interface AgentOnboardingSendResult { id: string; reference: string; onboardingId: string; sent: boolean; state?: string; warning?: string; agent?: { name: string; email: string }; printed?: number; fields?: number }
-/** Sends both onboarding documents as one request; installs the two blanks first when the Sign module does not have them yet. */
-export async function sendAgentOnboarding(input: AgentOnboardingSendInput): Promise<AgentOnboardingSendResult> {
-  const body = { action: "agent_onboarding_send", ...input };
-  try { return await signingAction<AgentOnboardingSendResult>(body); }
+export interface AgentOnboardingSendResult { id: string; reference: string; onboardingId: string; stage?: string; sent: boolean; state?: string; warning?: string; override?: boolean; agent?: { name: string; email: string }; printed?: number; fields?: number }
+/** Runs an onboarding action; installs the three blanks first when the Sign module does not have them yet, then tries once more. */
+async function onboardingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
+  try { return await signingAction<T>(body, file); }
   catch (error) {
     if (!ONBOARDING_TEMPLATES_MISSING.test((error as Error).message)) throw error;
     await installAgentOnboardingTemplates();
-    return await signingAction<AgentOnboardingSendResult>(body);
+    return await signingAction<T>(body, file);
   }
 }
+/** Stage 1: the application form to the business's agent. */
+export const sendAgentApplication = (input: { agencyId: string; agentId?: string | null; message?: string }) => onboardingAction<AgentOnboardingSendResult>({ action: "agent_onboarding_send_application", ...input });
+export interface AgentAgreementSendInput {
+  agencyId: string; onboardingId: string; agentId?: string | null; commencementDate: string; territory: string; commissionPercent: string; adminName: string; adminPosition: string;
+  adminWitnessName?: string; message?: string; overrideReason?: string;
+  adminSignature: { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
+}
+/** Stage 3: the agreement to the agent (at References received, or earlier with a typed reason). */
+export const sendAgentAgreement = (input: AgentAgreementSendInput) => onboardingAction<AgentOnboardingSendResult>({ action: "agent_onboarding_send_agreement", ...input });
+/** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
+export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
+/** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */
+export const changeReferee = (input: { refereeId: string; email: string; name?: string }) => onboardingAction<{ email: string; sent: number }>({ action: "agent_onboarding_referee_change", ...input });
+/** A signed referee check received by email, uploaded by staff. */
+export const uploadRefereeForm = (refereeId: string, file: File) => onboardingAction<{ stage: string; notified: boolean }>({ action: "agent_onboarding_referee_upload", refereeId }, file);
 /** A tick box that answers a question together with its siblings ("litigation_involved:YES"): the question and this box's answer. */
 export function fieldGroup(key: string | null | undefined): { key: string; answer: string } | null {
   const text = String(key ?? ""); const colon = text.indexOf(":");

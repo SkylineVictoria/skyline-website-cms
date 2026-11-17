@@ -18,6 +18,7 @@ const AGENCY_NAV: NavEntry[] = [
 const STUDENT_NAV: NavEntry[] = [
   { to: "/agency/applications", label: "My applications", icon: "ri-file-list-3-line", end: true },
   { to: "/agency/learning", label: "My learning", icon: "ri-book-open-line" },
+  { to: "/agency/timetable", label: "My timetable", icon: "ri-calendar-2-line" },
   { to: "/agency/assessments", label: "My assessments", icon: "ri-edit-box-line" },
   { to: "/agency/documents", label: "My documents", icon: "ri-folder-3-line" },
   { to: "/agency/bookings", label: "Bookings", icon: "ri-calendar-check-line" },
@@ -42,6 +43,7 @@ const CRUMB_LABELS: Record<string, string> = {
   documents: "Documents",
   assessments: "Assessments",
   learning: "My learning",
+  timetable: "My timetable",
   notifications: "Notifications",
   "agency-profile": "Agency Profile",
   profile: "My Profile",

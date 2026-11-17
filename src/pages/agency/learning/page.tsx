@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import type { Completion } from "@/pages/CertificatePage";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { RateBadge } from "@/pages/admin/lms/AttendanceSummary";
@@ -17,6 +19,8 @@ export default function StudentLearningPage() {
   const [courses, setCourses] = useState<Course[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  const [certs, setCerts] = useState<Completion[]>([]);
+  useEffect(() => { void supabase.rpc("my_course_completions").then(({ data }) => setCerts((data ?? []) as Completion[])); }, []);
   const load = useCallback(async () => {
     const { data, error: e } = await supabase.rpc("student_my_learning");
     if (e) { setError(e.message); return; }
@@ -43,6 +47,14 @@ export default function StudentLearningPage() {
       {error ? <div className="mt-4"><PortalError message={error} onRetry={() => void load()} /></div> : null}
       {courses === null && !error ? <PortalLoading label="Loading your courses…" /> : null}
       {courses && !courses.length ? <PortalEmpty icon="ri-book-open-line" title="No course yet" message="Once you are enrolled in a class, your units and learning materials appear here." /> : null}
+      {certs.length ? (
+        <section className="mt-6 rounded-card border border-green-200 bg-green-50 p-4">
+          <h2 className="font-heading text-base font-semibold text-green-900">My certificates</h2>
+          <ul className="mt-2 space-y-1 text-sm">{certs.map((c) => (
+            <li key={c.id}><Link to={`/certificate/${c.id}`} target="_blank" className="font-semibold text-green-800 underline">{c.kind === "certificate" ? "Certificate" : "Statement of attainment"}: {c.courseCode} {c.courseName}</Link> <span className="text-green-900">· No. {c.certificateNo}</span></li>
+          ))}</ul>
+        </section>
+      ) : null}
       <div className="mt-6 space-y-6">
         {(courses ?? []).map((c) => (
           <section key={c.enrolmentId} className="rounded-card border border-background-200 bg-background-50">

@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(617);
+select plan(619);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1222,6 +1222,12 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.admin_student_timeline(gen_random_uuid())$$,'42501',null,'a portal user cannot read a student timeline');
 select throws_ok($$select public.lms_attendance_summary(null, gen_random_uuid())$$,'42501',null,'a portal user cannot read attendance summaries');
+reset role;
+-- Course completion (migration 20261117093847): only RTO Managers issue; only staff list.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.course_completion_issue(gen_random_uuid(), 'certificate')$$,'42501',null,'a portal user cannot issue a certificate');
+select throws_ok($$select public.course_completion_list(gen_random_uuid())$$,'42501',null,'a portal user cannot list completions');
 reset role;
 select * from finish();
 rollback;

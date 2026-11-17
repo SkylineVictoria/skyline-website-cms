@@ -254,6 +254,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                     <Link to={`/admin/agents/${r.agentId}`} className="font-semibold text-foreground-900 hover:text-primary-700">{r.name}</Link><PersonMessageIcon phone={r.phone} name={r.name} email={r.email} />
                     <p className="mt-0.5 text-xs text-foreground-500">{[r.role === "agency_admin" ? "Business admin agent" : "Agent", r.email].filter(Boolean).join(", ")}</p>
                     {r.registered === false ? <p className="text-xs font-medium text-amber-700">No longer registered with OMARA</p> : null}
+                    {r.externalOnDirect ? <p className="text-xs font-medium text-amber-700" data-testid="external-on-direct">External account on SLIT-DIRECT (not @slit.edu.au); kept as is, for a decision</p> : null}
                   </td>
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>

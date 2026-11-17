@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(835);
+select plan(845);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1589,6 +1589,31 @@ set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000c1"}';
 select is(public.portal_agency_id(),pg_temp.gate(),'renewed: the workspace is back');
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select is(public.admin_agent_activate(null,pg_temp.gate(),'Extra Agent','extra.gate@example.test','','','agent')->>'role','agent','and Add agent works again');
+-- SLIT's direct business (migration 20261117230000): agents there are @slit.edu.au only; an uploaded signed copy needs a reason and is logged.
+reset role;
+create function pg_temp.direct() returns uuid language sql stable security definer as $$ select id from public.agencies where coalesce(is_direct, false) limit 1 $$;
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_agent_activate(null,pg_temp.direct(),'Outside Agent','outside.agent@example.test','','','agent')$$,'22023',null,'an outside address cannot be an agent on the direct business');
+select is(public.admin_agent_activate(null,pg_temp.direct(),'SLIT Staff Agent','staff.agent@slit.edu.au','','','agent')->>'role','agent','a @slit.edu.au address can');
+reset role;
+select throws_ok($$select public.portal_invitation_create('33000000-0000-0000-0000-000000000002',pg_temp.direct(),'outside.agent@example.test','Outside Agent','agent')$$,'22023',null,'nor can an outside address be invited as an agent there');
+insert into public.agents(id,business_id,full_name,email,role,status) values ('53000000-0000-0000-0000-000000000031',pg_temp.direct(),'Legacy Outside','legacy.outside@example.test','agent','Active');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select is((select r->>'externalOnDirect' from jsonb_array_elements(public.admin_business_agents(pg_temp.direct())) r where r->>'email'='legacy.outside@example.test'),'true','an existing outside agent there is flagged');
+select is((select r->>'externalOnDirect' from jsonb_array_elements(public.admin_business_agents(pg_temp.direct())) r where r->>'email'='staff.agent@slit.edu.au'),'false','a @slit.edu.au agent is not');
+reset role;
+insert into storage.objects(bucket_id, name) select 'business-documents', pg_temp.gate()::text || '/signed-copy.pdf';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_business_document_add(pg_temp.gate(),'agent_agreement',pg_temp.gate()::text || '/signed-copy.pdf','signed-copy.pdf',1000)$$,'22023',null,'a signed copy needs a reason');
+select is(public.admin_business_document_add(pg_temp.gate(),'agent_agreement',pg_temp.gate()::text || '/signed-copy.pdf','signed-copy.pdf',1000,'Signed on paper at the agent fair')->>'reason','Signed on paper at the agent fair','with a reason it is recorded');
+select is((select d->>'reason' from jsonb_array_elements(public.admin_business_documents(pg_temp.gate())) d where d->>'fileName'='signed-copy.pdf'),'Signed on paper at the agent fair','the document list shows the reason');
+select is((select count(*)::int from jsonb_array_elements(public.agency_onboarding_list(pg_temp.gate())) o, jsonb_array_elements(o->'events') e where e->>'event'='agreement_uploaded' and e->'detail'->>'reason'='Signed on paper at the agent fair'),1,'and the onboarding history has it');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.admin_business_document_add(pg_temp.gate(),'agent_agreement',pg_temp.gate()::text || '/signed-copy.pdf','signed-copy.pdf',1000,'An agent tries')$$,'42501',null,'only administrators record a signed copy');
+reset role;
 reset role;
 select * from finish();
 rollback;

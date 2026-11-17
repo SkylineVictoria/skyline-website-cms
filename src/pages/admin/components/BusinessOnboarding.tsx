@@ -34,12 +34,14 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
   }, [business.id]);
   useEffect(() => { void load(); }, [load]);
 
+  const [reason, setReason] = useState("");
   const upload = async (f: File | undefined) => {
     if (!f) return;
     setBusy(true);
     try {
-      await uploadBusinessDocument(business.id, f);
-      push("Signed agent agreement uploaded.");
+      await uploadBusinessDocument(business.id, f, "agent_agreement", reason);
+      setReason("");
+      push("Signed agent agreement uploaded; the reason is on the record.");
       await load();
       await onChanged();
     } catch (e) {
@@ -82,14 +84,19 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-heading text-base font-semibold text-foreground-950">Agent agreement (uploaded copies)</h2>
-            <p className="text-sm text-foreground-600">Signed copies uploaded for this business (PDF, image or Word, up to 15 MB).</p>
+            <p className="text-sm text-foreground-600">Signed copies uploaded for this business (PDF, image or Word, up to 15 MB). A copy stands in for the online agreement, so it needs a reason, which is kept with the document and in the onboarding history; administrators only.</p>
           </div>
           <div className="flex items-center gap-2">
             {ready ? <Badge tone="success">Signed</Badge> : <Badge tone="warn">Not signed yet</Badge>}
-            <Button size="sm" variant="outline" icon="ri-upload-2-line" disabled={busy} onClick={() => file.current?.click()}>{busy ? "Uploading…" : "Upload signed agreement"}</Button>
+            <Button size="sm" variant="outline" icon="ri-upload-2-line" disabled={busy || reason.trim().length < 5} title={reason.trim().length < 5 ? "Type the reason first" : undefined} onClick={() => file.current?.click()} data-testid="upload-agreement">{busy ? "Uploading…" : "Upload signed agreement"}</Button>
             <input ref={file} type="file" accept={ACCEPT} className="hidden" aria-label="Signed agent agreement file" onChange={(e) => void upload(e.target.files?.[0])} />
           </div>
         </div>
+        <label className="mt-3 block text-sm">
+          <span className="font-medium text-foreground-800">Reason for recording a signed copy</span>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder="e.g. Agreement signed on paper at the agent fair on 12 Nov" data-testid="upload-agreement-reason"
+            className="mt-1 w-full rounded-md border border-background-300 px-3 py-2 text-foreground-950" />
+        </label>
         {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
         {docs && agreements.length ? (
           <ul className="mt-3 divide-y divide-background-200 text-sm">
@@ -98,6 +105,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
                 <button type="button" className="text-left font-medium text-primary-700 hover:underline" onClick={() => void openBusinessDocument(d.path).catch((e: Error) => push(e.message, "error"))}>
                   <i className="ri-file-text-line mr-1" aria-hidden="true" />{d.fileName}
                 </button>
+                {d.reason ? <span className="w-full text-xs text-foreground-600">Reason: {d.reason}</span> : null}
                 <span className="flex items-center gap-3 text-xs text-foreground-500">
                   {new Date(d.createdAt).toLocaleDateString()}{d.uploadedBy ? ` · ${d.uploadedBy}` : ""}
                   <Button size="sm" variant="ghost" disabled={busy} onClick={() => void remove(d)}>Remove</Button>

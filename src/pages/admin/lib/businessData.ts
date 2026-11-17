@@ -96,7 +96,7 @@ export interface BusinessDetail {
   profile?: Record<string, string>;
 }
 
-export interface BusinessDocument { id: string; kind: "agent_agreement" | "other"; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string }
+export interface BusinessDocument { id: string; kind: "agent_agreement" | "other"; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string; reason?: string | null }
 
 export interface ApplicationRow {
   id: string;
@@ -215,13 +215,15 @@ export const listBusinessDocuments = (id: string) => call<BusinessDocument[]>("a
 const DOCUMENT_BUCKET = "business-documents";
 
 /** Uploads a signed agreement (or other document) to the private bucket and records it against the business. */
-export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement") {
+export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement", reason = "") {
   if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
+  // A signed copy instead of the online agreement needs a reason (kept on the record and in the onboarding history); the server checks it too.
+  if (kind === "agent_agreement" && reason.trim().length < 5) throw new Error("Give the reason for recording a signed copy instead of the online agreement.");
   const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
   const path = `${businessId}/${crypto.randomUUID()}-${safe}`;
   const { error } = await supabase.storage.from(DOCUMENT_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
   if (error) throw new Error(error.message || "We could not upload this file.");
-  await call<{ id: string }>("admin_business_document_add", { p_business: businessId, p_kind: kind, p_path: path, p_name: file.name, p_size: file.size }, "We could not save this document.");
+  await call<{ id: string }>("admin_business_document_add", { p_business: businessId, p_kind: kind, p_path: path, p_name: file.name, p_size: file.size, p_reason: reason.trim() || null }, "We could not save this document.");
 }
 
 export const removeBusinessDocument = (id: string) => call<{ ok: boolean }>("admin_business_document_remove", { p_id: id }, "We could not remove this document.");
@@ -295,6 +297,8 @@ export interface DirectoryAgent {
   statusChangedAt: string | null;
   marn: string;
   registered: boolean | null;
+  /** On SLIT's direct business, an agent whose address is not @slit.edu.au (kept as is, flagged for a decision). */
+  externalOnDirect?: boolean;
   businessId: string;
   businessName: string;
   businessStatus: BusinessStatus;

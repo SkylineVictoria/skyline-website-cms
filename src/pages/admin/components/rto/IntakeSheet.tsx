@@ -11,7 +11,7 @@ import BatchTimingDrawer, { type BatchSaved } from "@/pages/admin/components/rto
 import StudentPicker, { type StudentsAdded } from "@/pages/admin/components/rto/StudentPicker";
 import { Empty, MoreMenu, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import {
-  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, shortDate, timingShort, weeksOf,
+  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoFlow, rtoPlace, shortDate, timingShort, weeksOf,
   type BatchStudent, type FeeItem, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
 } from "@/pages/admin/lib/rto";
 
@@ -112,7 +112,8 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 onRegenerate={(fitEnd) => void run(() => rto<IntakeDetail>("intake_save", { id: intakeId, generate: true, ...(detail.schedule.length ? { unitIds: detail.schedule.map((r) => r.unitId) } : {}), ...(fitEnd ? { fitEnd } : {}) }))
                   .then((ok) => { if (ok) push(fitEnd ? "Timeline fitted to the course length." : "Timeline laid out again from the course."); })} />
             ) : null}
-            {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} onAdd={() => setAdding(true)} /> : null}
+            {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} onAdd={() => setAdding(true)}
+              onOpenAnother={() => { const src = [...detail.batches].filter((b) => b.isActive).pop(); if (!src) return; void run(async () => { await rtoPlace("batch_open", { batchId: src.id }); return rto<IntakeDetail>("intake_get", { intakeId }); }).then((ok) => { if (ok) { push("Another batch opened with the same classes."); onChanged(); } }); }} /> : null}
             {tab === "students" ? (
               <Students detail={detail} canEnrol={canEnrol} setDetail={setDetail} onChanged={onChanged} reload={load} undoable={undoable}
                 onAdd={(batchId) => setPicker(batchId)} onAddBatch={() => { setTab("batches"); setAdding(true); }} canEdit={canEdit} />
@@ -130,14 +131,15 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
           }} />
       ) : null}
       {picker !== null && detail ? (
-        <StudentPicker courseId={detail.intake.courseId} batchId={picker || undefined} rtoManager={canEdit}
-          batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.capacity, enrolled: b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
+        <StudentPicker courseId={detail.intake.courseId} intakeId={detail.intake.id} batchId={picker || undefined} rtoManager={canEdit}
+          batches={detail.batches.filter((b) => b.isActive).map((b) => ({ id: b.id, name: b.name, capacity: b.seats ?? b.capacity, enrolled: b.occupied ?? b.students.filter(active).length, studentIds: b.students.filter(active).map((s) => s.id) }))}
           onClose={() => setPicker(null)}
           onAdded={({ out, batchId, studentIds, names }: StudentsAdded) => {
             setPicker(null); setDetail(out); onChanged();
-            const b = out.batches.find((x) => x.id === batchId);
-            const enrolments = (b?.students ?? []).filter((s) => studentIds.includes(s.id)).map((s) => s.enrolmentId);
-            undoable(`${names.length === 1 ? names[0] : `${names.length} students`} added to ${b?.name ?? "the batch"}.`, () => {
+            const placed = out.batches.flatMap((x) => x.students.filter((s) => studentIds.includes(s.id) && active(s)).map((s) => ({ id: s.enrolmentId, batch: x.name })));
+            const enrolments = placed.map((p) => p.id);
+            const where = [...new Set(placed.map((p) => p.batch))].join(", ") || out.batches.find((x) => x.id === batchId)?.name || "the batch";
+            undoable(`${names.length === 1 ? names[0] : `${names.length} students`} added to ${where}.`, () => {
               void Promise.all(enrolments.map((id) => rtoFlow("enrolment_set", { enrolmentId: id, status: "withdrawn" }))).finally(() => { void load(); onChanged(); });
             });
           }} />
@@ -241,13 +243,18 @@ function Fact({ label, value, note, action }: { label: string; value: string; no
 }
 
 // ------------------------------------------------------------------ Batches
-function Batches({ detail, canEdit, onAdd }: { detail: IntakeDetail; canEdit: boolean; onAdd: () => void }) {
+function Batches({ detail, canEdit, onAdd, onOpenAnother }: { detail: IntakeDetail; canEdit: boolean; onAdd: () => void; onOpenAnother: () => void }) {
   const navigate = useNavigate();
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-foreground-600">A batch is one class group with its own days, room and trainer. Open a batch for its students and unit dates.</p>
-        {canEdit && detail.batches.length ? <Button icon="ri-add-line" onClick={onAdd}>Add batch</Button> : null}
+        {canEdit && detail.batches.length ? (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" icon="ri-file-copy-line" onClick={onOpenAnother} title="A copy of the latest batch in another free room, with the same days, times and trainers">Open another batch</Button>
+            <Button icon="ri-add-line" onClick={onAdd}>Add batch</Button>
+          </div>
+        ) : null}
       </div>
       {detail.batches.length === 0 ? (
         <Empty icon="ri-group-line" title="No batches yet" text="Add the first batch: pick a trainer, the class days and a room."
@@ -270,11 +277,15 @@ export function BatchCard({ batch: b, onOpen }: { batch: RtoBatch; onOpen: () =>
         <span className="font-heading text-xl font-bold text-foreground-950">{b.name}</span>
         <Avatars names={b.trainers.map((t) => t.name)} max={3} />
         {b.trainers.length === 1 ? <span className="truncate text-sm text-foreground-700">{b.trainers[0].name}</span> : null}
-        <span className="ml-auto text-sm tabular-nums text-foreground-700"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{enrolled}{b.capacity ? `/${b.capacity}` : ""}</span>
+        <span className="ml-auto text-sm tabular-nums text-foreground-700" title="Seats in use now / physical seats"><i className="ri-group-line mr-1 text-foreground-400" aria-hidden="true" />{b.occupied ?? enrolled}{b.seats ? `/${b.seats}` : b.capacity ? `/${b.capacity}` : ""}</span>
       </div>
       <p className="mt-2 text-sm text-foreground-600">{timingShort(b) || "No class times yet"}</p>
       <div className="mt-2 flex items-center justify-between">
-        {b.isActive ? <span /> : <Badge>Inactive</Badge>}
+        <span className="flex flex-wrap items-center gap-1.5">
+          {b.isActive ? null : <Badge>Inactive</Badge>}
+          {b.autoCreated && !b.classroomId ? <Badge tone="warn">Needs a room</Badge> : null}
+          {b.autoCreated && b.classroomId ? <Badge>Opened automatically</Badge> : null}
+        </span>
         <span className="text-xs font-medium text-primary-600 opacity-0 transition-opacity duration-150 group-hover:opacity-100">Open batch <i className="ri-arrow-right-line" aria-hidden="true" /></span>
       </div>
     </button>
@@ -326,11 +337,11 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-foreground-600">{canEnrol && batches.length > 1 ? "Drag a student onto another batch to move them." : "The students of each batch."}</p>
-        {canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd(batches[0].id)}>Students</Button> : null}
+        {canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Students</Button> : null}
       </div>
       {total === 0 ? (
         <Empty icon="ri-user-add-line" title="No students yet" text="Add the students who applied for this course."
-          action={canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd(batches[0].id)}>Add students</Button> : undefined} />
+          action={canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Add students</Button> : undefined} />
       ) : null}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {batches.map((b) => {
@@ -339,7 +350,7 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
             <div key={b.id} onDragOver={(e) => { if (canEnrol) { e.preventDefault(); setOver(b.id); } }} onDragLeave={() => setOver((o) => (o === b.id ? null : o))} onDrop={(e) => drop(e, b.id)}
               className={`rounded-card border bg-background-50 transition-colors duration-150 ${over === b.id ? "border-primary-400 bg-primary-50/40" : "border-background-200"}`}>
               <div className="flex items-center justify-between border-b border-background-200 px-3 py-2">
-                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500">{list.length}{b.capacity ? `/${b.capacity}` : ""}</span></p>
+                <p className="font-heading font-semibold text-foreground-950">{b.name} <span className="text-sm font-normal tabular-nums text-foreground-500" title="Seats in use now / physical seats">{b.occupied ?? list.length}{b.seats ? `/${b.seats}` : b.capacity ? `/${b.capacity}` : ""}</span>{b.autoCreated && !b.classroomId ? <span className="ml-2 text-xs font-medium text-amber-800">needs a room</span> : null}</p>
                 {canEnrol ? <button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => onAdd(b.id)}>+ Add</button> : null}
               </div>
               <ul className="min-h-[3rem] divide-y divide-background-100">

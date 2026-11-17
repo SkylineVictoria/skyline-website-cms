@@ -4,15 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Button, Select, Toggle } from "@/pages/admin/components/ui";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
-import { rto, type EnrolmentType, type IntakeDetail, type StudentOption } from "@/pages/admin/lib/rto";
+import { rto, rtoPlace, type EnrolmentType, type IntakeDetail, type Placed, type StudentOption } from "@/pages/admin/lib/rto";
 
 export interface PickerBatch { id: string; name: string; capacity: number | null; enrolled: number; studentIds: string[] }
 export interface StudentsAdded { out: IntakeDetail; batchId: string; studentIds: string[]; names: string[] }
 
-export default function StudentPicker({ courseId, batches, batchId, rtoManager, onClose, onAdded }: {
-  courseId: string; batches: PickerBatch[]; batchId?: string; rtoManager: boolean; onClose: () => void; onAdded: (added: StudentsAdded) => void;
+export default function StudentPicker({ courseId, intakeId, batches, batchId, rtoManager, onClose, onAdded }: {
+  courseId: string; intakeId?: string; batches: PickerBatch[]; batchId?: string; rtoManager: boolean; onClose: () => void; onAdded: (added: StudentsAdded) => void;
 }) {
-  const [target, setTarget] = useState(batchId || batches[0]?.id || "");
+  // "auto": the first batch with a free seat; when every batch is full a new one is opened (G2, G3, ...).
+  const [target, setTarget] = useState(batchId || (intakeId ? "auto" : batches[0]?.id || ""));
   const [q, setQ] = useState("");
   const [all, setAll] = useState(false);
   const [found, setFound] = useState<StudentOption[] | null>(null);
@@ -46,6 +47,13 @@ export default function StudentPicker({ courseId, batches, batchId, rtoManager, 
     setBusy(true); setError("");
     try {
       const ids = [...picked.keys()];
+      if (target === "auto" && intakeId) {
+        let last = "";
+        for (const id of ids) last = (await rtoPlace<Placed>("assign", { studentId: id, intakeId, type })).batchId;
+        const out = await rto<IntakeDetail>("intake_get", { intakeId });
+        onAdded({ out, batchId: last, studentIds: ids, names: [...picked.values()].map((s) => s.name) });
+        return;
+      }
       const out = await rto<IntakeDetail>("enrol", { batchId: target, students: ids.map((id) => ({ id, type })) });
       onAdded({ out, batchId: target, studentIds: ids, names: [...picked.values()].map((s) => s.name) });
     } catch (e) { setError(e instanceof Error ? e.message : "Not added."); }
@@ -104,12 +112,13 @@ export default function StudentPicker({ courseId, batches, batchId, rtoManager, 
           {tooMany ? <p className="text-xs text-amber-800">{batch?.name} has {free} place{free === 1 ? "" : "s"} left.</p> : null}
           <div className="flex flex-wrap items-center gap-2">
             <Select aria-label="Batch" className="w-auto" value={target} onChange={(e) => setTarget(e.target.value)}>
-              {batches.map((b) => <option key={b.id} value={b.id}>{b.name}{b.capacity ? ` · ${b.enrolled}/${b.capacity}` : ""}</option>)}
+              {intakeId ? <option value="auto">First batch with a free seat</option> : null}
+              {batches.map((b) => <option key={b.id} value={b.id}>{b.name}{b.capacity ? ` · ${b.enrolled}/${b.capacity} seats` : ""}</option>)}
             </Select>
             <Select aria-label="How they study" className="w-auto" value={type} onChange={(e) => setType(e.target.value as EnrolmentType)}>
               <option value="CoE">CoE</option><option value="VoE">VoE</option><option value="Domestic">Domestic</option>
             </Select>
-            <Button className="ml-auto" disabled={busy || !picked.size || !target} onClick={() => void add()}>
+            <Button className="ml-auto" disabled={busy || !picked.size || !target || tooMany} onClick={() => void add()}>
               {busy ? "Adding…" : picked.size ? `Add ${picked.size} student${picked.size === 1 ? "" : "s"}` : "Add students"}
             </Button>
           </div>

@@ -49,6 +49,8 @@ export type EnrolmentType = "CoE" | "VoE" | "Domestic";
 export interface RtoBatch {
   id: string; intakeId: string; intakeName?: string; name: string; classroomId: string | null; classroom: string | null; classDays: string[];
   startTime: string | null; endTime: string | null; capacity: number | null; isActive: boolean;
+  /** Physical seats (the smaller of the batch's limit and its room's seats), the students in them now, and whether the system opened the batch. */
+  seats?: number; occupied?: number; autoCreated?: boolean;
   trainers: { id: string; name: string }[]; students: BatchStudent[];
   /** The intake's unit dates, or the batch's own where staff changed them (overridden). */
   schedule?: BatchScheduleRow[];
@@ -102,6 +104,16 @@ export async function rtoFlow<T>(action: string, data: Record<string, unknown> =
   if (error) throw new Error(error.message);
   return out as T;
 }
+
+/** Seats, automatic new batches and course class defaults (public.rto_batch_place). */
+export async function rtoPlace<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
+  const { data: out, error } = await supabase.rpc("rto_batch_place", { p_action: action, p_data: data });
+  if (error) throw new Error(error.message);
+  return out as T;
+}
+export interface ClassDefaults { courseId: string; seats: number | null; classroomId: string | null; sessions: Array<{ weekday: number; startTime: string; endTime: string; type: SessionType }> }
+export interface Placed { enrolmentId: string; batchId: string; batch: string; intakeId: string; seats: number; occupied: number; openedBatch: boolean }
+export interface UnplacedStudent { studentId: string; name: string; intakeId: string; courseId: string; course: string; intakeStart: string }
 
 export async function rto<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_admin", { p_action: action, p_data: data });

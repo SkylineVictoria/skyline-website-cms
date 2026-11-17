@@ -210,8 +210,13 @@ async function up() {
     "20261113025808_business_onboarding.sql": "20261113140001_business_onboarding.sql",
     "20261113031341_staff_signed_documents.sql": "20261113140002_staff_signed_documents.sql",
   };
+  // Lab copy only: the CLI replays every migration in ONE session, where a pg_temp function made by an earlier file still exists.
+  // Hosted applied these files one by one, so the repo files stay as they are.
+  const LAB_TWEAKS = { "20261118023417_agent_agreement_required.sql": [["create function pg_temp.patch(", "create or replace function pg_temp.patch("]] };
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
-    fs.copyFileSync(path.join(REPO, "supabase", "migrations", file), path.join(migrations, HOSTED_LATER[file] ?? file));
+    let text = fs.readFileSync(path.join(REPO, "supabase", "migrations", file), "utf8");
+    for (const [from, to] of LAB_TWEAKS[file] ?? []) text = text.replace(from, to);
+    fs.writeFileSync(path.join(migrations, HOSTED_LATER[file] ?? file), text);
   }
   copyFunctions(path.join(REPO, "supabase", "functions"), path.join(WORK, "supabase", "functions"));
   fs.writeFileSync(path.join(WORK, "supabase", "functions", ".env"), Object.entries(LAB_SECRETS).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");

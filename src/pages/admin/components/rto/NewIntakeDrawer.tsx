@@ -108,6 +108,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           <BreakDatePicker value={start} onChange={(d) => { setStart(d); setTouched(true); }} breaks={breaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
         </div>
       </Field>
+      {!busy && !clash && !inBreak && (!load || !start) ? <p className="text-sm text-foreground-600">To create it, still choose: {[!load && "CoE or VoE", !start && "a start date"].filter(Boolean).join(" and ")}.</p> : null}
       {clash ? <p role="alert" className="text-sm text-primary-800">This course already has an intake starting on {shortDate(start)}.</p> : null}
       {inBreak ? <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(start)} is in the {inBreak.label.toLowerCase()} ({shortDate(inBreak.startDate)} – {shortDate(inBreak.endDate)}). Pick a day outside the break.</p> : null}
       {course ? (

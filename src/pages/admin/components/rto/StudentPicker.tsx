@@ -112,7 +112,7 @@ export default function StudentPicker({ courseId, intakeId, batches, batchId, rt
           {tooMany ? <p className="text-xs text-amber-800">{batch?.name} has {free} place{free === 1 ? "" : "s"} left.</p> : null}
           <div className="flex flex-wrap items-center gap-2">
             <Select aria-label="Batch" className="w-auto" value={target} onChange={(e) => setTarget(e.target.value)}>
-              {intakeId ? <option value="auto">First batch with a free seat</option> : null}
+              {intakeId ? <option value="auto">Automatic: first batch with a free seat (a new batch opens when full)</option> : null}
               {batches.map((b) => <option key={b.id} value={b.id}>{b.name}{b.capacity ? ` · ${b.enrolled}/${b.capacity} seats` : ""}</option>)}
             </Select>
             <Select aria-label="How they study" className="w-auto" value={type} onChange={(e) => setType(e.target.value as EnrolmentType)}>

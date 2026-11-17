@@ -257,7 +257,7 @@ function Batches({ detail, canEdit, onAdd, onOpenAnother }: { detail: IntakeDeta
         ) : null}
       </div>
       {detail.batches.length === 0 ? (
-        <Empty icon="ri-group-line" title="No batches yet" text="Add the first batch: pick a trainer, the class days and a room."
+        <Empty icon="ri-group-line" title="No batches yet" text="You don’t have to add one by hand: the first batch opens by itself when you add a student, using the course’s usual classes and room. Add one here only to choose its trainer, days or room yourself."
           action={canEdit ? <Button icon="ri-add-line" onClick={onAdd}>Add batch</Button> : undefined} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -329,7 +329,8 @@ function Students({ detail, canEnrol, canEdit, setDetail, onChanged, reload, und
   };
 
   if (!batches.length) {
-    return <Empty icon="ri-group-line" title="Add a batch first" text="Students join a batch. Add one, then add students to it." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;
+    return <Empty icon="ri-user-add-line" title="No students yet" text="Add a student and a batch opens for them automatically, with a seat in the course’s usual room. Prefer to set the trainer and days first? Add a batch yourself."
+      action={<div className="flex flex-wrap justify-center gap-2">{canEnrol ? <Button icon="ri-user-add-line" onClick={() => onAdd("")}>Add students</Button> : null}{canEdit ? <Button variant="outline" icon="ri-add-line" onClick={onAddBatch}>Add batch myself</Button> : null}</div>} />;
   }
   const total = batches.reduce((s, b) => s + b.students.filter(active).length, 0);
   const drop = (e: DragEvent, batchId: string) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData("text/enrolment"); if (id) move(id, batchId); };

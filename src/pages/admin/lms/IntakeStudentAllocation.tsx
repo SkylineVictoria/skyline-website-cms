@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   intakeStudents,
   type AllocationUnit,
   type IntakeStudent,
   type IntakeStudentScope,
 } from "@/pages/admin/lib/intakeStudents";
+import { rto, shortDate, todayIso, type IntakeDetail, type ScheduleRow } from "@/pages/admin/lib/rto";
 
 const panel = "min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm";
 const secondary = "rounded-lg border border-background-300 px-3 py-2 text-xs font-semibold hover:bg-background-100 disabled:opacity-50";
@@ -18,7 +19,7 @@ function StudentIdentity({ student }: { student: IntakeStudent }) {
   </span>;
 }
 
-function StudentPicker({ courseId, intakeId, unit, close, saved }: {
+export function IntakeStudentPicker({ courseId, intakeId, unit, close, saved }: {
   courseId: string;
   intakeId: string;
   unit: AllocationUnit | null;
@@ -175,17 +176,36 @@ function StudentRoster({ courseId, intakeId, unitId, revision, changed }: Requir
   </>;
 }
 
-export default function IntakeStudentAllocation({ courseId, intakeId, changed }: {
+export default function IntakeStudentAllocation({ courseId, intakeId, changed, schedule, intakeRevision = 0, calendarRevision = 0 }: {
   courseId: string;
   intakeId: string;
   changed: () => void;
+  schedule?: ScheduleRow[];
+  intakeRevision?: number;
+  calendarRevision?: number;
 }) {
   const [units, setUnits] = useState<AllocationUnit[] | null>(null);
   const [unitId, setUnitId] = useState<string>();
   const [picker, setPicker] = useState<{ unit: AllocationUnit | null } | null>(null);
-  const [revision, setRevision] = useState(0);
+  const [unitRetry, setUnitRetry] = useState(0);
   const [problem, setProblem] = useState("");
   const [notice, setNotice] = useState("");
+  const [loadedSchedule, setLoadedSchedule] = useState<ScheduleRow[] | null>(null);
+  const [calendarError, setCalendarError] = useState("");
+  const [calendarRetry, setCalendarRetry] = useState(0);
+  const actualSchedule = schedule ?? loadedSchedule;
+  const datesByUnit = useMemo(() => {
+    const dates = new Map<string, ScheduleRow[]>();
+    for (const row of [...(actualSchedule ?? [])].sort((a, b) => a.startDate.localeCompare(b.startDate))) {
+      const periods = dates.get(row.unitId) ?? [];
+      periods.push(row);
+      dates.set(row.unitId, periods);
+    }
+    return dates;
+  }, [actualSchedule]);
+  const orderedUnits = [...(units ?? [])].sort((a, b) =>
+    (datesByUnit.get(a.id)?.[0].startDate ?? "9999").localeCompare(datesByUnit.get(b.id)?.[0].startDate ?? "9999"));
+  const today = todayIso();
   const unit = units?.find(row => row.id === unitId);
 
   useEffect(() => {
@@ -194,22 +214,33 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed }:
       .then(rows => { if (active) setUnits(rows); })
       .catch((error: Error) => { if (active) setProblem(error.message); });
     return () => { active = false; };
-  }, [courseId, intakeId, revision]);
+  }, [courseId, intakeId, intakeRevision, unitRetry]);
 
-  const refresh = () => {
-    setProblem("");
-    setRevision(value => value + 1);
-    changed();
-  };
+  useEffect(() => {
+    if (schedule) return;
+    let active = true;
+    rto<IntakeDetail>("intake_get", { intakeId })
+      .then(detail => { if (active) { setLoadedSchedule(detail.schedule); setCalendarError(""); } })
+      .catch((error: Error) => { if (active) setCalendarError(error.message); });
+    return () => { active = false; };
+  }, [intakeId, schedule, calendarRetry, calendarRevision]);
 
   return <>
-    <section className={panel} aria-label="Units">
-      <h2 className="mb-2 px-1 text-sm font-bold text-foreground-950">Units</h2>
-      {problem ? <p role="alert" className="px-1 text-sm text-red-700">{problem} <button type="button" onClick={refresh} className="underline">Retry</button></p>
+    <section className={panel} aria-label="Unit calendar">
+      <h2 className="mb-2 px-1 text-sm font-bold text-foreground-950">Unit calendar</h2>
+      {calendarError ? <p role="alert" className="mb-2 px-1 text-xs text-red-700">
+        Could not load unit dates. <button type="button" className="underline" onClick={() => {
+          setCalendarError(""); setCalendarRetry(value => value + 1);
+        }}>Retry</button>
+      </p> : actualSchedule === null && <p className="mb-2 px-1 text-xs text-foreground-600">Loading unit dates…</p>}
+      {problem ? <p role="alert" className="px-1 text-sm text-red-700">{problem} <button type="button" onClick={() => { setProblem(""); setUnitRetry(value => value + 1); }} className="underline">Retry</button></p>
         : !units ? <p className="px-1 text-sm text-foreground-600">Loading units…</p>
         : !units.length ? <p className="px-1 text-sm text-foreground-600">This course has no units.</p>
         : <ul className="max-h-[65vh] space-y-1 overflow-y-auto p-1">
-          {units.map(row => <li key={row.id} className={`flex items-center rounded-lg border ${unitId === row.id ? "border-primary-300 bg-primary-50" : "border-transparent hover:bg-background-100"}`}>
+          {orderedUnits.map(row => {
+            const dates = datesByUnit.get(row.id) ?? [];
+            const running = dates.some(period => period.startDate <= today && today <= period.endDate);
+            return <li key={row.id} className={`flex items-center rounded-lg border ${unitId === row.id ? "border-primary-300 bg-primary-50" : "border-transparent hover:bg-background-100"}`}>
             <button type="button" aria-pressed={unitId === row.id} onClick={() => { setUnitId(row.id); setNotice(""); }}
               className="min-w-0 flex-1 rounded-lg px-2 py-2 text-left">
               <span className="flex flex-wrap items-center justify-between gap-1 text-xs font-bold text-foreground-950">
@@ -217,11 +248,18 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed }:
                 <span aria-label={`${row.count} allocated students`} className="rounded-full bg-background-200 px-2 py-0.5">{row.count}</span>
               </span>
               <span className="block break-words text-xs text-foreground-600">{row.name}</span>
+              {dates.map(period => <span key={period.id} className="mt-1 block text-xs text-foreground-700">
+                <time dateTime={period.startDate}>{shortDate(period.startDate)}</time>
+                {" – "}<time dateTime={period.endDate}>{shortDate(period.endDate)}</time>
+              </span>)}
+              {actualSchedule !== null && !dates.length && <span className="mt-1 block text-xs text-foreground-500">Unscheduled</span>}
+              {running && <span className="mt-1 inline-block rounded-full bg-primary-100 px-2 py-0.5 text-xs font-semibold text-primary-800">In progress</span>}
             </button>
             <button type="button" aria-label={`Add students to ${row.code}`} title="Add students"
               onClick={() => { setUnitId(row.id); setNotice(""); setPicker({ unit: row }); }}
               className="mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg font-semibold text-primary-700 hover:bg-primary-100">+</button>
-          </li>)}
+          </li>;
+          })}
         </ul>}
     </section>
     <section className={panel} aria-label="Allocated students">
@@ -229,17 +267,17 @@ export default function IntakeStudentAllocation({ courseId, intakeId, changed }:
         <h2 className="px-1 text-sm font-bold text-foreground-950">{unit ? "Allocated students" : "Intake students"}</h2>
         {unit
           ? <button type="button" className={secondary} onClick={() => { setUnitId(undefined); setNotice(""); }}>Intake roster</button>
-          : <button type="button" className={secondary} onClick={() => { setNotice(""); setPicker({ unit: null }); }}>+ Add students</button>}
+          : <button type="button" className={secondary} onClick={() => { setNotice(""); setPicker({ unit: null }); }}>+ Add to intake</button>}
       </div>
       {unit && <p className="mt-1 px-1 text-xs text-foreground-600">{unit.code} · {unit.name}</p>}
       {notice && <p role="status" className="mt-2 text-sm text-green-800">{notice}</p>}
       <StudentRoster key={unit?.id ?? "intake"} courseId={courseId} intakeId={intakeId} unitId={unit?.id}
-        revision={revision} changed={() => { setNotice("Student removed from the unit."); refresh(); }} />
+        revision={intakeRevision} changed={() => { setNotice("Student removed from the unit."); changed(); }} />
     </section>
-    {picker && <StudentPicker courseId={courseId} intakeId={intakeId} unit={picker.unit} close={() => setPicker(null)} saved={() => {
+    {picker && <IntakeStudentPicker courseId={courseId} intakeId={intakeId} unit={picker.unit} close={() => setPicker(null)} saved={() => {
       setNotice(picker.unit ? "Students allocated to the unit." : "Students enrolled in the intake.");
       setPicker(null);
-      refresh();
+      changed();
     }} />}
   </>;
 }

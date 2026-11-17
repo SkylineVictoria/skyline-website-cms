@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import IntakeCalendar from "./IntakeCalendar";
-import IntakeStudentAllocation from "./IntakeStudentAllocation";
+import IntakeStudentAllocation, { IntakeStudentPicker } from "./IntakeStudentAllocation";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import { intakeStudents } from "@/pages/admin/lib/intakeStudents";
 import { generateClassSessions, listBreaks, loadIntakeLoads, LOAD_HOURS, rto, setIntakeLoad, shortDate, todayIso, type StudyLoad, type AcademicBreak, type IntakeDetail, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
@@ -15,7 +15,18 @@ const longDate = (d: string) => new Date(d + "T00:00:00Z").toLocaleDateString(un
 export default function LmsIntakesPage() {
   const { user } = useAuth();
   const canAllocate = user?.role === "Admin";
-  const [allocationIntakeId, setAllocationIntakeId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const allocationIntakeId = searchParams.get("intake") ?? "";
+  const [intakePicker, setIntakePicker] = useState<RtoIntake | null>(null);
+  const [calendarRevision, setCalendarRevision] = useState(0);
+  const selectAllocationIntake = (id: string) => {
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      if (id) next.set("intake", id);
+      else next.delete("intake");
+      return next;
+    }, { replace: true, preventScrollReset: true });
+  };
   const [studentCounts, setStudentCounts] = useState<Record<string, number> | null>(null);
   const [countError, setCountError] = useState("");
   const [countRevision, setCountRevision] = useState(0);
@@ -67,9 +78,14 @@ export default function LmsIntakesPage() {
     return () => { active = false; };
   }, [canAllocate, courseId, countRevision]);
 
+  const linkedCourseId = intakes.find(i => i.id === allocationIntakeId)?.courseId;
+  useEffect(() => {
+    if (linkedCourseId) setCourseId(linkedCourseId);
+  }, [linkedCourseId]);
+
   const chooseCourse = (id: string) => {
     if (id === courseId) return;
-    setCourseId(id); setSelectedId(""); setAllocationIntakeId(""); setNotice("");
+    setCourseId(id); setSelectedId(""); selectAllocationIntake(""); setNotice("");
     setStudentCounts(null); setCountError("");
   };
   const selectedCourse = courses.find(c => c.id === courseId);
@@ -92,6 +108,7 @@ export default function LmsIntakesPage() {
       // A new start date moves the unit timeline, so the batches' dated classes are planned again.
       if (moved || loadChanged) for (const b of updated.batches) if ((b.sessions ?? []).length) await generateClassSessions(b.id).catch(() => null);
       setIntakes(prev => prev.map(i => i.id === updated.intake.id ? { ...i, ...updated.intake } : i));
+      setCalendarRevision(value => value + 1);
       setNotice(`${updated.intake.name} saved.`); close(); void load();
     } catch (e) { setProblem(e instanceof Error ? e.message : "The intake was not saved."); }
     finally { setBusy(false); }
@@ -102,7 +119,7 @@ export default function LmsIntakesPage() {
     try {
       await rto("intake_delete", { intakeId: i.id });
       setIntakes(prev => prev.filter(x => x.id !== i.id));
-      if (allocationIntakeId === i.id) setAllocationIntakeId("");
+      if (allocationIntakeId === i.id) selectAllocationIntake("");
       setNotice(`${i.name} deleted.`); if (selectedId === i.id) close();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "The intake was not deleted.";
@@ -153,7 +170,7 @@ export default function LmsIntakesPage() {
           <ul className="mt-2 max-h-[65vh] space-y-1 overflow-y-auto p-1">
             {filtered.map(i => <li key={i.id} className={`rounded-lg border ${allocationIntake?.id === i.id ? "border-primary-300 bg-primary-50" : "border-background-200"}`}>
               <button type="button" aria-pressed={canAllocate ? allocationIntake?.id === i.id : undefined}
-                onClick={() => { setNotice(""); if (canAllocate) setAllocationIntakeId(i.id); else setSelectedId(i.id); }}
+                onClick={() => { setNotice(""); if (canAllocate) selectAllocationIntake(i.id); else setSelectedId(i.id); }}
                 className="w-full rounded-lg px-2 py-2 text-left hover:bg-background-100">
                 <span className="block break-words text-sm font-semibold text-foreground-950">{i.name}</span>
                 <span className="block text-xs text-foreground-600">{shortDate(i.startDate)} – {shortDate(i.endDate)}</span>
@@ -163,6 +180,12 @@ export default function LmsIntakesPage() {
               </button>
               <div className="flex flex-wrap items-center gap-2 px-2 pb-2 text-xs">
                 <span className="me-auto text-foreground-600">{(loads[i.id] ?? "coe") === "voe" ? "VoE · 40 h" : "CoE · 20 h"}</span>
+                {canAllocate && <button type="button" onClick={() => {
+                  setNotice(""); selectAllocationIntake(i.id); setIntakePicker(i);
+                }} aria-label={`Add students to intake ${i.name}`}
+                  className="rounded-lg bg-primary-600 px-2.5 py-1.5 font-semibold text-white hover:bg-primary-700">
+                  + Add students
+                </button>}
                 {(canAllocate || canEdit) && <button type="button" onClick={() => { setNotice(""); setSelectedId(i.id); }}
                   aria-label={`${canEdit ? "Edit" : "View"} intake ${i.name}`} className="rounded-lg border border-background-300 px-2 py-1 font-semibold hover:bg-background-100">
                   {canEdit ? "Edit" : "View"}
@@ -180,11 +203,11 @@ export default function LmsIntakesPage() {
         </>}
       </section>
       {canAllocate && (allocationIntake
-        ? <IntakeStudentAllocation key={allocationIntake.id} courseId={courseId} intakeId={allocationIntake.id} changed={refreshCounts} />
+        ? <IntakeStudentAllocation key={allocationIntake.id} courseId={courseId} intakeId={allocationIntake.id} changed={refreshCounts} intakeRevision={countRevision} calendarRevision={calendarRevision} />
         : <>
-          <section className={card + " min-w-0 p-3"} aria-label="Units">
-            <h2 className="mb-2 text-sm font-bold text-foreground-950">Units</h2>
-            <p className="text-sm text-foreground-500">Select an intake to view its units.</p>
+          <section className={card + " min-w-0 p-3"} aria-label="Unit calendar">
+            <h2 className="mb-2 text-sm font-bold text-foreground-950">Unit calendar</h2>
+            <p className="text-sm text-foreground-500">Select an intake to see unit dates and add students.</p>
           </section>
           <section className={card + " min-w-0 p-3"} aria-label="Allocated students">
             <h2 className="mb-2 text-sm font-bold text-foreground-950">Allocated students</h2>
@@ -209,7 +232,16 @@ export default function LmsIntakesPage() {
                 <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
               </div>)}
             </dl>
-            <IntakeCalendar detail={detail} />
+            {canAllocate ? <>
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                <IntakeStudentAllocation key={detail.intake.id} courseId={detail.intake.courseId} intakeId={detail.intake.id}
+                  schedule={detail.schedule} changed={refreshCounts} intakeRevision={countRevision} />
+              </div>
+              {detail.batches.length > 0 && <details className="rounded-lg border border-background-200 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-foreground-900">Batch calendar</summary>
+                <div className="pt-3"><IntakeCalendar detail={detail} /></div>
+              </details>}
+            </> : <IntakeCalendar detail={detail} />}
             {canEdit ? <div className="space-y-1">
               <p className="text-sm font-medium text-foreground-800">Students on</p>
               <div className="grid max-w-md grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
@@ -237,6 +269,12 @@ export default function LmsIntakesPage() {
           </div>
         </div> : null}
       </section></div> : null}
+    {intakePicker && <IntakeStudentPicker courseId={intakePicker.courseId} intakeId={intakePicker.id} unit={null}
+      close={() => setIntakePicker(null)} saved={() => {
+        setNotice(`Students enrolled in ${intakePicker.name}.`);
+        setIntakePicker(null);
+        refreshCounts();
+      }} />}
     <NewIntakeDrawer open={creating && canEdit} onClose={() => setCreating(false)} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={courseId || undefined}
       onCreated={(created: IntakeDetail) => { setCreating(false); chooseCourse(created.intake.courseId); setNotice(`${created.intake.name} added.`); void load(); }} />
   </div>;

@@ -1,8 +1,9 @@
 // One intake in a sheet from the right (its address ends in #<intake id>): Overview · Timeline · Batches · Students. Changes save
 // as they are made, with Undo on the toast.
 import { useCallback, useEffect, useState, type DragEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge, Button, ConfirmDialog, TextInput } from "@/pages/admin/components/ui";
+import { useAuth } from "@/pages/admin/lib/authContext";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote, FeesEditor } from "@/pages/admin/components/rto/shared";
 import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
@@ -23,6 +24,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
   onClose: () => void; onChanged: () => void; onDuplicate: (i: RtoIntake) => void; onDelete: (i: RtoIntake) => void;
 }) {
   const { push } = useToast();
+  const { user } = useAuth();
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -69,6 +71,11 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 </div>
                 <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p>
                 <p className="text-xs text-foreground-500">{shortDate(i.startDate)} – {shortDate(i.endDate)}{i.campus ? ` · ${i.campus}` : ""}</p>
+                {user?.role === "Admin" && <Link
+            to={`/admin/lms/intakes?intake=${encodeURIComponent(i.id)}`}
+            className="mt-2 inline-flex rounded-lg border border-primary-300 px-2.5 py-1.5 text-xs font-semibold text-primary-700 hover:bg-primary-50">
+            Unit calendar &amp; students
+          </Link>}
               </>
             ) : <div className="h-14 w-64 animate-pulse rounded bg-background-200 motion-reduce:animate-none" />}
           </div>

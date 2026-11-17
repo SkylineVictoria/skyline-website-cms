@@ -439,6 +439,10 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
       if (name === "agency_onboarding_template_install") {
         // The database's claim of the key: the first insert wins (unique index), every later call reuses it.
         const key = String(args.p_key); const have = saved.find((t) => t.__key === key);
+        if (have && (args.p_data as Record<string, unknown> | null)?.refresh === true) {
+          const d = args.p_data as Record<string, unknown>; Object.assign(have, { fields: d.fields, source_path: d.source_path, source_hash: d.source_hash, source_pages: d.source_pages, version: Number(have.version ?? 1) + 1 });
+          return { id: have.id, systemKey: key, reused: false, refreshed: true, fields: (d.fields as unknown[]).length, pages: d.source_pages, status: "active", version: have.version };
+        }
         if (have) return { id: have.id, systemKey: key, reused: true, fields: (have.fields as unknown[]).length, pages: have.source_pages, status: "active" };
         if (!args.p_data) return null;
         const d = args.p_data as Record<string, unknown>; saved.push({ ...d, __key: key });
@@ -481,6 +485,12 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   assert.deepEqual(saved.map((t) => `${t.__key}:${(t.roles as Array<{ key: string }>)[0].key}`), ["agent_application_form:agent", "agent_referee_check_form:referee", "agent_agreement:agent"], "three blanks, one template per key, the referee check signed by a referee");
   assert.equal([...stored.keys()].filter((p) => p.startsWith("templates/")).length, 3, "one stored source per template: the losing upload was removed");
   assert.ok(saved.every((t) => stored.has(String(t.source_path))), "every template's source is the stored one");
+  // A corrected blank: refresh replaces the file and the fields of the same template (version + 1), never a new row.
+  const beforeRefresh = { id: saved[2].id, source: String(saved[2].source_path) };
+  const refreshed = await call({ action: "agent_onboarding_install", which: "agreement", refresh: true }, { name: "agreement.pdf", bytes: blankBytes("agreement") }) as { id: string; refreshed: boolean; version: number; pages: number };
+  assert.ok(refreshed.refreshed && refreshed.id === beforeRefresh.id && refreshed.version === 2 && refreshed.pages === 13, "the agreement template is refreshed in place at version 2");
+  assert.equal(saved.length, 3, "still three templates"); assert.notEqual(saved[2].source_path, beforeRefresh.source, "with a new source file");
+  assert.ok(stored.has(String(saved[2].source_path)) && [...stored.keys()].filter((p) => p.startsWith("templates/")).length === 4, "the new source is stored (the old one stays for requests already sent)");
   // Stage 1: the application form alone.
   const sentForm = await call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001", message: "Welcome" }) as { id: string; sent: boolean; stage: string };
   assert.ok(sentForm.sent && sentForm.stage === "application_sent" && sent.includes(sentForm.id));
@@ -529,7 +539,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   // Stage 3 is gated: no reason, no agreement; a reason passes it to the database and is reported.
   const agreementInput = { action: "agent_onboarding_send_agreement", agencyId: "30000000-0000-4000-8000-000000000001", onboardingId: "20000000-0000-4000-8000-000000000001", commencementDate: "2026-11-17", territory: "India", commissionPercent: "25", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" } };
   await assert.rejects(call(agreementInput), /Give a reason for sending the agreement/);
-  assert.equal(stored.size, 3 + 1 + 2 + 2, "the refused agreement's PDF is removed again (three sources, the form, two referee checks, the signed form and its certificate stay)");
+  assert.equal(stored.size, 4 + 1 + 2 + 2, "the refused agreement's PDF is removed again (four sources after the refresh, the form, two referee checks, the signed form and its certificate stay)");
   // A referee's email changes: the old request is voided and a new check goes out.
   const changed = await call({ action: "agent_onboarding_referee_change", refereeId: referees[1].id, email: "sam.lee@newplace.test", name: "Sam Lee" }) as { sent: number; email: string };
   assert.ok(changed.sent === 1 && changed.email === "sam.lee@newplace.test" && voided.length === 1 && voided[0] === (refereeCreates[1][1].p_data as { id: string }).id, "the old request is voided");

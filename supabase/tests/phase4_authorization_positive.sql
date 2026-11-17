@@ -1,6 +1,6 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(784);
+select plan(787);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values
  ('23000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Positive agent','positive@example.test');
@@ -1291,6 +1291,10 @@ select is(public.agency_onboarding_template_install('agent_agreement',null)->>'r
 select is((select count(*) from jsonb_array_elements(public.agency_onboarding_templates()) x where x->>'systemKey'='agent_agreement')::int,1,'one Agent Agreement template is listed');
 select lives_ok($$select public.signing_admin('template_archive','73000000-0000-0000-0000-000000000040')$$,'staff archive it');
 select is(public.agency_onboarding_template_install('agent_agreement',null)->>'status','active','installing brings an archived template back');
+-- A corrected blank (migration 20261117200000): refresh replaces the file and fields of the same template, version + 1, never a new row.
+select throws_ok($$select public.agency_onboarding_template_install('agent_agreement','{"refresh":true,"fields":[]}')$$,null,'The refreshed template needs its source file','a refresh needs the new file');
+select is(public.agency_onboarding_template_install('agent_agreement','{"refresh":true,"fields":[{"type":"text","role":"sender","page":10,"x":0.1,"y":0.5,"w":0.3,"h":0.02,"key":"agent_organisation_name","label":"Organisation","value":"{{agent_organisation_name}}"}],"source_path":"templates/73000000-0000-0000-0000-000000000040/source-2.pdf","source_hash":"4343434343434343434343434343434343434343434343434343434343434343","source_pages":13}')->>'refreshed','true','the template is refreshed');
+select is((select t->>'id'||'|'||(t->>'version')||'|'||(t->>'sourceHash')||'|'||jsonb_array_length(t->'fields')::text from jsonb_array_elements(public.agency_onboarding_templates()) t where t->>'systemKey'='agent_agreement'),'73000000-0000-0000-0000-000000000040|2|4343434343434343434343434343434343434343434343434343434343434343|1','the same row at version 2 with the new file and the new fields');
 reset role;
 select throws_ok($$insert into hr.sign_templates(id,name,title,kind,audience,category,system_key,source_path,source_hash,source_pages,created_by) values ('73000000-0000-0000-0000-000000000042','Agent Agreement','Agent Agreement','pdf','agent','agency_agreement','agent_agreement','templates/73000000-0000-0000-0000-000000000042/source.pdf','4242424242424242424242424242424242424242424242424242424242424242',13,'33000000-0000-0000-0000-000000000002')$$,'23505',null,'the unique index refuses a second live template with the key');
 select is((select count(*)::int from hr.sign_templates where system_key='agent_agreement' and deleted_at is null),1,'one live template per key');

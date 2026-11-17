@@ -50,7 +50,9 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   const spec = AGENT_ONBOARDING_DOCS[which];
   if (!spec) throw new SigningError("Say which blank to install: form, referee or agreement.");
   const installed = ((await ctx.rpc("agency_onboarding_templates", {})) as OnboardingTemplate[]).find((t) => t.systemKey === spec.key);
-  if (installed) {
+  // refresh: the blank shipped with the site changed; the same template takes the new file and the fields read from it (no new row).
+  const refresh = ctx.body.refresh === true && !!installed;
+  if (installed && !refresh) {
     const kept = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: null });
     if (kept?.id) return { id: kept.id, systemKey: spec.key, fields: Number(kept.fields ?? installed.fields?.length ?? 0), pages: Number(kept.pages ?? installed.sourcePages), reused: true };
   }
@@ -63,7 +65,8 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   const path = `templates/${id}/source-${ctx.ports.uuid()}.pdf`;
   await ctx.store(path, read.flattened);
   const result = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: { id, name: spec.name, title: spec.title, category: spec.category, roles: [signerRole(which)], fields: read.fields,
-    signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages } });
+    signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages, refresh } });
+  if (result?.refreshed) { ctx.commit(); return { id: result.id, systemKey: spec.key, fields: read.fields.length, pages: read.pages, reused: false, refreshed: true, version: Number(result.version ?? 0) }; }
   if (result?.reused) {
     // Another send installed this blank first: its template is the one; this upload is not referenced by anything.
     try { await ctx.ports.storage.remove([path]); } catch { /* left for a later clean-up */ }

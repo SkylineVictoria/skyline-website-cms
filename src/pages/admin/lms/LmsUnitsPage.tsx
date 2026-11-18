@@ -3,6 +3,7 @@ import UnitContentPanel from "./UnitContentPanel";
 import UnitAssessmentsPanel from "./UnitAssessmentsPanel";
 import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
 import AddUnitsFromTga from "./AddUnitsFromTga";
+import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
@@ -27,6 +28,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
   const [hoursBusy, setHoursBusy] = useState(false);
+  const [editingHours, setEditingHours] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [type, setType] = useState("all");
   const [status, setStatus] = useState("all");
@@ -152,6 +154,8 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     finally { setBusy(false); }
   };
   return <div className={embeddedCourseId ? "space-y-4" : "mx-auto max-w-[1500px] space-y-5 pb-12"}>
+    {editingHours && selectedCourse ? <UnitHoursEditor course={selectedCourse} onClose={() => setEditingHours(false)}
+      onSaved={() => { void refreshHours(selectedCourse.id); void reloadCourse(selectedCourse.id); }} /> : null}
     {picking && selectedCourse ? <AddUnitsFromTga course={selectedCourse} units={details.find(d => d.course.id === selectedCourse.id)?.units ?? []}
       onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)} /> : null}
     {!embeddedCourseId && <header className="flex flex-wrap items-end justify-between gap-3">
@@ -182,14 +186,10 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
           <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2></div>
-        {canEdit ? <div className="flex flex-wrap items-center gap-2">{(() => {
-          const pending = (details.find(d => d.course.id === selectedCourse.id)?.units ?? [])
-            .filter(u => u.isActive && u.id && u.nominalHours !== null && !hours[u.id]?.confirmedAt);
-          return <button type="button" disabled={hoursBusy || !pending.length} onClick={() => void acceptAllSuggested(pending)}
-            title="For every unit not yet accepted: SLIT hours = nominal hours, split 40% theory, 40% practical, 20% assessment"
-            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:border-background-300 disabled:bg-transparent disabled:text-foreground-500">
-            {hoursBusy ? "Accepting…" : pending.length ? `Accept nominal hours for all units (${pending.length})` : "All unit hours accepted"}</button>;
-        })()}
+        {canEdit ? <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
+            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100">
+            <i className="ri-time-line mr-1" aria-hidden="true" />Edit all hours</button>
           <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add units</button></div> : null}
       </div>
       {(() => {

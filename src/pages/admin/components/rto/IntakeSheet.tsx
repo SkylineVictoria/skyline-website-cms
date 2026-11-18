@@ -108,7 +108,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
 
       {wizStep && canEdit ? <div className="shrink-0 border-b border-primary-200 bg-primary-50 px-4 py-2.5 sm:px-6" role="status">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 4 of 4 · Batch.</b> Add the class: days and times, trainer and room. Students join through the enrolment wizard and are placed into it automatically.</span>
+          <span className="min-w-0 flex-1"><b>Step 6 of 6 · Batch.</b> Add the class: days and times, trainer and room. Students join through the enrolment wizard and are placed into it automatically.</span>
           <Button size="sm" icon="ri-add-line" onClick={() => { setTab("batches"); setAdding(true); }}>Add batch</Button>
           <Button size="sm" variant="outline" onClick={() => { setWizStep(null); push("Course set up. A batch opens by itself when the first student is placed."); }}>Finish without a batch</Button>
         </div>

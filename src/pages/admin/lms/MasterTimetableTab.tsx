@@ -28,7 +28,7 @@ const weeksLabel = (value: number) => (Number.isInteger(value) ? String(value) :
 const input = "rounded-lg border border-background-300 bg-background-50 px-2 py-1.5 text-sm";
 const th = "px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground-500";
 
-export default function MasterTimetableTab({ courseId, courseCode }: { courseId: string; courseCode: string }) {
+export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { courseId: string; courseCode: string; onSaved?: () => void }) {
   const [master, setMaster] = useState<Master | null>(null);
   const [start, setStart] = useState("");
   const [order, setOrder] = useState<{ unitId: string; weeks: number }[]>([]);
@@ -77,7 +77,7 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
   const save = async () => {
     if (busy || !master?.canEdit) return;
     setBusy(true); setError(""); setNotice("");
-    try { const data = await call("save", { courseId, startDate: start, rows: order }); apply(data); setDirty(false); setNotice("Master timetable saved."); }
+    try { const data = await call("save", { courseId, startDate: start, rows: order }); apply(data); setDirty(false); setNotice("Master timetable saved."); onSaved?.(); }
     catch (e) { setError(e instanceof Error ? e.message : "The master timetable was not saved."); }
     finally { setBusy(false); }
   };

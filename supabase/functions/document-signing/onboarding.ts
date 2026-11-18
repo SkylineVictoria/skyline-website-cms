@@ -4,7 +4,7 @@
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, expiryDate, F04_RECORD_KEYS, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { ABR_PREFILL_KEYS, abrFacts, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
+import { ABR_PREFILL_KEYS, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
@@ -182,6 +182,8 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   // The referee checks go out by themselves when the form is signed (no browser to install a blank then): all three must exist now.
   await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
   const { values, prefill, facts } = await applicationValues(ctx, prepared);
+  // The ACN is kept as digits in the request's stored values (no box on the form; printed "603 584 676" on the page and in the registration box).
+  if (values.agent_acn) values.agent_acn = acnDigits(values.agent_acn);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
   // F04 wizard (2026-11-19): every value we hold is the contact's to correct (the Company summary's Edit), whatever its source.
   const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });

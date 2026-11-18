@@ -1,11 +1,11 @@
 // Add Unit: pick core and elective units from the course's current Training.gov.au release, or add an elective from
 // outside the qualification by its code. The selection is checked against the official packaging rules (the same check
 // the server runs before saving), and a unit's prerequisites can be read from training.gov.au.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import type { RtoCourse, RtoUnit } from "@/pages/admin/lib/rto";
-import { autoPickElectives, checkElectives, groupSizes, parseElectiveRules, type ElectiveUnit } from "../../../../supabase/functions/tga-course-import/packaging";
+import { checkElectives, groupSizes, parseElectiveRules, type ElectiveUnit } from "../../../../supabase/functions/tga-course-import/packaging";
 
 interface TgaUnit { code: string; name: string; nominalHours: number | null; groups: string[]; hasPrerequisites: boolean | null }
 interface Release {
@@ -51,8 +51,6 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState("");
   const [note, setNote] = useState("");
-  // Qualifications with specialisations (Builder / Site Manager …): the one the automatic pick follows.
-  const [streamName, setStreamName] = useState("");
   // Electives on the course that staff unticked: switched off when the change is saved (to change a unit for another).
   const [removing, setRemoving] = useState<Set<string>>(new Set());
   const onCourse = useMemo(() => new Map(units.map(unit => [unit.code.trim().toUpperCase(), unit])), [units]);
@@ -94,19 +92,9 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const toggle = (code: string, on: boolean) => {
     setChosen(s => {
       const next = new Set(s);
-      if (on) next.add(code);
-      else {
-        // Unticking a prerequisite also unticks the picked units that need it (they always go together).
-        const drop = [code.toUpperCase()];
-        for (let i = 0; i < drop.length; i++) {
-          for (const other of [...next]) {
-            const found = lookups[other.toUpperCase()];
-            if (found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === drop[i]) && !drop.includes(other.toUpperCase())) drop.push(other.toUpperCase());
-          }
-        }
-        for (const item of [...next]) if (drop.includes(item.toUpperCase())) next.delete(item);
-        if (drop.length > 1) setNote(`Also unticked ${drop.slice(1).join(", ")}: ${drop.length > 2 ? "they need" : "it needs"} ${code}.`);
-      }
+      // Staff pick every unit themselves (owner, 2026-11-19): nothing else is ticked or unticked with it; the check below
+      // names the prerequisites still missing and keeps Add off until they are picked.
+      if (on) next.add(code); else next.delete(code);
       return next;
     });
     // Prerequisites are read only for the units picked, and only the missing ones are shown.
@@ -146,60 +134,10 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per release
   }, [release]);
-  // A picked unit brings its prerequisites with it: those in this qualification are ticked automatically.
-  useEffect(() => {
-    const add: string[] = [];
-    for (const code of chosen) {
-      const found = lookups[code.toUpperCase()];
-      if (!found || "error" in found) continue;
-      for (const need of found.prerequisiteCodes) {
-        const key = need.toUpperCase();
-        if (!selected(key) && official.has(key) && !add.includes(key)) add.push(key);
-      }
-    }
-    if (!add.length) return;
-    add.forEach(key => toggle(official.get(key)!.unit.code, true));
-    setNote(`Added the prerequisite${add.length === 1 ? "" : "s"} ${add.join(", ")}: a unit and its prerequisites are added together.`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a unit's prerequisites have been read
-  }, [lookups, chosen]);
   // Units are added only when the course then meets every packaging rule (owner, 2026-11-19): a broken or unfinished rule blocks.
   const removeBlocked = [...removing].flatMap(code => neededBy(code).map(other => `${code} is needed by ${other}`));
   const blocked = !release || !changes || removeBlocked.length > 0 || check?.ok === false || (check !== null && !check.complete) || (needsAttest && !attested);
 
-  // Electives picked automatically so every packaging rule is met (owner, 2026-11-19): in the course wizard it runs by itself
-  // once the prerequisites are read; "Pick electives for me" runs it any time. Staff can still change any tick.
-  const prereqsRead = !!release && [...release.core, ...release.electives].every(unit => lookups[unit.code.toUpperCase()] !== undefined && lookups[unit.code.toUpperCase()] !== null);
-  function pickForMe(auto = false) {
-    if (!release || !rules) return;
-    const current: ElectiveUnit[] = [];
-    const seen = new Set<string>();
-    const push = (code: string) => {
-      const key = code.toUpperCase(); if (seen.has(key)) return; seen.add(key);
-      const listed = official.get(key);
-      if (!listed) current.push({ code, groups: null }); else if (!listed.core) current.push({ code, groups: listed.unit.groups });
-    };
-    units.filter(unit => unit.isActive && unit.unitType !== "core" && !removing.has(unit.code.trim().toUpperCase())).forEach(unit => push(unit.code.trim()));
-    chosen.forEach(push); imported.forEach(unit => push(unit.code));
-    const candidates = release.electives.map(unit => {
-      const found = lookups[unit.code.toUpperCase()];
-      // A unit whose prerequisites could not be read is only picked when nothing else fits (its needs are unknown).
-      const prerequisites = found && !("error" in found) ? found.prerequisiteCodes : unit.hasPrerequisites === true ? ["?"] : [];
-      return { code: unit.code, groups: unit.groups, prerequisites };
-    });
-    const picks = autoPickElectives(rules, candidates, current, selected, streamName || undefined);
-    if (!picks) { if (!auto) setNote("The packaging rules cannot be met from the listed electives automatically: pick the units by hand (or add one from outside the qualification)."); return; }
-    if (!picks.length) return;
-    setChosen(s => new Set([...s, ...picks]));
-    const as = rules.streams.length ? ` (specialisation ${streamName || rules.streams.find(item => autoPickElectives(rules, candidates, current, selected, item.name))?.name || rules.streams[0].name})` : "";
-    setNote(`Picked ${picks.length} elective${picks.length === 1 ? "" : "s"} automatically so every packaging rule is met${as} (prerequisites included): ${picks.join(", ")}. Change any tick if you prefer other units.`);
-  }
-  const autoRan = useRef(false);
-  useEffect(() => {
-    if (autoRan.current || !stepLabel || !release || !rules || !check || check.complete || !prereqsRead) return;
-    autoRan.current = true;
-    pickForMe(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the wizard's units step has read everything
-  }, [stepLabel, release, rules, check, prereqsRead]);
 
   function lookup(code: string) {
     const key = code.toUpperCase();
@@ -254,10 +192,10 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const readingPrereqs = [...chosen].some(code => lookups[code.toUpperCase()] === null);
   // Why Add is grey, in words (owner, 2026-11-19: the button was grey with no reason).
   const addBlockedWhy = busy ? "" : !release ? "Reading the qualification…"
-    : !changes ? (check?.complete ? "Nothing new to add: the course already meets every packaging rule." : "Tick the electives to add, or press Pick electives for me.")
+    : !changes ? (check?.complete ? "Nothing new to add: the course already meets every packaging rule." : "Tick the electives to add.")
     : removeBlocked.length ? `${removeBlocked[0]}.`
     : check?.ok === false ? "Packaging rules not followed: see the red line above."
-    : check && !check.complete ? "Select units until every packaging rule is met (or press Pick electives for me)."
+    : check && !check.complete ? "Select units until every packaging rule is met."
     : needsAttest && !attested ? "Tick the confirmation above: part of the rules could not be checked automatically."
     : readingPrereqs ? "Checking the prerequisites of the units you picked…"
     : missingPrereqs.length ? `Add the prerequisites first: ${missingPrereqs[0].unit} needs ${missingPrereqs[0].needs.join(", ")}.` : "";
@@ -330,12 +268,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
         <p className="text-sm font-semibold text-foreground-950">{count ? `${count} unit${count === 1 ? "" : "s"} picked${hours ? ` · ${hours} nominal hours` : ""}` : "Tick the electives to add."}</p>
         {brokenRules.map(line => <p key={line.label} role="alert" className="text-sm font-semibold text-red-700"><i className="ri-close-circle-line mr-1" aria-hidden="true" />{line.label}: {line.detail}</p>)}
         {!brokenRules.length && pendingRules.map(line => <p key={line.label} className="text-sm text-amber-800"><i className="ri-time-line mr-1" aria-hidden="true" />Still to pick: {line.label} ({line.detail})</p>)}
-        {rules?.streams.length ? <label className="flex flex-wrap items-center gap-2 text-sm"><span className="font-medium">Specialisation</span>
-          <select value={streamName} disabled={busy} onChange={e => setStreamName(e.target.value)} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-sm">
-            <option value="">Any (the first that fits)</option>{rules.streams.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
-          </select>{check?.stream ? <span className="text-xs text-foreground-600">Your selection follows: <b>{check.stream}</b></span> : null}</label> : null}
-        {check && !check.complete ? <div><Button size="sm" icon="ri-magic-line" disabled={busy || !prereqsRead} onClick={() => pickForMe()}>
-          {prereqsRead ? "Pick electives for me" : "Reading prerequisites…"}</Button></div> : null}
+        {rules?.streams.length ? <p className="text-sm text-foreground-700">This qualification has specialisations ({rules.streams.map(item => item.name).join(", ")}): the electives must meet one of them in full.{check?.stream && count ? <> Checking against: <b>{check.stream}</b>.</> : ""}</p> : null}
         {check && !brokenRules.length && !pendingRules.length && count > 0 ? <p className="text-sm text-green-800"><i className="ri-checkbox-circle-line mr-1" aria-hidden="true" />The elective rules are met.</p> : null}
         {missingPrereqs.map(item => <p key={item.unit} className="flex flex-wrap items-center gap-2 text-sm text-amber-900">
           <span><i className="ri-git-merge-line mr-1" aria-hidden="true" /><b>{item.unit}</b> needs</span>
@@ -364,10 +297,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
                 {options.length ? <select aria-label={`Change ${unit.code}`} value="" disabled={busy} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-xs"
                   onChange={e => {
                     const next = e.target.value; if (!next) return;
-                    // Units that need this one leave with it (a unit and its prerequisites go together).
-                    const needing = [...chosen].filter(code => code !== unit.code && (() => { const found = lookups[code.toUpperCase()]; return !!found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === unit.code.toUpperCase()); })());
-                    toggle(unit.code, false); toggle(next, true);
-                    setNote(`Changed ${unit.code} to ${next}.${needing.length ? ` ${needing.join(", ")} also left: ${needing.length > 1 ? "they need" : "it needs"} ${unit.code}. Pick another unit if a rule is no longer met.` : ""}`);
+                    toggle(unit.code, false); toggle(next, true); setNote(`Changed ${unit.code} to ${next}.`);
                   }}>
                   <option value="">Change to…</option>
                   {options.map(other => <option key={other.code} value={other.code}>{other.code} {other.name}</option>)}

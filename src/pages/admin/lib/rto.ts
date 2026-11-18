@@ -5,7 +5,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 /** The database refuses duplicate LMS rows (migration 20261119184213_no_duplicate_lms_rows); say which one in plain words. */
 const DUPLICATES: Array<[RegExp, string]> = [
   [/intake_units_no_duplicate_unit/, "This unit is already in this intake."],
-  [/batch_sessions_no_duplicate_time|class_sessions_batch_id_session_date_start_time/, "This intake already has a class on that day at that start time."],
+  [/intake_class_times_no_duplicate_time|class_sessions_intake_date_start_key/, "This intake already has a class on that day at that start time."],
   [/prereq_class_times_no_duplicate_time/, "The Prerequisite class already has a class on that day at that start time."],
   [/cms_courses_code_no_duplicate|cms_courses_cricos_course_code/, "A course with this code already exists."],
   [/cms_course_units_code|cms_course_units_course_code/, "This course already has a unit with this code."],
@@ -14,7 +14,7 @@ const DUPLICATES: Array<[RegExp, string]> = [
   [/locations_name/, "A location with this name already exists."],
   [/classrooms_name_no_duplicate/, "This location already has a room with this name."],
   [/course_fee_items_label_no_duplicate/, "This fee line is already on the course."],
-  [/batch_enrolments_batch_id_student_id|lms_intake_students_pkey|lms_unit_students_pkey/, "This student is already there."],
+  [/intake_enrolments_intake_student_key|lms_intake_students_pkey|lms_unit_students_pkey/, "This student is already there."],
 ];
 /** An intake is the class group: a database message that still says "batch" is shown with "intake" (words only, not identifiers). */
 const intakeWords = (message: string) => message

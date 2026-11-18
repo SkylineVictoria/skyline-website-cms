@@ -14,7 +14,11 @@ const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-backgr
 const hoursInputClass = "w-full rounded-lg border-2 border-primary-300 bg-background-50 px-3 py-2 text-base font-semibold text-foreground-950 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:border-background-200 disabled:bg-background-100";
 const HOUR_PARTS = [["theoryHours", "Theory hrs", "40%"], ["practicalHours", "Practical hrs", "40%"], ["assessmentHours", "Assessment hrs", "20%"]] as const;
 /** Units of each course. On the Courses page (embeddedCourseId) it shows only that course's units, without the course list. */
-export default function LmsUnitsPage({ embeddedCourseId, openPicker, onPickerOpened }: { embeddedCourseId?: string; openPicker?: boolean; onPickerOpened?: () => void } = {}) {
+export default function LmsUnitsPage({ embeddedCourseId, openPicker, onPickerOpened, onUnitsComplete }: {
+  embeddedCourseId?: string; openPicker?: boolean; onPickerOpened?: () => void;
+  /** A new course: once its units meet the packaging rules, Add units offers "Create first intake". */
+  onUnitsComplete?: () => void;
+} = {}) {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [details, setDetails] = useState<CourseDetail[]>([]);
   const [query, setQuery] = useState("");
@@ -155,7 +159,8 @@ export default function LmsUnitsPage({ embeddedCourseId, openPicker, onPickerOpe
   };
   return <div className={embeddedCourseId ? "space-y-4" : "mx-auto max-w-[1500px] space-y-5 pb-12"}>
     {picking && selectedCourse ? <AddUnitsFromTga course={selectedCourse} units={details.find(d => d.course.id === selectedCourse.id)?.units ?? []}
-      onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)} /> : null}
+      onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)}
+      nextStep={onUnitsComplete ? { label: "Create first intake", onClick: () => { setPicking(false); onUnitsComplete(); } } : undefined} /> : null}
     {!embeddedCourseId && <header className="flex flex-wrap items-end justify-between gap-3">
       <div><h1 className="font-heading text-2xl font-bold text-foreground-950">Units</h1>
         <p className="text-sm text-foreground-500">Units of each course, with their Training.gov.au content.</p></div>

@@ -29,8 +29,10 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
 }
 
 
-export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
+export default function AddUnitsFromTga({ course, units, onClose, onDone, nextStep }: {
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
+  /** Shown once the units are added and every packaging rule is met (a new course: "Create first intake"). */
+  nextStep?: { label: string; onClick: () => void };
 }) {
   const [release, setRelease] = useState<Release | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -130,7 +132,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     setNote(`Added the prerequisite${add.length === 1 ? "" : "s"} ${add.join(", ")}: a unit and its prerequisites are added together.`);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a unit's prerequisites have been read
   }, [lookups, chosen]);
-  const blocked = !release || !count || check?.ok === false || (needsAttest && !attested);
+  // Units are added only when the course then meets every packaging rule (owner, 2026-11-19): a broken or unfinished rule blocks.
+  const blocked = !release || !count || check?.ok === false || (check !== null && !check.complete) || (needsAttest && !attested);
 
   function lookup(code: string) {
     const key = code.toUpperCase();
@@ -219,10 +222,13 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   };
 
   return <Modal open title={`Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
-    footer={result ? <div className="flex justify-end"><Button onClick={onClose}>Close</Button></div>
+    footer={result ? <div className="flex justify-end gap-2">{nextStep && result.rulesComplete !== false
+        ? <><Button variant="outline" onClick={onClose}>Later</Button><Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button></>
+        : <Button onClick={onClose}>Close</Button>}</div>
       : <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm text-foreground-600">{count} selected{hours ? ` · ${hours} nominal hours` : ""}
-          {check?.ok === false ? <span className="ml-2 font-semibold text-red-700">Packaging rules not followed</span> : null}</span>
+          {check?.ok === false ? <span className="ml-2 font-semibold text-red-700">Packaging rules not followed</span>
+            : check && !check.complete && count ? <span className="ml-2 font-semibold text-amber-800">Select units until every packaging rule is met</span> : null}</span>
         <div className="flex gap-2"><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button disabled={busy || blocked || prereqBlocked} title={prereqBlocked ? "Add the prerequisites of the units you picked first" : undefined} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : `Add ${count} unit${count === 1 ? "" : "s"}`}</Button></div>
       </div>}>

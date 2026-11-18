@@ -77,7 +77,8 @@ async function request<T>(body: Record<string, unknown>): Promise<T> {
 export default function TrainingGovCourseImport({ onClose, onSaved }: {
   onClose: () => void;
   /** addUnits: open the new course on its Units tab with the Add units picker. */
-  onSaved: (courseId: string, addUnits?: boolean) => void;
+  /** next: "intake" when the units were chosen here (create the first intake), "units" to choose them in Add units first. */
+  onSaved: (courseId: string, next: "units" | "intake") => void;
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Qualification[] | null>(null);
@@ -155,16 +156,16 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
       const result = await request<{ courseId: string }>({
         action: "save", code: review.code, revision: review.revision, electives: selectedCodes, attested, specialisation: spec?.code ?? null,
       });
-      onSaved(result.courseId, true);
+      onSaved(result.courseId, "intake");
     });
   }
 
-  /** "Add course only": the course with its core units (always required); electives are chosen later on its Units tab. */
+  /** The course with its core units (always required); Add units then opens to choose the electives under the packaging rules. */
   function saveOnly() {
     if (!review || busy) return;
     void run("Adding the course…", async () => {
       const result = await request<{ courseId: string }>({ action: "create_core", code: review.code });
-      onSaved(result.courseId, false);
+      onSaved(result.courseId, "units");
     });
   }
 
@@ -268,11 +269,11 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
         <span>I confirm the selected electives meet the relevance, AQF alignment and vocational outcome requirements in the packaging rules.</span>
       </label>}
-      {blocker ? <p role="status" className="text-right text-sm font-semibold text-amber-800">To add the units: {blocker} Or use Add course only and choose the electives later.</p> : null}
+      {blocker ? <p role="status" className="text-right text-sm font-semibold text-amber-800">To add the units: {blocker} Or use Add course, then choose units.</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={() => { setReview(null); setError(""); }}>Back to results</button>
         <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={saveOnly}
-          title="Adds the course with its core units only; choose the electives later on its Units tab">Add course only</button>
+          title="Adds the course with its core units, then opens Add units to choose the electives">Add course, then choose units</button>
         <button type="button" className={actionClass} disabled={!canSave || Boolean(busy)} onClick={save}
           title="Adds the course with its core units and the electives selected above">Add course and units</button>
       </div>

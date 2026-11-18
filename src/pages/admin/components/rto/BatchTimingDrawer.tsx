@@ -1,4 +1,4 @@
-// Add a batch, or change a batch's class timing: a week strip (Mon–Sun), each day's classes (morning / afternoon / evening with
+// Set an intake's class timing (the intake is the class group; this makes its batch), or change it: a week strip (Mon–Sun), each day's classes (morning / afternoon / evening with
 // editable times, theory / practical / assessment, a room picked by location), "Use course timetable" and "Copy timing from G1"
 // in one click, and a live warning when a room is already taken.
 import { useEffect, useMemo, useState } from "react";
@@ -166,9 +166,9 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   ));
 
   return (
-    <Drawer open width="max-w-2xl" title={adding ? `Add batch ${shownName}` : `Class timing · ${batch.name}`} onClose={onClose}
+    <Drawer open width="max-w-2xl" title={adding ? `Class timing · ${intake.name}` : `Class timing · ${batch.name}`} onClose={onClose}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button disabled={busy || !!invalid || !!overlap || short} onClick={() => void save()}>{busy ? "Saving…" : adding ? `Add ${shownName}` : "Save timing"}</Button></>}>
+        <Button disabled={busy || !!invalid || !!overlap || short} onClick={() => void save()}>{busy ? "Saving…" : adding ? "Save class timing" : "Save timing"}</Button></>}>
       <ErrorNote text={error} />
       {adding ? (
         <div className="grid gap-3 sm:grid-cols-[8rem_minmax(0,1fr)_7rem]">

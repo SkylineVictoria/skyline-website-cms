@@ -93,8 +93,9 @@ export default function LmsCoursesPage() {
   const [syncNote, setSyncNote] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   // New course wizard: 1 course (Add course / Sync), 2 units in the Add units popup (packaging rules met), 3 the units' SLIT
-  // hours, 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first intake, then on
-  // the intake: 6 a batch. Students are added only through the enrolment wizard.
+  // hours (required), 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first
+  // intake/batch with its class timing (a course template or by hand). Students are added only through the enrolment wizard.
+  // A step closed with X stays waiting (hidden): the bar at the top of the page opens it again.
   const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "intake"; hidden?: boolean } | null>(null);
   const navigate = useNavigate();
 
@@ -203,6 +204,8 @@ export default function LmsCoursesPage() {
   const slitDuration = detail && slitHours > 0 ? courseWeeksLabel(slitHours) : "";
 
   const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
+  /** The wizard's course back on screen (another course may have been opened since the step was closed). */
+  const pickForWizard = (id: string) => { if (id !== selectedId) { setSelectedId(id); setTab("units"); setEditing(false); } };
   /** next: "units" opens Add units (then the first intake), "intake" opens New intake (units already chosen), "none" just shows it. */
   const reloadAfterAdd = (courseId: string, next: "units" | "intake" | "none" = "none") => {
     setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
@@ -230,23 +233,31 @@ export default function LmsCoursesPage() {
       </div> : null}
     </header>
 
+    {wizard?.hidden && wizard.step !== "intake" ? <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-primary-300 bg-primary-50 p-3 text-sm text-primary-900">
+      <span className="flex-1"><b>New course setup is not finished.</b> {wizard.step === "units" ? "Step 2 of 5 · Units: pick the electives."
+        : wizard.step === "hours" ? "Step 3 of 5 · Hours: every unit needs its SLIT hours." : "Step 4 of 5 · Start date and term breaks."}</span>
+      <button type="button" onClick={() => { pickForWizard(wizard.courseId); setWizard(w => (w ? { ...w, hidden: false } : w)); }}
+        className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700">Continue</button>
+    </div> : null}
     <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />
     {wizard?.step === "units" && !wizard.hidden && canEdit && detail?.course.id === wizard.courseId
-      ? <AddUnitsFromTga course={detail.course} units={detail.units} stepLabel="Step 2 of 6 · Units"
+      ? <AddUnitsFromTga course={detail.course} units={detail.units} stepLabel="Step 2 of 5 · Units"
         // The course reloads when the popup closes: reloading earlier would close it before its result and next step show.
-        // Closing keeps the wizard: the bar on the Units tab opens the popup again.
+        // Closing keeps the wizard: the bar at the top of the page opens the step again.
         onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onDone={() => undefined}
         nextStep={{ label: "Next: unit hours", onClick: () => { setWizard({ courseId: wizard.courseId, step: "hours" }); setReloadKey(k => k + 1); } }} /> : null}
-    {wizard?.step === "hours" && canEdit && selected?.id === wizard.courseId
-      ? <UnitHoursEditor course={selected} stepLabel="Step 3 of 6 · Hours" onClose={() => { setWizard(null); setReloadKey(k => k + 1); }} onSaved={() => undefined}
-        nextStep={{ label: "Next: start date and term breaks", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }} /> : null}
-    {wizard?.step === "master" && canEdit && selected?.id === wizard.courseId
-      ? <StartDateBreaksEditor course={selected} stepLabel="Step 4 of 6" onClose={() => { setWizard(null); setReloadKey(k => k + 1); }}
-        nextStep={detail?.intakes.length ? undefined : { label: "Next: create first intake", onClick: () => { setWizard({ courseId: wizard.courseId, step: "intake" }); setReloadKey(k => k + 1); } }} /> : null}
+    {wizard?.step === "hours" && !wizard.hidden && canEdit && selected?.id === wizard.courseId
+      ? <UnitHoursEditor course={selected} stepLabel="Step 3 of 5 · Hours" onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onSaved={() => undefined}
+        nextStep={{ label: "Save and continue: start date", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }} /> : null}
+    {wizard?.step === "master" && !wizard.hidden && canEdit && selected?.id === wizard.courseId
+      ? <StartDateBreaksEditor course={selected} stepLabel="Step 4 of 5"
+        // With an intake already on the course this is the last step: closing ends the wizard.
+        onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
+        nextStep={detail?.intakes.length ? undefined : { label: "Next: intake and class timing", onClick: () => { setWizard({ courseId: wizard.courseId, step: "intake" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Step 5 of 6 · First intake"
+      allowBatch={false} requireUnitSchedule title="Step 5 of 5 · Intake/Batch" createLabel="Create and set class timing"
       onClose={() => setWizard(null)}
       onCreated={d => { setWizard(null); navigate(`/admin/lms/intakes?wizard=1#${d.intake.id}`); }} /> : null}
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
@@ -350,13 +361,6 @@ export default function LmsCoursesPage() {
                 <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</h3>
                 <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />
               </section> : null}
-              </div> : null}
-              {tab === "units" && wizard?.step === "units" && wizard.courseId === selectedId ? <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-primary-300 bg-primary-50 p-3 text-sm text-primary-900">
-                <span className="flex-1"><b>Step 2 of 6 · Units.</b> {detail?.course.id === selectedId ? "Pick the electives for this course." : "Loading the course…"}</span>
-                <button type="button" disabled={detail?.course.id !== selectedId} onClick={() => setWizard(w => (w ? { ...w, hidden: false } : w))}
-                  className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Open Add units</button>
-                <button type="button" onClick={() => setWizard({ courseId: selectedId, step: "hours" })} className="rounded-lg border border-primary-300 px-3 py-1.5 font-semibold text-primary-800 hover:bg-primary-100">Skip to unit hours</button>
-                <button type="button" onClick={() => setWizard(null)} className="rounded-lg border border-primary-300 px-3 py-1.5 font-semibold text-primary-800 hover:bg-primary-100">Later</button>
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}

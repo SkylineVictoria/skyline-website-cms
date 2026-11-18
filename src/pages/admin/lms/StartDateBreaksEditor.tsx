@@ -7,6 +7,7 @@
 // down, and a unit's weeks or end date changed.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
+import { BreakDateField } from "@/pages/admin/components/rto/BreakDatePicker";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { shortDate } from "@/pages/admin/lib/rto";
 
@@ -177,7 +178,8 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
         <table className="w-full max-w-2xl overflow-hidden rounded-lg border border-background-200 text-sm">
           <thead className="bg-background-100"><tr><th className={th}>Course starts</th><th className={th}>One cycle (every unit once)</th><th className={th}>Course ends</th></tr></thead>
           <tbody><tr className="border-t border-background-100">
-            <td className="px-2 py-1.5"><input type="date" aria-label="Start date" className={input + " border-2 border-primary-300 font-semibold"} value={start} disabled={!canEdit || busy} onChange={e => changeStart(e.target.value)} /></td>
+            <td className="px-2 py-1.5"><BreakDateField label="Start date" className="border-2 border-primary-300 font-semibold" value={start} disabled={!canEdit || busy} onChange={changeStart}
+              breaks={breaks} breakNote="the course cannot start in a term break" /></td>
             <td className="px-2 py-1.5 text-foreground-800">{start && master.endDate ? <>{weeksLabel(totalWeeks)} weeks, last unit ends {shortDate(master.endDate)}</> : `${weeksLabel(totalWeeks)} weeks`}</td>
             <td className="px-2 py-1.5 font-semibold text-foreground-950">Never: the units start again</td>
           </tr></tbody>
@@ -193,8 +195,10 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
               {breaks.map(b => editing?.id === b.id ? <tr key={b.id} className="border-t border-background-100 bg-primary-50/50">
                 <td className="px-2 py-1.5"><input aria-label="Term break name" maxLength={80} className={input + " w-full"} value={editing.label} disabled={busy} onChange={e => setEditing({ ...editing, label: e.target.value })} />
                   {!b.courseId ? <span className="mt-0.5 block text-xs text-amber-800">For every course</span> : null}</td>
-                <td className="px-2 py-1.5"><input type="date" aria-label="First day" className={input} value={editing.startDate} disabled={busy} onChange={e => setEditing({ ...editing, startDate: e.target.value })} /></td>
-                <td className="px-2 py-1.5"><input type="date" aria-label="Last day" className={input} value={editing.endDate} min={editing.startDate || undefined} disabled={busy} onChange={e => setEditing({ ...editing, endDate: e.target.value })} /></td>
+                <td className="px-2 py-1.5"><BreakDateField label="First day" value={editing.startDate} disabled={busy} onChange={d => setEditing({ ...editing, startDate: d, endDate: editing.endDate && editing.endDate < d ? "" : editing.endDate })}
+                  breaks={breaks.filter(x => x.id !== editing.id)} breakNote="already a term break" /></td>
+                <td className="px-2 py-1.5"><BreakDateField label="Last day" value={editing.endDate} disabled={busy} onChange={d => setEditing({ ...editing, endDate: d })} today={editing.startDate || undefined} earlyNote="Before the first day"
+                  breaks={breaks.filter(x => x.id !== editing.id)} breakNote="already a term break" /></td>
                 <td className="px-2 py-1.5 text-right text-foreground-500">{editing.startDate && editing.endDate && editing.endDate >= editing.startDate ? weeksOf(editing.startDate, editing.endDate) : ""}</td>
                 <td className="whitespace-nowrap px-2 py-1.5 text-right">
                   <button type="button" disabled={busy || !!editProblem} onClick={() => void saveBreak()} title={editProblem || undefined} className="rounded-lg bg-primary-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Save</button>
@@ -212,8 +216,10 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
               </tr>)}
               {canEdit ? <tr className="border-t border-background-100 bg-background-50">
                 <td className="px-2 py-1.5"><input aria-label="New term break name" placeholder="e.g. Summer break" maxLength={80} className={input + " w-full"} value={draft.label} disabled={busy} onChange={e => setDraft({ ...draft, label: e.target.value })} /></td>
-                <td className="px-2 py-1.5"><input type="date" aria-label="New term break first day" className={input} value={draft.startDate} disabled={busy} onChange={e => setDraft({ ...draft, startDate: e.target.value })} /></td>
-                <td className="px-2 py-1.5"><input type="date" aria-label="New term break last day" className={input} value={draft.endDate} min={draft.startDate || undefined} disabled={busy} onChange={e => setDraft({ ...draft, endDate: e.target.value })} /></td>
+                <td className="px-2 py-1.5"><BreakDateField label="New term break first day" value={draft.startDate} disabled={busy} onChange={d => setDraft({ ...draft, startDate: d, endDate: draft.endDate && draft.endDate < d ? "" : draft.endDate })}
+                  breaks={breaks} breakNote="already a term break" /></td>
+                <td className="px-2 py-1.5"><BreakDateField label="New term break last day" value={draft.endDate} disabled={busy} onChange={d => setDraft({ ...draft, endDate: d })} today={draft.startDate || undefined} earlyNote="Before the first day"
+                  breaks={breaks} breakNote="already a term break" /></td>
                 <td className="px-2 py-1.5 text-right text-foreground-500">{draft.startDate && draft.endDate && !draftProblem ? weeksOf(draft.startDate, draft.endDate) : ""}</td>
                 <td className="px-2 py-1.5 text-right"><button type="button" disabled={busy || !!draftProblem} onClick={() => void addBreak()} title={draftProblem || undefined}
                   className="rounded-lg bg-primary-600 px-3 py-1 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Add</button></td>

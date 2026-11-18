@@ -15,7 +15,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
   onSaved: () => void;
   /** New course wizard: "Step 3 of 5 · Hours" in the title. */
   stepLabel?: string;
-  /** New course wizard: the step after saving. */
+  /** New course wizard: hours are required, and the one button saves them and goes to this step. */
   nextStep?: { label: string; onClick: () => void };
 }) {
   const [detail, setDetail] = useState<CourseDetail | null>(null);
@@ -52,19 +52,21 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
     : { ...r, ...suggestHours(r.unit.nominalHours), touched: true })));
 
   const save = async () => {
-    if (busy || bad.length || !detail) return;
+    if (busy || bad.length || !detail || !rows.length) return;
     setBusy(true); setError("");
     try {
       const durations = new Map<string, number>();
-      for (const r of rows) {
-        if (r.accepted && !r.touched) continue;
-        const out = await saveUnitHours(r.unit.id as string, { slitHours: r.slitHours, theoryHours: r.theoryHours, practicalHours: r.practicalHours, assessmentHours: r.assessmentHours });
-        durations.set(out.unitId, weeksForHours(out.slitHours ?? r.slitHours));
+      const todo = rows.filter(r => !r.accepted || r.touched);
+      // Six units at a time: one after another made a long course wait.
+      for (let i = 0; i < todo.length; i += 6) {
+        const done = await Promise.all(todo.slice(i, i + 6).map(async r => ({ r, out: await saveUnitHours(r.unit.id as string, { slitHours: r.slitHours, theoryHours: r.theoryHours, practicalHours: r.practicalHours, assessmentHours: r.assessmentHours }) })));
+        for (const { r, out } of done) durations.set(out.unitId, weeksForHours(out.slitHours ?? r.slitHours));
       }
       // Each unit's duration follows its SLIT hours (20 hours a week).
       if (durations.size) await rto("units_save", { courseId: course.id, units: detail.units.map(u => (u.id && durations.has(u.id) ? { ...u, defaultWeeks: durations.get(u.id) } : u)) });
       setRows(list => list.map(r => ({ ...r, accepted: true, touched: false })));
       setSaved(true); onSaved();
+      if (nextStep) nextStep.onClick();
     } catch (e) { setError(e instanceof Error ? e.message : "The hours were not saved."); }
     finally { setBusy(false); }
   };
@@ -74,7 +76,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-foreground-700"><b>{total.toLocaleString()} SLIT hours</b> · about {weeks} weeks at {HOURS_PER_WEEK} hours a week (CoE)</span>
       <div className="flex gap-2">
-        {saved && nextStep ? <><Button variant="outline" onClick={onClose}>Later</Button><Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button></>
+        {nextStep ? <Button icon="ri-calendar-event-line" disabled={busy || !detail || !!bad.length || !rows.length} onClick={() => void save()}>{busy ? "Saving…" : nextStep.label}</Button>
           : <><Button variant="outline" disabled={busy} onClick={onClose}>{saved ? "Close" : "Cancel"}</Button>
             <Button disabled={busy || !detail || !!bad.length || (!toAccept && !nextStep)} onClick={() => void save()}>{busy ? "Saving…" : `Save hours${toAccept ? ` (${toAccept})` : ""}`}</Button></>}
       </div>
@@ -83,7 +85,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
     {saved ? <p role="status" className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Hours saved for every unit. Each unit's duration now follows its SLIT hours.</p> : null}
     {!detail && !error ? <p className="text-sm text-foreground-500">Loading the units…</p> : detail ? <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-600">Enter SLIT hours for each unit; theory, practical and assessment are suggested 40 / 40 / 20 and can be changed. They must add up to the SLIT hours.</p>
+        <p className="text-sm text-foreground-600">{nextStep ? "Hours are required for every unit before the dates can be set. " : ""}Enter SLIT hours for each unit; theory, practical and assessment are suggested 40 / 40 / 20 and can be changed. They must add up to the SLIT hours.</p>
         <button type="button" disabled={busy} onClick={fillFromNominal} className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-1.5 text-sm font-semibold text-primary-800 hover:bg-primary-100">
           Fill empty units from nominal hours</button>
       </div>

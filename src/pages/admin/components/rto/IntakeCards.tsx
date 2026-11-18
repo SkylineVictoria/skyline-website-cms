@@ -66,7 +66,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
   const location = useLocation();
   const navigate = useNavigate();
   const openId = /^#([0-9a-f-]{36})$/i.exec(location.hash)?.[1] ?? null;
-  // ?wizard=1 (new course wizard): the intake opens on step 4, Add batch.
+  // ?wizard=1 (new course wizard): the intake opens on step 5, its class timing.
   const wizard = new URLSearchParams(location.search).get("wizard") === "1";
   const [start, setStart] = useState<{ tab?: SheetTab; addBatch?: boolean }>(() => (wizard ? { addBatch: true } : {}));
   const [creating, setCreating] = useState(false);

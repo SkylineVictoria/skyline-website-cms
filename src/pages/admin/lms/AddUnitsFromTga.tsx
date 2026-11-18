@@ -33,7 +33,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
   /** Shown once the units are added and every packaging rule is met (a new course: "Create first intake"). */
   nextStep?: { label: string; onClick: () => void };
-  /** New course wizard: "Step 2 of 3 · Units" in the title. */
+  /** New course wizard: "Step 2 of 5 · Units" in the title. */
   stepLabel?: string;
 }) {
   const [release, setRelease] = useState<Release | null>(null);
@@ -244,7 +244,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
 
   return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
     footer={result ? <div className="flex justify-end gap-2">{nextStep && result.rulesComplete !== false
-        ? <><Button variant="outline" onClick={onClose}>Later</Button><Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button></>
+        ? <Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button>
         : <Button onClick={onClose}>Close</Button>}</div>
       : <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm text-foreground-600">{count} selected{hours ? ` · ${hours} nominal hours` : ""}

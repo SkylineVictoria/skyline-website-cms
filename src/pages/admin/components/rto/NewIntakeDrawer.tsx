@@ -1,5 +1,6 @@
 // New intake: one field, the start date, filled in from the calendar (the next term start this course has no intake for). The
-// schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & add batch".
+// schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & set class
+// timing" (the intake is the class group: its timing comes from a course template or is set by hand).
 // A course with a master timetable (LMS > Courses > Master timetable) has no start date to choose: every intake of the course
 // follows the master's dates, so the intake is one more group on that calendar.
 import { useEffect, useMemo, useState } from "react";
@@ -21,19 +22,21 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: "the next free Monday" };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake" }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create" }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
   /** Opened from a course (or the enrolment wizard): the course is fixed and not shown as a choice. */
   courseId?: string;
   onCreated: (detail: IntakeDetail, addBatch: boolean) => void;
-  /** "Create & add batch" is for the LMS pages; the enrolment wizard only creates the intake. */
+  /** "Create & set class timing" is for the LMS pages; the enrolment wizard only creates the intake. */
   allowBatch?: boolean;
   requireUnitSchedule?: boolean;
   /** Stacking layer when opened over another dialog (the wizard). */
   zIndex?: string;
   title?: string;
+  /** The Create button's words (the new course wizard goes on to the class timing). */
+  createLabel?: string;
 }) {
   const [chosen, setChosen] = useState(courseId ?? "");
   const [course, setCourse] = useState<CourseDetail | null>(null);
@@ -101,8 +104,8 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   return (
     <Drawer open={open} title={title} onClose={onClose} zIndex={zIndex}
       footer={<>
-        <Button variant={allowBatch ? "outline" : undefined} disabled={blocked} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : "Create"}</Button>
-        {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button> : null}
+        <Button variant={allowBatch ? "outline" : undefined} disabled={blocked} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : createLabel}</Button>
+        {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & set class timing"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (

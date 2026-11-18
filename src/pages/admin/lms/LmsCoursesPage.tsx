@@ -6,12 +6,13 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
 import LmsUnitsPage from "./LmsUnitsPage";
+import MasterTimetableTab from "./MasterTimetableTab";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import { useNavigate } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
-type Tab = "overview" | "units" | "cricos" | "tga";
+type Tab = "overview" | "units" | "cricos" | "tga" | "master";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
@@ -195,7 +196,7 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }] as const;
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }, { id: "master", label: "Master timetable" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
@@ -317,6 +318,7 @@ export default function LmsCoursesPage() {
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "cricos" && detail ? <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /> : null}
               {tab === "tga" && detail ? <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /> : null}
+              {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}
         </>}

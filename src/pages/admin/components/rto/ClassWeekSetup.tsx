@@ -1,5 +1,5 @@
 // An intake's class timetable, the one way to set it (owner, 2026-11-19: no templates): the week from a one-click ready-made
-// week, a copy of another intake, or ticking a day x part-of-day grid, with one room, one trainer and the seats; then
+// week, a copy of another intake, or ticking a day x part-of-day grid, with one room and one trainer (the seats are the room's, set in Timetable › Settings › Locations & rooms); then
 // Create classes saves the week (rto_course_flow batch_setup) and creates the dated classes inside the intake's unit dates
 // (rto_class_sessions_generate). Used by Timetable › Create timetable, the intake's Class setup and the new course wizard.
 import { useEffect, useMemo, useState } from "react";
@@ -43,7 +43,6 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   const [rows, setRows] = useState<Rows>(freshRows);
   const [roomId, setRoomId] = useState("");
   const [trainerId, setTrainerId] = useState("");
-  const [seats, setSeats] = useState("");
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -72,7 +71,6 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         applySessions(group?.sessions ?? []);
         setRoomId(group?.sessions?.find((x) => x.roomId)?.roomId ?? group?.classroomId ?? "");
         setTrainerId(group?.trainers[0]?.id ?? "");
-        setSeats(d.intake.capacity ? String(d.intake.capacity) : group?.capacity ? String(group.capacity) : "");
         void loadClosedDays(d.intake.startDate, courseId).then((f) => { if (live) setClosed(() => f); });
       }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The intake did not load."); });
     void loadCourseNeed(courseId).then((n) => { if (live) setNeed(n); }).catch(() => undefined);
@@ -80,6 +78,8 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   }, [intakeId, courseId]);
 
   const rooms = locations.flatMap((l) => l.rooms.filter((r) => r.isActive).map((r) => ({ id: r.id, label: `${l.name} · ${r.name}${r.capacity ? ` (${r.capacity} seats)` : ""}` })));
+  // Seats come from the room (rooms keep a fixed seat count): no seat box on the form.
+  const roomSeats = locations.flatMap((l) => l.rooms).find((r) => r.id === roomId)?.capacity ?? null;
   const sessions = useMemo(() => [...cells].map((key) => { const [day, slot] = key.split("|") as [string, Slot]; const r = rows[slot];
     return { weekday: Number(day), startTime: r.start, endTime: r.end, type: r.type, roomId: roomId || null }; })
     .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime)), [cells, rows, roomId]);
@@ -118,7 +118,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   const create = async () => {
     setBusy(true); setError(""); setDone(null);
     try {
-      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity: seats.trim(), trainerIds: trainerId ? [trainerId] : [] });
+      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity: roomSeats ? String(roomSeats) : "", trainerIds: trainerId ? [trainerId] : [] });
       const made = await generateClassSessions(out.batchId);
       setDetail(out); setDone(made);
       onSaved?.({ detail: out, generated: made });
@@ -175,8 +175,8 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
           <Select className="mt-1" value={trainerId} disabled={busy} onChange={(e) => { setTrainerId(e.target.value); setDone(null); }}>
             <option value="">No trainer yet</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select></label>
-        <label className="text-sm font-medium">Seats
-          <TextInput className="mt-1" inputMode="numeric" placeholder="Room size" value={seats} disabled={busy} onChange={(e) => setSeats(e.target.value.replace(/\D/g, ""))} /></label>
+        <div className="text-sm"><span className="font-medium">Seats</span>
+          <p className="mt-2 text-foreground-700">{roomId ? (roomSeats ? `${roomSeats} (the room's seats)` : "The room has no seat count: set it in Locations & rooms") : "From the room"}</p></div>
       </div>
       {detail && !rooms.length ? <p className="mt-2 text-sm text-foreground-600">No rooms yet: add one in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/lms/timetable-settings?tab=locations">Timetable settings</Link>.</p> : null}
 

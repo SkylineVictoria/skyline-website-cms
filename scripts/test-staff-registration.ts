@@ -533,9 +533,20 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   const titleField = fieldRows.find((f) => f.key === "contact_title"); if (titleField) values[titleField.id] = "Mr";
   // The two referees need different emails (2026-11-19).
   for (const n of [1, 2]) { const email = fieldRows.find((f) => f.key === `ref${n}_email`); if (email) values[email.id] = referees[n - 1].email; }
-  const signed = await signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values, documentHash: originalHash }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts) as { signed: boolean; complete: boolean };
+  // F04 wizard (2026-11-19): the sign step needs every declaration ticked and a MARN of digits; it prints "ACN … / MARN …" in the registration box.
+  const signAs = (application: unknown) => signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values: { ...values }, documentHash: originalHash, application }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts);
+  const allTicked = Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true]));
+  await assert.rejects(signAs(undefined), /complete every step/, "no wizard answers: refused");
+  await assert.rejects(signAs({ acn: "", marn: "", declarations: { ...allTicked, code_of_ethics: false } }), /Tick every declaration statement before you sign \(1 not ticked\)/);
+  await assert.rejects(signAs({ acn: "", marn: "12AB", declarations: allTicked }), /MARN is a number: digits only/);
+  await assert.rejects(signAs({ acn: "60358467", marn: "", declarations: allTicked }), /ACN has 9 digits/);
+  const signed = await signAs({ acn: "603584676", marn: "1234567", declarations: allTicked }) as { signed: boolean; complete: boolean };
   assert.ok(signed.signed && signed.complete);
   assert.equal((signData as unknown as { form_base64?: string }).form_base64, undefined, "a staged request is not split: its signed PDF is the document");
+  const registrationBox = fieldRows.find((f) => f.key === "agent_registration_number");
+  if (registrationBox) assert.equal((signData as unknown as { values: Record<string, string> }).values[registrationBox.id], "ACN 603 584 676 / MARN 1234567", "the registration box prints the ACN and the MARN");
+  const extra = services.find(([name]) => name === "agency_onboarding_application_extra");
+  assert.deepEqual(extra && [(extra[1].p_data as { agent_acn: string }).agent_acn, (extra[1].p_data as { agent_marn: string }).agent_marn, Object.keys((extra[1].p_data as { declarations: object }).declarations).length], ["603584676", "1234567", 5], "the ACN, the MARN and the declarations are kept");
   const refereeCreates = services.filter(([name]) => name === "agency_onboarding_referee_request_create");
   assert.equal(refereeCreates.length, 2, "one referee check per referee, sent when the form was signed");
   const first = refereeCreates[0][1].p_data as { title: string; message: string; fields: Array<{ key: string; role: string; value: string; required: boolean }>; original_hash: string; id: string };
@@ -721,7 +732,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   const details = ok.ok ? ok.details : null;
   const values = abrLib.abrApplicationValues({ details, confirmed: { legalEntity: "BHP GROUP LIMITED", tradingName: "BHP BILLITON", gstRegistered: true, state: "VIC", postcode: "3000" },
     contact: { givenName: "Pat", familyName: "Contact", email: "ZZ-Test-POC@blackhole.postmarkapp.com", phone: "+61412345678" } });
-  assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49 004 028 077 (ACN 004 028 077)",
+  assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49004028077", agent_acn: "004 028 077",
     agent_gst_registered: "YES", office_state: "VIC", office_province: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
     contact_email: "zz-test-poc@blackhole.postmarkapp.com", contact_phone: "+61412345678" });
   assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_suburb" in values) && !("agent_registration_number" in values), "Suburb and the registration number stay blank");
@@ -738,7 +749,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   const byKey = Object.fromEntries(editable.recipient.map((f) => [f.key, f]));
   assert.equal(editable.printed.length, 0, "nothing prefilled is printed (the contact can change all of it)");
   assert.equal(byKey.agent_legal_entity.value, "BHP GROUP LIMITED"); assert.equal(byKey.agent_legal_entity.role, "agent");
-  assert.equal(byKey["agent_abn_form"].value, "49 004 028 077 (ACN 004 028 077)"); assert.equal(byKey["agent_abn_form"].required, true);
+  assert.equal(byKey["agent_abn_form"].value, "49 004 028 077", "the ABN box holds the ABN only (the ACN goes to the registration box)"); assert.equal(byKey["agent_abn_form"].required, true);
   assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
   assert.equal(byKey.office_province.value, "3000"); assert.equal(byKey.office_suburb.value, "", "Suburb is left for the contact"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
   assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
@@ -759,6 +770,24 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.match(String(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }).error), /different email/);
   assert.deepEqual(abrLib.checkApplicationAnswers({ ref1_email: "a@example.test", ref2_email: "b@example.test", ref1_contact_name: "Sam Lee", ref2_contact_name: "sam lee" }), { error: null, warnings: ["Both references have the same contact name. Check that they are two different people."] });
 
+  // F04 wizard (2026-11-19): the public ABN Lookup page (no GUID) gives the same prefill; PURVA TECH PTY LTD (86 603 584 676) has no business name.
+  const abnLib = await load.import<typeof import("../supabase/functions/_shared/validation/abn.ts")>("../supabase/functions/_shared/validation/abn.ts");
+  const purvaHtml = `<h1>Current details for ABN 86 603 584 676</h1><table><tr><th>Entity name:</th><td>PURVA TECH PTY LTD</td></tr><tr><th>ABN status:</th><td>Active from 07 Jan 2015</td></tr><tr><th>Entity type:</th><td>Australian Private Company</td></tr>` +
+    `<tr><th>Goods &amp; Services Tax (GST):</th><td>Registered from 07 Jan 2015</td></tr><tr><th>Main business location:</th><td>VIC 3029</td></tr></table>` +
+    `<table><caption>ASIC registration - ACN or ARBN</caption><tr><td>603 584 676</td></tr></table>`;
+  const purvaPage = abnLib.parseAgencyAbnPage(purvaHtml, "86603584676");
+  if (purvaPage.legalName) {
+    const purva = abrLib.pageToAbrDetails(purvaPage);
+    const pv = abrLib.abrApplicationValues({ details: purva, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } });
+    assert.deepEqual([pv.agent_trading_name, pv.agent_year_founded, pv.agent_acn, pv.agent_gst_registered], ["PURVA TECH PTY LTD", "2015", "603 584 676", "YES"], "trading name falls back to the entity name; year from the ABN status date; the ACN");
+    assert.deepEqual(abrLib.abrFactLines(abrLib.abrFacts(purva, "2026-11-19T00:00:00Z")).map((l) => l.value), ["Active from 07 Jan 2015", "Australian Private Company", "GST registered from 07 Jan 2015"]);
+  }
+  assert.equal(abnLib.abrPageDate("Registered from 07 Jan 2015"), "2015-01-07"); assert.equal(abnLib.abrPageDate("Cancelled"), "");
+  assert.equal(onboarding.composeRegistrationNumber("603584676", "1234567"), "ACN 603 584 676 / MARN 1234567");
+  assert.equal(onboarding.composeRegistrationNumber("", "1234567"), "MARN 1234567"); assert.equal(onboarding.composeRegistrationNumber("603 584 676", ""), "ACN 603 584 676"); assert.equal(onboarding.composeRegistrationNumber("", ""), "");
+  assert.equal(onboarding.F04_DECLARATIONS.length, 5); assert.ok(onboarding.F04_DECLARATIONS.find((d) => d.key === "code_of_ethics")?.link, "the Code of Ethics has its link");
+  assert.throws(() => signingCore.checkApplicationSubmission({ acn: "", marn: "", declarations: Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true])) }, { litigation_involved: "YES" }), /details of the litigation/);
+  assert.throws(() => signingCore.checkApplicationSubmission({ acn: "", marn: "", declarations: Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true])) }, { works_with_sub_agents: "YES" }), /sub-agent agency/);
   // The function: the lookup is admin-only, cached by ABN, and reports "not set up" without a GUID; Add business keeps the confirmed values
   // on the business (a failure there still saves the business and sends the form, without the prefill).
   const rpcs: Array<[string, Record<string, unknown>]> = []; const adminCalls: string[] = [];

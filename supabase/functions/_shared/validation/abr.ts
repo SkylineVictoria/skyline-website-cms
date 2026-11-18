@@ -2,7 +2,7 @@
 // https://abr.business.gov.au/json/AbnDetails.aspx?abn=...&guid=... answers with JSONP; the GUID is the registered party's key, kept as the
 // Edge Function secret EF_ABR_GUID (ABR_GUID is read too) and never sent to the browser. Without a GUID nothing here is called: the lookup
 // reports `not_configured` and Add business keeps its earlier behaviour. Runtime-neutral (the function, the offline tests and the CMS types).
-import { normalizeAbn, validateAbn } from "./abn.ts";
+import { lookupAgencyAbn, normalizeAbn, validateAbn, type AgencyAbnDetails } from "./abn.ts";
 
 /** What staff confirm on Add business and the F04 prefill uses: the register's values, editable before the business is saved. */
 export interface AbrDetails {
@@ -114,10 +114,10 @@ export function abrApplicationValues(input: {
   const legal = str(c?.legalEntity) || d?.entityName || "";
   const trading = str(c?.tradingName) || d?.businessNames[0] || legal;
   const gst = c && c.gstRegistered !== null && c.gstRegistered !== undefined ? c.gstRegistered : d ? d.gstRegistered : null;
+  // F04 wizard (2026-11-19): the ABN box holds the ABN only; the ACN is its own answer (printed with the MARN in the registration box).
   const abn = d?.abn ?? "";
-  const abnAcn = abn ? (d?.acn && d.acn.length === 9 ? `${abn.replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3 $4")} (ACN ${d.acn.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3")})` : abn) : "";
   const values: Record<string, string> = {
-    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abnAcn,
+    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : "",
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
     office_state: str(c?.state) || d?.state || "", office_province: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
     agent_year_founded: (d?.statusFrom ?? "").slice(0, 4),
@@ -128,8 +128,53 @@ export function abrApplicationValues(input: {
 }
 
 /** The keys of the F04 the prefill may fill (anything else from our records is left blank for the contact). */
-export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_gst_registered", "office_state", "office_province", "office_country",
+export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_acn", "agent_gst_registered", "office_state", "office_province", "office_country",
   "agent_year_founded", "contact_given_name", "contact_family_name", "contact_email", "contact_phone"] as const;
+
+/** "603 584 676": an ACN in its printed groups (other text unchanged). */
+export const printAcn = (acn: string) => { const d = String(acn ?? "").replace(/\D/g, ""); return d.length === 9 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : String(acn ?? "").trim(); };
+
+/** The public ABN Lookup page's details (the fallback lookup, no GUID) in the JSON service's shape, so the F04 prefill has one rule. */
+export function pageToAbrDetails(page: AgencyAbnDetails): AbrDetails {
+  const status = str(page.abnStatus).replace(/\s+from\b.*$/i, "");
+  return {
+    abn: page.abn, acn: str(page.acn).replace(/\D/g, ""), abnStatus: status, active: /^active$/i.test(status), statusFrom: page.statusFrom ?? "", entityName: str(page.legalName),
+    entityType: str(page.entityType), businessNames: [...new Set((page.businessNames ?? []).map(str).filter(Boolean))], gstRegistered: /^registered/i.test(page.gstStatus ?? ""),
+    gstFrom: page.gstFrom ?? "", state: str(page.state).toUpperCase(), postcode: str(page.postcode), sourceUrl: page.sourceUrl,
+  };
+}
+
+/**
+ * What the register says about the business, shown read-only in the F04 wizard's Company summary and kept on the business profile
+ * (agencies.profile.abr_facts). No box on the PDF.
+ */
+export interface AbrFacts { abn: string; acn: string; abnStatus: string; statusFrom: string; entityName: string; entityType: string; gstRegistered: boolean; gstFrom: string; sourceUrl: string; fetchedAt: string }
+export function abrFacts(d: AbrDetails, fetchedAt: string): AbrFacts {
+  return { abn: d.abn, acn: d.acn, abnStatus: d.abnStatus, statusFrom: d.statusFrom, entityName: d.entityName, entityType: d.entityType, gstRegistered: d.gstRegistered, gstFrom: d.gstFrom, sourceUrl: d.sourceUrl, fetchedAt };
+}
+/** "07 Jan 2015" for an ISO date. */
+export function abrDateWords(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  return m ? `${m[3]} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1] ?? ""} ${m[1]}` : "";
+}
+/** The facts as the Company summary words them: "Active from 07 Jan 2015", "Australian Private Company", "GST registered from 07 Jan 2015". */
+export function abrFactLines(f: Partial<AbrFacts> | null | undefined): Array<{ label: string; value: string }> {
+  if (!f) return [];
+  const lines: Array<{ label: string; value: string }> = [];
+  if (f.abnStatus) lines.push({ label: "ABN status", value: `${f.abnStatus}${f.statusFrom ? ` from ${abrDateWords(f.statusFrom)}` : ""}` });
+  if (f.entityType) lines.push({ label: "Entity type", value: f.entityType });
+  lines.push({ label: "GST", value: f.gstRegistered ? `GST registered${f.gstFrom ? ` from ${abrDateWords(f.gstFrom)}` : ""}` : "Not registered for GST" });
+  return lines;
+}
+
+/** Looks the ABN up for the F04: the JSON service when the GUID is set, otherwise the public page. Never throws (null when neither answers). */
+export async function lookupAbrAny(abn: string, guid: string | null | undefined, request: typeof fetch = fetch): Promise<{ details: AbrDetails; fetchedAt: string } | null> {
+  if (String(guid ?? "").trim()) {
+    const outcome = await lookupAbr(abn, guid, request);
+    if (outcome.ok) return { details: outcome.details, fetchedAt: outcome.fetchedAt };
+  }
+  try { return { details: pageToAbrDetails(await lookupAgencyAbn(abn, request)), fetchedAt: new Date().toISOString() }; } catch { return null; }
+}
 
 /** Signing-time checks of a signed F04 (owner brief): the title is one of the list; the two referees have different emails. */
 export function checkApplicationAnswers(answers: Record<string, string>): { error: string | null; warnings: string[] } {

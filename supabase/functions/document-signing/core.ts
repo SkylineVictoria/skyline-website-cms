@@ -11,7 +11,8 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
-import { checkApplicationAnswers } from "../_shared/validation/abr.ts";
+import { abrFacts, checkApplicationAnswers, lookupAbrAny } from "../_shared/validation/abr.ts";
+import { collectAnswers, composeRegistrationNumber, F04_DECLARATIONS } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
@@ -64,7 +65,33 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_INVALID = "This signing link is invalid or expired.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
-const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request"];
+const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save"];
+/** The F04 wizard's draft ("Save and continue later"): at most this many characters of JSON. */
+const DRAFT_MAX = 60000;
+const isApplication = (record: { onboarding?: unknown }) => (record.onboarding as { kind?: string } | null)?.kind === "application";
+
+/** What the F04 wizard sends besides the fields: the ACN, the MARN and the declaration tick boxes. */
+export interface ApplicationSubmission { acn: string; marn: string; declarations: Record<string, boolean> }
+/**
+ * F04 wizard (2026-11-19): the server's checks of a signed Agent Application Form, besides the title and the referees (checkApplicationAnswers):
+ * every declaration statement ticked; the MARN digits only; the ACN nine digits; litigation details when litigation is Yes; the sub-agent
+ * names when sub-agents is Yes. Returns the cleaned values.
+ */
+export function checkApplicationSubmission(input: unknown, answers: Record<string, string>): ApplicationSubmission {
+  const app = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : null;
+  if (!app) throw new SigningError("Open the application form from your email link again and complete every step before you sign.");
+  const ticks = app.declarations && typeof app.declarations === "object" ? app.declarations as Record<string, unknown> : {};
+  const unticked = F04_DECLARATIONS.filter((d) => ticks[d.key] !== true);
+  if (unticked.length) throw new SigningError(`Tick every declaration statement before you sign (${unticked.length} not ticked).`);
+  const marn = String(app.marn ?? "").replace(/\s/g, "");
+  if (marn && !/^\d{1,10}$/.test(marn)) throw new SigningError("The MARN is a number: digits only.");
+  const acn = String(app.acn ?? "").replace(/\s/g, "");
+  if (acn && !/^\d{9}$/.test(acn)) throw new SigningError("The ACN has 9 digits.");
+  const tick = (key: string) => String(answers[key] ?? "").toUpperCase();
+  if (tick("litigation_involved") === "YES" && !String(answers.litigation_details ?? "").trim()) throw new SigningError("Give the details of the litigation or dispute.");
+  if (tick("works_with_sub_agents") === "YES" && !String(answers.sub_agent_names ?? "").trim()) throw new SigningError("Give the name of the sub-agent agency.");
+  return { acn, marn, declarations: Object.fromEntries(F04_DECLARATIONS.map((d) => [d.key, true])) };
+}
 /** s***@example.com: enough for the signer to recognise the address, nothing more. */
 export const maskEmail = (email: string) => { const [user, domain] = String(email).split("@"); return domain ? `${user.slice(0, 1)}${"*".repeat(Math.max(2, Math.min(6, user.length - 1)))}@${domain}` : ""; };
 // The PDF engine (pdf-lib + fontkit) loads on the first request that makes, checks or signs a PDF, not at boot.
@@ -145,6 +172,15 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
       };
       const record = await linkCall("open", { ip: call.ip });
+      if (action === "draft_save") {
+        // F04 wizard "Save and continue later": the contact's answers so far, kept on the server for this link's request and signer.
+        if (!isApplication(record) || !ports.serviceRpc) throw new SigningError("Only the application form can be saved as a draft.");
+        if (record.state === "signed" || record.recipient?.state === "signed") throw new SigningError("This form is already signed.");
+        const draft = body.draft && typeof body.draft === "object" && !Array.isArray(body.draft) ? body.draft : null;
+        if (!draft || JSON.stringify(draft).length > DRAFT_MAX) throw new SigningError("The draft could not be saved: it is too large.");
+        const saved = await ports.serviceRpc("agency_onboarding_draft_save", { p_request: record.id, p_recipient: record.recipient.id, p_draft: draft });
+        return { saved: true, savedAt: saved };
+      }
       if (action === "code_send") {
         const { provider, config } = ports.mail;
         if (!provider || !config.from) throw new SigningError("The code cannot be emailed right now. Please try again later or contact admissions.", 503);
@@ -176,14 +212,18 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if (answers.has(f.label) && answers.get(f.label) !== answer) throw new SigningError(`Give one answer for ${f.label}: it appears more than once in the document.`);
           answers.set(f.label, answer);
         }
-        // Agent Application Form (2026-11-19): the title comes from the list; the two referees need different email addresses.
-        if ((record.onboarding as { kind?: string } | null)?.kind === "application") {
+        // Agent Application Form (2026-11-19): the title comes from the list; the two referees need different email addresses. F04 wizard: the
+        // declarations, the MARN and the ACN (checkApplicationSubmission); the registration box prints "ACN … / MARN …" from them.
+        let submission: ApplicationSubmission | null = null;
+        if (isApplication(record)) {
+          const fields = (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>;
           const byKey: Record<string, string> = {};
-          for (const f of (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>) {
-            if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
-          }
+          for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
           const checked = checkApplicationAnswers(byKey);
           if (checked.error) throw new SigningError(checked.error);
+          submission = checkApplicationSubmission(body.application, collectAnswers(fields.map((f) => ({ key: f.key, type: f.type, value: String(values[f.id] ?? f.value ?? "") }))));
+          const registration = fields.find((f) => f.key === "agent_registration_number");
+          if (registration) values[registration.id] = composeRegistrationNumber(submission.acn, submission.marn);
         }
         const [pdf, letter] = await Promise.all([signingPdfModule(), letterPdfModule()]);
         let image: string | null = null, signatureHash: string;
@@ -226,6 +266,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             const after = await ports.service("sign", { hash, data: { ...data, revision: plan.revision, signed_at: plan.signed_at, current_path: currentPath, current_hash: signedHash,
               certificate_path: certificatePath, certificate_hash: certificateHash, ...documents } });
             staged.length = 0; // Committed: these files are the record now and are never removed on a later error.
+            // F04 wizard: the ACN, the MARN and the ticked declarations join the signed answers and the business profile (the draft is removed).
+            if (submission && ports.serviceRpc) {
+              await ports.serviceRpc("agency_onboarding_application_extra", { p_request: record.id, p_data: { agent_acn: submission.acn, agent_marn: submission.marn,
+                declarations: submission.declarations, declared_at: plan.signed_at } }).catch(() => undefined);
+            }
             await ports.later(drainSigningMail(ports));
             // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.
             if (onboarding && after.state === "signed") await ports.later(afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, onboarding).catch(() => undefined));
@@ -239,11 +284,27 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
       }
       const done = record.state === "signed";
+      // F04 wizard: the saved draft and the register's facts for the Company summary (looked up once and kept when the send did not keep them).
+      let application: { draft: unknown; facts: unknown; savedAt: string | null } | null = null;
+      if (isApplication(record) && !done && ports.serviceRpc) {
+        try {
+          const wizard = await ports.serviceRpc("agency_onboarding_wizard_get", { p_request: record.id }) as { draft: unknown; saved_at: string | null; facts: unknown; abn: string | null } | null;
+          let facts = wizard?.facts ?? null;
+          if (!facts && wizard?.abn) {
+            const found = await lookupAbrAny(wizard.abn, ports.abr?.guid, ports.abr?.fetch ?? fetch);
+            if (found) {
+              facts = abrFacts(found.details, found.fetchedAt);
+              await ports.serviceRpc("agency_onboarding_facts_save", { p_request: record.id, p_facts: facts }).catch(() => undefined);
+            }
+          }
+          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null };
+        } catch { application = { draft: null, facts: null, savedAt: null }; }
+      }
       const path = done ? record.signed_path : record.current_path ?? record.original_path;
       const expected = done ? record.signed_hash : record.current_hash ?? record.original_hash;
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
         recipient: record.recipient, fields: record.fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
-        requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
+        requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
         certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };
     }

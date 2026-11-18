@@ -6,6 +6,7 @@ import PdfPages from "@/components/signing/PdfPages";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { pictureToPng } from "@/components/signing/signatureImage";
 import LegacySignPage from "@/components/signing/LegacySignPage";
+import F04Wizard, { F04Done } from "@/components/signing/F04Wizard";
 import { fieldGroup, formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type OfferSigningState, type PaymentView, type SigningView } from "@/lib/signingApi";
 const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
@@ -337,7 +338,9 @@ export default function SigningPage() {
   const depositLabel = pay?.payment ? moneyLabel(pay.payment.amountCents, pay.payment.currency) : offerState?.paymentAmountCents ? moneyLabel(offerState.paymentAmountCents, offerState.paymentCurrency ?? "aud") : "";
   const card = "rounded-xl border border-background-200 bg-white p-4 sm:p-5";
   const canvasFrame = (lacking: boolean) => `absolute rounded-sm border-2 ${lacking ? "border-red-500 bg-red-50/80" : "border-primary-500 bg-primary-50/80"}`;
-  const hasBottomBar = !!view && !declined && !declining && (canSign || (showPay && !paid) || paymentPage);
+  // F04 wizard (2026-11-19): the Agent Application Form is filled step by step; the F05 and the P06 keep this page.
+  const f04 = view?.onboarding?.kind === "application";
+  const hasBottomBar = !!view && !f04 && !declined && !declining && (canSign || (showPay && !paid) || paymentPage);
   const downloads = view && (complete || paymentPage) ? <div className="flex flex-wrap gap-3">
     <a className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-sm font-medium text-background-50 hover:bg-primary-600" href={view.url} download data-testid="download-signed"><i className="ri-download-line" aria-hidden="true" />Download signed copy</a>
     {view.certificateUrl && <a className="inline-flex items-center gap-2 rounded-md border border-background-300 bg-white px-4 py-2 text-sm font-medium" href={view.certificateUrl} download><i className="ri-shield-check-line" aria-hidden="true" />Completion certificate</a>}
@@ -356,7 +359,7 @@ export default function SigningPage() {
     </header>
 
     <div className="mx-auto max-w-4xl space-y-4 px-4 pt-5 sm:pt-6">
-      <section className={card}>
+      {!(f04 && !error) && <section className={card}>
         <h1 className="break-words font-heading text-xl font-bold text-foreground-950 sm:text-2xl">{offer ? (paymentPage ? (paid || !hasPayment ? "Your offer is accepted" : "Pay your initial deposit") : "Review and sign your offer") : view?.title ?? "Your document"}</h1>
         {offer ? <dl className="mt-3 grid gap-3 rounded-lg border border-background-200 bg-background-50 p-3 text-sm sm:grid-cols-3" data-testid="offer-summary">
           <div className="min-w-0"><dt className="text-xs font-medium uppercase tracking-wide text-foreground-500">Student</dt><dd className="truncate font-medium text-foreground-900">{offer.studentName}</dd></div>
@@ -364,10 +367,13 @@ export default function SigningPage() {
           <div className="min-w-0"><dt className="text-xs font-medium uppercase tracking-wide text-foreground-500">Document</dt><dd className="truncate text-foreground-800">{view?.title}</dd></div>
         </dl> : view && <p className="mt-1 text-xs text-foreground-500">Reference {view.reference}</p>}
         {view && !error && <div className="mt-4"><Steps steps={steps.list} current={steps.current} /></div>}
-      </section>
+      </section>}
 
       {error && !view && !legacy ? <LinkProblem token={token} message={error} /> : error && <p role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      {declined ? <p role="status" className={card}>You declined this request. The sender has been told. Please contact them if you need a new document.</p> : view ? <>
+      {declined ? <p role="status" className={card}>You declined this request. The sender has been told. Please contact them if you need a new document.</p> : view && f04 ? (canSign
+        ? <F04Wizard token={token} view={view} codeCheck={{ needed: !!view.requireCode, session: codeSession, render: () => <CodeCheck token={token} to={view.codeTo} onVerified={setCodeSession} /> }}
+          onSigned={async () => { setJustSigned(true); await load(); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
+        : <F04Done view={view} justSigned={justSigned} />) : view ? <>
         {paymentPage ? <>
           {/* OFFER-DEPOSIT: the same link after signing: "Offer accepted", the deposit to pay (or paid), the signed copy. The letter itself is not shown again. */}
           <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:p-5" data-testid={justSigned ? "offer-signed" : "offer-already-signed"} data-accepted="true">

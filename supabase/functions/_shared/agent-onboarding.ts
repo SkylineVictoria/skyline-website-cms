@@ -91,7 +91,8 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
   agent_agency_name: autoOrAgent("form", "Agency name", { required: true }),
   agent_legal_entity: autoOrAgent("form", "Legal entity"),
   agent_trading_name: autoOrAgent("form", "Trading name"),
-  // The form's "Business/Mara/Registration Number" box: typed by the contact, never prefilled (not the ABN or the ACN).
+  // The form's "Business/Mara/Registration Number" box: never prefilled as such; the F04 wizard (2026-11-19) asks for the ACN (prefilled from
+  // ABN Lookup) and the MARN, and the sign step prints "ACN 603 584 676 / MARN 1234567" here (composeRegistrationNumber).
   agent_registration_number: agent("form", "Business/MARA/Registration number", { noPrefill: true }),
   "agent_gst_registered:YES": { doc: "form", label: "GST registered: Yes", type: "checkbox", role: "sender", source: "auto", autoOrAgent: true, group: { key: "agent_gst_registered", answer: "YES" } },
   "agent_gst_registered:NO": { doc: "form", label: "GST registered: No", type: "checkbox", role: "sender", source: "auto", autoOrAgent: true, group: { key: "agent_gst_registered", answer: "NO" } },
@@ -193,6 +194,30 @@ export const ONBOARDING_KEY = /^[a-z][a-z0-9_]{0,60}(:[A-Z0-9]{1,10})?$/;
 
 /** The questions the agent must answer with Yes or No before signing (the form says so), and the signature. */
 export const REQUIRED_GROUPS = ["litigation_involved", "eatc_completed"];
+
+/**
+ * F04 wizard (2026-11-19): the declaration statements of the form's page 2, each its own required tick box on the wizard's last step and
+ * checked again by the sign step (document-signing core.ts). Kept with the signed answers (agency_onboarding.answers.declarations).
+ */
+export const F04_DECLARATIONS: ReadonlyArray<{ key: string; text: string; link?: { href: string; label: string } }> = [
+  { key: "dha_policies", text: "I will regularly monitor policies and changes to the policies as reported on the Department of Home Affairs (DHA) website." },
+  { key: "education_policies", text: "I will regularly monitor policies and regulations, and changes to these policies and regulations, as reported on the www.education.gov.au website." },
+  { key: "national_code", text: "I have read the National Code 2018 and agree to adhere to the relevant Standards." },
+  { key: "conflicts_of_interest", text: "I declare that I take all reasonable steps to avoid conflicts of interest with my duties as an education agent of SLIT (for example: charging service fees to both overseas students and SLIT for the same service; a financial interest in SLIT; or an employee having a personal relationship with an employee of SLIT), and I will disclose any conflict of interest to SLIT." },
+  { key: "code_of_ethics", text: "I declare that I have read the Australian International Education and Training Agent Code of Ethics.",
+    link: { href: "https://internationaleducation.gov.au/News/Latest-News/Documents/Australian%20International%20Education%20and%20Training%20-%20Agent%20Code%20of%20Ethics.pdf", label: "Agent Code of Ethics (PDF)" } },
+];
+/** The opening statement of the declaration, printed above the tick boxes. */
+export const F04_DECLARATION_INTRO = "I am interested in representing Skyline Institute Pty Ltd as an education agent and I agree to do so in an honest and professional manner. I agree to:";
+
+/** "603584676" / "1234567" -> "ACN 603 584 676 / MARN 1234567", or whichever is present: what the F04's registration box prints. */
+export function composeRegistrationNumber(acn: string | null | undefined, marn: string | null | undefined): string {
+  const a = String(acn ?? "").replace(/\D/g, ""), m = String(marn ?? "").replace(/\s/g, "");
+  const parts = [a ? `ACN ${a.length === 9 ? `${a.slice(0, 3)} ${a.slice(3, 6)} ${a.slice(6)}` : a}` : "", m ? `MARN ${m}` : ""].filter(Boolean);
+  return parts.join(" / ");
+}
+/** The OMARA public register search (staff check a MARN by hand; no automated lookup). */
+export const OMARA_REGISTER_URL = "https://portal.mara.gov.au/search-the-register-of-migration-agents/";
 
 export interface PlacedField { key: string; type: OnboardingField["type"]; role: OnboardingRole; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string }
 /** A widget rectangle in PDF points, from the page's bottom-left, with the page size. */

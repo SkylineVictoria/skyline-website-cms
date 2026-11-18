@@ -5,7 +5,7 @@
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
-import { abrApplicationValues, lookupAbr, type AbrConfirmed, type AbrDetails } from "../_shared/validation/abr.ts";
+import { ABR_PREFILL_KEYS, abrApplicationValues, abrFacts, lookupAbr, pageToAbrDetails, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
@@ -114,19 +114,27 @@ async function prepare(ctx: OnboardingContext, agencyId: string, agentId: unknow
 }
 /** The values our records give, plus the ABN Lookup (legal entity, trading name, GST, state, postcode). Unavailable: left for the agent. */
 async function recordValues(prepared: Pick<Prepared, "agency" | "values">): Promise<Record<string, string>> {
+  return (await recordValuesWithFacts(prepared)).values;
+}
+/**
+ * The same, with the register's facts (status, entity type, GST date, ACN). F04 wizard (2026-11-19): without the ABR GUID the public page
+ * gives the same prefill as the JSON service (one rule, abrApplicationValues): trading name falls back to the entity name, year founded from
+ * the ABN's status date, the ACN from the ASIC table. Our records win over the register.
+ */
+async function recordValuesWithFacts(prepared: Pick<Prepared, "agency" | "values">): Promise<{ values: Record<string, string>; facts: AbrFacts | null }> {
   const values: Record<string, string> = {};
   for (const [key, value] of Object.entries(prepared.values ?? {})) if (typeof value === "string" && value.trim()) values[key] = value.trim();
+  let facts: AbrFacts | null = null;
   if (prepared.agency.abn) {
     try {
-      const abr = await lookupAgencyAbn(prepared.agency.abn);
-      if (abr.legalName) { values.agent_legal_entity ||= abr.legalName; values.agent_organisation_name = abr.legalName; }
-      if (abr.businessNames?.[0]) values.agent_trading_name ||= abr.businessNames[0];
-      if (/^registered/i.test(abr.gstStatus ?? "")) values.agent_gst_registered ||= "YES"; else if (/not/i.test(abr.gstStatus ?? "")) values.agent_gst_registered ||= "NO";
-      if (abr.state) values.office_state ||= abr.state;
-      if (abr.postcode) values.office_province ||= abr.postcode;
+      const details = pageToAbrDetails(await lookupAgencyAbn(prepared.agency.abn));
+      facts = abrFacts(details, new Date().toISOString());
+      if (details.entityName) values.agent_organisation_name = details.entityName;
+      const abr = abrApplicationValues({ details, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } });
+      for (const key of ["agent_legal_entity", "agent_trading_name", "agent_gst_registered", "office_state", "office_province", "agent_year_founded", "agent_acn"]) if (abr[key]) values[key] ||= abr[key];
     } catch { /* the lookup is a convenience: the agent types what it would have printed */ }
   }
-  return values;
+  return { values, facts };
 }
 
 /** What the business keeps from ABN Lookup (agencies.abr_*): the register's answer, the values staff confirmed, the contact's names. */
@@ -135,17 +143,22 @@ interface BusinessAbr { details: AbrDetails | null; confirmed: (AbrConfirmed & {
  * ABN prefill (2026-11-19): a business added with an ABN Lookup confirmation gets the F04 prefilled from what is kept on the business (no new
  * call to the register), every prefilled value editable by the contact; everything else is blank. A business without one keeps the earlier values.
  */
-async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null }> {
+async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
   let abr: BusinessAbr | null = null;
   try { abr = await ctx.rpc("agency_abr_get", { p_agency: prepared.agency.id }) as BusinessAbr | null; } catch { abr = null; }
-  if (!abr?.confirmed) return { values: await recordValues(prepared), prefill: null };
+  if (!abr?.confirmed) {
+    // No ABR confirmation on the business (EF_ABR_GUID not set): the public page's values, still editable by the contact in the wizard.
+    const { values, facts } = await recordValuesWithFacts(prepared);
+    const prefill = Object.fromEntries(ABR_PREFILL_KEYS.filter((k) => values[k]).map((k) => [k, values[k]]));
+    return { values, prefill: Object.keys(prefill).length ? prefill : null, facts };
+  }
   const record = prepared.values ?? {};
   const parts = String(prepared.agent?.name ?? "").trim().split(/\s+/);
   const prefill = abrApplicationValues({ details: abr.details, confirmed: abr.confirmed, contact: {
     givenName: abr.confirmed.givenName || String(record.contact_given_name ?? "") || parts.slice(0, -1).join(" ") || parts[0] || "",
     familyName: abr.confirmed.familyName || String(record.contact_family_name ?? "") || (parts.length > 1 ? parts[parts.length - 1] : ""),
     email: String(prepared.agent?.email ?? ""), phone: String(record.contact_phone ?? "") } });
-  return { values: { ...prefill }, prefill };
+  return { values: { ...prefill }, prefill, facts: abr.details ? abrFacts(abr.details, abr.fetchedAt ?? new Date().toISOString()) : null };
 }
 
 /** Add business: the ABN typed is looked up on the register (EF_ABR_GUID); the answer is cached by ABN for the business about to be saved. */
@@ -165,9 +178,10 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const template = await installedTemplate(ctx, "form");
   // The referee checks go out by themselves when the form is signed (no browser to install a blank then): all three must exist now.
   await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
-  const { values, prefill } = await applicationValues(ctx, prepared);
+  const { values, prefill, facts } = await applicationValues(ctx, prepared);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
-  const made = await buildDocument(ctx, template, values, title, { editablePrefill: prefill !== null });
+  // F04 wizard (2026-11-19): every value we hold is the contact's to correct (the Company summary's Edit), whatever its source.
+  const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });
   const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
@@ -186,6 +200,8 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   ctx.commit();
   // The onboarding history says which values were prefilled; the database compares them with the signed answers (prefill_reviewed).
   if (prefill) { try { await ctx.rpc("agency_onboarding_prefill_record", { p_onboarding: onboarding.id, p_prefill: prefill }); } catch { /* the form still goes; only the history line is missing */ } }
+  // The register's facts (status, entity type, GST date, ACN) on the business profile, shown read-only in the wizard's Company summary.
+  if (facts) { try { await ctx.rpc("agency_abr_facts_record", { p_agency: agencyId, p_facts: facts }); } catch { /* the wizard looks them up itself */ } }
   return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, agent: { name: prepared.agent!.name, email: prepared.agent!.email }, printed: made.printed.length, fields: made.recipient.length, prefilled: prefill ? Object.keys(prefill).length : 0 });
 }
 async function sendRequest(ctx: OnboardingContext, id: string, result: Record<string, unknown>) {

@@ -45,6 +45,9 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const [error, setError] = useState("");
   // The course's saved master timetable (first and last day), when it has one.
   const [master, setMaster] = useState<{ startDate: string; endDate: string | null } | null>(null);
+  // On a master course the intakes share their dates, so each one is told apart by its name ("Intake 1", "Intake 2", ...).
+  const [name, setName] = useState("");
+  const [named, setNamed] = useState(false);
 
   useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); if (requireUnitSchedule) setStart(""); } }, [open, courseId, requireUnitSchedule]);
   useEffect(() => { if (open) listBreaks(chosen || null).then(setBreaks).catch(() => undefined); }, [open, chosen]);
@@ -71,19 +74,23 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const suggestion = useMemo(() => (course ? suggestStart(breaks, taken) : null), [course, breaks, taken]);
   useEffect(() => { if (suggestion && !touched && !requireUnitSchedule && !master) setStart(suggestion.date); }, [suggestion, touched, requireUnitSchedule, master]);
 
+  useEffect(() => { if (!open) { setName(""); setNamed(false); } }, [open]);
+  useEffect(() => {
+    if (master && course && !named) setName(`Intake ${(course.intakes ?? []).filter((i) => i.status !== "closed").length + 1}`);
+  }, [master, course, named]);
   const units = (course?.units ?? []).filter((u) => u.isActive);
   const weeks = units.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
   // With a master the dates are the master's: several intakes share them, and term breaks are already in the master.
   const inBreak = master ? undefined : breaks.find((b) => start >= b.startDate && start <= b.endDate);
   const clash = !master && start && taken.has(start);
-  const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak
+  const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak || (!!master && !name.trim())
     || (requireUnitSchedule && (course?.course.id !== chosen || !units.length));
 
   const create = async (addBatch: boolean) => {
     if (blocked) return;
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "" });
+      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "", ...(master ? { name: name.trim() } : {}) });
       // VoE: 40 hours a week, so the unit timeline is laid out again at twice the CoE rate.
       if (load === "voe") { await setIntakeLoad(out.intake.id, "voe"); out = await rto<IntakeDetail>("intake_get", { intakeId: out.intake.id }); }
       onCreated(out, addBatch);
@@ -117,6 +124,10 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           ))}
         </div>
       </Field>
+      {master ? <Field label="Intake name" required hint="Intakes of this course share the master timetable's dates; the name tells them apart.">
+        <input className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" value={name} maxLength={80} data-testid="new-intake-name"
+          onChange={(e) => { setName(e.target.value); setNamed(true); }} />
+      </Field> : null}
       {master ? <p className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900" data-testid="new-intake-master">
         This course has a master timetable. The intake follows it: {shortDate(master.startDate)}{master.endDate ? ` to ${shortDate(master.endDate)}` : ""}. To change the dates, change the master timetable on the course.
       </p> : <Field label={requireUnitSchedule ? "Intake start date" : "Start date"} required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>

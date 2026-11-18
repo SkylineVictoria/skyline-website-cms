@@ -18,8 +18,8 @@ export interface LmsMenuEntry {
 }
 export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "courses", label: "Courses", route: "/admin/lms/courses", icon: "ri-book-open-line", dependencies: [], primaryAction: "Add Course" },
-  { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
-  { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-line", dependencies: ["course", "intake"], primaryAction: "Add Batch" },
+  // Batches live inside their intake (the intake's Batches tab): one menu entry for both.
+  { id: "intakes", label: "Intakes/Batches", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   { id: "tt-calendar", label: "Calendar", route: "/admin/lms/timetable", icon: "ri-calendar-2-line", dependencies: [], parent: "timetable" },
   { id: "tt-trainers", label: "Trainers", route: "/admin/lms/timetable?view=trainers", icon: "ri-user-star-line", dependencies: [], parent: "timetable" },
   { id: "tt-rooms", label: "Rooms board", route: "/admin/lms/timetable?view=rooms", icon: "ri-door-open-line", dependencies: [], parent: "timetable" },

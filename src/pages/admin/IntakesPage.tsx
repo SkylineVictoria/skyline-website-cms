@@ -37,7 +37,7 @@ export default function IntakesPage({ embedded = false }: { embedded?: boolean }
 
   return (
     <div>
-      {embedded ? null : <PageHeader title="Intakes" description="Each intake is one run of a course with its own dates, batches and students." />}
+      {embedded ? null : <PageHeader title="Intakes/Batches" description="Each intake is one run of a course with its own dates, batches and students. Open an intake for its batches." />}
       <div className="sticky top-0 z-10 -mx-1 mb-4 space-y-3 bg-background-100/95 px-1 py-2 backdrop-blur">
         <SearchBox label="Search intakes" value={search} onSearch={setSearch} placeholder="Search intake or course (press /)" />
         <div className="flex flex-wrap gap-x-5 gap-y-2">

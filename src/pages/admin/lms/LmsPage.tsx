@@ -1,6 +1,5 @@
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import IntakesPage from "../IntakesPage";
-import LmsBatchesOverview from "./LmsBatchesOverview";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
@@ -26,10 +25,8 @@ export default function LmsPage() {
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
-  if (area === "batches") return <LmsBatchesOverview />;
-  // Batch Allocation is now part of Batches (one screen).
-  if (area === "batch-allocation") return <Navigate to="/admin/lms/batches" replace />;
-  if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
+  // Batches are managed inside their intake (Intakes/Batches); the old Batches screens redirect there.
+  if (area === "batches" || area === "batch-allocation" || area === "unit-delivery") return <Navigate to="/admin/lms/intakes" replace />;
   if (area === "timetable") return <LmsTimetableHub />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
   if (area === "locations") return <LmsLocationsPage />;

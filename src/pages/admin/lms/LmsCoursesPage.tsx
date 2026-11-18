@@ -147,7 +147,7 @@ export default function LmsCoursesPage() {
   const remove = useCallback(async () => {
     const course = courses.find(c => c.id === selectedId);
     if (!canEdit || !course || saving) return;
-    if (!window.confirm(`Delete ${course.code} – ${course.name} and its units? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete ${course.code} – ${course.name} and its units? Draft applications that chose it lose the course and must choose again. This cannot be undone.`)) return;
     setSaving(true); setDetailError("");
     const { error: deleteError } = await supabase.rpc("rto_course_delete", { p_course_id: course.id });
     setSaving(false);

@@ -87,7 +87,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
     }).catch((e) => { setLocal((m) => ({ ...m, [i.id]: before })); push(e instanceof Error ? e.message : "Not saved.", "error"); });
   };
   const remove = async (i: RtoIntake) => {
-    try { await rto("intake_delete", { intakeId: i.id }); push(`${i.name} deleted.`); if (openId === i.id) close(); onReload(); }
+    try { const r = await rto<{ deleted: boolean; freed?: number }>("intake_delete", { intakeId: i.id }); push(r?.freed ? `${i.name} deleted. ${r.freed} student${r.freed === 1 ? " needs" : "s need"} a new intake.` : `${i.name} deleted.`); if (openId === i.id) close(); onReload(); }
     catch (e) { push(e instanceof Error ? e.message : "Not deleted.", "error"); }
   };
 
@@ -113,7 +113,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
         onCreated={(d: IntakeDetail, addBatch) => { setCreating(false); onReload(); push(`${d.intake.name} created.`); open(d.intake.id, addBatch ? { addBatch: true } : { tab: "timeline" }); }} />
       {duplicating ? <DuplicateDrawer intake={duplicating} onClose={() => setDuplicating(null)} onDone={(d) => { setDuplicating(null); onReload(); push(`${d.intake.name} created as a draft.`); open(d.intake.id); }} /> : null}
       <ConfirmDialog open={deleting !== null} title={`Delete ${deleting?.name ?? "this intake"}?`} confirmLabel="Delete intake"
-        message="Its timeline and empty batches go too. An intake with students or applications cannot be deleted; close it instead."
+        message="Its timeline and batches go too. Students in it are taken out and wait for you to place them in a new intake (Override: place a student). An intake with issued certificates, set assessments or recorded attendance cannot be deleted; close it instead."
         onCancel={() => setDeleting(null)} onConfirm={() => { const i = deleting; setDeleting(null); if (i) void remove(i); }} />
     </>
   );

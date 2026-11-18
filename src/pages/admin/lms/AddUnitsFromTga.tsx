@@ -108,6 +108,12 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     + imported.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
   const count = chosen.size + imported.length;
   const needsAttest = (rules?.unchecked.length ?? 0) > 0;
+  // Read the prerequisites of every listed unit Training.gov.au marks as having them, so each row can name them.
+  useEffect(() => {
+    if (!release) return;
+    [...release.core, ...release.electives].filter(unit => unit.hasPrerequisites === true).forEach(unit => lookup(unit.code));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per release
+  }, [release]);
   // A picked unit brings its prerequisites with it: those in this qualification are ticked automatically.
   useEffect(() => {
     const add: string[] = [];
@@ -179,6 +185,24 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   const brokenRules = check?.lines.filter(line => line.state === "broken") ?? [];
   const pendingRules = check?.lines.filter(line => line.state === "pending") ?? [];
 
+  /** The unit's prerequisites with their names ("Needs first: CPCCWHS2001 Apply WHS requirements…"), under its name. */
+  const prereqName = (code: string, text: string | null) => {
+    const key = code.toUpperCase();
+    const known = official.get(key)?.unit.name ?? onCourse.get(key)?.name;
+    if (known) return known;
+    const m = text ? new RegExp(`${key}\\s+([^\\n]+?)(?=\\s+[A-Z]{3,}[A-Z0-9]*\\d{3,}\\b|$|\\.|\\n)`, "i").exec(text) : null;
+    return m ? m[1].trim() : "";
+  };
+  const prereqLine = (unit: TgaUnit) => {
+    if (unit.hasPrerequisites === false) return null;
+    const found = lookups[unit.code.toUpperCase()];
+    if (found === undefined) return unit.hasPrerequisites ? <span className="block text-xs text-amber-800">Has prerequisites</span> : null;
+    if (found === null) return <span className="block text-xs text-foreground-500">Reading prerequisites…</span>;
+    if ("error" in found) return <span className="block text-xs text-amber-800">Has prerequisites (could not read them)</span>;
+    if (!found.prerequisiteCodes.length) return null;
+    return <span className="mt-0.5 block text-xs text-amber-900"><i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {found.prerequisiteCodes.map((code, i) =>
+      <span key={code}>{i ? "; " : ""}<b>{code}</b>{prereqName(code, found.prerequisites) ? ` ${prereqName(code, found.prerequisites)}` : ""}{selected(code) ? " ✓" : ""}</span>)}</span>;
+  };
   const row = (unit: TgaUnit) => {
     const on = active(unit.code);
     return <div key={unit.code} className={"rounded px-2 py-1.5 text-sm " + (on ? "opacity-70" : "hover:bg-background-100")}>
@@ -187,7 +211,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
           <input type="checkbox" className="mt-1" disabled={on || busy} checked={on || chosen.has(unit.code)} onChange={e => toggle(unit.code, e.target.checked)} />
           <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
             <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "hours not published",
-              unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : "", on ? "already on the course" : ""].filter(Boolean).join(" · ")}</span></span>
+              unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : "", on ? "already on the course" : ""].filter(Boolean).join(" · ")}</span>
+            {prereqLine(unit)}</span>
         </label>
       </div>
     </div>;

@@ -221,7 +221,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
             </td>
           <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
-          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="font-medium text-amber-800">{needs[r.unit.id].map(n => n.code).join(", ")}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
+          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
           {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
             return <>
               <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>

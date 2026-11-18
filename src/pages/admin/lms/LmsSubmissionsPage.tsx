@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import ListPane from "@/pages/admin/components/ListPane";
+import { useListPane } from "@/pages/admin/lib/listPane";
 import { rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 import { asmAdmin, downloadCsv, type AssignmentRow, type AssignmentStudent } from "@/pages/admin/lib/assessments";
 import AttemptDrawer from "@/pages/admin/assessments/panels/AttemptDrawer";
 
 /** LMS-only submission register. No shadow student or assessment data. */
 export default function LmsSubmissionsPage() {
+  const pane = useListPane("submissions");
   const [courses,setCourses] = useState<RtoCourse[]>([]);
   const [intakes,setIntakes] = useState<RtoIntake[]>([]);
   const [assignments,setAssignments] = useState<AssignmentRow[]>([]);
@@ -67,12 +70,14 @@ export default function LmsSubmissionsPage() {
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
     <header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="font-heading text-2xl font-bold text-foreground-950">Submissions</h1><p className="text-sm text-foreground-500">Student submissions by batch and assessment.</p></div><div className="flex flex-wrap gap-2"><button type="button" className={secondaryBtn} onClick={()=>downloadCsv("lms-submissions.csv",filtered.map(r=>({studentId:r.student.studentId,student:r.student.name,assessment:selected?.assessmentTitle??"",status:r.state,attempt:r.latest?.attemptNo??"",submittedAt:r.latest?.submittedAt??""})))}>Export CSV</button><button type="button" className={secondaryBtn} onClick={()=>void fetchStudents()}>Refresh</button></div></header>
     {error?<p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>:null}
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className={"grid items-start gap-5 " + pane.grid}>
+      <ListPane pane={pane} label="Courses">
       <div className="min-w-0 space-y-5">
         {listCard("Course","Search course",0,choice(courses.map(c=>({id:c.id,label:c.label,title:c.code,sub:c.name+(c.variantLabel?` (${c.variantLabel})`:""),dot:c.isActive})),courseId,setCourseId,0))}
         {listCard("Intake","Search intake",1,choice(matchingIntakes.map(i=>({id:i.id,label:i.name})),intakeId,setIntakeId,1))}
         {listCard("Batch","Search batch",2,choice(batches.map(b=>({id:b.id,label:b.name})),batchId,setBatchId,2))}
       </div>
+      </ListPane>
       <section className={card+" min-w-0 p-5"}>
         {!batchId?<p className="py-10 text-center text-sm text-foreground-500">Select a batch to view submissions.</p>:<>
           <label className="block text-xs font-semibold text-foreground-500">Unit / Assessment<select className={field+" mt-1 font-normal text-foreground-950"} value={assignmentId} onChange={e=>setAssignmentId(e.target.value)}><option value="">Select an assigned assessment</option>{batchAssignments.map(a=><option key={a.id} value={a.id}>{a.unitCode??"Course"} — {a.assessmentTitle}</option>)}</select></label>

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import ListPane from "@/pages/admin/components/ListPane";
+import { useListPane } from "@/pages/admin/lib/listPane";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AttendanceSummary from "./AttendanceSummary";
 import { bestIntake, rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
@@ -18,6 +20,7 @@ function Search({ label, value, onChange }: { label: string; value: string; onCh
   </label>;
 }
 export default function LmsAttendancePage() {
+  const pane = useListPane("attendance");
   const [courses,setCourses] = useState<RtoCourse[]>([]);
   const [intakes,setIntakes] = useState<RtoIntake[]>([]);
   const [courseId,setCourseId] = useState("");
@@ -74,7 +77,8 @@ export default function LmsAttendancePage() {
     </header>
     {error&&<div role="alert" className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button className="underline" onClick={()=>setError("")}>Dismiss</button></div>}
     {message&&<p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{message}</p>}
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className={"grid items-start gap-5 " + pane.grid}>
+      <ListPane pane={pane} label="Courses">
       <aside className={card+" space-y-4 p-3"}>
         <section><h2 className={heading+" px-1"}>Course</h2><Search label="Search courses" value={courseSearch} onChange={setCourseSearch}/>
           <div className={list}>{visibleCourses.length?visibleCourses.map(c=><button key={c.id} type="button" className={itemClass(c.id===courseId)} onClick={()=>setCourseId(c.id)} title={c.label}>{c.label}</button>):empty}</div></section>
@@ -83,6 +87,7 @@ export default function LmsAttendancePage() {
         <section className="border-t border-background-200 pt-3"><h2 className={heading+" px-1"}>Batch</h2><Search label="Search batches" value={batchSearch} onChange={setBatchSearch}/>
           <div className={list}>{visibleBatches.length?visibleBatches.map(b=><button key={b.id} type="button" className={itemClass(b.id===batchId)} onClick={()=>setBatchId(b.id)}>{b.name}</button>):empty}</div></section>
       </aside>
+      </ListPane>
       <section className={card+" min-w-0 p-5"}>
         {!batchId?<p className="py-10 text-center text-sm text-foreground-500">This intake has no batch yet. Add students to the intake and a batch opens by itself.</p>:!batch||batch.batch.id!==batchId?<p className="py-10 text-center text-sm text-foreground-500">Loading batch…</p>:<>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

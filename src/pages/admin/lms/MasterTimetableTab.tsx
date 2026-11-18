@@ -11,7 +11,12 @@ interface Row {
   startDate: string | null; endDate: string | null; prerequisites: string[]; inMaster: boolean;
 }
 interface Break { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
-interface Master { courseId: string; saved: boolean; startDate: string | null; endDate: string | null; rows: Row[]; problems: string[]; canEdit: boolean; breaks: Break[] }
+interface Master {
+  courseId: string; saved: boolean; startDate: string | null; endDate: string | null; rows: Row[]; problems: string[]; canEdit: boolean; breaks: Break[];
+  /** The cycle on screen (the master repeats), the next one when it has been created, and whether it is time to create it. */
+  cycle?: number; next?: { cycle: number; startDate: string; endDate: string } | null; nextDue?: boolean;
+}
+interface NextCycle { cycle: number; startDate: string; endDate: string; created: boolean; rows: { unitId: string; code: string; name: string; weeks: number; startDate: string; endDate: string }[]; breaks: Break[] }
 
 async function call(action: "get" | "preview" | "save", data: Record<string, unknown>): Promise<Master> {
   const { data: out, error } = await supabase.rpc("rto_master_timetable", { p_action: action, p_data: data });
@@ -31,6 +36,7 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [nextCycle, setNextCycle] = useState<NextCycle | null>(null);
   const [breakDraft, setBreakDraft] = useState<{ label: string; startDate: string; endDate: string } | null>(null);
   const request = useRef(0);
 
@@ -74,6 +80,18 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
     try { const data = await call("save", { courseId, startDate: start, rows: order }); apply(data); setDirty(false); setNotice("Master timetable saved."); }
     catch (e) { setError(e instanceof Error ? e.message : "The master timetable was not saved."); }
     finally { setBusy(false); }
+  };
+
+  /** The next cycle as it would be with the term breaks entered so far (nothing is saved), or create it. */
+  const next = async (create: boolean) => {
+    if (busy) return;
+    if (create && !window.confirm("Create the next cycle with these dates? Check that every term break for that period has been added first.")) return;
+    setBusy(true); setError(""); setNotice("");
+    const { data, error: e } = await supabase.rpc("rto_master_timetable", { p_action: create ? "next_create" : "next_preview", p_data: { courseId } });
+    setBusy(false);
+    if (e) { setError(e.message); return; }
+    setNextCycle(data as NextCycle);
+    if (create) { setNotice("The next cycle is created. Intakes move onto it when the current cycle ends."); await load(); }
   };
 
   const breakProblem = !breakDraft ? "" : !breakDraft.label.trim() ? "Enter a name." : !breakDraft.startDate || !breakDraft.endDate ? "Enter the first and last day."
@@ -201,6 +219,27 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
         </tr>)}</tbody>
       </table>
     </div>}
+    {master.saved && !dirty ? <section aria-label="Next cycle" className={"rounded-lg border p-3 " + (master.nextDue ? "border-amber-300 bg-amber-50" : "border-background-200")}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0 text-sm">
+          <h4 className="font-semibold text-foreground-950">Next cycle{master.cycle ? ` (cycle ${master.cycle + 1})` : ""}</h4>
+          {master.next ? <p className="text-foreground-700">Created: {shortDate(master.next.startDate)} to {shortDate(master.next.endDate)}. The intakes move onto it when this cycle ends{master.endDate ? ` (${shortDate(master.endDate)})` : ""}.</p>
+            : <p className={master.nextDue ? "text-amber-900" : "text-foreground-700"}>{master.nextDue ? "This cycle ends within three months. " : ""}When this cycle ends the units start again. Add the term breaks for that period above, then create the next cycle; the system does not create it by itself.</p>}
+        </div>
+        {!master.next ? <div className="flex gap-2">
+          <button type="button" disabled={busy} onClick={() => void next(false)} className="rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Preview dates</button>
+          {canEdit ? <button type="button" disabled={busy} onClick={() => void next(true)} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Create the next cycle</button> : null}
+        </div> : null}
+      </div>
+      {nextCycle && !master.next ? <div className="mt-2 overflow-x-auto"><table className="w-full min-w-[520px] text-sm">
+        <thead><tr><th className={th}>Unit</th><th className={th + " text-right"}>Weeks</th><th className={th}>Start date</th><th className={th}>End date</th></tr></thead>
+        <tbody>{nextCycle.rows.map(row => <tr key={row.unitId} className="border-t border-background-200">
+          <td className="px-2 py-1.5"><b>{row.code}</b> <span className="text-foreground-700">{row.name}</span></td><td className="px-2 py-1.5 text-right">{weeksLabel(Number(row.weeks))}</td>
+          <td className="whitespace-nowrap px-2 py-1.5">{shortDate(row.startDate)}</td><td className="whitespace-nowrap px-2 py-1.5">{shortDate(row.endDate)}</td></tr>)}</tbody>
+      </table>
+        <p className="mt-1 text-xs text-foreground-600">{nextCycle.breaks.length ? `Term breaks in this period: ${nextCycle.breaks.map(item => `${item.label} (${shortDate(item.startDate)} to ${shortDate(item.endDate)})`).join("; ")}.` : "No term break has been entered for this period yet."}</p>
+      </div> : null}
+    </section> : null}
     <p className="text-xs text-foreground-500">Units run one after another in whole 7-day weeks, weekends included; days inside a term break are not counted. A unit marked * needs the units in the Pre-requisite column first.
       Changing weeks here does not change the unit itself. Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > 40 ? " (more than 40 hours a week cannot be timetabled: give the unit more weeks)" : ""}.</p>
   </div>;

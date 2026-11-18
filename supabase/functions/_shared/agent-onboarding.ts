@@ -107,9 +107,10 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
   agent_website: autoOrAgent("form", "Website"),
   agent_fax: autoOrAgent("form", "Fax"),
   office_street_address: autoOrAgent("form", "Office street address", { required: true }),
-  office_suburb: autoOrAgent("form", "Suburb / city"),
+  office_suburb: autoOrAgent("form", "Suburb and postcode"),
   office_state: autoOrAgent("form", "State"),
-  office_province: autoOrAgent("form", "Province / postcode"),
+  // No postcode box on the form: an Australian postcode is printed in the Suburb box (composeSuburb); Province is an overseas region only.
+  office_province: autoOrAgent("form", "Province (outside Australia)"),
   office_country: autoOrAgent("form", "Country", { required: true }),
   // ------------------------------------------------------------- Application form: the agent's answers
   agent_year_founded: agent("form", "Year founded"),
@@ -218,6 +219,49 @@ export function composeRegistrationNumber(acn: string | null | undefined, marn: 
 }
 /** The OMARA public register search (staff check a MARN by hand; no automated lookup). */
 export const OMARA_REGISTER_URL = "https://portal.mara.gov.au/search-the-register-of-migration-agents/";
+
+/*
+ * The office address (2026-11-19, prefill fix): the F04 row is Street / Suburb / State / Province / Country and has no postcode box. An
+ * Australian postcode is printed in the Suburb box after the suburb ("Footscray 3011"); Province is only an overseas region and never holds
+ * a postcode (requests sent before the fix put the ABR postcode there).
+ */
+const POSTCODE = /^\d{4}$/;
+/** "Footscray" + "3011" -> "Footscray 3011"; either alone as it is. */
+export function composeSuburb(suburb: string | null | undefined, postcode: string | null | undefined): string {
+  const s = String(suburb ?? "").trim(), p = String(postcode ?? "").trim();
+  if (!p) return s;
+  return s.endsWith(` ${p}`) || s === p ? s : [s, p].filter(Boolean).join(" ");
+}
+/** "Footscray 3011" -> { suburb: "Footscray", postcode: "3011" }; "3011" -> postcode only; anything else is the suburb. */
+export function splitSuburb(text: string | null | undefined): { suburb: string; postcode: string } {
+  const t = String(text ?? "").trim();
+  if (POSTCODE.test(t)) return { suburb: "", postcode: t };
+  const m = /^(.*\S)\s+(\d{4})$/.exec(t);
+  return m ? { suburb: m[1], postcode: m[2] } : { suburb: t, postcode: "" };
+}
+/** A postcode found in the Province box moves to the Suburb box; nothing else changes. */
+export function normalizeOfficeAddress<T extends Record<string, string>>(values: T): T {
+  const province = String(values.office_province ?? "").trim();
+  if (!POSTCODE.test(province)) return values;
+  return { ...values, office_province: "", office_suburb: composeSuburb(values.office_suburb, province) };
+}
+
+/**
+ * Filled on open (2026-11-19): when the signing page opens an F04 still waiting for its signature, the blank fields among these get the
+ * register's / the business record's value (document-signing, agency_onboarding_prefill_blanks). A value already there is never overwritten.
+ */
+export const F04_OPEN_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_gst_registered", "agent_year_founded",
+  "contact_title", "contact_given_name", "contact_family_name", "contact_position", "contact_email", "contact_phone", "agent_website",
+  "office_street_address", "office_suburb", "office_state", "office_country", "declarant_name", "declarant_role"] as const;
+/** The business record's own values the F04 prefill uses besides the register (sign-up, earlier answers kept on the business profile). */
+export const F04_RECORD_KEYS = ["contact_title", "contact_position", "agent_website", "office_street_address", "office_suburb", "office_state", "office_country",
+  "contact_given_name", "contact_family_name", "contact_email", "contact_phone", "declarant_name", "declarant_role"] as const;
+
+/** The wizard's uploads on the Agency step (the questions "organisational chart" / "business profile" answered Yes). */
+export const F04_ATTACHMENTS = { org_chart: "Organisational chart", business_profile: "Business profile or strategic plan" } as const;
+export type F04AttachmentKind = keyof typeof F04_ATTACHMENTS;
+export const F04_ATTACHMENT_TYPES = ["application/pdf", "image/png", "image/jpeg"] as const;
+export const F04_ATTACHMENT_MAX = 5 * 1024 * 1024;
 
 export interface PlacedField { key: string; type: OnboardingField["type"]; role: OnboardingRole; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string }
 /** A widget rectangle in PDF points, from the page's bottom-left, with the page size. */

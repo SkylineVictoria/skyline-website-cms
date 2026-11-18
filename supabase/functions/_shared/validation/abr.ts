@@ -3,6 +3,7 @@
 // Edge Function secret EF_ABR_GUID (ABR_GUID is read too) and never sent to the browser. Without a GUID nothing here is called: the lookup
 // reports `not_configured` and Add business keeps its earlier behaviour. Runtime-neutral (the function, the offline tests and the CMS types).
 import { lookupAgencyAbn, normalizeAbn, validateAbn, type AgencyAbnDetails } from "./abn.ts";
+import { DEFAULT_DIAL, parseStoredPhone, validatePhone } from "./identifiers.ts";
 
 /** What staff confirm on Add business and the F04 prefill uses: the register's values, editable before the business is saved. */
 export interface AbrDetails {
@@ -102,7 +103,7 @@ export const F04_TITLES = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Other"] as const;
 
 /**
  * The F04 prefill from the register (owner brief): Legal Entity = EntityName; Trading Name and Agent/Agency Name = the chosen business
- * name (fallback EntityName); ABN/ACN; GST Registered; State; postcode in the "Province / postcode" box (Suburb is left for the contact);
+ * name (fallback EntityName); ABN/ACN; GST Registered; State; postcode in the Suburb box (never Province; the suburb is the contact's);
  * Country = Australia; Year founded = year of the ABN's status date. From Add business:
  * the contact's given and family name, email and phone. Everything else is left for the contact. Staff edits win over the register.
  */
@@ -119,7 +120,8 @@ export function abrApplicationValues(input: {
   const values: Record<string, string> = {
     agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : "",
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
-    office_state: str(c?.state) || d?.state || "", office_province: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
+    // No postcode box on the F04: the postcode is printed in the Suburb box (never Province); the suburb itself is the contact's.
+    office_state: str(c?.state) || d?.state || "", office_suburb: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
     agent_year_founded: (d?.statusFrom ?? "").slice(0, 4),
     contact_given_name: str(input.contact.givenName), contact_family_name: str(input.contact.familyName),
     contact_email: str(input.contact.email).toLowerCase(), contact_phone: str(input.contact.phone),
@@ -128,7 +130,7 @@ export function abrApplicationValues(input: {
 }
 
 /** The keys of the F04 the prefill may fill (anything else from our records is left blank for the contact). */
-export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_acn", "agent_gst_registered", "office_state", "office_province", "office_country",
+export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_acn", "agent_gst_registered", "office_state", "office_suburb", "office_country",
   "agent_year_founded", "contact_given_name", "contact_family_name", "contact_email", "contact_phone"] as const;
 
 /** "603 584 676": an ACN in its printed groups (other text unchanged). */
@@ -176,12 +178,68 @@ export async function lookupAbrAny(abn: string, guid: string | null | undefined,
   try { return { details: pageToAbrDetails(await lookupAgencyAbn(abn, request)), fetchedAt: new Date().toISOString() }; } catch { return null; }
 }
 
-/** Signing-time checks of a signed F04 (owner brief): the title is one of the list; the two referees have different emails. */
+/** Where the register's answers are cached by ABN (public.abr_businesses, 30 days). Either call may fail: the lookup goes on without it. */
+export interface AbrCache { get(abn: string): Promise<(AbrDetails & { fetchedAt?: string }) | null>; put(details: AbrDetails): Promise<void> }
+/**
+ * The F04's lookup (2026-11-19): the cached answer when there is one; otherwise the register (JSON service with the GUID, else the public
+ * page), and the answer is cached so later sends and opens do not ask again. Never throws.
+ */
+export async function lookupAbrCached(abn: string, guid: string | null | undefined, cache: AbrCache | null, request: typeof fetch = fetch): Promise<{ details: AbrDetails; fetchedAt: string; cached: boolean } | null> {
+  const digits = normalizeAbn(abn).replace(/\D/g, "");
+  if (validateAbn(digits)) return null;
+  if (cache) {
+    try {
+      const hit = await cache.get(digits);
+      if (hit?.entityName) {
+        const { fetchedAt, ...details } = hit;
+        return { details: { ...details, businessNames: Array.isArray(details.businessNames) ? details.businessNames : [] }, fetchedAt: String(fetchedAt ?? new Date().toISOString()), cached: true };
+      }
+    } catch { /* the register instead */ }
+  }
+  const found = await lookupAbrAny(digits, guid, request);
+  if (!found) return null;
+  if (cache) { try { await cache.put(found.details); } catch { /* not cached this time */ } }
+  return { ...found, cached: false };
+}
+
+/**
+ * A phone as E.164 ("+61412345678"): an international number with a known code, or an Australian number written nationally (0412 345 678,
+ * 03 9123 4567). Anything else, or a number of the wrong length: null.
+ */
+export function phoneE164(raw: string | null | undefined): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const parsed = parseStoredPhone(text) ?? (/^0\d{9}$/.test(text.replace(/[\s().-]/g, "")) ? { dial: DEFAULT_DIAL, national: text.replace(/[\s().-]/g, "").slice(1) } : null);
+  if (!parsed || validatePhone(parsed.dial, parsed.national)) return null;
+  return `+${parsed.dial}${parsed.national}`;
+}
+const personName = (value: unknown) => str(value).toLowerCase().replace(/[^a-zÀ-ɏ ]/g, "").replace(/\s+/g, " ").trim();
+
+/**
+ * Signing-time checks of a signed F04 (owner brief, 2026-11-19): the title is one of the list; each referee's phone is a full number with
+ * its country code; the two referees have different emails and phones; neither referee is the applicant (their contact email, phone or
+ * name). The same name on both referees is only a warning.
+ */
 export function checkApplicationAnswers(answers: Record<string, string>): { error: string | null; warnings: string[] } {
   const title = str(answers.contact_title);
   if (title && !(F04_TITLES as readonly string[]).includes(title)) return { error: `Choose the contact's title from the list (${F04_TITLES.join(", ")}).`, warnings: [] };
   const e1 = str(answers.ref1_email).toLowerCase(), e2 = str(answers.ref2_email).toLowerCase();
   if (e1 && e2 && e1 === e2) return { error: "The two references need different email addresses: each referee gets their own form.", warnings: [] };
-  const n1 = str(answers.ref1_contact_name).toLowerCase(), n2 = str(answers.ref2_contact_name).toLowerCase();
+  const phones: Array<string | null> = [];
+  for (const n of [1, 2]) {
+    const raw = str(answers[`ref${n}_phone`]);
+    const e164 = phoneE164(raw);
+    if (raw && !e164) return { error: `Enter reference ${n}'s phone with its country code, for example +61 412 345 678.`, warnings: [] };
+    phones.push(e164);
+  }
+  if (phones[0] && phones[0] === phones[1]) return { error: "The two references need different phone numbers.", warnings: [] };
+  const myEmail = str(answers.contact_email).toLowerCase(), myPhone = phoneE164(answers.contact_phone);
+  const myNames = [personName(`${str(answers.contact_given_name)} ${str(answers.contact_family_name)}`), personName(answers.declarant_name)].filter(Boolean);
+  for (const n of [1, 2]) {
+    const email = n === 1 ? e1 : e2, phone = phones[n - 1], name = personName(answers[`ref${n}_contact_name`]);
+    const same = (email && myEmail && email === myEmail) ? "email address" : (phone && myPhone && phone === myPhone) ? "phone number" : (name && myNames.includes(name)) ? "name" : "";
+    if (same) return { error: `Reference ${n} has your own ${same}. A referee must be someone other than you.`, warnings: [] };
+  }
+  const n1 = personName(answers.ref1_contact_name), n2 = personName(answers.ref2_contact_name);
   return { error: null, warnings: n1 && n2 && n1 === n2 ? ["Both references have the same contact name. Check that they are two different people."] : [] };
 }

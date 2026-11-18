@@ -3,13 +3,12 @@
 // checks go out when the agent has signed the form; staff are told when both referees are back). Everything goes through the Sign
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
-import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
-import { ABR_PREFILL_KEYS, abrApplicationValues, abrFacts, lookupAbr, pageToAbrDetails, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
+import { AGENT_ONBOARDING_DOCS, expiryDate, F04_RECORD_KEYS, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { ABR_PREFILL_KEYS, abrFacts, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
-import { drainSigningMail, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
+import { abrCache, drainSigningMail, f04Prefill, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const onboardingPdfModule = () => import("../_shared/agent-onboarding-pdf.ts");
@@ -113,28 +112,29 @@ async function prepare(ctx: OnboardingContext, agencyId: string, agentId: unknow
   return prepared;
 }
 /** The values our records give, plus the ABN Lookup (legal entity, trading name, GST, state, postcode). Unavailable: left for the agent. */
-async function recordValues(prepared: Pick<Prepared, "agency" | "values">): Promise<Record<string, string>> {
-  return (await recordValuesWithFacts(prepared)).values;
+async function recordValues(ctx: OnboardingContext, prepared: Pick<Prepared, "agency" | "values">): Promise<Record<string, string>> {
+  return (await recordValuesWithFacts(ctx, prepared)).values;
 }
 /**
- * The same, with the register's facts (status, entity type, GST date, ACN). F04 wizard (2026-11-19): without the ABR GUID the public page
- * gives the same prefill as the JSON service (one rule, abrApplicationValues): trading name falls back to the entity name, year founded from
- * the ABN's status date, the ACN from the ASIC table. Our records win over the register.
+ * The same, with the register's facts (status, entity type, GST date, ACN). The register's answer is cached by ABN (public.abr_businesses,
+ * 2026-11-19): a send within 30 days of an earlier lookup does not ask again. One rule with the open (f04Prefill): trading name falls back to
+ * the entity name, year founded from the ABN's status date, the ACN from the ASIC table, the postcode in the Suburb box. Our records win.
  */
-async function recordValuesWithFacts(prepared: Pick<Prepared, "agency" | "values">): Promise<{ values: Record<string, string>; facts: AbrFacts | null }> {
+async function recordValuesWithFacts(ctx: OnboardingContext, prepared: Pick<Prepared, "agency" | "values">): Promise<{ values: Record<string, string>; facts: AbrFacts | null }> {
   const values: Record<string, string> = {};
   for (const [key, value] of Object.entries(prepared.values ?? {})) if (typeof value === "string" && value.trim()) values[key] = value.trim();
-  let facts: AbrFacts | null = null;
+  let facts: AbrFacts | null = null, register: Record<string, string> = {};
   if (prepared.agency.abn) {
-    try {
-      const details = pageToAbrDetails(await lookupAgencyAbn(prepared.agency.abn));
-      facts = abrFacts(details, new Date().toISOString());
-      if (details.entityName) values.agent_organisation_name = details.entityName;
-      const abr = abrApplicationValues({ details, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } });
-      for (const key of ["agent_legal_entity", "agent_trading_name", "agent_gst_registered", "office_state", "office_province", "agent_year_founded", "agent_acn"]) if (abr[key]) values[key] ||= abr[key];
-    } catch { /* the lookup is a convenience: the agent types what it would have printed */ }
+    const found = await lookupAbrCached(prepared.agency.abn, ctx.ports.abr?.guid, abrCache(ctx.ports), ctx.ports.abr?.fetch ?? fetch);
+    if (found) {
+      facts = abrFacts(found.details, found.fetchedAt);
+      if (found.details.entityName) values.agent_organisation_name = found.details.entityName;
+      register = f04Prefill({ details: found.details, confirmed: null, record: values });
+    }
   }
-  return { values, facts };
+  const merged = normalizeOfficeAddress({ ...register, ...values });
+  const phone = phoneE164(merged.contact_phone); if (phone) merged.contact_phone = phone;
+  return { values: merged, facts };
 }
 
 /** What the business keeps from ABN Lookup (agencies.abr_*): the register's answer, the values staff confirmed, the contact's names. */
@@ -148,16 +148,18 @@ async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Pr
   try { abr = await ctx.rpc("agency_abr_get", { p_agency: prepared.agency.id }) as BusinessAbr | null; } catch { abr = null; }
   if (!abr?.confirmed) {
     // No ABR confirmation on the business (EF_ABR_GUID not set): the public page's values, still editable by the contact in the wizard.
-    const { values, facts } = await recordValuesWithFacts(prepared);
-    const prefill = Object.fromEntries(ABR_PREFILL_KEYS.filter((k) => values[k]).map((k) => [k, values[k]]));
+    const { values, facts } = await recordValuesWithFacts(ctx, prepared);
+    const prefill = Object.fromEntries([...new Set([...ABR_PREFILL_KEYS, ...F04_RECORD_KEYS])].filter((k) => values[k]).map((k) => [k, values[k]]));
     return { values, prefill: Object.keys(prefill).length ? prefill : null, facts };
   }
   const record = prepared.values ?? {};
   const parts = String(prepared.agent?.name ?? "").trim().split(/\s+/);
-  const prefill = abrApplicationValues({ details: abr.details, confirmed: abr.confirmed, contact: {
+  // The register's answer kept on the business (staff confirmed it) and the business record (website, title, office, from the sign-up / profile).
+  if (abr.details) { const cache = abrCache(ctx.ports); if (cache) await cache.put(abr.details).catch(() => undefined); }
+  const prefill = f04Prefill({ details: abr.details, confirmed: { ...abr.confirmed,
     givenName: abr.confirmed.givenName || String(record.contact_given_name ?? "") || parts.slice(0, -1).join(" ") || parts[0] || "",
-    familyName: abr.confirmed.familyName || String(record.contact_family_name ?? "") || (parts.length > 1 ? parts[parts.length - 1] : ""),
-    email: String(prepared.agent?.email ?? ""), phone: String(record.contact_phone ?? "") } });
+    familyName: abr.confirmed.familyName || String(record.contact_family_name ?? "") || (parts.length > 1 ? parts[parts.length - 1] : "") },
+    record: { ...Object.fromEntries(F04_RECORD_KEYS.map((k) => [k, record[k]])), contact_email: String(prepared.agent?.email ?? ""), contact_phone: String(record.contact_phone ?? "") } });
   return { values: { ...prefill }, prefill, facts: abr.details ? abrFacts(abr.details, abr.fetchedAt ?? new Date().toISOString()) : null };
 }
 
@@ -242,7 +244,7 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
     adminSignature = text(signature.name ?? adminName, 150);
     if (!signingNameValid(adminSignature)) throw new SigningError("Type the signatory's name as the signature, or draw one.");
   }
-  const values = await recordValues(prepared);
+  const values = await recordValues(ctx, prepared);
   Object.assign(values, { agreement_commencement_date: commencement, agent_territory: territory, agent_commission_percent: commission, admin_name: adminName, admin_position: adminPosition,
     admin_signed_date: isoToday(), admin_witness_name: text(ctx.body.adminWitnessName, 150), admin_witness_signature: text(ctx.body.adminWitnessName, 150), admin_signature: adminSignature });
   const title = `Agent agreement: ${text(prepared.agency.name, 150)}`.slice(0, 200);

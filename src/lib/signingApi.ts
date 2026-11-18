@@ -117,7 +117,9 @@ export interface SigningView {
   /** Agent onboarding (2026-11-17): the application form (the first `formPages` pages) and the agreement, sent as one document. */
   onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string; kind?: string; stage?: string } | null;
   /** F04 wizard (2026-11-19): the saved draft ("Save and continue later") and the register's facts for the Company summary. */
-  application?: { draft: unknown; facts: unknown; savedAt: string | null } | null;
+  application?: { draft: unknown; facts: unknown; savedAt: string | null;
+    /** 2026-11-19: values with no box of their own (agent_acn), the keys the open filled, the wizard uploads (organisation chart, business profile). */
+    prefill?: Record<string, string>; filled?: string[]; attachments?: Record<string, { name: string; size: number; at: string }> } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
   // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
   fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;
@@ -152,6 +154,13 @@ export async function signingMine<T>(action: "list" | "token", id: string | null
   const result = await supabase.rpc("signing_mine", { p_action: action, p_id: id });
   if (result.error) throw new Error(result.error.message);
   return result.data as T;
+}
+/** The F04 wizard address boxes: Australian address suggestions for a link holder (document-signing proxies the address-search lookup). */
+export async function signingAddressSearch(token: string, q: string): Promise<{ kind: "ok"; suggestions: Array<{ line: string; line2: string; suburb: string; state: string; postcode: string }> } | { kind: "unavailable" }> {
+  try {
+    const r = await signingAction<{ ok: boolean; suggestions?: Array<{ line: string; line2: string; suburb: string; state: string; postcode: string }> }>({ action: "address_search", token, q });
+    return r.ok && Array.isArray(r.suggestions) ? { kind: "ok", suggestions: r.suggestions } : { kind: "unavailable" };
+  } catch { return { kind: "unavailable" }; }
 }
 export async function signingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
   return invokeFunction<T>("document-signing", body, "The signing request could not be completed.", file);

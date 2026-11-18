@@ -533,6 +533,11 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   const titleField = fieldRows.find((f) => f.key === "contact_title"); if (titleField) values[titleField.id] = "Mr";
   // The two referees need different emails (2026-11-19).
   for (const n of [1, 2]) { const email = fieldRows.find((f) => f.key === `ref${n}_email`); if (email) values[email.id] = referees[n - 1].email; }
+  // 2026-11-19: referees are other people with their own phones (E.164 kept); a postcode in Province moves to the Suburb box.
+  const setKey = (key: string, value: string) => { const f = fieldRows.find((x) => x.key === key); if (f) values[f.id] = value; };
+  for (const n of [1, 2]) { setKey(`ref${n}_contact_name`, referees[n - 1].name); setKey(`ref${n}_phone`, referees[n - 1].phone); }
+  setKey("contact_given_name", "Ravi"); setKey("contact_family_name", "Kumar"); setKey("declarant_name", "Ravi Kumar"); setKey("contact_phone", "0412 345 678"); setKey("contact_email", "ravi@example.test");
+  setKey("office_suburb", "Footscray"); setKey("office_province", "3011");
   // F04 wizard (2026-11-19): the sign step needs every declaration ticked and a MARN of digits; it prints "ACN … / MARN …" in the registration box.
   const signAs = (application: unknown) => signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values: { ...values }, documentHash: originalHash, application }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts);
   const allTicked = Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true]));
@@ -545,6 +550,9 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   assert.equal((signData as unknown as { form_base64?: string }).form_base64, undefined, "a staged request is not split: its signed PDF is the document");
   const registrationBox = fieldRows.find((f) => f.key === "agent_registration_number");
   if (registrationBox) assert.equal((signData as unknown as { values: Record<string, string> }).values[registrationBox.id], "ACN 603 584 676 / MARN 1234567", "the registration box prints the ACN and the MARN");
+  const signedValue = (key: string) => (signData as unknown as { values: Record<string, string> }).values[fieldRows.find((f) => f.key === key)!.id];
+  assert.deepEqual([signedValue("office_province"), signedValue("office_suburb")], ["", "Footscray 3011"], "office_province never holds a postcode: it is printed in the Suburb box");
+  assert.deepEqual([signedValue("ref1_phone"), signedValue("ref2_phone"), signedValue("contact_phone")], ["+61400111222", "+61400333444", "+61412345678"], "phones are kept as E.164");
   const extra = services.find(([name]) => name === "agency_onboarding_application_extra");
   assert.deepEqual(extra && [(extra[1].p_data as { agent_acn: string }).agent_acn, (extra[1].p_data as { agent_marn: string }).agent_marn, Object.keys((extra[1].p_data as { declarations: object }).declarations).length], ["603584676", "1234567", 5], "the ACN, the MARN and the declarations are kept");
   const refereeCreates = services.filter(([name]) => name === "agency_onboarding_referee_request_create");
@@ -728,17 +736,17 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   }
 
   // The F04 prefill (brief): Legal Entity, Trading / Agency name (the chosen business name), ABN/ACN, GST, State, postcode in the
-  // "Province / postcode" box (Suburb left for the contact), Country, Year founded; the contact from Add business; nothing else.
+  // Suburb box (never Province), Country, Year founded; the contact from Add business; nothing else.
   const details = ok.ok ? ok.details : null;
   const values = abrLib.abrApplicationValues({ details, confirmed: { legalEntity: "BHP GROUP LIMITED", tradingName: "BHP BILLITON", gstRegistered: true, state: "VIC", postcode: "3000" },
     contact: { givenName: "Pat", familyName: "Contact", email: "ZZ-Test-POC@blackhole.postmarkapp.com", phone: "+61412345678" } });
   assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49004028077", agent_acn: "004 028 077",
-    agent_gst_registered: "YES", office_state: "VIC", office_province: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
+    agent_gst_registered: "YES", office_state: "VIC", office_suburb: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
     contact_email: "zz-test-poc@blackhole.postmarkapp.com", contact_phone: "+61412345678" });
-  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_suburb" in values) && !("agent_registration_number" in values), "Suburb and the registration number stay blank");
+  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_province" in values) && !("agent_registration_number" in values), "the postcode goes in the Suburb box, never Province; the registration number stays blank");
   // Staff edits win over the register; no business name falls back to the entity name; GST left to the contact.
   const edited = abrLib.abrApplicationValues({ details: { ...details!, businessNames: [], acn: "" }, confirmed: { legalEntity: "BHP Group Ltd", tradingName: "", gstRegistered: null, state: "WA", postcode: "6000" }, contact: { givenName: "", familyName: "", email: "", phone: "" } });
-  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_province, "6000"); assert.ok(!("office_suburb" in edited)); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
+  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_suburb, "6000"); assert.ok(!("office_province" in edited)); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
   assert.equal(edited.agent_abn, BHP);
 
   // Editable: with the prefill switch, every value we hold is the contact's field, already filled in (nothing printed); the GST pair comes ticked.
@@ -751,7 +759,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.equal(byKey.agent_legal_entity.value, "BHP GROUP LIMITED"); assert.equal(byKey.agent_legal_entity.role, "agent");
   assert.equal(byKey["agent_abn_form"].value, "49 004 028 077", "the ABN box holds the ABN only (the ACN goes to the registration box)"); assert.equal(byKey["agent_abn_form"].required, true);
   assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
-  assert.equal(byKey.office_province.value, "3000"); assert.equal(byKey.office_suburb.value, "", "Suburb is left for the contact"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
+  assert.equal(byKey.office_suburb.value, "3000"); assert.equal(byKey.office_province.value, "", "Province never holds the postcode"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
   assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
   // Registry fixes (2026-11-19): the registration number is the contact's field, never prefilled, even from a template installed when it was the sender's;
   // the signer is the "Business contact"; an activated onboarding reads "Business activated"; Ready to activate is shown for a signed business agreement.
@@ -820,6 +828,109 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.ok(["create table public.abr_lookups", "abr_raw jsonb", "abr_fetched_at timestamptz", "agency_abr_attach", "agency_onboarding_prefill_record", "'prefill_reviewed'", "after update of answers on public.agency_onboarding"].every((s) => migration.includes(s)), "cache, business record, prefill history");
 });
 
+
+test("F04 prefill on open (2026-11-19): an old request's blank fields are filled server side from the cached register and the business record, existing values never overwritten; office_province never holds a postcode; referees checked (duplicates, self) server side; phones as E.164; the short wizard's rules", async () => {
+  const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  const purva = { abn: "86603584676", acn: "603584676", abnStatus: "Active", active: true, statusFrom: "2015-01-07", entityName: "PURVA TECH PTY LTD", entityType: "Australian Private Company",
+    businessNames: [] as string[], gstRegistered: true, gstFrom: "2015-01-07", state: "VIC", postcode: "3029", sourceUrl: "https://abr.business.gov.au/ABN/View?abn=86603584676" };
+  // A request sent before v31 (like 86b0d7f5, PURVA TECH): trading name, year founded, website, street, suburb and title blank; the postcode in Province.
+  const sentValues: Record<string, string> = { agent_legal_entity: "PURVA TECH PTY LTD", agent_agency_name: "PURVA TECH PTY LTD", agent_abn_form: "86 603 584 676", "agent_gst_registered:YES": "true",
+    contact_email: "kept@example.test", contact_phone: "+61938938943", office_state: "VIC", office_province: "3029", office_country: "Australia" };
+  const keys = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn_form", "agent_year_founded", "agent_gst_registered:YES", "agent_gst_registered:NO", "contact_title",
+    "contact_email", "contact_phone", "agent_website", "office_street_address", "office_suburb", "office_state", "office_province", "office_country"];
+  const fieldsOf = (values: Record<string, string>) => keys.map((key, i) => ({ id: `f${i}`, type: key.includes(":") ? "checkbox" : "text", key, label: key, page: 1, x: 0, y: 0, w: 0.1, h: 0.02, required: false, value: values[key] ?? "" }));
+  const original = new TextEncoder().encode("%PDF-1.4 test"); const originalHash = await signingCore.sha256Hex(original);
+  const rpcs: Array<[string, Record<string, unknown>]> = []; let fetches = 0; let cached: unknown = purva;
+  const html = `<h1>Current details for ABN 86 603 584 676</h1><table><tr><th>Entity name:</th><td>PURVA TECH PTY LTD</td></tr><tr><th>ABN status:</th><td>Active from 07 Jan 2015</td></tr>` +
+    `<tr><th>Entity type:</th><td>Australian Private Company</td></tr><tr><th>Goods &amp; Services Tax (GST):</th><td>Registered from 07 Jan 2015</td></tr><tr><th>Main business location:</th><td>VIC 3029</td></tr></table>` +
+    `<table><caption>ASIC registration - ACN or ARBN</caption><tr><td>603 584 676</td></tr></table>`;
+  const openWith = async (fields: ReturnType<typeof fieldsOf>, extra: Record<string, unknown> = {}) => signingCore.handleSigning({ body: { action: "open", token: "d".repeat(64), ...extra }, upload: null, ip: "203.0.113.5", userAgent: "test" }, {
+    isServiceCaller: false, uuid: () => "00000000-0000-4000-8000-0000000000aa", later: () => undefined, letterhead: async () => null, mail: { provider: null, config: { from: null, siteUrl: "", adminTo: [] } },
+    abr: { guid: "", fetch: (async () => { fetches++; return new Response(html); }) as unknown as typeof fetch },
+    service: async (action: string) => {
+      if (action === "rate") return true;
+      if (action === "open") return { id: "50000000-0000-4000-8000-000000000001", reference: "SLIT-2026-000040", title: "Agent application form: PURVA TECH PTY LTD", state: "viewed", original_path: "x/original.pdf", original_hash: originalHash,
+        recipient: { id: "r1", name: "Gourav Gupta", email: "kept@example.test", state: "viewed" }, fields, signers: [], onboarding: { id: "o1", kind: "application", formPages: 2, agencyName: "PURVA TECH PTY LTD" } };
+      throw new Error(`unexpected ${action}`);
+    },
+    admin: async () => { throw new Error("no admin"); },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agency_onboarding_wizard_get") return { draft: null, saved_at: null, facts: abrLib.abrFacts(purva, "2026-11-18T08:47:08Z"), abn: "86603584676", abr: null, attachments: {},
+        record: { contact_email: "other@example.test", agent_website: "https://purva.example", office_street_address: "1 Test St", office_suburb: "Altona North", contact_title: "Mr", contact_phone: "0412 345 678" } };
+      if (name === "abr_business_cache_get") return cached;
+      if (name === "abr_business_cache_put") return null;
+      if (name === "agency_onboarding_prefill_blanks") return args.p_values;
+      if (name === "agency_onboarding_facts_save") return null;
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    storage: { download: async () => original, upload: async () => true, remove: async () => undefined, signedUrl: async () => "https://signed.example/x" },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1]) as Promise<{ fields: Array<{ key: string; value: string }>; application: { prefill: Record<string, string>; filled: string[] } }>;
+
+  const opened = await openWith(fieldsOf(sentValues));
+  const at = (key: string) => opened.fields.find((f) => f.key === key)!.value;
+  const filled = rpcs.find(([name]) => name === "agency_onboarding_prefill_blanks")![1].p_values as Record<string, string>;
+  assert.deepEqual(Object.keys(filled).sort(), ["agent_trading_name", "agent_website", "agent_year_founded", "contact_title", "office_street_address", "office_suburb"], "only the blank keys are sent to be filled");
+  assert.deepEqual([at("agent_trading_name"), at("agent_year_founded"), opened.application.prefill.agent_acn], ["PURVA TECH PTY LTD", "2015", "603 584 676"], "ACN, trading name and year founded come back filled");
+  assert.deepEqual([at("agent_website"), at("office_street_address"), at("office_suburb"), at("contact_title")], ["https://purva.example", "1 Test St", "Altona North 3029", "Mr"], "website, address, suburb (with the postcode) and title from the business record");
+  assert.deepEqual([at("contact_email"), at("contact_phone"), at("agent_legal_entity"), at("office_province")], ["kept@example.test", "+61938938943", "PURVA TECH PTY LTD", "3029"], "values already there are never overwritten by the open");
+  assert.equal(fetches, 0, "the cached register answer is used: no new lookup");
+  assert.ok(!rpcs.some(([name]) => name === "abr_business_cache_put"), "a cache hit is not written again");
+  // Nothing blank: no fill. A cache miss: the register is asked once and the answer cached.
+  rpcs.length = 0;
+  await openWith(fieldsOf({ ...sentValues, ...filled, agent_trading_name: "Purva", agent_year_founded: "2015", contact_title: "Ms" }));
+  assert.ok(!rpcs.some(([name]) => name === "agency_onboarding_prefill_blanks"), "a form with nothing blank is left as it is");
+  rpcs.length = 0; cached = null;
+  const missed = await openWith(fieldsOf(sentValues));
+  assert.equal(fetches, 1, "a cache miss asks the register (the public page without the GUID)");
+  assert.equal((rpcs.find(([name]) => name === "abr_business_cache_put")![1].p_details as { entityName: string }).entityName, "PURVA TECH PTY LTD", "and caches the answer in abr_businesses");
+  assert.equal(missed.fields.find((f) => f.key === "agent_year_founded")!.value, "2015");
+  const migration = read("supabase/migrations/20261119153412_f04_prefill_short.sql");
+  assert.ok(["coalesce(btrim(f.value), '') = ''", "on conflict (abn) do update", "public.abr_businesses", "p := p - 'office_province'", "'office_suburb', nullif(coalesce("].every((s) => migration.includes(s)),
+    "the database fills blanks only, caches by ABN and moves the sign-up postcode to the Suburb box");
+
+  // office_province never holds a postcode: the register's prefill, the wizard's values and the shared rule.
+  const values = abrLib.abrApplicationValues({ details: purva, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } });
+  assert.ok(!("office_province" in values) && values.office_suburb === "3029" && values.office_state === "VIC");
+  assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "2166", office_suburb: "Cabramatta" }), { office_province: "", office_suburb: "Cabramatta 2166" });
+  assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "Punjab", office_suburb: "Ludhiana" }), { office_province: "Punjab", office_suburb: "Ludhiana" }, "an overseas province stays");
+  assert.deepEqual(onboarding.splitSuburb("Altona North 3025"), { suburb: "Altona North", postcode: "3025" });
+  const wizFields = fieldsOf(sentValues) as unknown as Parameters<typeof logic.initialF04>[0];
+  const wiz = logic.initialF04(wizFields, null, { agent_acn: "603 584 676" }, null);
+  assert.deepEqual([wiz.answers.office_province, wiz.answers.office_postcode, wiz.acn], ["", "3029", "603 584 676"], "the wizard moves the old Province postcode to its own box");
+  const signed = logic.f04Values(wizFields, { ...wiz, answers: { ...wiz.answers, office_suburb: "Altona North" } });
+  assert.deepEqual([signed[wizFields.find((f) => f.key === "office_suburb")!.id], signed[wizFields.find((f) => f.key === "office_province")!.id]], ["Altona North 3029", ""]);
+
+  // Referees (server rule, shared with the page): different emails and phones, neither is the applicant; phones with a country code.
+  const me = { contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", contact_phone: "+61412345678", declarant_name: "Ravi Kumar" };
+  const two = { ref1_contact_name: "Priya Nair", ref1_email: "priya@example.test", ref1_phone: "+61400111222", ref2_contact_name: "Sam Lee", ref2_email: "sam@example.test", ref2_phone: "+61400333444" };
+  assert.equal(abrLib.checkApplicationAnswers({ ...me, ...two }).error, null);
+  assert.match(String(abrLib.checkApplicationAnswers({ ...me, ...two, ref2_phone: "0400 111 222" }).error), /different phone numbers/);
+  assert.match(String(abrLib.checkApplicationAnswers({ ...me, ...two, ref1_email: "RAVI@example.test" }).error), /Reference 1 has your own email address/);
+  assert.match(String(abrLib.checkApplicationAnswers({ ...me, ...two, ref2_phone: "0412 345 678" }).error), /Reference 2 has your own phone number/);
+  assert.match(String(abrLib.checkApplicationAnswers({ ...me, ...two, ref2_contact_name: "ravi  KUMAR" }).error), /Reference 2 has your own name/);
+  assert.match(String(abrLib.checkApplicationAnswers({ ...me, ...two, ref1_phone: "12345" }).error), /reference 1's phone with its country code/);
+  // ... and the sign step refuses it in core.ts before anything is made.
+  const signFields = Object.entries({ ...me, ...two, ref2_email: "ravi@example.test" }).map(([key, value], i) => ({ id: `s${i}`, type: "text", key, label: key, value }));
+  await assert.rejects(signingCore.handleSigning({ body: { action: "sign", token: "e".repeat(64), name: "Ravi Kumar", agreed: true, values: {}, application: { acn: "", marn: "", declarations: {} } }, upload: null, ip: null, userAgent: null }, {
+    isServiceCaller: false, later: () => undefined, uuid: () => "x",
+    service: async (action: string) => { if (action === "rate") return true; if (action === "open") return { id: "s1", state: "viewed", recipient: { id: "r1", state: "viewed" }, fields: signFields, onboarding: { id: "o1", kind: "application" } }; throw new Error(`unexpected ${action}`); },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1]), /Reference 2 has your own email address/, "server side in core.ts");
+  // E.164.
+  assert.deepEqual(["0412 345 678", "+91 98765 43210", "03 9123 4567", "12345", ""].map((p) => abrLib.phoneE164(p)), ["+61412345678", "+919876543210", "+61391234567", null, null]);
+
+  // The short wizard: four steps; chips with Other; an upload asked for on Yes; referee problems before signing.
+  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References & sign"]);
+  assert.equal(logic.writeChips(["Accommodation", "Course counselling"], "Visa reviews", logic.SERVICES), "Course counselling, Accommodation, Visa reviews");
+  assert.deepEqual(logic.readChips("Course counselling, Accommodation, Visa reviews", logic.SERVICES), { picked: ["Course counselling", "Accommodation"], other: "Visa reviews" });
+  assert.deepEqual(logic.readChips("Canada, Other", logic.COUNTRIES), { picked: ["Canada"], other: "" }); assert.equal(logic.readChips("Canada", logic.COUNTRIES).other, null);
+  const qFields = [{ id: "q1", type: "checkbox", key: "org_chart_attached:YES", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }, { id: "q2", type: "text", key: "services_provided", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }] as unknown as Parameters<typeof logic.f04Problems>[1];
+  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(2, qFields, { answers, acn: "", marn: "", declarations: {}, step: 2 }, files);
+  assert.match(agencyStep({ org_chart_attached: "YES" }).attach_org_chart, /Upload the organisational chart, or answer No/);
+  assert.equal(agencyStep({ org_chart_attached: "YES" }, { org_chart: { name: "chart.pdf", size: 10 } }).attach_org_chart, undefined);
+  assert.match(agencyStep({ services_provided: "Accommodation, Other" }).services_provided, /Name the other services/);
+});
 
 /* ------------------------------------------------------------------ phone normalisation */
 

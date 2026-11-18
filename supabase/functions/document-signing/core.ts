@@ -11,8 +11,10 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
-import { abrFacts, checkApplicationAnswers, lookupAbrAny } from "../_shared/validation/abr.ts";
-import { collectAnswers, composeRegistrationNumber, F04_DECLARATIONS } from "../_shared/agent-onboarding.ts";
+import { abrApplicationValues, abrFacts, checkApplicationAnswers, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails } from "../_shared/validation/abr.ts";
+import type { AddressSearchResult } from "../_shared/validation/address.ts";
+import { answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, F04_ATTACHMENT_MAX, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
+  normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
@@ -51,6 +53,8 @@ export interface SigningPorts {
   mail: { provider: EmailProvider | null; config: HrMailConfig };
   /** ABN Lookup (ABR JSON service): the registered party's GUID (secret EF_ABR_GUID; empty = not set up). Tests inject fetch. */
   abr?: { guid: string; fetch?: typeof fetch };
+  /** Australian address suggestions (the address-search function's Geoscape lookup, same key, server side): the F04 wizard's address boxes. */
+  address?(query: string): Promise<AddressSearchResult>;
   /** True when the request carries the service-role key itself (the scheduled job). */
   isServiceCaller: boolean;
   uuid(): string;
@@ -65,10 +69,67 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_INVALID = "This signing link is invalid or expired.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
-const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save"];
+const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
 /** The F04 wizard's draft ("Save and continue later"): at most this many characters of JSON. */
 const DRAFT_MAX = 60000;
 const isApplication = (record: { onboarding?: unknown }) => (record.onboarding as { kind?: string } | null)?.kind === "application";
+
+/** The register's answers cached by ABN in public.abr_businesses (service RPCs); null without the service port. */
+export function abrCache(ports: Pick<SigningPorts, "serviceRpc">): AbrCache | null {
+  if (!ports.serviceRpc) return null;
+  return {
+    get: async (abn) => (await ports.serviceRpc!("abr_business_cache_get", { p_abn: abn })) ?? null,
+    put: async (details) => { await ports.serviceRpc!("abr_business_cache_put", { p_details: details }); },
+  };
+}
+
+const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+/**
+ * The F04 prefill (2026-11-19), one rule for the send and the open: the register's values (staff-confirmed ones win) for the company, the
+ * business record (sign-up, earlier answers on the profile) for the contact, website and office; the postcode in the Suburb box, phones as
+ * E.164. Keys without a value are left out.
+ */
+export function f04Prefill(input: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null; record: Record<string, unknown> }): Record<string, string> {
+  const record = input.record ?? {};
+  const abr = abrApplicationValues({ details: input.details, confirmed: input.confirmed, contact: {
+    givenName: textOf(input.confirmed?.givenName) || textOf(record.contact_given_name), familyName: textOf(input.confirmed?.familyName) || textOf(record.contact_family_name),
+    email: textOf(record.contact_email), phone: textOf(record.contact_phone) } });
+  const out: Record<string, string> = { ...abr };
+  for (const key of F04_RECORD_KEYS) { const v = textOf(record[key]); if (v) out[key] = v; }
+  // The register's postcode joins a suburb the record holds without one.
+  if (abr.office_suburb && out.office_suburb) { const kept = splitSuburb(out.office_suburb); out.office_suburb = composeSuburb(kept.suburb, kept.postcode || abr.office_suburb); }
+  const phone = phoneE164(out.contact_phone); if (phone) out.contact_phone = phone;
+  const normalized = normalizeOfficeAddress(out);
+  return Object.fromEntries(Object.entries(normalized).filter(([, v]) => String(v ?? "").trim() !== ""));
+}
+
+type LinkField = { id: string; type: string; key?: string | null; value?: string | null };
+/** The F04 fields still blank among the keys filled on open (a Yes / No pair with no box ticked counts as blank). */
+export function f04BlankKeys(fields: readonly LinkField[]): string[] {
+  return F04_OPEN_PREFILL_KEYS.filter((key) => {
+    const mine = fields.filter((f) => f.key && answerKey(f.key) === key);
+    if (!mine.length) return false;
+    if (mine.some((f) => groupOf(f.key))) return !mine.some((f) => f.value === "true");
+    return mine.every((f) => !String(f.value ?? "").trim());
+  });
+}
+/** The fields with the filled values written into the blank ones only (what the page shows after the fill). */
+export function withFilled<T extends LinkField>(fields: readonly T[], filled: Record<string, string>): T[] {
+  return fields.map((f) => {
+    if (!f.key) return f;
+    const group = groupOf(f.key);
+    if (group) { const answer = String(filled[group.key] ?? "").toUpperCase(); return answer && answer === group.answer && f.value !== "true" ? { ...f, value: "true" } : f; }
+    const value = filled[answerKey(f.key)];
+    return value && f.type === "text" && !String(f.value ?? "").trim() ? { ...f, value } : f;
+  });
+}
+/** What an uploaded attachment is, from its first bytes: a PDF, a PNG or a JPEG; anything else is refused. */
+export function attachmentType(bytes: Uint8Array): string | null {
+  if (bytes.length >= 5 && String.fromCharCode(...bytes.slice(0, 5)) === "%PDF-") return "application/pdf";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  return null;
+}
 
 /** What the F04 wizard sends besides the fields: the ACN, the MARN and the declaration tick boxes. */
 export interface ApplicationSubmission { acn: string; marn: string; declarations: Record<string, boolean> }
@@ -181,6 +242,37 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         const saved = await ports.serviceRpc("agency_onboarding_draft_save", { p_request: record.id, p_recipient: record.recipient.id, p_draft: draft });
         return { saved: true, savedAt: saved };
       }
+      const waitingApplication = () => {
+        if (!isApplication(record) || !ports.serviceRpc) throw new SigningError("Only the application form can do this.");
+        if (record.state === "signed" || record.recipient?.state === "signed") throw new SigningError("This form is already signed.");
+      };
+      if (action === "address_search") {
+        // The wizard's address boxes: the address-search function's lookup (same Geoscape key, server side) for a link holder, who has no login.
+        waitingApplication();
+        if (await limited(`addr:${hash.slice(0, 40)}`, 40, 60)) throw new SigningError("Too many address searches. Please wait a moment.", 429);
+        const q = String(body.q ?? "").trim().slice(0, 200);
+        if (q.length < 4) return { ok: true, suggestions: [] };
+        const found = ports.address ? await ports.address(q).catch(() => ({ kind: "unavailable" as const })) : { kind: "unavailable" as const };
+        return found.kind === "ok" ? { ok: true, suggestions: found.suggestions } : { ok: false, unavailable: true };
+      }
+      if (action === "attachment_upload" || action === "attachment_remove") {
+        // The organisation chart / business profile, uploaded on the wizard's Agency step: kept with the application, opened by staff.
+        waitingApplication();
+        const kind = String(body.kind ?? "");
+        if (!(kind in F04_ATTACHMENTS)) throw new SigningError("Say which file this is.");
+        if (action === "attachment_remove") {
+          await ports.serviceRpc!("agency_onboarding_attachment_remove", { p_request: record.id, p_recipient: record.recipient.id, p_kind: kind });
+          return { removed: true, kind };
+        }
+        if (await limited(`attach:${hash.slice(0, 40)}`, 20, 600)) throw new SigningError(TOO_MANY, 429);
+        if (!call.upload?.bytes.length) throw new SigningError("Choose a file.");
+        if (call.upload.bytes.length > F04_ATTACHMENT_MAX) throw new SigningError("The file must be smaller than 5 MB.");
+        const contentType = attachmentType(call.upload.bytes);
+        if (!contentType) throw new SigningError("Upload a PDF, PNG or JPEG file.");
+        const name = call.upload.name.replace(/[\u0000-\u001f\u007f/\\]/g, " ").trim().slice(0, 160) || `${kind}.${contentType.split("/")[1]}`; // eslint-disable-line no-control-regex
+        return await ports.serviceRpc!("agency_onboarding_attachment_save", { p_request: record.id, p_recipient: record.recipient.id, p_kind: kind,
+          p_data: { name, contentType, base64: toBase64(call.upload.bytes) } });
+      }
       if (action === "code_send") {
         const { provider, config } = ports.mail;
         if (!provider || !config.from) throw new SigningError("The code cannot be emailed right now. Please try again later or contact admissions.", 503);
@@ -217,6 +309,17 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         let submission: ApplicationSubmission | null = null;
         if (isApplication(record)) {
           const fields = (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>;
+          const valueOf = (key: string) => { const f = fields.find((x) => x.key === key); return f ? { f, v: String(values[f.id] ?? f.value ?? "").trim() } : null; };
+          // 2026-11-19: a postcode is never kept in the Province box (it goes in the Suburb box); phones are kept as E.164.
+          const province = valueOf("office_province"), suburb = valueOf("office_suburb");
+          if (province && /^\d{4}$/.test(province.v)) {
+            values[province.f.id] = "";
+            if (suburb) values[suburb.f.id] = composeSuburb(suburb.v, province.v);
+          }
+          for (const key of ["contact_phone", "ref1_phone", "ref2_phone"]) {
+            const phone = valueOf(key); const e164 = phone ? phoneE164(phone.v) : null;
+            if (phone && e164) values[phone.f.id] = e164;
+          }
           const byKey: Record<string, string> = {};
           for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
           const checked = checkApplicationAnswers(byKey);
@@ -285,25 +388,42 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       }
       const done = record.state === "signed";
       // F04 wizard: the saved draft and the register's facts for the Company summary (looked up once and kept when the send did not keep them).
-      let application: { draft: unknown; facts: unknown; savedAt: string | null } | null = null;
+      // Prefill that cannot come up empty (2026-11-19): the blank fields among F04_OPEN_PREFILL_KEYS are filled from the register (cached by
+      // ABN) and the business record, server side, and returned filled; a value already there is never overwritten. The ACN has no box of
+      // its own: it is returned as application.prefill.agent_acn.
+      let application: { draft: unknown; facts: unknown; savedAt: string | null; prefill: Record<string, string>; filled: string[]; attachments: Record<string, unknown> } | null = null;
+      let fields = (record.fields ?? []) as LinkField[];
       if (isApplication(record) && !done && ports.serviceRpc) {
         try {
-          const wizard = await ports.serviceRpc("agency_onboarding_wizard_get", { p_request: record.id }) as { draft: unknown; saved_at: string | null; facts: unknown; abn: string | null } | null;
+          const wizard = await ports.serviceRpc("agency_onboarding_wizard_get", { p_request: record.id }) as { draft: unknown; saved_at: string | null; facts: unknown; abn: string | null;
+            record?: Record<string, unknown> | null; abr?: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null } | null; attachments?: Record<string, unknown> | null } | null;
           let facts = wizard?.facts ?? null;
-          if (!facts && wizard?.abn) {
-            const found = await lookupAbrAny(wizard.abn, ports.abr?.guid, ports.abr?.fetch ?? fetch);
+          const blanks = f04BlankKeys(fields);
+          let details: AbrDetails | null = wizard?.abr?.details ?? null;
+          if (!details && wizard?.abn && (blanks.length || !facts || !(facts as { acn?: string }).acn)) {
+            const found = await lookupAbrCached(wizard.abn, ports.abr?.guid, abrCache(ports), ports.abr?.fetch ?? fetch);
             if (found) {
-              facts = abrFacts(found.details, found.fetchedAt);
-              await ports.serviceRpc("agency_onboarding_facts_save", { p_request: record.id, p_facts: facts }).catch(() => undefined);
+              details = found.details;
+              if (!facts) {
+                facts = abrFacts(found.details, found.fetchedAt);
+                await ports.serviceRpc("agency_onboarding_facts_save", { p_request: record.id, p_facts: facts }).catch(() => undefined);
+              }
             }
           }
-          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null };
-        } catch { application = { draft: null, facts: null, savedAt: null }; }
+          const computed = f04Prefill({ details, confirmed: wizard?.abr?.confirmed ?? null, record: wizard?.record ?? {} });
+          const fill = Object.fromEntries(blanks.filter((k) => computed[k]).map((k) => [k, computed[k]]));
+          if (Object.keys(fill).length) {
+            await ports.serviceRpc("agency_onboarding_prefill_blanks", { p_request: record.id, p_values: fill }).catch(() => undefined);
+            fields = withFilled(fields, fill);
+          }
+          const acn = computed.agent_acn ?? ((facts as { acn?: string } | null)?.acn ?? "");
+          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill: acn ? { agent_acn: acn } : {}, filled: Object.keys(fill), attachments: wizard?.attachments ?? {} };
+        } catch { application = { draft: null, facts: null, savedAt: null, prefill: {}, filled: [], attachments: {} }; }
       }
       const path = done ? record.signed_path : record.current_path ?? record.original_path;
       const expected = done ? record.signed_hash : record.current_hash ?? record.original_hash;
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
-        recipient: record.recipient, fields: record.fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
+        recipient: record.recipient, fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
         requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
         certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };

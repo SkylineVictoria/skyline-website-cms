@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(949);
+select plan(957);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1281,6 +1281,9 @@ select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')
 select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'office_state','VIC','the state comes from the sign-up address');
 select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'declarant_name','Ravi Kumar','the declarant is the contact');
 select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'agent_website','https://positive.example','what the agent entered last time prefills');
+-- F04 prefill fix (20261119153412): the sign-up postcode is printed in the Suburb box, never in Province.
+select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'office_suburb','3000','the sign-up postcode goes in the Suburb box');
+select ok(not (public.agent_onboarding_values('53000000-0000-0000-0000-000000000001') ? 'office_province'),'office_province never holds the sign-up postcode');
 select is((hr.sign_subject('agent','53000000-0000-0000-0000-000000000001')->'values')->>'contact_email','ravi.agent@example.test','hr.sign_subject(agent) adds the form variables');
 select is((hr.sign_subject('agent','53000000-0000-0000-0000-000000000001')->'values')->>'agent.name','Ravi Kumar','the agent.* variables stay');
 select is(jsonb_array_length(hr.sign_template_fields('[{"type":"checkbox","role":"sender","page":1,"x":0.1,"y":0.1,"w":0.02,"h":0.01,"key":"agent_gst_registered:YES","value":"{{agent_gst_registered}}"},{"type":"signature","role":"sender","page":1,"x":0.1,"y":0.2,"w":0.2,"h":0.03,"key":"admin_signature"}]'::jsonb,'[{"key":"agent","label":"Agent","order":1,"required":true}]'::jsonb)),2,'the sender may print a tick box and a signature');
@@ -1821,6 +1824,16 @@ select is((select count(*)::int from public.agency_onboarding_events where onboa
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.intake_schedule_preview(gen_random_uuid(), current_date)$$,'42501',null,'a portal user cannot preview an intake schedule');
+reset role;
+-- F04 prefill fix (20261119153412): the register cached by ABN in abr_businesses; the open fills blanks only; service role only.
+select lives_ok($$select public.abr_business_cache_put('{"abn":"86603584676","acn":"603584676","abnStatus":"Active","statusFrom":"2015-01-07","entityName":"PURVA TECH PTY LTD","businessNames":[],"gstRegistered":true,"state":"VIC","postcode":"3029"}')$$,'ABR cache: an answer is kept by ABN');
+select is(public.abr_business_cache_get('86 603 584 676')->>'statusFrom','2015-01-07','ABR cache: read back by ABN (spaces ignored)');
+select is(public.abr_business_cache_get('11111111111'),null,'ABR cache: nothing for an ABN never looked up');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
+select throws_ok($$select public.agency_onboarding_prefill_blanks(gen_random_uuid(),'{}')$$,'42501',null,'a signed-in user cannot fill an application form');
+select throws_ok($$select public.abr_business_cache_get('86603584676')$$,'42501',null,'a signed-in user cannot read the ABR cache');
+select throws_ok($$select public.agency_onboarding_attachments_list(gen_random_uuid())$$,'42501',null,'only administrators list the uploaded files');
 reset role;
 select * from finish();
 rollback;

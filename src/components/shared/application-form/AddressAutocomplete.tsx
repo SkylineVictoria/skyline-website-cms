@@ -56,8 +56,9 @@ type Status = "idle" | "searching" | "empty" | "unavailable";
  * in a layer of their own (above the sticky footer and any card), under the box or above it when there is no room below; the
  * previous results stay, dimmed, while new ones load. ↑ / ↓ move, Enter picks, Escape closes.
  */
-export default function AddressAutocomplete({ disabled, onPick, onUnavailable, onManual, search = lookup }: {
+export default function AddressAutocomplete({ disabled, onPick, onUnavailable, onManual, search = lookup, inputId = "address-search", label = "Search address" }: {
   disabled?: boolean;
+  /** Several boxes on one page (the F04 wizard: the office and each referee) need their own ids. */ inputId?: string; label?: string;
   onPick: (pick: AddressPick) => void;
   onUnavailable?: () => void;
   /** When given, "No matches" offers "Enter address manually". */
@@ -157,14 +158,14 @@ export default function AddressAutocomplete({ disabled, onPick, onUnavailable, o
 
   return (
     <div ref={boxRef} className="relative md:col-span-2">
-      <label htmlFor="address-search" className="mb-1 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-foreground-500">
-        Search address
+      <label htmlFor={inputId} className="mb-1 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-foreground-500">
+        {label}
       </label>
       <div className="relative">
         <i className="ri-search-line pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base leading-none text-foreground-400" aria-hidden="true" />
         <input
           ref={inputRef}
-          id="address-search"
+          id={inputId}
           // No name: the search text is never saved with the application.
           type="text"
           autoComplete="off"
@@ -173,9 +174,9 @@ export default function AddressAutocomplete({ disabled, onPick, onUnavailable, o
           placeholder="Start typing the street address, e.g. 12 Smith St Melbourne"
           role="combobox"
           aria-expanded={showList}
-          aria-controls="address-search-results"
+          aria-controls={`${inputId}-results`}
           aria-autocomplete="list"
-          aria-activedescendant={showList && active >= 0 ? `address-option-${active}` : undefined}
+          aria-activedescendant={showList && active >= 0 ? `${inputId}-option-${active}` : undefined}
           onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
           onKeyDown={(event) => {
@@ -195,7 +196,7 @@ export default function AddressAutocomplete({ disabled, onPick, onUnavailable, o
           style={place}
           className="fade-in z-[95] flex flex-col overflow-hidden rounded-lg border border-background-200 bg-background-50 shadow-lg"
         >
-          <ul id="address-search-results" role="listbox" aria-label="Address suggestions" aria-busy={status === "searching"}
+          <ul id={`${inputId}-results`} role="listbox" aria-label="Address suggestions" aria-busy={status === "searching"}
             className={`min-h-0 flex-1 overflow-y-auto py-1 transition-opacity duration-150 ${refreshing ? "opacity-60" : ""}`}>
             {firstLoad
               ? [0, 1, 2].map((row) => (
@@ -205,7 +206,7 @@ export default function AddressAutocomplete({ disabled, onPick, onUnavailable, o
                 </li>
               ))
               : results.map((pick, index) => (
-                <li key={format(pick)} id={`address-option-${index}`} role="option" aria-selected={index === active} data-index={index}>
+                <li key={format(pick)} id={`${inputId}-option-${index}`} role="option" aria-selected={index === active} data-index={index}>
                   <button
                     type="button"
                     tabIndex={-1}

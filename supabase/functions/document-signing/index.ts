@@ -5,6 +5,8 @@ import { loadLetterhead } from "../_shared/letterhead.ts";
 import { readHrMailConfig, selectHrMailProvider } from "../_shared/hr-mail.ts";
 import { HR_MAIL_ENV } from "../_shared/hr-mail-drain.ts";
 import { handleSigning, readSigningRequest, SigningError, type SigningPorts } from "./core.ts";
+import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
+import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
 
 const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Type": "application/json" };
@@ -13,6 +15,13 @@ const env: Record<string, string> = { SUPABASE_URL: Deno.env.get("SUPABASE_URL")
 for (const key of HR_MAIL_ENV) env[key] = Deno.env.get(key) ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const mail = { provider: selectHrMailProvider(env), config: readHrMailConfig(env) };
+// The F04 wizard address boxes: the SAME Geoscape key and helper as the address-search function (the key stays on the server).
+const ADDRESS_KEY = Deno.env.get("EF_ADDRESS_SEARCH_GEOSCAPE_KEY") ?? "";
+// LAB ONLY: EF_ADDRESS_SEARCH_API_URL sends the lookup to a mock, and only when SUPABASE_URL is local; otherwise plain fetch.
+const ADDRESS_MOCK = (Deno.env.get("EF_ADDRESS_SEARCH_API_URL") ?? "").trim().replace(/\/+$/, "");
+const addressFetch: typeof fetch = ADDRESS_MOCK && isLocalSupabaseUrl(env.SUPABASE_URL)
+  ? ((input: string | URL | Request, init?: RequestInit) => fetch(String(input) === GEOSCAPE_URL ? `${ADDRESS_MOCK}/v1/verify/autocomplete/AU` : input, init)) as typeof fetch
+  : fetch;
 const sameText = (a: string, b: string) => { if (!a || a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; };
 
 Deno.serve(async (req) => {
@@ -42,6 +51,7 @@ Deno.serve(async (req) => {
     letterhead: () => loadLetterhead(service),
     mail,
     abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },
+    address: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
     isServiceCaller: sameText(authorization.replace(/^Bearer\s+/i, ""), serviceKey),
     uuid: () => crypto.randomUUID(),
     later: (work) => {

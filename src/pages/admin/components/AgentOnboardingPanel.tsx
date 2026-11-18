@@ -4,7 +4,7 @@ import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
-import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
+import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
@@ -168,6 +168,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend application" />
       {row.applicationSignedAt ? <p className="text-xs text-foreground-600">Signed {new Date(row.applicationSignedAt).toLocaleDateString()} by {row.signerName ?? row.agent.name}.</p> : null}
       <div className="flex flex-wrap gap-1.5">{row.files.form ? dl("form", ONBOARDING_FILE_LABEL.form) : null}{row.files.application_certificate ? dl("application_certificate", ONBOARDING_FILE_LABEL.application_certificate) : null}</div>
+      {compact ? null : <ApplicationAttachments onboardingId={row.id} />}
     </div>
     <div className="space-y-2 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -410,4 +411,16 @@ function ChangeRefereeDialog({ referee, onClose, onDone }: { referee: Onboarding
       <Field label="Referee email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} data-testid="referee-email" /></Field>
     </div>
   </Modal>;
+}
+
+/** The organisation chart / business profile the contact uploaded with the F04 wizard (2026-11-19); opened in a new tab. */
+function ApplicationAttachments({ onboardingId }: { onboardingId: string }) {
+  const [files, setFiles] = useState<ApplicationAttachment[] | null>(null);
+  const [problem, setProblem] = useState("");
+  useEffect(() => { let live = true; listApplicationAttachments(onboardingId).then((list) => { if (live) setFiles(list); }).catch(() => { if (live) setFiles([]); }); return () => { live = false; }; }, [onboardingId]);
+  if (!files?.length) return null;
+  return <div className="flex flex-wrap items-center gap-1.5" data-testid="onboarding-attachments">
+    {files.map((file) => <Button key={file.kind} size="sm" variant="ghost" icon="ri-attachment-2" onClick={() => { setProblem(""); openApplicationAttachment(onboardingId, file.kind).catch((e: Error) => setProblem(e.message)); }}>{APPLICATION_ATTACHMENT_LABEL[file.kind] ?? file.kind}: {file.name}</Button>)}
+    {problem ? <span className="text-xs text-red-700">{problem}</span> : null}
+  </div>;
 }

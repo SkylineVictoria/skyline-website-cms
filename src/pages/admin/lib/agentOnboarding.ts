@@ -58,7 +58,7 @@ export const EVENT_LABEL: Record<string, string> = {
   references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
   agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)", countersigner_changed: "SLIT signatory changed",
   application_prefilled: "Application form prefilled (ABN Lookup and Add business)", prefill_reviewed: "Prefilled values checked against the signed form",
-  application_declarations: "Declarations ticked, ACN / MARN recorded",
+  application_declarations: "Declarations ticked, ACN / MARN recorded", application_prefilled_on_open: "Blank application fields filled when the form was opened (ABN Lookup and business record)",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
@@ -74,6 +74,20 @@ export const prepareOnboarding = (agencyId: string, agentId?: string | null) => 
 export const listOnboarding = (agencyId: string) => call<OnboardingRow[]>("agency_onboarding_list", { p_agency: agencyId }, "We could not load the onboarding documents.");
 export const onboardingFile = (id: string, kind: OnboardingFileKind) => call<{ name: string; base64: string }>("agency_onboarding_file", { p_id: id, p_kind: kind }, "The document could not be opened.");
 export const saveMySignature = (png: string | null) => call<{ saved: boolean }>("cms_user_signature_save", { p_png: png }, "The signature could not be saved.");
+
+/** The organisation chart / business profile uploaded with the F04 wizard (2026-11-19), administrators only. */
+export interface ApplicationAttachment { kind: string; name: string; contentType: string; size: number; at: string }
+export const APPLICATION_ATTACHMENT_LABEL: Record<string, string> = { org_chart: "Organisational chart", business_profile: "Business profile" };
+export const listApplicationAttachments = (onboardingId: string) => call<ApplicationAttachment[]>("agency_onboarding_attachments_list", { p_onboarding: onboardingId }, "The uploaded files could not be listed.");
+export async function openApplicationAttachment(onboardingId: string, kind: string): Promise<void> {
+  const file = await call<{ name: string; contentType: string; base64: string }>("agency_onboarding_attachment_file", { p_onboarding: onboardingId, p_kind: kind }, "The file could not be opened.");
+  const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: file.contentType }));
+  const link = document.createElement("a");
+  link.href = url; link.download = file.name; link.rel = "noopener";
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 
 /** Opens a signed PDF kept in the database in a new tab (a blob of this page; nothing is stored in the browser). */
 export async function openOnboardingFile(id: string, kind: OnboardingFileKind): Promise<void> {

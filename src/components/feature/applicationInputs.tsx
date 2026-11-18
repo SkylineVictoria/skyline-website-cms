@@ -91,7 +91,8 @@ export function UsiInput({ id, name, value, locked, required, placeholder }: { i
  * Phone: country code dropdown plus a number input. The form reads the normalised E.164 value from a visually hidden
  * input carrying the field's name; the visible controls have no name. Saved values are shown, never rewritten, until edited.
  */
-export function PhoneInput({ id, name, value, locked, required, placeholder }: { id: string; name: string; value?: string; locked?: boolean; required?: boolean; placeholder?: string }) {
+export function PhoneInput({ id, name, value, locked, required, placeholder, onValueChange, invalid }: { id: string; name: string; value?: string; locked?: boolean; required?: boolean; placeholder?: string;
+  /** Controlled forms (the F04 wizard): the E.164 value after every edit ("" when blank). */ onValueChange?: (e164: string) => void; /** An error the form shows itself. */ invalid?: boolean }) {
   const storedRef = useRef<HTMLInputElement>(null);
   const ownChange = useRef(false);
   const initial = useMemo(() => parseStoredPhone(value ?? ""), [value]);
@@ -125,6 +126,7 @@ export function PhoneInput({ id, name, value, locked, required, placeholder }: {
     if (normalized.dial === DEFAULT_DIAL) setText(normalized.national ? formatNational(normalized.dial, normalized.national) : typed.replace(/\D/g, "").startsWith("0") ? "0" : "");
     else setText(normalized.national === typed.replace(/\D/g, "") ? typed : normalized.national);
     setMessage(validatePhone(normalized.dial, normalized.national));
+    onValueChange?.(validatePhone(normalized.dial, normalized.national) ? "" : normalized.e164);
     const stored = storedRef.current;
     if (!stored || stored.value === normalized.e164) return;
     // Native setter + input event, so the form's autosave and React's change tracking both see the edit.
@@ -158,7 +160,7 @@ export function PhoneInput({ id, name, value, locked, required, placeholder }: {
           value={text}
           readOnly={locked}
           placeholder={placeholder}
-          aria-invalid={shown ? true : undefined}
+          aria-invalid={shown || invalid ? true : undefined}
           aria-describedby={shown ? `${id}-error` : undefined}
           onChange={(event) => commit(dial, event.target.value)}
           onBlur={() => {

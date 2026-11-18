@@ -1,9 +1,12 @@
 // New intake: one field, the start date, filled in from the calendar (the next term start this course has no intake for). The
 // schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & add batch".
+// A course with a master timetable (LMS > Courses > Master timetable) has no start date to choose: every intake of the course
+// follows the master's dates, so the intake is one more group on that calendar.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Select } from "@/pages/admin/components/ui";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
+import { supabase } from "@/pages/admin/lib/supabase";
 import {
   addDays, listBreaks, mondayOf, rto, setIntakeLoad, LOAD_HOURS, type StudyLoad, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
 } from "@/pages/admin/lib/rto";
@@ -40,6 +43,8 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState<"" | "create" | "batch">("");
   const [error, setError] = useState("");
+  // The course's saved master timetable (first and last day), when it has one.
+  const [master, setMaster] = useState<{ startDate: string; endDate: string | null } | null>(null);
 
   useEffect(() => { if (open) { setChosen(courseId ?? ""); setTouched(false); setError(""); if (requireUnitSchedule) setStart(""); } }, [open, courseId, requireUnitSchedule]);
   useEffect(() => { if (open) listBreaks(chosen || null).then(setBreaks).catch(() => undefined); }, [open, chosen]);
@@ -51,14 +56,26 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
     return () => { live = false; };
   }, [open, chosen]);
 
+  useEffect(() => {
+    setMaster(null);
+    if (!open || !chosen) return;
+    let live = true;
+    supabase.rpc("rto_master_timetable", { p_action: "get", p_data: { courseId: chosen } }).then(({ data }) => {
+      const found = data as { saved?: boolean; startDate?: string | null; endDate?: string | null } | null;
+      if (live && found?.saved && found.startDate) { setMaster({ startDate: found.startDate, endDate: found.endDate ?? null }); setStart(found.startDate); }
+    });
+    return () => { live = false; };
+  }, [open, chosen]);
+
   const taken = useMemo(() => new Set((course?.intakes ?? []).map((i) => i.startDate)), [course]);
   const suggestion = useMemo(() => (course ? suggestStart(breaks, taken) : null), [course, breaks, taken]);
-  useEffect(() => { if (suggestion && !touched && !requireUnitSchedule) setStart(suggestion.date); }, [suggestion, touched, requireUnitSchedule]);
+  useEffect(() => { if (suggestion && !touched && !requireUnitSchedule && !master) setStart(suggestion.date); }, [suggestion, touched, requireUnitSchedule, master]);
 
   const units = (course?.units ?? []).filter((u) => u.isActive);
   const weeks = units.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
-  const inBreak = breaks.find((b) => start >= b.startDate && start <= b.endDate);
-  const clash = start && taken.has(start);
+  // With a master the dates are the master's: several intakes share them, and term breaks are already in the master.
+  const inBreak = master ? undefined : breaks.find((b) => start >= b.startDate && start <= b.endDate);
+  const clash = !master && start && taken.has(start);
   const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak
     || (requireUnitSchedule && (course?.course.id !== chosen || !units.length));
 
@@ -100,7 +117,9 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           ))}
         </div>
       </Field>
-      <Field label={requireUnitSchedule ? "Intake start date" : "Start date"} required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
+      {master ? <p className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900" data-testid="new-intake-master">
+        This course has a master timetable. The intake follows it: {shortDate(master.startDate)}{master.endDate ? ` to ${shortDate(master.endDate)}` : ""}. To change the dates, change the master timetable on the course.
+      </p> : <Field label={requireUnitSchedule ? "Intake start date" : "Start date"} required hint={suggestion && start === suggestion.date ? `Filled in with ${suggestion.why}.` : undefined}>
         <div className="space-y-2">
           <p className="text-sm font-semibold text-foreground-900">{start ? new Date(start + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "Pick a day below"}</p>
           {requireUnitSchedule && suggestion && !start && <button type="button" onClick={() => {
@@ -108,14 +127,15 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           }} className="text-sm font-semibold text-primary-700 underline">Use {shortDate(suggestion.date)}</button>}
           <BreakDatePicker value={start} onChange={(d) => { setStart(d); setTouched(true); }} breaks={breaks} taken={taken} takenLabel="Another intake starts" today={todayIso()} />
         </div>
-      </Field>
+      </Field>}
       {!busy && !clash && !inBreak && (!load || !start) ? <p className="text-sm text-foreground-600">To create it, still choose: {[!load && "CoE or VoE", !start && "a start date"].filter(Boolean).join(" and ")}.</p> : null}
       {clash ? <p role="alert" className="text-sm text-primary-800">This course already has an intake starting on {shortDate(start)}.</p> : null}
       {inBreak ? <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(start)} is in the {inBreak.label.toLowerCase()} ({shortDate(inBreak.startDate)} – {shortDate(inBreak.endDate)}). Pick a day outside the break.</p> : null}
       {course ? (
         <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-700">
           {units.length
-            ? <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It is active as soon as it is created.</>
+            ? master ? <>The intake gets the master timetable’s unit dates for the course’s {units.length} units. It is active as soon as it is created.</>
+              : <>The timeline is laid out from the course’s {units.length} units (about {weeks} weeks of classes), skipping public holidays and term breaks. It is active as soon as it is created.</>
             : <>{requireUnitSchedule ? "Add active units to this course before creating its intake calendar." : "This course has no units yet. Add the units in the course’s Units & Timetable step."}</>}
         </p>
       ) : chosen ? <p className="text-sm text-foreground-500">Loading the course…</p> : null}

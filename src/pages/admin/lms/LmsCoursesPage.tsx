@@ -216,7 +216,7 @@ export default function LmsCoursesPage() {
         <p className="text-sm text-foreground-500">Qualifications, their CRICOS registration and units.</p>
       </div>
       {canEdit ? <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setBulkSync(true)} title="Create every qualification on SLIT's Training.gov.au scope of registration that is not in the CMS yet"
+        <button type="button" onClick={() => setBulkSync(true)} title="Import one qualification from SLIT's Training.gov.au scope of registration and run the new course wizard on it"
           className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
         <button type="button" onClick={() => setAddingCourse("tga")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
       </div> : null}

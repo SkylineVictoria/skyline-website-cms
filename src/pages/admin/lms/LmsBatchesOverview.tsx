@@ -7,6 +7,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { ListMessage, SearchBox } from "@/pages/admin/components/ListControls";
 import { SkeletonCards } from "@/pages/admin/components/rto/overlay";
 import HoursNote from "@/pages/admin/components/rto/HoursNote";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { monthYear, rto, rtoHoursCheck, shortDate, sortIntakes, todayIso, type HoursCheck, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** Batches in three columns: Course (the first is selected) › its Intakes › the selected intake's Batches. RTO Managers add an intake
@@ -22,6 +23,8 @@ export default function LmsBatchesOverview() {
   const [intakeId, setIntakeId] = useState("");
   const [newIntake, setNewIntake] = useState(false);
   const [addFor, setAddFor] = useState<RtoIntake | null>(null);
+  // Courses with a master timetable: each intake is one class group on the master's dates (no separate batches).
+  const [masters, setMasters] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
   const { push } = useToast();
 
@@ -29,6 +32,8 @@ export default function LmsBatchesOverview() {
     try {
       const [cs, list, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<RtoIntake[]>("intake_list"), rto<{ rtoManager: boolean }>("me")]);
       setCourses(cs); setIntakes(list); setCanEdit(Boolean(me.rtoManager)); setError("");
+      const { data } = await supabase.from("course_master_timetables").select("course_id");
+      setMasters(new Set(((data ?? []) as { course_id: string }[]).map((row) => row.course_id)));
     } catch (e) { setError(e instanceof Error ? e.message : "Batches did not load."); setCourses([]); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -48,6 +53,7 @@ export default function LmsBatchesOverview() {
   // Column 2: the selected intake, else the first (running, then upcoming, then finished).
   const intake = courseIntakes.find((i) => i.id === intakeId) ?? courseIntakes[0] ?? null;
   const batches = (intake?.batchList ?? []).filter((b) => b.isActive);
+  const onMaster = !!course && masters.has(course.id);
   const intakeOpen = !!intake && intake.status !== "closed" && (!intake.endDate || intake.endDate >= todayIso());
   const count = (courseKey: string) => intakes.filter((i) => i.courseId === courseKey).length;
 
@@ -57,7 +63,7 @@ export default function LmsBatchesOverview() {
 
   return (
     <div>
-      <PageHeader title="Batches" description="Choose a course, then an intake, to see its batches. Students are placed in a batch with a free seat; a new batch opens by itself when one is full." />
+      <PageHeader title="Batches" description="Choose a course, then an intake, to see its batches. Students are placed in a batch with a free seat; a new batch opens by itself when one is full. A course with a master timetable has no separate batches: each intake is one class group on the master's dates." />
       <div className="mb-4"><SearchBox label="Search courses" value={search} onSearch={setSearch} placeholder="Search course code or name" /></div>
       {error ? <Card><ListMessage icon="ri-error-warning-line" title="Batches did not load" text={error} /></Card> : null}
       {courses === null ? <SkeletonCards /> : (
@@ -87,11 +93,13 @@ export default function LmsBatchesOverview() {
                 return (
                   <button key={i.id} type="button" aria-pressed={i.id === intake?.id} className={item(i.id === intake?.id)} onClick={() => setIntakeId(i.id)}>
                     <span className="flex items-baseline justify-between gap-2">
-                      <b className="text-foreground-950">{shortDate(i.startDate)} – {shortDate(i.endDate)}</b>
+                      <b className="text-foreground-950">{onMaster ? i.customName || i.batchList?.[0]?.name || i.name : <>{shortDate(i.startDate)} – {shortDate(i.endDate)}</>}</b>
                       <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${i.status === "closed" ? "bg-background-200 text-foreground-600" : running ? "bg-green-100 text-green-800" : "bg-primary-100 text-primary-800"}`}>
                         {i.status === "closed" ? "Closed" : running ? "Running" : i.endDate && i.endDate < todayIso() ? "Finished" : "Upcoming"}</span>
                     </span>
-                    <span className="block text-xs text-foreground-600">{i.batches} batch{i.batches === 1 ? "" : "es"} · {i.enrolled} student{i.enrolled === 1 ? "" : "s"}</span>
+                    <span className="block text-xs text-foreground-600">{onMaster
+                      ? `${i.batchList?.[0]?.days.length ? i.batchList[0].days.join(", ") : "No class times yet"} · ${i.enrolled}${i.batchList?.[0]?.capacity ? ` of ${i.batchList[0].capacity} seats` : ` student${i.enrolled === 1 ? "" : "s"}`}`
+                      : `${i.batches} batch${i.batches === 1 ? "" : "es"} · ${i.enrolled} student${i.enrolled === 1 ? "" : "s"}`}</span>
                   </button>
                 );
               }) : <p className="p-3 text-sm text-foreground-500">{course ? "No intake for this course yet." : "Choose a course."}</p>}
@@ -101,8 +109,8 @@ export default function LmsBatchesOverview() {
           {/* 3 · Batch */}
           <section className={col} aria-label="Batches">
             <div className={head}>
-              <h2 className="font-heading text-base font-semibold text-foreground-900">3 · Batch{intake ? <span className="ml-1 font-normal text-foreground-500">· {monthYear(intake.startDate)}</span> : null}</h2>
-              {canEdit && intakeOpen ? <Button size="sm" icon="ri-add-line" onClick={() => setAddFor(intake)}>Add batch</Button> : null}
+              <h2 className="font-heading text-base font-semibold text-foreground-900">3 · {onMaster ? "Class group" : "Batch"}{intake ? <span className="ml-1 font-normal text-foreground-500">· {onMaster ? `${shortDate(intake.startDate)} – ${shortDate(intake.endDate)}` : monthYear(intake.startDate)}</span> : null}</h2>
+              {canEdit && intakeOpen && !(onMaster && (intake?.batchList ?? []).length) ? <Button size="sm" icon="ri-add-line" onClick={() => setAddFor(intake)}>{onMaster ? "Set room, trainer and class times" : "Add batch"}</Button> : null}
             </div>
             <div className="max-h-[70vh] space-y-2 overflow-y-auto p-2">
               {!intake ? <p className="p-3 text-sm text-foreground-500">Choose an intake.</p>
@@ -120,7 +128,7 @@ export default function LmsBatchesOverview() {
                       <HoursNote check={hours[b.id]} compact />
                     </Link>
                   );
-                }) : <p className="p-3 text-sm text-foreground-500">No batch in this intake yet.{canEdit && intakeOpen ? " Add one, or let the system open one when the first student is placed." : ""}</p>}
+                }) : <p className="p-3 text-sm text-foreground-500">{onMaster ? "This intake has no room, trainer or class times yet." : "No batch in this intake yet."}{canEdit && intakeOpen ? onMaster ? " Set them so students can be placed." : " Add one, or let the system open one when the first student is placed." : ""}</p>}
             </div>
           </section>
         </div>
@@ -130,7 +138,7 @@ export default function LmsBatchesOverview() {
         onCreated={(d, addBatch) => {
           setNewIntake(false); setIntakeId(d.intake.id); void load();
           push(`${course.code} ${monthYear(d.intake.startDate)} intake created.`);
-          if (addBatch) setAddFor(d.intake);
+          if (addBatch || masters.has(d.intake.courseId)) setAddFor(d.intake);
         }} /> : null}
       {addFor ? <BatchTimingDrawer intake={addFor} onClose={() => setAddFor(null)}
         onSaved={(out) => {

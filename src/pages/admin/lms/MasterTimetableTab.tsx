@@ -116,6 +116,14 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
   const canEdit = master.canEdit;
   const totalWeeks = order.reduce((sum, row) => sum + (row.weeks || 0), 0);
   const totalHours = master.rows.reduce((sum, row) => sum + (row.hours ?? 0), 0);
+  const perWeek = (row: Row, index: number) => row.hours && order[index]?.weeks > 0 ? row.hours / order[index].weeks : null;
+  const orderedRows = order.map(item => byId.get(item.unitId));
+  const need = Math.max(0, ...orderedRows.map((row, index) => row ? perWeek(row, index) ?? 0 : 0));
+  /** Every unit's weeks from its hours at a weekly rate (20 hours a week: 40 hours = 2 weeks), rounded up to whole weeks. */
+  const fitWeeks = (rate: number) => change(start, order.map(item => {
+    const hours = byId.get(item.unitId)?.hours;
+    return hours ? { ...item, weeks: Math.max(1, Math.ceil(hours / rate)) } : item;
+  }));
   const blocked = busy || !start || !order.length || order.some(row => !(row.weeks > 0)) || master.problems.length > 0;
 
   return <div className="space-y-4">
@@ -129,10 +137,13 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
           <div><dt className="text-xs text-foreground-500">Units</dt><dd className="font-semibold text-foreground-950">{order.length}</dd></div>
           <div><dt className="text-xs text-foreground-500">Classroom weeks</dt><dd className="font-semibold text-foreground-950">{weeksLabel(totalWeeks)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Classroom hours</dt><dd className="font-semibold text-foreground-950">{totalHours.toLocaleString()}</dd></div>
+          <div><dt className="text-xs text-foreground-500">Most hours a week</dt><dd className={"font-semibold " + (need > 40 ? "text-red-700" : "text-foreground-950")}>{need ? need.toFixed(1).replace(/\.0$/, "") : "—"}</dd></div>
         </dl>
       </div>
       {canEdit ? <div className="flex items-center gap-2">
         <span className="text-xs text-foreground-500" role="status">{dirty ? "Unsaved changes" : master.saved ? "Saved" : "Not saved yet"}</span>
+        <button type="button" disabled={busy || !order.length} onClick={() => fitWeeks(20)} title="Sets every unit's weeks from its classroom hours at 20 hours a week (40 hours = 2 weeks)"
+          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Weeks from hours (20 a week)</button>
         <button type="button" disabled={busy} onClick={() => setBreakDraft({ label: "Term break", startDate: "", endDate: "" })}
           className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Add term break</button>
         <button type="button" disabled={blocked || (!dirty && master.saved)} onClick={() => void save()}
@@ -161,12 +172,12 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
       <table className="w-full min-w-[860px] text-sm">
         <thead className="border-b border-background-200 bg-background-100"><tr>
           <th className={th}>Sr. No.</th><th className={th}>Unit code</th><th className={th}>Unit name</th><th className={th} title="Core or elective">C/E</th>
-          <th className={th + " text-right"}>Classroom hours</th><th className={th + " text-right"}>Classroom weeks</th><th className={th}>Pre-requisite</th>
+          <th className={th + " text-right"}>Classroom hours</th><th className={th + " text-right"}>Classroom weeks</th><th className={th + " text-right"} title="Classroom hours divided by classroom weeks: every intake's class times must give at least this many hours a week">Hours a week</th><th className={th}>Pre-requisite</th>
           <th className={th}>Start date</th><th className={th}>End date</th>{canEdit ? <th className={th}><span className="sr-only">Move</span></th> : null}
         </tr></thead>
         <tbody>{lines.map(line => line.kind === "break" ? <tr key={"break:" + line.item.id} className="border-b border-background-200 bg-amber-100 text-amber-950">
           <td className="px-2 py-2" /><td className="px-2 py-2 font-semibold" colSpan={3}>{line.item.label}{line.item.courseId ? "" : " (all courses)"}</td>
-          <td className="px-2 py-2" /><td className="px-2 py-2 text-right">{weeksLabel(days(line.item.startDate, line.item.endDate) / 7)}</td><td className="px-2 py-2" />
+          <td className="px-2 py-2" /><td className="px-2 py-2 text-right">{weeksLabel(days(line.item.startDate, line.item.endDate) / 7)}</td><td className="px-2 py-2" /><td className="px-2 py-2" />
           <td className="whitespace-nowrap px-2 py-2">{shortDate(line.item.startDate)}</td><td className="whitespace-nowrap px-2 py-2">{shortDate(line.item.endDate)}</td>
           {canEdit ? <td className="px-2 py-2 text-right">{line.item.courseId ? <button type="button" disabled={busy} onClick={() => void removeBreak(line.item)} aria-label={`Remove ${line.item.label}`}
             className="rounded p-1 text-red-700 hover:bg-amber-200 disabled:opacity-50"><i className="ri-delete-bin-line" aria-hidden="true" /></button> : null}</td> : null}
@@ -179,6 +190,7 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
           <td className="px-2 py-2 text-right">{canEdit ? <input type="number" min={0.5} max={104} step={0.5} aria-label={`Classroom weeks for ${line.row.code}`} disabled={busy}
             className={input + " w-20 text-right " + (order[line.index]?.weeks > 0 ? "" : "border-red-400")} value={order[line.index]?.weeks || ""} onChange={e => setWeeks(line.index, e.target.value)} />
             : weeksLabel(Number(line.row.weeks))}</td>
+          <td className={"px-2 py-2 text-right " + ((perWeek(line.row, line.index) ?? 0) > 40 ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
           <td className="px-2 py-2 text-xs text-foreground-700">{line.row.prerequisites.join(", ")}</td>
           <td className="whitespace-nowrap px-2 py-2">{line.row.startDate ? shortDate(line.row.startDate) : "—"}</td>
           <td className="whitespace-nowrap px-2 py-2">{line.row.endDate ? shortDate(line.row.endDate) : "—"}</td>
@@ -190,6 +202,6 @@ export default function MasterTimetableTab({ courseId, courseCode }: { courseId:
       </table>
     </div>}
     <p className="text-xs text-foreground-500">Units run one after another in whole 7-day weeks, weekends included; days inside a term break are not counted. A unit marked * needs the units in the Pre-requisite column first.
-      Changing weeks here does not change the unit itself. Intakes do not follow these dates yet; that comes with the next update.</p>
+      Changing weeks here does not change the unit itself. Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > 40 ? " (more than 40 hours a week cannot be timetabled: give the unit more weeks)" : ""}.</p>
   </div>;
 }

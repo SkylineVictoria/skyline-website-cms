@@ -54,7 +54,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [studyLoad, setStudyLoad] = useState<StudyLoad>("coe");
   const [closed, setClosed] = useState<((day: string) => boolean) | null>(null);
   const [rows, setRows] = useState<Draft[]>(() => { const base = (batch?.sessions ?? []).map(toDraft); return startDay ? withClass(base, startDay) : base; });
-  const [name, setName] = useState(batch?.name ?? "");
+  const [name, setName] = useState(batch?.name ?? (intake as { customName?: string | null }).customName ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
   const [trainerIds, setTrainerIds] = useState<string[]>(() => (batch?.trainers ?? []).map((t) => t.id));
   const [clashes, setClashes] = useState<Clash[]>([]);

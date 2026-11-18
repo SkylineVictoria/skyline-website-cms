@@ -120,7 +120,6 @@ import BookingsHub from "@/pages/bookings/BookingsHub";
 import PublicBookingPage from "@/pages/bookings/PublicBookingPage";
 import ManageBookingPage from "@/pages/bookings/ManageBookingPage";
 
-
 const routes: RouteObject[] = [
   {
     path: "/",

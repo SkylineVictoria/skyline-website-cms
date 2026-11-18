@@ -46,6 +46,31 @@ export interface OnboardingRow {
   request: RequestSummary | null;
   application: RequestSummary | null; agreement: RequestSummary | null; referees: OnboardingReferee[]; events: OnboardingEvent[];
   files: { form: boolean; agreement: boolean; certificate: boolean; application_certificate: boolean };
+  /** 2026-11-18: the business status in words, the correction rounds and the PDF revisions after the first signature. */
+  label?: string | null; corrections?: OnboardingCorrection[]; revisions?: OnboardingRevision[];
+}
+export interface FieldChange { field: string; old: string; new: string }
+export interface OnboardingCorrection { id: string; round: number; message: string | null; flags: Record<string, string>; status: "open" | "resubmitted" | "closed"; changes: FieldChange[]; by: string | null;
+  requestedAt: string; resubmittedAt: string | null; closedReason: string | null; request: RequestSummary | null }
+export interface OnboardingRevision { id: string; revision: number; kind: "staff_edit" | "resubmitted"; note: string | null; changes: FieldChange[]; by: string | null; at: string }
+/** What staff review in the F04 wizard (admin-review mode): the form's fields, the current answers, the referees' replies, an open correction. */
+export interface ApplicationReview {
+  onboardingId: string; stage: OnboardingStage; label: string | null; agency: { id: string; name: string; abn: string | null; status: string }; contact: { id: string; name: string; email: string; role: string };
+  requestId: string; signerName: string | null; signedAt: string | null;
+  fields: Array<{ id: string; key: string; type: string; label: string; required: boolean; page: number }>; answers: Record<string, string>; facts: Record<string, unknown> | null;
+  attachments: Record<string, { name: string; size: number; at: string }>;
+  referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; status: string; receivedAt: string | null; receivedVia: string | null; answers: Record<string, string> }>;
+  correction: { round: number; message: string | null; flags: Record<string, string>; requestedAt: string; by: string | null } | null;
+}
+export const getApplicationReview = (onboardingId: string) => call<ApplicationReview>("agency_onboarding_review_get", { p_onboarding: onboardingId }, "The application could not be opened for review.");
+export async function openRevisionFile(revisionId: string): Promise<void> {
+  const file = await call<{ name: string; base64: string }>("agency_onboarding_revision_file", { p_revision: revisionId }, "The revision could not be opened.");
+  const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = file.name; link.rel = "noopener";
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 /** form / agreement / certificate / application_certificate, or "referee:<id>" / "referee_certificate:<id>" (administrators only). */
 export type OnboardingFileKind = string;
@@ -59,9 +84,11 @@ export const EVENT_LABEL: Record<string, string> = {
   agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)", countersigner_changed: "SLIT signatory changed",
   application_prefilled: "Application form prefilled (ABN Lookup and Add business)", prefill_reviewed: "Prefilled values checked against the signed form",
   application_declarations: "Declarations ticked, ACN / MARN recorded", application_prefilled_on_open: "Blank application fields filled when the form was opened (ABN Lookup and business record)",
+  staff_edit: "Application edited by SLIT staff", revision_added: "New PDF revision", correction_requested: "Sent back for correction", correction_closed: "Correction request closed unsigned",
+  resubmitted: "Corrected and signed again", referee_corrected: "Referee details corrected: new referee check", approved: "Approved: business active, agreement sent",
 };
 /** Stages that are still in progress (one at a time per business). */
-export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
+export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent", "correction_requested", "resubmitted"];
 /** Staff approve the references (then the Send agreement dialog opens) or decline the onboarding with a reason kept for staff. */
 export const approveReferences = (onboardingId: string) => call<{ id: string; stage: OnboardingStage; approvedAt: string }>("agency_onboarding_approve_references", { p_onboarding: onboardingId }, "The references could not be approved.");
 

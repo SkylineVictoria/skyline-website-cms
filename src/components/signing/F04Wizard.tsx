@@ -9,8 +9,8 @@ import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type Si
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
-import { F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
-import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
+import { correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 
 /*
@@ -150,26 +150,53 @@ const streetOf = (pick: AddressPick) => [pick.line2, pick.line].filter(Boolean).
 const searchFor = (token: string) => async (q: string) => signingAddressSearch(token, q);
 const Hint = ({ children, testId }: { children: ReactNode; testId?: string }) => <p className="mt-1 flex items-start gap-1 text-xs text-foreground-500" data-testid={testId}><i className="ri-information-line mt-px" aria-hidden="true" />{children}</p>;
 
-export default function F04Wizard({ token, view, codeCheck, onSigned }: {
+/** Admin-review mode (CMS): the flags, the message and the three actions live with the container (F04ReviewDialog). */
+export interface F04ReviewControls {
+  flags: Record<string, string>; onFlags: (flags: Record<string, string>) => void;
+  message: string; onMessage: (message: string) => void;
+  /** The referee's reply (F05), read-only beside the References step. */
+  refereePanel: (position: 1 | 2) => ReactNode;
+  busy: "" | "save" | "back" | "approve";
+  /** Why Approve / Send back are not available yet (e.g. a referee has not replied), or null. */
+  blocked: string | null;
+  onSave: (changes: Record<string, string>, after: F04Draft) => Promise<boolean>;
+  onSendBack: () => void;
+  onApprove: () => void;
+  onClose: () => void;
+}
+
+export default function F04Wizard({ token, view, codeCheck, onSigned, mode: modeProp = "agent", review }: {
   token: string; view: SigningView;
   /** The emailed-code check when the request asks for one (rendered on the last step); null when not needed or done. */
   codeCheck: { needed: boolean; session: string | null; render: () => ReactNode };
   onSigned: () => Promise<void> | void;
+  /** agent: the agency admin fills in and signs; admin-review: SLIT staff in the CMS; correction: set by the request itself. */
+  mode?: F04Mode; review?: F04ReviewControls;
 }) {
   const fields = view.fields;
   const facts = (view.application?.facts ?? null) as Partial<AbrFacts> | null;
+  const correction = view.application?.correction ?? null;
+  const mode: F04Mode = modeProp === "admin-review" ? "admin-review" : correction ? "correction" : "agent";
+  const admin = mode === "admin-review", correcting = mode === "correction";
+  const reviewFlags = review?.flags, correctionFlags = correction?.flags;
+  const flags = useMemo(() => (admin ? reviewFlags : correctionFlags) ?? {}, [admin, reviewFlags, correctionFlags]);
+  const order = useMemo(() => visibleSteps(mode, flags), [mode, flags]);
   const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name),
     [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name]);
   const [state, setState] = useState<F04Draft>(opening);
-  const [step, setStep] = useState(opening.step);
-  const [furthest, setFurthest] = useState(opening.step);
+  // What the review opened with: staff changes are the difference from it.
+  const [reviewBase, setReviewBase] = useState<F04Draft>(opening);
+  const firstStep = order.includes(opening.step) ? opening.step : order[0];
+  const [step, setStep] = useState(firstStep);
+  const [furthest, setFurthest] = useState(firstStep);
   const [returnTo, setReturnTo] = useState<number | null>(null);
   const [tried, setTried] = useState<Set<number>>(new Set());
   const [attachments, setAttachments] = useState<Attachments>(() => (view.application?.attachments ?? {}) as Attachments);
   // The register's values are shown as text to confirm; Edit turns the same values into inputs. Nothing to show: inputs at once.
-  const [editCompany, setEditCompany] = useState(() => !COMPANY_KEYS.some((k) => (opening.answers[k] ?? "").trim()));
-  const [editContact, setEditContact] = useState(false);
-  const [editAddress, setEditAddress] = useState(() => !(opening.answers.office_street_address ?? "").trim());
+  // Staff and a correction see every answer as an input (each one can be flagged / is marked); the agent gets the confirm cards.
+  const [editCompany, setEditCompany] = useState(() => mode !== "agent" || !COMPANY_KEYS.some((k) => (opening.answers[k] ?? "").trim()));
+  const [editContact, setEditContact] = useState(mode !== "agent");
+  const [editAddress, setEditAddress] = useState(() => mode !== "agent" || !(opening.answers.office_street_address ?? "").trim());
   const [manualRef, setManualRef] = useState<Record<number, boolean>>({});
   const [method, setMethod] = useState<"typed" | "drawn">("typed");
   const [picture, setPicture] = useState<string | null>(null);
@@ -178,7 +205,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
   const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "error">(view.application?.savedAt ? "saved" : "idle");
   const [notice, setNotice] = useState<{ tone: "info" | "error" | "warn"; text: string } | null>(view.application?.savedAt ? { tone: "info", text: `Welcome back. Your answers saved on ${new Date(view.application.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })} are filled in.` } : null);
   const top = useRef<HTMLDivElement>(null);
-  const search = useMemo(() => searchFor(token), [token]);
+  // Staff search with their own session (the address box's default); the link holder searches through document-signing with the token.
+  const search = useMemo(() => (admin ? undefined : searchFor(token)), [admin, token]);
   const has = (key: string) => fields.some((f) => keyOf(f) === key);
   const isRequired = (key: string) => fields.some((f) => keyOf(f) === key && f.required);
   const asks = (question: string) => fields.some((f) => fieldGroup(f.key)?.key === question);
@@ -191,7 +219,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
   const lastSaveAt = useRef(0);
   const closed = useRef(false);
   const persist = useCallback(async (at: number, force = false) => {
-    if (closed.current) return true;
+    // Staff review keeps no draft: Save changes writes the answers themselves.
+    if (closed.current || mode === "admin-review") return true;
     const draft = { ...stateRef.current, step: at };
     const json = JSON.stringify(draft);
     if (!force && json === lastSaved.current) return true;
@@ -201,13 +230,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
       lastSaved.current = json; lastSaveAt.current = Date.now(); setSaved("saved");
       return true;
     } catch { setSaved("error"); return false; }
-  }, [token]);
+  }, [token, mode]);
   useEffect(() => {
-    if (closed.current || JSON.stringify({ ...state, step: stepRef.current }) === lastSaved.current) return;
+    if (closed.current || mode === "admin-review" || JSON.stringify({ ...state, step: stepRef.current }) === lastSaved.current) return;
     const wait = Math.max(AUTOSAVE_PAUSE, lastSaveAt.current + AUTOSAVE_GAP - Date.now());
     const timer = window.setTimeout(() => { void persist(stepRef.current); }, wait);
     return () => window.clearTimeout(timer);
-  }, [state, persist]);
+  }, [state, persist, mode]);
 
   const problems = f04Problems(step, fields, state, attachments);
   const shown = tried.has(step) ? problems : {};
@@ -230,12 +259,54 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
     top.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const goTo = (index: number) => {
-    // Forward only once the steps before are complete; back always.
-    if (index > step) {
-      for (let i = step; i < index; i++) if (Object.keys(allProblems[i]).length) { setTried((t) => new Set(t).add(i)); if (i !== step) show(i); return; }
+    if (!order.includes(index)) return;
+    // Forward only once the steps before are complete (staff may move freely); back always.
+    if (index > step && !admin) {
+      for (const i of order.filter((s) => s >= step && s < index)) if (Object.keys(allProblems[i]).length) { setTried((t) => new Set(t).add(i)); if (i !== step) show(i); return; }
     }
     if (index !== returnTo && index < step) setReturnTo(null);
     show(index);
+  };
+  const nextOf = (s: number) => order[order.indexOf(s) + 1] ?? REVIEW_STEP;
+  const prevOf = (s: number) => order[order.indexOf(s) - 1] ?? s;
+  // Staff review: what changed since it opened, saved with an audit line per field (and a new PDF revision).
+  const changes = admin ? reviewChanges(fields, reviewBase, state) : {};
+  const dirty = Object.keys(changes).length > 0;
+  const saveReview = async () => {
+    if (!review || !dirty) return true;
+    const ok = await review.onSave(changes, state);
+    if (ok) setReviewBase(state);
+    return ok;
+  };
+  // ---------------------------------------------------------------- flags (staff) and read-only answers (correction)
+  const flagged = (keys: string[]) => keys.some((k) => correctionFlagged(k, flags));
+  const setFlag = (key: string, note: string | null) => {
+    if (!review) return;
+    const next = { ...review.flags };
+    if (note === null) delete next[key]; else next[key] = note;
+    review.onFlags(next);
+  };
+  /** One answer's frame: staff get a flag button and a note box; a correction marks flagged answers and locks the others. */
+  const frame = (keys: string[], node: ReactNode, label = "this answer") => {
+    if (mode === "agent" || !node) return node;
+    const key = keys[0];
+    const on = flagged(keys);
+    if (admin) return (
+      <div className="relative" key={`frame-${key}`} data-testid={`f04-frame-${key}`}>
+        <button type="button" aria-pressed={on} title={on ? "Flagged for correction" : `Flag ${label} for correction`} aria-label={on ? `Remove the correction flag on ${label}` : `Flag ${label} for correction`}
+          onClick={() => setFlag(key, on ? null : "")} className={`absolute right-0 top-0 z-10 cursor-pointer rounded p-0.5 text-sm ${on ? "text-amber-600" : "text-foreground-400 hover:text-amber-600"}`} data-testid={`f04-flag-${key}`}>
+          <i className={on ? "ri-flag-2-fill" : "ri-flag-2-line"} aria-hidden="true" /></button>
+        <div className={on ? "rounded-md ring-2 ring-amber-300 ring-offset-2" : ""}>{node}</div>
+        {on ? <input aria-label={`Note for the agency on ${label}`} value={flags[key] ?? ""} maxLength={500} placeholder="What should they correct?" className={`${WIZARD_INPUT} mt-1.5 border-amber-300 bg-amber-50 text-sm`}
+          onChange={(e) => setFlag(key, e.target.value)} data-testid={`f04-flag-note-${key}`} /> : null}
+      </div>);
+    if (on) return (
+      <div className="rounded-md bg-amber-50 p-2 ring-2 ring-amber-300" key={`frame-${key}`} data-testid={`f04-flagged-${key}`}>
+        {flags[key] ? <p className="mb-1.5 flex items-start gap-1 text-xs font-medium text-amber-900"><i className="ri-flag-2-fill mt-px" aria-hidden="true" />SLIT: {flags[key]}</p>
+          : <p className="mb-1.5 text-xs font-medium text-amber-900"><i className="ri-flag-2-fill mr-1" aria-hidden="true" />Please check and correct this answer.</p>}
+        {node}
+      </div>);
+    return <fieldset key={`frame-${key}`} disabled className="min-w-0 opacity-75" data-testid={`f04-locked-${key}`}>{node}</fieldset>;
   };
   /** From the review: open a step, then come straight back. */
   const editStep = (index: number) => { setReturnTo(REVIEW_STEP); show(index); };
@@ -247,7 +318,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
       if (step === 1) { if (["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].some((k) => problems[k])) setEditContact(true); if (problems.office_street_address || problems.office_country || problems.office_postcode || problems.office_suburb) setEditAddress(true); }
       setNotice({ tone: "error", text: "Some answers are missing or need a fix. They are marked below." }); return;
     }
-    const target = returnTo ?? step + 1;
+    const target = returnTo ?? nextOf(step);
     setReturnTo(null);
     goTo(target);
   };
@@ -273,15 +344,18 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
     e.preventDefault(); next();
   };
 
-  const text = (key: string, label: string, options: { type?: string; inputMode?: "numeric" | "text"; autoComplete?: string; maxLength?: number; required?: boolean; placeholder?: string; digits?: boolean; hint?: ReactNode } = {}) =>
-    has(key) || key === "office_postcode" ? <WizardTextField key={key} id={`f04-${key}`} name={key} label={label} value={a[key] ?? ""} error={shown[key]} required={options.required ?? isRequired(key)} placeholder={options.placeholder}
-      type={options.type} inputMode={options.inputMode} autoComplete={options.autoComplete ?? "off"} maxLength={options.maxLength ?? 500} testId={`f04-${key}`} onChange={(v) => set(key, options.digits ? v.replace(/\D/g, "") : v)}>{options.hint}</WizardTextField> : null;
-  const phone = (key: string, label: string) => has(key) ? (
+  const text = (key: string, label: string, options: { type?: string; inputMode?: "numeric" | "text"; autoComplete?: string; maxLength?: number; required?: boolean; placeholder?: string; digits?: boolean; hint?: ReactNode; noFrame?: boolean } = {}) => {
+    if (!has(key) && key !== "office_postcode") return null;
+    const node = <WizardTextField key={key} id={`f04-${key}`} name={key} label={label} value={a[key] ?? ""} error={shown[key]} required={options.required ?? isRequired(key)} placeholder={options.placeholder}
+      type={options.type} inputMode={options.inputMode} autoComplete={options.autoComplete ?? "off"} maxLength={options.maxLength ?? 500} testId={`f04-${key}`} onChange={(v) => set(key, options.digits ? v.replace(/\D/g, "") : v)}>{options.hint}</WizardTextField>;
+    return options.noFrame ? node : frame([key], node, label.toLowerCase());
+  };
+  const phone = (key: string, label: string) => has(key) ? frame([key], (
     <div key={key}>
       <WizardLabel htmlFor={`f04-${key}`} required>{label}</WizardLabel>
       <PhoneInput id={`f04-${key}`} name={key} value={a[key] ?? ""} invalid={Boolean(shown[key])} placeholder="041 234 5678" onValueChange={(v) => set(key, v)} />
       <FieldError text={shown[key]} />
-    </div>) : null;
+    </div>), label.toLowerCase()) : null;
   const card = "rounded-lg border border-background-200 bg-background-100/60 p-4";
   const editButton = (onClick: () => void, testId: string, label = "Edit") => (
     <button type="button" onClick={onClick} className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 bg-background-50 px-3 py-1.5 text-xs font-semibold text-foreground-700 hover:bg-background-100" data-testid={testId}>
@@ -295,8 +369,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
   const officeLine = [a.office_street_address, [a.office_suburb, australian ? a.office_state : a.office_province, a.office_postcode].filter(Boolean).join(" "), a.office_country].filter((s) => (s ?? "").trim()).join(", ");
   const contactName = [a.contact_title, a.contact_given_name, a.contact_family_name].filter(Boolean).join(" ");
 
-  const review = () => {
-    const section = (index: number, rows: Array<[string, ReactNode]>) => (
+  const reviewSummary = () => {
+    const section = (index: number, rows: Array<[string, ReactNode]>) => !order.includes(index) ? null : (
       <section key={index} className="rounded-lg border border-background-200 p-4" data-testid={`f04-review-${STEPS[index].id}`}>
         <div className="mb-2 flex items-center justify-between gap-3">
           <h4 className="text-sm font-semibold text-foreground-900">{STEPS[index].short}</h4>
@@ -339,12 +413,12 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
               <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="f04-company-inputs">
                 {text("agent_legal_entity", "Legal name")}
                 {text("agent_abn", "ABN", { inputMode: "numeric", maxLength: 14 })}
-                <WizardTextField id="f04-acn" name="acn" label="ACN" required={false} value={printAcn(state.acn)} error={shown.acn} inputMode="numeric" maxLength={11} testId="f04-acn"
-                  onChange={(v) => setState((s) => ({ ...s, acn: v.replace(/\D/g, "").slice(0, 9) }))} />
+                {frame(["acn"], <WizardTextField id="f04-acn" name="acn" label="ACN" required={false} value={printAcn(state.acn)} error={shown.acn} inputMode="numeric" maxLength={11} testId="f04-acn"
+                  onChange={(v) => setState((s) => ({ ...s, acn: v.replace(/\D/g, "").slice(0, 9) }))} />, "the ACN")}
                 {text("agent_trading_name", "Trading name", { hint: tradingHint })}
                 {text("agent_agency_name", "Agency name")}
                 {text("agent_year_founded", "Year founded", { inputMode: "numeric", maxLength: 4, digits: true, hint: yearHint })}
-                {has("agent_gst_registered") ? <div className="sm:col-span-2"><YesNo id="agent_gst_registered" label="Registered for GST?" value={gst} required={false} onChange={(v) => set("agent_gst_registered", v)} /></div> : null}
+                {has("agent_gst_registered") ? <div className="sm:col-span-2">{frame(["agent_gst_registered"], <YesNo id="agent_gst_registered" label="Registered for GST?" value={gst} required={false} onChange={(v) => set("agent_gst_registered", v)} />, "GST registration")}</div> : null}
                 {noBox.length ? <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:col-span-2" data-testid="f04-company-printed">
                   {noBox.map((k) => item(COMPANY_LABEL[k], k === "agent_abn" ? printAbn(a[k]) : a[k], undefined, <p className="text-xs text-foreground-500">Already printed on your form</p>))}</dl> : null}
               </div>
@@ -366,11 +440,11 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
             {Object.keys(shown).some((k) => COMPANY_KEYS.includes(k as never) || k === "acn") && !editCompany ? <FieldError text="Some details are missing: select Edit." /> : null}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <WizardTextField id="f04-marn" name="marn" label="MARA number (MARN), if registered" required={false} value={state.marn} error={shown.marn} inputMode="numeric" maxLength={10} testId="f04-marn"
+            {frame(["marn"], <WizardTextField id="f04-marn" name="marn" label="MARA number (MARN), if registered" required={false} value={state.marn} error={shown.marn} inputMode="numeric" maxLength={10} testId="f04-marn"
               onChange={(v) => setState((s) => ({ ...s, marn: v.replace(/\D/g, "") }))}>
               <a href={OMARA_REGISTER_URL} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary-700 underline underline-offset-2" data-testid="f04-omara-link">
                 <i className="ri-external-link-line" aria-hidden="true" />Search the OMARA register</a>
-            </WizardTextField>
+            </WizardTextField>, "the MARN")}
           </div>
         </div>
       );
@@ -397,16 +471,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
             ) : ["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].map((k) => shown[k] ? <FieldError key={k} text={shown[k]} /> : null)}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {has("contact_title") ? <div>
+            {has("contact_title") ? frame(["contact_title"], <div>
               <WizardLabel htmlFor="f04-contact_title" required={isRequired("contact_title")}>Title</WizardLabel>
               <select id="f04-contact_title" value={a.contact_title ?? ""} aria-invalid={Boolean(shown.contact_title)} className={WIZARD_INPUT} data-testid="f04-contact_title" onChange={(e) => set("contact_title", e.target.value)}>
                 <option value="">Select</option>{F04_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <FieldError text={shown.contact_title} />
-            </div> : null}
-            {has("contact_position") ? <div className="sm:col-span-2"><ChoiceChips id="contact_position" label="Position" value={a.contact_position ?? ""} error={shown.contact_position} required={isRequired("contact_position")} onChange={(v) => set("contact_position", v)} /></div> : null}
+            </div>, "the title") : null}
+            {has("contact_position") ? <div className="sm:col-span-2">{frame(["contact_position"], <ChoiceChips id="contact_position" label="Position" value={a.contact_position ?? ""} error={shown.contact_position} required={isRequired("contact_position")} onChange={(v) => set("contact_position", v)} />, "the position")}</div> : null}
           </div>
-          <fieldset className="space-y-3">
+          {frame(["office_address", "office_street_address", "office_suburb", "office_state", "office_province", "office_country"], <fieldset className="space-y-3">
             <legend className="mb-1.5 text-sm font-semibold text-foreground-900">Office address <span className="text-primary-600">*</span></legend>
             <AddressAutocomplete inputId="f04-office-search" label="Find the office address" search={search} onPick={pick} onManual={() => setEditAddress(true)} onUnavailable={() => setEditAddress(true)} />
             {!editAddress && officeLine ? (
@@ -416,20 +490,20 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-6" data-testid="f04-office-inputs">
-                <div className="sm:col-span-6">{text("office_street_address", "Street address", { autoComplete: "street-address" })}</div>
-                <div className="sm:col-span-3">{text("office_suburb", "Suburb or city", { autoComplete: "address-level2", required: false })}</div>
+                <div className="sm:col-span-6">{text("office_street_address", "Street address", { autoComplete: "street-address", noFrame: true })}</div>
+                <div className="sm:col-span-3">{text("office_suburb", "Suburb or city", { autoComplete: "address-level2", required: false, noFrame: true })}</div>
                 {australian ? <div className="sm:col-span-1">
                   <WizardLabel htmlFor="f04-office_state" required={false}>State</WizardLabel>
                   <select id="f04-office_state" value={(a.office_state ?? "").toUpperCase()} className={WIZARD_INPUT} data-testid="f04-office_state" onChange={(e) => set("office_state", e.target.value)}>
                     <option value="">—</option>{AU_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
-                </div> : <div className="sm:col-span-1">{text("office_province", "Province / region", { required: false })}</div>}
-                <div className="sm:col-span-2">{text("office_postcode", "Postcode", { inputMode: australian ? "numeric" : "text", autoComplete: "postal-code", maxLength: 10, required: false })}</div>
-                <div className="sm:col-span-6">{text("office_country", "Country", { autoComplete: "country-name" })}</div>
+                </div> : <div className="sm:col-span-1">{text("office_province", "Province / region", { required: false, noFrame: true })}</div>}
+                <div className="sm:col-span-2">{text("office_postcode", "Postcode", { inputMode: australian ? "numeric" : "text", autoComplete: "postal-code", maxLength: 10, required: false, noFrame: true })}</div>
+                <div className="sm:col-span-6">{text("office_country", "Country", { autoComplete: "country-name", noFrame: true })}</div>
               </div>
             )}
             {!editAddress ? [shown.office_street_address, shown.office_country, shown.office_postcode, shown.office_suburb].map((t, i) => <FieldError key={i} text={t} />) : null}
-          </fieldset>
+          </fieldset>, "the office address")}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{text("agent_website", "Website", { autoComplete: "url", required: false, placeholder: "https://" })}</div>
         </div>
       );
@@ -440,29 +514,30 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
           {QUESTIONS.filter((q) => asks(q.key)).map((q) => {
             const yes = yesNo(a[q.key]) === "YES";
             return (
-              <YesNo key={q.key} id={q.key} label={q.label} value={yesNo(a[q.key])} error={shown[q.key]} required={fields.some((f) => fieldGroup(f.key)?.key === q.key && f.required)} onChange={(v) => set(q.key, v)}>
-                {yes && q.attach ? <Upload token={token} kind={q.attach} file={attachments[q.attach]} error={shown[`attach_${q.attach}`]} onChange={(file) => setAttachments((x) => { const n = { ...x }; if (file) n[q.attach!] = file; else delete n[q.attach!]; return n; })} /> : null}
+              frame([q.key, ...(q.follow ? [q.follow.key] : [])], <YesNo key={q.key} id={q.key} label={q.label} value={yesNo(a[q.key])} error={shown[q.key]} required={fields.some((f) => fieldGroup(f.key)?.key === q.key && f.required)} onChange={(v) => set(q.key, v)}>
+                {yes && q.attach ? (admin ? <p className="text-xs text-foreground-600" data-testid={`f04-attach-${q.attach}`}><i className="ri-attachment-2 mr-1" aria-hidden="true" />{attachments[q.attach]?.name ?? "No file uploaded"}</p>
+                  : <Upload token={token} kind={q.attach} file={attachments[q.attach]} error={shown[`attach_${q.attach}`]} onChange={(file) => setAttachments((x) => { const n = { ...x }; if (file) n[q.attach!] = file; else delete n[q.attach!]; return n; })} />) : null}
                 {yes && q.follow && has(q.follow.key) ? (q.follow.long
                   ? <TextArea id={q.follow.key} label={q.follow.label} value={a[q.follow.key] ?? ""} error={shown[q.follow.key]} required={q.follow.required} onChange={(v) => set(q.follow!.key, v)} />
-                  : text(q.follow.key, q.follow.label, { required: q.follow.required })) : null}
-              </YesNo>
+                  : text(q.follow.key, q.follow.label, { required: q.follow.required, noFrame: true })) : null}
+              </YesNo>, q.short.toLowerCase())
             );
           })}
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{NUMBERS.filter(([k]) => has(k)).map(([k, label]) => <div key={k}>{text(k, label, { inputMode: "numeric", maxLength: 6, required: false, digits: true })}</div>)}</div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {has("services_provided") ? <Chips id="services_provided" label="Services provided to students" value={a.services_provided ?? ""} options={SERVICES} error={shown.services_provided} onChange={(v) => set("services_provided", v)} /> : null}
-          {has("other_countries_recruited") ? <Chips id="other_countries_recruited" label="Other countries you recruit students to" value={a.other_countries_recruited ?? ""} options={COUNTRIES} error={shown.other_countries_recruited} onChange={(v) => set("other_countries_recruited", v)} /> : null}
+          {has("services_provided") ? frame(["services_provided"], <Chips id="services_provided" label="Services provided to students" value={a.services_provided ?? ""} options={SERVICES} error={shown.services_provided} onChange={(v) => set("services_provided", v)} />, "the services") : null}
+          {has("other_countries_recruited") ? frame(["other_countries_recruited"], <Chips id="other_countries_recruited" label="Other countries you recruit students to" value={a.other_countries_recruited ?? ""} options={COUNTRIES} error={shown.other_countries_recruited} onChange={(v) => set("other_countries_recruited", v)} />, "the other countries") : null}
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {has("popular_courses") ? <TextArea id="popular_courses" label="Popular courses among your students" value={a.popular_courses ?? ""} error={shown.popular_courses} required={isRequired("popular_courses")} onChange={(v) => set("popular_courses", v)} /> : null}
-          {has("slit_promotion_plan") ? <TextArea id="slit_promotion_plan" label="How you will promote SLIT" value={a.slit_promotion_plan ?? ""} error={shown.slit_promotion_plan} required={isRequired("slit_promotion_plan")} onChange={(v) => set("slit_promotion_plan", v)} /> : null}
+          {has("popular_courses") ? frame(["popular_courses"], <TextArea id="popular_courses" label="Popular courses among your students" value={a.popular_courses ?? ""} error={shown.popular_courses} required={isRequired("popular_courses")} onChange={(v) => set("popular_courses", v)} />, "the popular courses") : null}
+          {has("slit_promotion_plan") ? frame(["slit_promotion_plan"], <TextArea id="slit_promotion_plan" label="How you will promote SLIT" value={a.slit_promotion_plan ?? ""} error={shown.slit_promotion_plan} required={isRequired("slit_promotion_plan")} onChange={(v) => set("slit_promotion_plan", v)} />, "the promotion plan") : null}
         </div>
-        <details className="rounded-lg border border-background-200 px-3 py-2" data-testid="f04-more" open={Boolean((a.associations ?? "").trim() || (a.australian_institutions_represented ?? "").trim()) || undefined}>
+        <details className="rounded-lg border border-background-200 px-3 py-2" data-testid="f04-more" open={Boolean((a.associations ?? "").trim() || (a.australian_institutions_represented ?? "").trim() || flagged(["associations", "australian_institutions_represented"])) || undefined}>
           <summary className="cursor-pointer text-sm font-semibold text-foreground-800">More about your agency (optional)</summary>
           <div className="mt-3 grid grid-cols-1 gap-4 pb-1 sm:grid-cols-2">
-            {has("associations") ? <TextArea id="associations" label="Associations you are a member of" value={a.associations ?? ""} required={false} onChange={(v) => set("associations", v)} /> : null}
-            {has("australian_institutions_represented") ? <TextArea id="australian_institutions_represented" label="Australian institutions you represent" value={a.australian_institutions_represented ?? ""} required={false} onChange={(v) => set("australian_institutions_represented", v)} /> : null}
+            {has("associations") ? frame(["associations"], <TextArea id="associations" label="Associations you are a member of" value={a.associations ?? ""} required={false} onChange={(v) => set("associations", v)} />, "the associations") : null}
+            {has("australian_institutions_represented") ? frame(["australian_institutions_represented"], <TextArea id="australian_institutions_represented" label="Australian institutions you represent" value={a.australian_institutions_represented ?? ""} required={false} onChange={(v) => set("australian_institutions_represented", v)} />, "the institutions") : null}
           </div>
         </details>
       </div>
@@ -477,16 +552,17 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {REF_PARTS.filter(([part]) => ["contact_name", "organisation", "position", "email"].includes(part)).map(([part, label, must]) => text(k(part), label, { required: must, type: part === "email" ? "email" : undefined }))}
                 <div className="sm:col-span-2">{phone(k("phone"), "Phone")}</div>
-                {has(k("address")) ? <div className="sm:col-span-2">
+                {has(k("address")) ? <div className="sm:col-span-2">{frame([k("address")], <div>
                   {manualRef[n] || (a[k("address")] ?? "").trim() ? (
                     <div>
-                      {text(k("address"), "Address", { required: false })}
+                      {text(k("address"), "Address", { required: false, noFrame: true })}
                       <button type="button" onClick={() => { set(k("address"), ""); setManualRef((m) => ({ ...m, [n]: false })); }} className="mt-1 cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline">Search again</button>
                     </div>
                   ) : <AddressAutocomplete inputId={`f04-ref${n}-search`} label="Address (optional)" search={search} onManual={() => setManualRef((m) => ({ ...m, [n]: true }))} onUnavailable={() => setManualRef((m) => ({ ...m, [n]: true }))}
                     onPick={(p) => set(k("address"), [streetOf(p), `${p.suburb} ${p.state} ${p.postcode}`.trim()].filter(Boolean).join(", "))} />}
-                </div> : null}
+                </div>, `reference ${n}'s address`)}</div> : null}
               </div>
+              {admin && review ? <div className="mt-3 border-t border-background-200 pt-3" data-testid={`f04-referee-reply-${n}`}>{review.refereePanel(n as 1 | 2)}</div> : null}
             </section>
           );
         })}
@@ -494,9 +570,29 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
       </div>
     );
     const agreed = declarationsState(state.declarations);
+    const flaggedKeys = Object.keys(flags);
+    if (admin && review) return (
+      <div className="space-y-6">
+        {reviewSummary()}
+        <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-review-actions">
+          <h3 className="text-sm font-semibold text-foreground-900">Your decision</h3>
+          {flaggedKeys.length ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="f04-flag-list">
+            <p className="font-medium">{flaggedKeys.length} answer{flaggedKeys.length === 1 ? "" : "s"} flagged for correction</p>
+            <ul className="mt-1 list-disc pl-5 text-xs">{flaggedKeys.map((k) => <li key={k}><button type="button" className="cursor-pointer underline underline-offset-2" onClick={() => editStep(stepOfKey(k))}>{k.replaceAll("_", " ")}</button>{flags[k] ? `: ${flags[k]}` : ""}</li>)}</ul>
+          </div> : <p className="text-sm text-foreground-600">Flag an answer (the flag next to it) to send the application back for correction, or approve it.</p>}
+          <div>
+            <WizardLabel htmlFor="f04-review-message" required={false}>Message to the agency (optional)</WizardLabel>
+            <textarea id="f04-review-message" rows={3} maxLength={2000} value={review.message} onChange={(e) => review.onMessage(e.target.value)} className={WIZARD_INPUT} data-testid="f04-review-message"
+              placeholder="Shown at the top of the corrected form" />
+          </div>
+          {review.blocked ? <p className="text-sm text-foreground-600" data-testid="f04-review-blocked"><i className="ri-time-line mr-1" aria-hidden="true" />{review.blocked}</p> : null}
+          {dirty ? <p className="text-sm text-amber-800">You have unsaved changes: save them first (they are kept as a new PDF revision, edited by SLIT staff).</p> : null}
+        </section>
+      </div>);
     return (
       <div className="space-y-6">
-        {review()}
+        {correcting && correction ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Check your corrected answers, then tick the declaration and sign again.</p> : null}
+        {reviewSummary()}
         <section className="space-y-4 border-t border-background-200 pt-5">
           <h3 className="text-sm font-semibold text-foreground-900">Declaration</h3>
           <p className="text-sm text-foreground-800">{F04_DECLARATION_INTRO}</p>
@@ -534,6 +630,19 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
   })();
 
   const last = step === REVIEW_STEP;
+  const stepNumber = order.indexOf(step) + 1;
+  const reviewBusy = review?.busy ?? "";
+  const adminButtons = admin && review ? (
+    <span className="flex flex-wrap items-center justify-end gap-2">
+      <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!dirty || !!reviewBusy} onClick={() => void saveReview()} data-testid="f04-review-save"><i className="ri-save-line" aria-hidden="true" />{reviewBusy === "save" ? "Saving…" : "Save changes"}</button>
+      {last ? <>
+        <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} onClick={review.onSendBack} data-testid="f04-review-send-back"><i className="ri-arrow-go-back-line" aria-hidden="true" />{reviewBusy === "back" ? "Sending…" : "Send back for correction"}</button>
+        <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} title={Object.keys(flags).length ? "Remove the flags, or send the application back" : undefined}
+          onClick={review.onApprove} data-testid="f04-review-approve">{reviewBusy === "approve" ? "Approving…" : "Approve and activate agency"}<i className="ri-check-double-line" aria-hidden="true" /></button>
+      </> : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!reviewBusy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}
+    </span>) : null;
   const savedNote = saved === "saving" ? "Saving…" : saved === "saved" ? "Saved ✓" : saved === "error" ? "Not saved" : "";
   const saveLater = (
     <span className="flex items-center gap-2 whitespace-nowrap">
@@ -543,24 +652,30 @@ export default function F04Wizard({ token, view, codeCheck, onSigned }: {
     </span>);
   return (
     <div ref={top} className="scroll-mt-4" onKeyDown={onKey}>
-      <WizardShell variant="page" stickyFooter icon="ri-file-user-line" title="Agent application form" subtitle={<>For <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {step + 1} of {STEPS.length}: {STEPS[step].text}</>}
-        stepper={<div data-testid="f04-stepper"><WizardStepper items={STEPS.map((s, i) => ({ id: s.id, short: s.short, icon: s.icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={step} onSelect={goTo} /></div>}
+      <WizardShell variant={admin ? "modal" : "page"} stickyFooter={!admin} icon="ri-file-user-line" title={admin ? "Review application" : correcting ? "Correct your application" : "Agent application form"}
+        onClose={admin ? review?.onClose : undefined}
+        subtitle={<>{admin ? "Agent application of" : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
+        stepper={<div data-testid="f04-stepper"><WizardStepper items={order.map((i) => ({ id: STEPS[i].id, short: STEPS[i].short, icon: STEPS[i].icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={order.indexOf(step)} onSelect={(n) => goTo(order[n])} /></div>}
         footerStart={<>
-          {step > 0 ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={!!busy} /> : null}
-          <span className="hidden sm:inline-flex">{saveLater}</span>
+          {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
+          {admin ? (dirty ? <span className="text-xs text-amber-800" data-testid="f04-review-dirty">{Object.keys(changes).length} unsaved change{Object.keys(changes).length === 1 ? "" : "s"}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
-        footerEnd={last
+        footerEnd={adminButtons ?? (last
           ? <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!canSubmit || !!busy} onClick={() => void submit()} data-testid="f04-submit">{busy === "sign" ? "Submitting…" : "Sign and submit"}<i className="ri-check-line" aria-hidden="true" /></button>
-          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}
+          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>)}
         notices={<>
           {notice ? <WizardNotice tone={notice.tone}>{notice.text}</WizardNotice> : null}
-          {last && !canSubmit && !busy ? <WizardNotice tone="info">{Object.keys(problems).length ? "Tick every statement and give your name and role." : !signatureReady ? "Add your signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code."}</WizardNotice> : null}
+          {last && !admin && !canSubmit && !busy ? <WizardNotice tone="info">{Object.keys(problems).length ? "Tick every statement and give your name and role." : !signatureReady ? "Add your signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code."}</WizardNotice> : null}
         </>}>
-        <h3 className="mb-4 font-heading text-base font-semibold text-foreground-950">{STEPS[step].title}</h3>
+        {correcting && correction ? <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" data-testid="f04-correction-banner">
+          <p className="font-semibold"><i className="ri-flag-2-fill mr-1" aria-hidden="true" />SLIT has asked you to correct {Object.keys(flags).length} answer{Object.keys(flags).length === 1 ? "" : "s"} (highlighted). Everything else stays as you signed it.</p>
+          {correction.message ? <p className="mt-1 whitespace-pre-line" data-testid="f04-correction-message">{correction.message}</p> : null}
+        </div> : null}
+        <h3 className="mb-4 font-heading text-base font-semibold text-foreground-950">{admin && step === REVIEW_STEP ? "Review and decide" : STEPS[step].title}</h3>
         {body}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-500">
           <p><span className="text-primary-600">*</span> required</p>
-          <span className="sm:hidden">{saveLater}</span>
+          {admin ? null : <span className="sm:hidden">{saveLater}</span>}
         </div>
       </WizardShell>
     </div>

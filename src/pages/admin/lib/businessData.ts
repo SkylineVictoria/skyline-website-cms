@@ -60,6 +60,8 @@ export interface BusinessRow {
   students: number;
   applications: number;
   statusCounts: StatusCounts;
+  /** 2026-11-18: where the onboarding is up to (Application sent ... Active), or null for SLIT's own / no onboarding. */
+  onboardingLabel?: string | null;
 }
 
 export interface BusinessDetail {
@@ -87,6 +89,8 @@ export interface BusinessDetail {
     agreementReady: boolean;
     /** The latest onboarding's stage (agency_onboarding.stage), if any. */
     stage?: string | null;
+    /** 2026-11-18: the business status in words (Application sent, Awaiting referees, Ready for review, Correction requested, Resubmitted, Active). */
+    label?: string | null;
     onboardingId?: string | null;
     /** The agreement is signed (online or an uploaded copy) and the business is still onboarding: an administrator presses Activate. */
     readyToActivate?: boolean;

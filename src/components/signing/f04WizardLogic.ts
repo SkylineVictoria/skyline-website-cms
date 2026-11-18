@@ -1,6 +1,6 @@
 import type { SigningView } from "@/lib/signingApi";
 import { abrYearFounded, acnDigits, acnFromAbn, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
-import { composeRegistrationNumber, composeSuburb, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { composeRegistrationNumber, composeSuburb, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 
 /*
  * The F04 wizard's rules, without React (owner briefs 2026-11-19 "fix prefill and make it short", and round 3 "less typing, nicer finish"):
@@ -107,7 +107,7 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   }
   const has = (key: string) => fields.some((f) => keyOf(f) === key);
   const blank = (key: string) => !String(answers[key] ?? "").trim();
-  for (const [key, value] of Object.entries(prefill ?? {})) if (key !== "agent_acn" && String(value ?? "").trim() && blank(key)) answers[key] = String(value).trim();
+  for (const [key, value] of Object.entries(prefill ?? {})) if (key !== "agent_acn" && key !== "agent_marn" && String(value ?? "").trim() && blank(key)) answers[key] = String(value).trim();
   const fill = (key: string, value: string | undefined) => { if (value && has(key) && blank(key)) answers[key] = value; };
   if (facts) {
     fill("agent_legal_entity", facts.entityName); fill("agent_trading_name", answers.agent_legal_entity || facts.entityName); fill("agent_agency_name", facts.entityName);
@@ -124,7 +124,7 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   delete answers.agent_registration_number;
   // No ACN from the register: a company's ACN is the last nine digits of its ABN (check digit verified).
   const acn = acnDigits(prefill?.agent_acn || facts?.acn || acnFromAbn(facts?.abn || answers.agent_abn, facts?.entityType));
-  const base: F04Draft = { answers, acn: /^\d{9}$/.test(acn) ? acn : "", marn: "", declarations: {}, step: 0 };
+  const base: F04Draft = { answers, acn: /^\d{9}$/.test(acn) ? acn : "", marn: String(prefill?.agent_marn ?? "").trim(), declarations: {}, step: 0 };
   const merged: F04Draft = !draft ? base : {
     answers: { ...answers, ...Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k, v]) => String(v ?? "").trim() || blank(k))) },
     acn: acnDigits(draft.acn) || base.acn, marn: draft.marn ?? "", declarations: { ...(draft.declarations ?? {}) },
@@ -218,4 +218,57 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
     if (!blank("declarant_role") && choiceUnnamed(a.declarant_role)) p.declarant_role = "Type your role.";
   }
   return p;
+}
+
+/*
+ * One wizard, three modes (2026-11-18): "agent" (the agency admin fills in and signs), "admin-review" (SLIT staff edit, flag and approve
+ * in the CMS) and "correction" (the agency admin changes only the flagged answers and signs again).
+ */
+export type F04Mode = "agent" | "admin-review" | "correction";
+const STEP_OF_KEY: Array<[RegExp, number]> = [
+  [/^(agent_legal_entity|agent_trading_name|agent_agency_name|agent_abn|agent_year_founded|agent_gst_registered|acn|marn)$/, 0],
+  [/^(contact_|office_|agent_website$)/, 1],
+  [/^ref[12]_/, 3],
+];
+/** The step a flagged answer is on (anything about the agency itself: step 3, Agency). */
+export const stepOfKey = (key: string) => STEP_OF_KEY.find(([re]) => re.test(key))?.[1] ?? 2;
+/** The steps shown: every step in agent and admin-review modes; in correction mode only the steps with a flagged answer, then Review & sign. */
+export function visibleSteps(mode: F04Mode, flags: Record<string, string> | null | undefined): number[] {
+  if (mode !== "correction") return F04_STEPS.map((_, i) => i);
+  const steps = new Set(Object.keys(flags ?? {}).map(stepOfKey));
+  return [...F04_STEPS.map((_, i) => i).filter((i) => i !== REVIEW_STEP && steps.has(i)), REVIEW_STEP];
+}
+/** In correction mode an answer can change only when flagged (the declaration's name and role are given again). */
+export const correctionEditable = (key: string, flags: Record<string, string> | null | undefined) =>
+  key === "declarant_name" || key === "declarant_role" || correctionFlagged(key, flags);
+
+/** The answers as the server keeps them (agency_onboarding.answers): text by key, a Yes / No question as YES / NO, the ACN and the MARN. */
+export function answersOf(fields: readonly Field[], state: F04Draft): Record<string, string> {
+  const values = f04Values(fields, state);
+  const out: Record<string, string> = {};
+  for (const f of fields) {
+    if (!f.key) continue;
+    const group = groupOf(f.key);
+    if (group) { if (values[f.id] === "true") out[group.key] = group.answer; else if (!(group.key in out)) out[group.key] = ""; continue; }
+    if (f.type !== "text") continue;
+    const key = keyOf(f);
+    if (key === "agent_registration_number") continue;
+    out[key] = (values[f.id] ?? "").trim();
+  }
+  out.agent_acn = acnDigits(state.acn);
+  out.agent_marn = state.marn.replace(/\s/g, "");
+  return out;
+}
+/** What staff changed since the review opened (key -> new value). */
+export function reviewChanges(fields: readonly Field[], opened: F04Draft, now: F04Draft): Record<string, string> {
+  const before = answersOf(fields, opened), after = answersOf(fields, now);
+  return Object.fromEntries(Object.keys(after).filter((k) => (before[k] ?? "") !== (after[k] ?? "")).map((k) => [k, after[k]]));
+}
+/** The fields of a reviewed application as the wizard reads them: the form's fields with the current answers as their values. */
+export function reviewFields(fields: ReadonlyArray<{ id: string; key: string; type: string; label: string; required: boolean; page: number }>, answers: Record<string, string>): Field[] {
+  return fields.map((f) => {
+    const group = groupOf(f.key);
+    const value = group ? (String(answers[group.key] ?? "").toUpperCase() === group.answer ? "true" : "") : f.type === "text" ? String(answers[keyOf(f)] ?? "") : "";
+    return { ...f, value, x: 0, y: 0, w: 0, h: 0 } as unknown as Field;
+  });
 }

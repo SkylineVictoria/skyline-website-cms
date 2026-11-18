@@ -65,15 +65,82 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
 
   const card = (c: CalClass, compact = false) => (
     <button key={c.id} type="button" onClick={() => setOpen(c)} title={clash.get(c.id) ?? `${c.courseCode} ${c.batch} · ${c.unitCode ?? ""} ${c.unitName ?? ""}`}
-      className={`block w-full rounded-md border px-2 py-1 text-left text-xs ${courseColour(c.courseId)} ${clash.has(c.id) ? "ring-2 ring-red-500" : ""}`}>
+      className={`block w-full rounded-md border px-2 py-1 text-left text-xs ${courseColour(c.courseId)} ${c.prerequisite ? "border-dashed" : ""} ${clash.has(c.id) ? "ring-2 ring-red-500" : ""}`}>
       <span className="font-semibold">{timeRange(c.start, c.end)}</span> · {c.courseCode} {c.batch}
-      {compact ? null : <>
+      {compact ? (c.unitCode ? <span className="block truncate opacity-80">{c.unitCode}</span> : null) : <>
         <span className="block truncate">{c.unitCode} {c.unitName}</span>
         <span className="block truncate opacity-80">{c.room ?? "No room"} · {trainerNames(c)} · {c.students} student{c.students === 1 ? "" : "s"}</span>
         {clash.has(c.id) ? <span className="block font-semibold text-red-700">Clash: {clash.get(c.id)}</span> : null}
       </>}
     </button>
   );
+
+  /** Week / day: a time grid (hours down the side), each class placed and sized by its time, overlapping classes side by side. */
+  const mins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const timeGrid = (days: string[]) => {
+    const all = days.flatMap((d) => byDay.get(d) ?? []);
+    const first = Math.min(8, ...all.map((c) => Math.floor(mins(c.start) / 60)));
+    const last = Math.max(18, ...all.map((c) => Math.ceil(mins(c.end) / 60)));
+    const HOUR = 56;
+    const hours = Array.from({ length: last - first }, (_, i) => first + i);
+    const now = new Date(); const nowMins = now.getHours() * 60 + now.getMinutes();
+    const lay = (list: CalClass[]) => {
+      // overlapping classes share the column: each gets a lane within its group of overlaps
+      const sorted = [...list].sort((a, b) => a.start.localeCompare(b.start) || b.end.localeCompare(a.end));
+      const out: { c: CalClass; lane: number; lanes: number }[] = [];
+      let group: { c: CalClass; lane: number; lanes: number }[] = []; let groupEnd = "";
+      const close = () => { const n = Math.max(1, ...group.map((g) => g.lane + 1)); group.forEach((g) => { g.lanes = n; }); out.push(...group); group = []; };
+      for (const c of sorted) {
+        if (group.length && c.start >= groupEnd) close();
+        const used = new Set(group.filter((g) => g.c.end > c.start).map((g) => g.lane));
+        let lane = 0; while (used.has(lane)) lane++;
+        group.push({ c, lane, lanes: 1 }); if (c.end > groupEnd) groupEnd = c.end;
+      }
+      if (group.length) close();
+      return out;
+    };
+    return (
+      <div className="overflow-x-auto rounded-lg border border-background-200 bg-background-50">
+        <div className={days.length > 1 ? "min-w-[980px]" : ""}>
+          <div className="grid border-b border-background-200" style={{ gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))` }}>
+            <div />
+            {days.map((d) => (
+              <button key={d} type="button" onClick={() => { setAnchor(d); setView("day"); }}
+                className={`border-l border-background-200 px-2 py-1.5 text-left text-xs font-semibold ${d === todayIso() ? "bg-primary-50 text-primary-800" : "text-foreground-700"}`}>
+                {DAY_NAMES[(new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7]} {Number(d.slice(8))}
+                <span className="ml-1 font-normal text-foreground-400">{(byDay.get(d) ?? []).length ? `${(byDay.get(d) ?? []).length} class${(byDay.get(d) ?? []).length === 1 ? "" : "es"}` : ""}</span>
+              </button>
+            ))}
+          </div>
+          <div className="relative grid" style={{ gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))`, height: hours.length * HOUR }}>
+            <div className="relative">
+              {hours.map((h, i) => <span key={h} className={`absolute right-2 text-2xs text-foreground-500 ${i ? "-translate-y-1/2" : ""}`} style={{ top: i * HOUR }}>{`${((h + 11) % 12) + 1} ${h < 12 ? "AM" : "PM"}`}</span>)}
+            </div>
+            {days.map((d) => (
+              <div key={d} className={`relative border-l border-background-200 ${d === todayIso() ? "bg-primary-50/40" : ""}`}>
+                {hours.map((h, i) => <div key={h} className="absolute inset-x-0 border-t border-background-200" style={{ top: i * HOUR }} />)}
+                {d === todayIso() && nowMins >= first * 60 && nowMins <= last * 60 ? <div className="absolute inset-x-0 z-20 border-t-2 border-red-500" style={{ top: ((nowMins - first * 60) / 60) * HOUR }} title="Now" /> : null}
+                {lay(byDay.get(d) ?? []).map(({ c, lane, lanes }) => {
+                  const top = ((mins(c.start) - first * 60) / 60) * HOUR; const height = Math.max(22, ((mins(c.end) - mins(c.start)) / 60) * HOUR - 2);
+                  return (
+                    <button key={c.id} type="button" onClick={() => setOpen(c)} title={clash.get(c.id) ?? `${timeRange(c.start, c.end)} · ${c.courseCode} ${c.batch} · ${c.unitCode ?? ""} ${c.unitName ?? ""}`}
+                      className={`absolute z-10 flex flex-col justify-start overflow-hidden rounded-md border px-1.5 py-1 text-left text-xs leading-tight shadow-sm ${courseColour(c.courseId)} ${c.prerequisite ? "border-dashed" : ""} ${clash.has(c.id) ? "ring-2 ring-red-500" : ""}`}
+                      style={{ top, height, left: `calc(${(lane / lanes) * 100}% + 2px)`, width: `calc(${100 / lanes}% - 4px)` }}>
+                      <span className="block font-semibold">{timeRange(c.start, c.end)}</span>
+                      <span className="block truncate">{c.courseCode} {c.batch}{c.unitCode ? ` · ${c.unitCode}` : ""}</span>
+                      {height > 64 ? <span className="block truncate opacity-80">{c.room ?? "No room"} · {trainerNames(c)}</span> : null}
+                      {height > 84 ? <span className="block truncate opacity-80">{c.students} student{c.students === 1 ? "" : "s"}{days.length === 1 && c.unitName ? ` · ${c.unitName}` : ""}</span> : null}
+                      {clash.has(c.id) && height > 100 ? <span className="block truncate font-semibold text-red-700">Clash</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const courseIntakes = (people?.intakes ?? []).filter((i) => i.courseId === filter.courseId);
   const intakeBatches = (people?.batches ?? []).filter((b) => b.intakeId === filter.intakeId);
@@ -137,22 +204,9 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
             );
           })}
         </div></div>
-      ) : view === "week" ? (
-        <div className="overflow-x-auto"><div className="grid min-w-[980px] grid-cols-7 gap-2">
-          {Array.from({ length: 7 }, (_, n) => addDays(range.from, n)).map((d, n) => (
-            <div key={d} className="min-w-0 rounded-lg border border-background-200 bg-background-50">
-              <button type="button" onClick={() => { setAnchor(d); setView("day"); }}
-                className={`block w-full border-b border-background-200 px-2 py-1.5 text-left text-xs font-semibold ${d === todayIso() ? "bg-primary-50 text-primary-800" : "text-foreground-700"}`}>
-                {DAY_NAMES[n]} {Number(d.slice(8))}</button>
-              <div className="space-y-1 p-1.5">{(byDay.get(d) ?? []).map((c) => card(c))}
-                {!(byDay.get(d) ?? []).length && classes ? <p className="px-1 py-2 text-xs text-foreground-400">No classes</p> : null}</div>
-            </div>
-          ))}
-        </div></div>
-      ) : (
+      ) : view === "week" ? timeGrid(Array.from({ length: 7 }, (_, n) => addDays(range.from, n))) : (
         <div className="space-y-2">
-          {(byDay.get(anchor) ?? []).map((c) => card(c))}
-          {classes && !(byDay.get(anchor) ?? []).length ? <p className="rounded-lg border border-dashed border-background-300 p-6 text-center text-sm text-foreground-500">No classes on this day.</p> : null}
+          {classes && !(byDay.get(anchor) ?? []).length ? <p className="rounded-lg border border-dashed border-background-300 p-6 text-center text-sm text-foreground-500">No classes on this day.</p> : timeGrid([anchor])}
         </div>
       )}
 

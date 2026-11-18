@@ -1,21 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Card, PageHeader } from "@/pages/admin/components/ui";
+import { Link, useNavigate } from "react-router-dom";
+import { Button, Card, Field, Modal, PageHeader, Select } from "@/pages/admin/components/ui";
+import BatchTimingDrawer from "@/pages/admin/components/rto/BatchTimingDrawer";
+import { useToast } from "@/pages/admin/components/toastContext";
 import { ListMessage, SearchBox } from "@/pages/admin/components/ListControls";
 import { Empty, SkeletonCards } from "@/pages/admin/components/rto/overlay";
 import HoursNote from "@/pages/admin/components/rto/HoursNote";
-import { monthYear, rto, rtoHoursCheck, shortDate, sortIntakes, type HoursCheck, type RtoIntake } from "@/pages/admin/lib/rto";
+import { monthYear, rto, rtoHoursCheck, shortDate, sortIntakes, todayIso, type HoursCheck, type RtoIntake } from "@/pages/admin/lib/rto";
 
 /** Every batch (class group) at a glance: students against seats, class days and its intake. A batch opens its own page; new batches are
- *  opened from an intake, or by the system when a batch is full. */
+ *  added here (choose the intake, then the batch form), inside an intake, or opened by the system when a batch is full. */
 export default function LmsBatchesOverview() {
   const [rows, setRows] = useState<RtoIntake[] | null>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [hours, setHours] = useState<Record<string, HoursCheck>>({});
+  const [canEdit, setCanEdit] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [pickId, setPickId] = useState("");
+  const [addFor, setAddFor] = useState<RtoIntake | null>(null);
+  const navigate = useNavigate();
+  const { push } = useToast();
+  const load = () => rto<RtoIntake[]>("intake_list").then((r) => setRows(r)).catch((e) => { setError(e instanceof Error ? e.message : "Batches did not load."); setRows([]); });
   useEffect(() => {
-    rto<RtoIntake[]>("intake_list").then((r) => setRows(r)).catch((e) => { setError(e instanceof Error ? e.message : "Batches did not load."); setRows([]); });
+    void load();
+    rto<{ rtoManager: boolean }>("me").then((m) => setCanEdit(Boolean(m.rtoManager))).catch(() => setCanEdit(false));
   }, []);
+  // Intakes a batch can be added to: not closed and not ended.
+  const open = useMemo(() => sortIntakes(rows ?? []).filter((i) => i.status !== "closed" && (!i.endDate || i.endDate >= todayIso())), [rows]);
   useEffect(() => {
     let live = true;
     void rtoHoursCheck((rows ?? []).flatMap((i) => (i.batchList ?? []).filter((b) => b.isActive).map((b) => b.id))).then((r) => { if (live) setHours(r); });
@@ -36,7 +48,24 @@ export default function LmsBatchesOverview() {
   }, [rows, search]);
   return (
     <div>
-      <PageHeader title="Batches" description="A batch is one class group in one room. Students are placed in a batch with a free seat; a new batch opens by itself when one is full." />
+      <PageHeader title="Batches" description="A batch is one class group in one room. Students are placed in a batch with a free seat; a new batch opens by itself when one is full."
+        actions={canEdit ? <Button icon="ri-add-line" onClick={() => { setPickId(open[0]?.id ?? ""); setPicking(true); }}>Add batch</Button> : undefined} />
+      <Modal open={picking} title="Add batch · choose the intake" onClose={() => setPicking(false)}
+        footer={<div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setPicking(false)}>Cancel</Button>
+          <Button disabled={!pickId} onClick={() => { setAddFor(open.find((i) => i.id === pickId) ?? null); setPicking(false); }}>Next: class times</Button></div>}>
+        {open.length ? <Field label="Intake">
+          <Select value={pickId} onChange={(e) => setPickId(e.target.value)}>
+            {open.map((i) => <option key={i.id} value={i.id}>{i.courseCode} · {shortDate(i.startDate)} – {shortDate(i.endDate)}{i.batches ? ` · ${i.batches} batch${i.batches === 1 ? "" : "es"}` : " · no batch yet"}</option>)}
+          </Select>
+        </Field> : <p className="text-sm text-foreground-600">There is no open intake. Create an intake first (LMS › Intakes › New intake).</p>}
+      </Modal>
+      {addFor ? <BatchTimingDrawer intake={addFor} onClose={() => setAddFor(null)}
+        onSaved={(out) => {
+          setAddFor(null); void load();
+          const made = out.batches.find((b) => b.id === out.batchId);
+          push(`${made?.name ?? "Batch"} added to ${addFor.courseCode} ${monthYear(addFor.startDate)}.`);
+          if (out.batchId) navigate(`/admin/batches/${out.batchId}`);
+        }} /> : null}
       <div className="mb-4"><SearchBox label="Search batches" value={search} onSearch={setSearch} placeholder="Search batch, course or intake" /></div>
       {error ? <Card><ListMessage icon="ri-error-warning-line" title="Batches did not load" text={error} /></Card> : null}
       {rows === null ? <SkeletonCards /> : groups.length === 0 && !error ? (

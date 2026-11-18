@@ -8,7 +8,6 @@ import LmsCoursesPage from "./LmsCoursesPage";
 import LmsTimetableHub from "./timetable/LmsTimetableHub";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
-import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
 import CreateTimetablePage from "./timetable/CreateTimetablePage";
 import TimetableSettingsPage from "./timetable/TimetableSettingsPage";
 
@@ -40,7 +39,8 @@ export default function LmsPage() {
   if (area === "timetable-settings") return <TimetableSettingsPage />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
   if (area === "locations") return <LmsLocationsPage />;
-  if (area === "timetable-templates") return <LmsTimetableTemplatesPage />;
+  // Course timetable templates are gone (owner, 2026-11-19): a timetable is made in Create timetable.
+  if (area === "timetable-templates") return <Navigate to="/admin/lms/timetable-create" replace />;
   if (area === "room-grid") return <Navigate to="/admin/lms/timetable" replace />;
   if (area === "attendance") return <LmsAttendancePage />;
   if (area === "completion") return <LmsCompletionPage />;

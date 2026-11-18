@@ -95,7 +95,7 @@ export default function LmsLocationsPage() {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Locations &amp; rooms</h1>
-        <p className="text-sm text-foreground-600">Where classes are held. The room lists in class timing, templates and the course calendar come from here.</p>
+        <p className="text-sm text-foreground-600">Where classes are held. The room lists in class timetables and the course calendar come from here.</p>
       </div>
       {canEdit && <button type="button" onClick={() => { setNotice(""); setLoc({ id: null, name: "", address: "", kind: "theory", isActive: true }); }}
         className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700">

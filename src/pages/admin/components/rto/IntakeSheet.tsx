@@ -6,7 +6,7 @@ import { Badge, Button, ConfirmDialog, TextInput } from "@/pages/admin/component
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Avatars, Drawer, ErrorNote, FeesEditor } from "@/pages/admin/components/rto/shared";
 import SchedulePanel from "@/pages/admin/components/rto/SchedulePanel";
-import IntakeClassSetupDrawer, { type BatchSaved } from "@/pages/admin/components/rto/BatchTimingDrawer";
+import { ClassWeekDialog } from "@/pages/admin/components/rto/ClassWeekSetup";
 import HoursNote from "@/pages/admin/components/rto/HoursNote";
 import { OverrideStudentDrawer, PlaceByHandDrawer } from "@/pages/admin/components/rto/OverridePlacement";
 import IntakeAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
@@ -119,7 +119,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
 
       {wizStep && canEdit ? <div className="shrink-0 border-b border-primary-200 bg-primary-50 px-4 py-2.5 sm:px-6" role="status">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Class setup.</b> Set the classes of this intake: use a course template or set the days and times by hand, with trainer and room. Students join through the enrolment wizard.</span>
+          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Class setup.</b> Set the class timetable of this intake: the days and times, room and trainer. Students join through the enrolment wizard.</span>
           <Button size="sm" icon="ri-time-line" onClick={() => { setTab("classes"); setSetup(true); }}>{setupLabel}</Button>
         </div>
       </div> : null}
@@ -151,11 +151,12 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
       </div>
 
       {setup && detail ? (
-        <IntakeClassSetupDrawer intake={detail.intake} batches={detail.batches} batch={group} onClose={() => setSetup(false)}
-          onSaved={(out: BatchSaved) => {
+        <ClassWeekDialog title={`Class timetable · ${detail.intake.customName || detail.intake.name}`} intakeId={detail.intake.id} courseId={detail.intake.courseId} canEdit={canEdit}
+          onClose={() => setSetup(false)}
+          onSaved={({ detail: out }) => {
             setSetup(false); setDetail(out); onChanged(); setCalendarKey((k) => k + 1);
             if (wizStep === "classes") { setWizStep(null); push("Course set up: units, hours, dates, intake and classes are ready. Students join through the enrolment wizard."); }
-            push(out.clashes.length ? `Class setup saved. ${clashText(out.clashes[0])}.` : "Class setup saved.", out.clashes.length ? "info" : "success");
+            else push("Class timetable saved.");
           }} />
       ) : null}
     </Sheet>
@@ -263,7 +264,7 @@ function ClassSetup({ detail, group: g, canEdit, hours, setupLabel, calendarKey,
 }) {
   if (!g || !hasSetup(g)) {
     return (
-      <Empty icon="ri-time-line" title="Classes not set up yet" text="Set the room, seats, trainer and weekly class times of this intake: use a course template or set them by hand. Students are placed automatically once the classes are set up."
+      <Empty icon="ri-time-line" title="Classes not set up yet" text="Set the room, seats, trainer and weekly class times of this intake. Students are placed automatically once the classes are set up."
         action={canEdit ? <Button icon="ri-time-line" onClick={onSetup}>{setupLabel}</Button> : undefined} />
     );
   }

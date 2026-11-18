@@ -1,6 +1,6 @@
 // New intake: one field, the start date, filled in from the calendar (the next term start this course has no intake for). The
 // schedule is laid out from the course's units, skipping public holidays and term breaks. "Create" or "Create & set class
-// timing" (the intake is the class group: its timing comes from a course template or is set by hand).
+// timing" (the intake is the class group: its timetable is set in the class timetable form).
 // A course with a master timetable (LMS > Courses > Master timetable) has no start date to choose: every intake of the course
 // follows the master's dates, so the intake is one more group on that calendar.
 import { useEffect, useMemo, useState } from "react";

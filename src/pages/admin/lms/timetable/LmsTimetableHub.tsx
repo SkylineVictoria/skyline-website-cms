@@ -1,10 +1,9 @@
-// LMS > Timetable: Today strip + Calendar, Trainers, Rooms, Students, Intakes timeline and Setup (weekly class timing per intake).
+// LMS > Timetable: Today strip + Calendar, Trainers, Rooms, Students and Intakes timeline. Classes are created in Timetable › Create timetable.
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/pages/admin/components/ui";
 import RoomsBoard from "@/pages/admin/components/rto/RoomsBoard";
 import { rto, todayIso } from "@/pages/admin/lib/rto";
-import LmsTimetablePage from "../LmsTimetablePage";
 import ClassCalendar from "./ClassCalendar";
 import TrainersWeek from "./TrainersWeek";
 import StudentsView from "./StudentsView";
@@ -17,7 +16,6 @@ const TABS = [
   { id: "rooms", label: "Rooms", icon: "ri-door-open-line" },
   { id: "students", label: "Students", icon: "ri-group-line" },
   { id: "intakes", label: "Intakes timeline", icon: "ri-bar-chart-horizontal-line" },
-  { id: "setup", label: "Setup", icon: "ri-settings-3-line" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -48,7 +46,7 @@ export default function LmsTimetableHub() {
     ];
   }, [today]);
 
-  if (me && !allowed) return <div><PageHeader title="Timetable" /><LmsTimetablePage /></div>;
+  if (me && !allowed) return <div><PageHeader title="Timetable" /><p className="text-sm text-foreground-600">The timetable is for Admins and RTO Managers.</p></div>;
 
   return (
     <div className="space-y-4">
@@ -75,8 +73,7 @@ export default function LmsTimetableHub() {
           : tab === "trainers" ? <TrainersWeek people={people} />
           : tab === "rooms" ? <RoomsBoard canEdit={me.rtoManager} />
           : tab === "students" ? <StudentsView people={people} />
-          : tab === "intakes" ? <IntakesTimeline />
-          : <LmsTimetablePage />}
+          : <IntakesTimeline />}
       </div>
     </div>
   );

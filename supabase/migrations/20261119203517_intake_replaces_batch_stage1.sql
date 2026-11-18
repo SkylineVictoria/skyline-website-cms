@@ -53,7 +53,7 @@ create policy intake_trainers_staff_read on public.intake_trainers for select to
 insert into public.intake_class_times(intake_id, weekday, slot, start_time, end_time, session_type, room_id, sort, legacy_batch_session_id)
   select b.intake_id, s.weekday, s.slot, s.start_time, s.end_time, s.session_type, s.room_id, s.sort, s.id
     from public.batch_sessions s join public.batches b on b.id = s.batch_id
-  on conflict do nothing;
+   where not exists (select 1 from public.intake_class_times x where x.legacy_batch_session_id = s.id);
 insert into public.intake_trainers(intake_id, staff_id)
   select b.intake_id, t.staff_id from public.batch_trainers t join public.batches b on b.id = t.batch_id on conflict do nothing;
 update public.intake_units u set trainer_id = t.staff_id

@@ -63,16 +63,16 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
       {inactive ? (
         <Card className="p-5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding</h2>
-          <p className="mt-1 text-sm text-foreground-600">Nobody from this business can sign in and no agents can be added until its agent agreement is signed. The point of contact only receives signing links (application form, then agreement); when the agreement is signed the business becomes active, they become its business admin agent and get one email to set their password.</p>
+          <p className="mt-1 text-sm text-foreground-600">The onboarding runs once for the business, with its point of contact: the application form (emailed when the business was added), two referee checks, staff review, the agent agreement. Nobody from the business can sign in until an administrator activates it. Agents can be added meanwhile; they get only their sign-in invitation, sent at Activate.</p>
           <ol className="mt-4 space-y-2 text-sm">
             <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add business creates one; contact SLIT IT if it is missing."} />
-            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received." : "Start the onboarding below (application form, referee checks, staff review, agreement), or upload a signed copy."} />
-            <Step done={business.status === "Active"} label="Active, business admin agent invited" detail={contact ? `Automatic when the agreement is signed online: the business goes Active and ${contact.email} gets the set-password email. With an uploaded copy, press Activate & invite.` : "Needs a point of contact."} />
+            <Step done={ready} label="Signed agent agreement" detail={ready ? "Received: ready to activate." : "Follow the onboarding below (application form, referee checks, staff review, agreement), or upload a signed copy with a reason."} />
+            <Step done={business.status === "Active"} label="Activated by an administrator" detail={contact ? `Press Activate: the business goes active, ${contact.email} gets the set-password email${onboarding?.heldAgents ? `, and ${onboarding.heldAgents} agent${onboarding.heldAgents === 1 ? "" : "s"} added meanwhile get their sign-in invitation` : ""}.` : "Needs a point of contact."} />
           </ol>
           {onActivate ? (
             <div className="mt-4">
-              <Button icon="ri-mail-send-line" disabled={!ready || !contact || activating} onClick={onActivate}>{activating ? "Activating…" : "Activate & invite business admin agent"}</Button>
-              {!ready ? <p className="mt-1 text-xs text-foreground-500">Available once a signed agent agreement is in (uploaded copies only; the online agreement activates the business by itself).</p> : null}
+              <Button icon="ri-mail-send-line" disabled={!ready || !contact || activating} onClick={onActivate} data-testid="onboarding-activate">{activating ? "Activating…" : "Activate"}</Button>
+              {!ready ? <p className="mt-1 text-xs text-foreground-500">Available once the agent agreement is signed online, or a signed copy is uploaded with a reason.</p> : null}
             </div>
           ) : null}
         </Card>

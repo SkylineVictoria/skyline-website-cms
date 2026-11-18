@@ -187,7 +187,7 @@ export default function AgentsPage() {
                       {r.status === "Onboarding" || r.status === "Declined" ? <div data-testid="agent-onboarding-status">
                         <AgentStatusBadge status={r.status} />
                         <p className="mt-1 text-2xs font-medium text-foreground-600">{r.status === "Declined" ? "Rejected; no sign-in" : agentOnboardingWords(r.onboarding)}</p>
-                        <Link to={`/admin/businesses/${r.businessId}?tab=agents`} className="mt-1 inline-block text-xs font-semibold text-primary-700 hover:underline">{r.onboarding?.ready ? "Activate or reject" : "Open onboarding"}</Link>
+                        <Link to={`/admin/businesses/${r.businessId}`} className="mt-1 inline-block text-xs font-semibold text-primary-700 hover:underline">Open the business</Link>
                       </div> : <>
                       <label className="sr-only" htmlFor={`status-${r.key}`}>Status for {r.name}</label>
                       <select id={`status-${r.key}`} value={r.status} disabled={busyKey === r.key} onChange={(e) => changeStatus(r, e.target.value)}

@@ -235,25 +235,16 @@ export const sendAgentAgreement = (input: AgentAgreementSendInput) => onboarding
 /** Reject the references: the onboarding is declined (reason kept for staff), its open requests voided, the agent emailed a polite decline. */
 export const rejectOnboarding = (input: { onboardingId: string; reason: string }) => onboardingAction<{ id: string; stage: string; emailed: boolean; agent: { name: string; email: string } }>({ action: "agent_onboarding_reject", ...input });
 /**
- * Agent-level onboarding (migration 20261118004521): Add agent records the agent as Onboarding (no login, no invitation) and emails them
- * the application form, prefilled with the business's details. CMS administrators pass the business; a business admin agent in the portal
- * adds to their own business. `agentId` starts the onboarding again for a Declined agent or one whose form was never signed.
+ * Onboarding per business (2026-11-19): Add business saves the business with its point of contact and sends the Agent Application Form
+ * to the contact at once (the three blanks are installed first when missing, before anything is saved). `warning` when the business was
+ * saved but the form could not be sent (Resend application on its page).
  */
-export interface AgentAddResult { onboardingId: string; agentId: string; reference: string; sent: boolean; agent: { id: string; name: string; email: string; role: "agent" | "agency_admin" }; agency: { id: string; name: string } }
-export const addAgentForOnboarding = (input: { businessId?: string | null; agentId?: string | null; name: string; email: string; phone?: string; role?: "agent" | "agency_admin"; message?: string }) =>
-  onboardingAction<AgentAddResult>({ action: "agent_onboarding_add_agent", ...input });
-/** Activate: both references are back; the agent becomes Active and is sent the congratulations set-password email (once). */
-export const activateOnboardedAgent = (onboardingId: string) =>
-  onboardingAction<{ onboardingId: string; invited: boolean; loginExists: boolean; agent: { id: string; name: string; email: string } }>({ action: "agent_onboarding_agent_activate", onboardingId });
-/** The agent's own agreement: the active Individual agent agreement template, sent to the agent once both references are back. */
-export const sendAgentOwnAgreement = (input: { onboardingId: string; countersignerId?: string | null; message?: string }) =>
-  onboardingAction<{ id: string; reference: string; stage: string; sent: boolean; warning?: string; template: { id: string; name: string; version: number }; agent: { name: string; email: string }; countersigner?: { name: string; email: string } }>({ action: "agent_onboarding_agent_agreement_send", ...input });
-/** A signed agreement received outside the Sign module, recorded by an administrator with a reason (kept in the history). */
-export const uploadAgentOwnAgreement = (onboardingId: string, file: File, reason: string, bothSigned: boolean) =>
-  onboardingAction<{ onboardingId: string; stage: string; voided: string | null }>({ action: "agent_onboarding_agent_agreement_upload", onboardingId, reason, bothSigned }, file);
-/** Change the SLIT signatory of an agent's agreement before they sign (old links stop working; the new one is emailed when it is their turn). */
-export const changeAgentCountersigner = (onboardingId: string, countersignerId: string) =>
-  onboardingAction<{ changed: boolean; invited?: boolean; countersigner: { name: string; email: string } }>({ action: "agent_onboarding_agent_countersigner_change", onboardingId, countersignerId });
+export interface BusinessCreateResult { agencyId: string; businessId: string; agencyName: string; contactAgentId: string; application: AgentOnboardingSendResult | null; warning?: string }
+export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string }) =>
+  onboardingAction<BusinessCreateResult>({ action: "agent_onboarding_business_create", ...input });
+/** Activate (administrator): the business, its point of contact and every agent added meanwhile become active; one set-password email each. */
+export interface BusinessActivateResult { businessId: string; name: string; contact: { id: string; name: string; email: string }; heldReleased: number; emailed: string[]; failed: string[]; skipped: Array<{ email: string; reason: string }> }
+export const activateBusinessOnboarding = (businessId: string) => signingAction<BusinessActivateResult>({ action: "agent_onboarding_business_activate", businessId });
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

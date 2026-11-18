@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
 import { type HoursLookup, ImportError, qualificationDetails } from "./tga.ts";
 import { unitDetails, unitSummary, type UnitSummary } from "./units.ts";
-import { checkElectives, type ElectiveUnit, parseElectiveRules, prerequisiteCodes } from "./packaging.ts";
+import { checkElectives, type ElectiveUnit, groupSizes, parseElectiveRules, prerequisiteCodes } from "./packaging.ts";
 
 /** How an elective from outside the qualification's own lists is labelled on the course. */
 const IMPORTED_GROUP = "Imported";
@@ -243,7 +243,7 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
   };
   for (const [item, unit] of existing) if (unit.is_active && unit.unit_type !== "core" && !remove.includes(item)) elective(item);
   [...wanted, ...imported].forEach(elective);
-  const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups));
+  const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups), groupSizes(review.electives));
   const check = checkElectives(rules, [...electives.values()]);
   if (!check.ok) {
     throw new ImportError("The packaging rules do not allow this selection. " + check.lines.filter(line => line.state === "broken")

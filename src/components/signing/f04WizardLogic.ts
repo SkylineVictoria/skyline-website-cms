@@ -1,43 +1,48 @@
 import type { SigningView } from "@/lib/signingApi";
-import { checkApplicationAnswers, phoneE164, printAcn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
-import { composeRegistrationNumber, composeSuburb, F04_ATTACHMENTS, F04_DECLARATIONS, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { abrYearFounded, acnDigits, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
+import { composeRegistrationNumber, composeSuburb, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 
 /*
- * The F04 wizard's rules, without React (owner brief 2026-11-19, "fix prefill and make it short"): what the page opens with, the values it
- * signs with and the problems of each of the four steps (Business, Contact, Agency, References & sign). The server repeats every check
- * (document-signing core.ts checkApplicationAnswers / checkApplicationSubmission) before anything is signed.
+ * The F04 wizard's rules, without React (owner briefs 2026-11-19 "fix prefill and make it short", and round 3 "less typing, nicer finish"):
+ * what the page opens with, the values it signs with and the problems of each of the five steps (Business, Contact, Agency, References,
+ * Review & sign). The server repeats every check (document-signing core.ts checkApplicationAnswers / checkApplicationSubmission) before
+ * anything is signed.
  */
 
 export type Answers = Record<string, string>;
 type Field = SigningView["fields"][number];
-/** What "Save and continue later" keeps on the server. office_postcode is the wizard's own key (printed in the Suburb box). */
+/** What "Save and continue later" keeps on the server. office_postcode is the wizard's own key (printed in the Suburb box). acn: digits. */
 export interface F04Draft { answers: Answers; acn: string; marn: string; declarations: Record<string, boolean>; step: number }
 
 export const F04_STEPS = [
   { id: "business", short: "Business", icon: "ri-building-line", title: "Your business", text: "Check what the government register says about your business." },
   { id: "contact", short: "Contact", icon: "ri-contacts-line", title: "Contact and office", text: "Who we deal with, and where your office is." },
   { id: "agency", short: "Agency", icon: "ri-briefcase-line", title: "Your agency", text: "A few questions about how you recruit students." },
-  { id: "references", short: "References & sign", icon: "ri-quill-pen-line", title: "References and declaration", text: "Two referees, then read, tick and sign." },
+  { id: "references", short: "References", icon: "ri-team-line", title: "Two references", text: "Two people who know your agency's work." },
+  { id: "review", short: "Review & sign", icon: "ri-quill-pen-line", title: "Review and sign", text: "Check your answers, tick the declaration and sign." },
 ] as const;
+export const REVIEW_STEP = F04_STEPS.length - 1;
 
 export const COMPANY_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_year_founded"] as const;
 export const COMPANY_LABEL: Record<string, string> = { agent_legal_entity: "Legal name", agent_trading_name: "Trading name", agent_agency_name: "Agency name", agent_abn: "ABN", agent_year_founded: "Year founded" };
-export const QUESTIONS: Array<{ key: string; label: string; attach?: F04AttachmentKind; follow?: { key: string; label: string; required: boolean; long: boolean } }> = [
-  { key: "org_chart_attached", label: "Do you have an organisational chart?", attach: "org_chart" },
-  { key: "business_profile_attached", label: "Do you have a business profile or strategic plan?", attach: "business_profile" },
-  { key: "litigation_involved", label: "Has the company or anyone in it been involved in litigation, arbitration, administrative action or another dispute (past, pending or threatened)?",
+export const QUESTIONS: Array<{ key: string; label: string; short: string; attach?: F04AttachmentKind; follow?: { key: string; label: string; required: boolean; long: boolean } }> = [
+  { key: "org_chart_attached", label: "Do you have an organisational chart?", short: "Organisational chart", attach: "org_chart" },
+  { key: "business_profile_attached", label: "Do you have a business profile or strategic plan?", short: "Business profile", attach: "business_profile" },
+  { key: "litigation_involved", label: "Has the company or anyone in it been involved in litigation, arbitration, administrative action or another dispute (past, pending or threatened)?", short: "Litigation or dispute",
     follow: { key: "litigation_details", label: "Details of the litigation or dispute", required: true, long: true } },
-  { key: "eatc_completed", label: "Have you or your staff completed the EATC training (PIER Online)?", follow: { key: "eatc_details", label: "Who completed it, and when", required: false, long: false } },
-  { key: "works_with_sub_agents", label: "Do you work, or have you worked, with sub-agents?", follow: { key: "sub_agent_names", label: "Names of the sub-agent agencies", required: true, long: false } },
+  { key: "eatc_completed", label: "Have you or your staff completed the EATC training (PIER Online)?", short: "EATC training", follow: { key: "eatc_details", label: "Who completed it, and when", required: false, long: false } },
+  { key: "works_with_sub_agents", label: "Do you work, or have you worked, with sub-agents?", short: "Sub-agents", follow: { key: "sub_agent_names", label: "Names of the sub-agent agencies", required: true, long: false } },
 ];
 export const NUMBERS: Array<[string, string]> = [["agent_years_as_education_agent", "Years as an agent"], ["students_recruited_per_year", "Students a year"], ["number_of_offices", "Offices"],
   ["staff_count", "Staff"], ["slit_recruitment_target", "SLIT target a year"]];
 export const SERVICES = ["Course counselling", "Applications and admissions", "Student visa applications", "Pre-departure briefing", "Accommodation", "Airport pickup", "Health cover (OSHC)", "English test preparation"];
 export const COUNTRIES = ["Canada", "United Kingdom", "United States", "New Zealand", "Ireland"];
+export const POSITIONS = F04_POSITIONS;
 export const REF_PARTS: Array<[string, string, boolean]> = [["contact_name", "Contact name", true], ["organisation", "Organisation", true], ["position", "Position", false], ["email", "Email", true], ["phone", "Phone", true], ["address", "Address", false]];
 const EMAIL = /^[^\s@<>,]+@[^\s@<>,]+\.[^\s@<>,]+$/;
 export const yesNo = (value: string | undefined) => (value ?? "").toUpperCase();
 export const isAustralia = (country: string | undefined) => !String(country ?? "").trim() || /^(australia|au)$/i.test(String(country).trim());
+export const TRADING_SAME_HINT = "Same as legal name; change if you trade differently";
 
 /** The value key of a field (agent_abn_form -> agent_abn; a tick box -> its question). */
 export const keyOf = (f: Pick<Field, "key">) => String(f.key ?? "").replace(/_(form|referee)$/, "").replace(/:.*$/, "");
@@ -58,8 +63,41 @@ export function writeChips(picked: readonly string[], other: string | null, opti
   return [...known, ...(other === null ? [] : [other.trim() || "Other"])].join(", ");
 }
 
-/** The answers the page opens with: the fields' values (filled on open by the server), the register's facts, then the saved draft. */
-export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | null, prefill: Record<string, string> | null, draft: Partial<F04Draft> | null): F04Draft {
+/**
+ * One choice of chips (round 3: the contact's position and the declarant's role): CEO / Director / Manager / Owner, or Other with the
+ * typed text. The value stored is the chosen label or the typed text; "Other" alone means Other chosen and not named yet.
+ */
+export function readChoice(value: string | undefined, options: readonly string[]): { picked: string | null; other: string | null } {
+  const v = String(value ?? "").trim();
+  if (!v) return { picked: null, other: null };
+  const known = options.find((o) => o.toLowerCase() === v.toLowerCase());
+  if (known) return { picked: known, other: null };
+  return { picked: null, other: v.toLowerCase() === "other" ? "" : v };
+}
+export function writeChoice(picked: string | null, other: string | null): string {
+  if (picked) return picked;
+  if (other === null) return "";
+  return other.trim() ? other : "Other";
+}
+const choiceUnnamed = (value: string | undefined) => String(value ?? "").trim().toLowerCase() === "other";
+
+/** "I agree to all of the above": every statement ticked, some, or none (the box shows indeterminate for some). */
+export function declarationsState(declarations: Record<string, boolean>): "all" | "some" | "none" {
+  const n = F04_DECLARATIONS.filter((d) => declarations[d.key] === true).length;
+  return n === F04_DECLARATIONS.length ? "all" : n ? "some" : "none";
+}
+/** Ticks (or unticks) every statement at once. */
+export const allDeclarations = (checked: boolean): Record<string, boolean> => Object.fromEntries(F04_DECLARATIONS.map((d) => [d.key, checked]));
+
+/** The year founded from the register's facts when the form has none ("Active from 07 Jan 2015" -> 2015). */
+export const yearFromFacts = (facts: Partial<AbrFacts> | null | undefined) => abrYearFounded(facts?.statusFrom, facts?.abnStatus);
+
+/**
+ * The answers the page opens with: the fields' values (filled on open by the server), the server's prefill for blanks (also the values an
+ * older request has no box for), the register's facts, then the saved draft. A blank in the draft never empties a value the page has
+ * (round 3: PURVA TECH's draft held an empty "Year founded" that hid the register's 2015).
+ */
+export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | null, prefill: Record<string, string> | null, draft: Partial<F04Draft> | null, recipientName = ""): F04Draft {
   const answers: Answers = {};
   for (const f of fields) {
     if (!f.key) continue;
@@ -68,24 +106,34 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
     if (f.type === "text" && f.value) answers[keyOf(f)] = f.value;
   }
   const has = (key: string) => fields.some((f) => keyOf(f) === key);
-  const fill = (key: string, value: string | undefined) => { if (value && has(key) && !answers[key]) answers[key] = value; };
+  const blank = (key: string) => !String(answers[key] ?? "").trim();
+  for (const [key, value] of Object.entries(prefill ?? {})) if (key !== "agent_acn" && String(value ?? "").trim() && blank(key)) answers[key] = String(value).trim();
+  const fill = (key: string, value: string | undefined) => { if (value && has(key) && blank(key)) answers[key] = value; };
   if (facts) {
-    fill("agent_legal_entity", facts.entityName); fill("agent_trading_name", facts.entityName); fill("agent_agency_name", facts.entityName);
-    fill("agent_year_founded", (facts.statusFrom ?? "").slice(0, 4));
-    if (has("agent_gst_registered") && !answers.agent_gst_registered && typeof facts.gstRegistered === "boolean") answers.agent_gst_registered = facts.gstRegistered ? "YES" : "NO";
+    fill("agent_legal_entity", facts.entityName); fill("agent_trading_name", answers.agent_legal_entity || facts.entityName); fill("agent_agency_name", facts.entityName);
+    if (blank("agent_year_founded")) { const year = yearFromFacts(facts); if (year) answers.agent_year_founded = year; }
+    if (has("agent_gst_registered") && blank("agent_gst_registered") && typeof facts.gstRegistered === "boolean") answers.agent_gst_registered = facts.gstRegistered ? "YES" : "NO";
   }
-  // The office: a postcode found in Province (requests sent before 2026-11-19) belongs to the Suburb box; the wizard keeps it apart.
-  if (/^\d{4}$/.test((answers.office_province ?? "").trim())) { answers.office_suburb = composeSuburb(answers.office_suburb, answers.office_province.trim()); answers.office_province = ""; }
-  const place = splitSuburb(answers.office_suburb);
+  if (blank("agent_trading_name") && !blank("agent_legal_entity")) answers.agent_trading_name = answers.agent_legal_entity;
+  // The office: a postcode found in Province (requests sent before 2026-11-19) belongs with the suburb; a postcode alone is no suburb (round 3).
+  if (/^\d{4}$/.test((answers.office_province ?? "").trim())) answers.office_province = "";
+  const place = isPostcodeOnly(answers.office_suburb) ? { suburb: "", postcode: "" } : splitSuburb(answers.office_suburb);
   answers.office_suburb = place.suburb; answers.office_postcode = place.postcode;
   for (const key of ["contact_phone", "ref1_phone", "ref2_phone"]) { const e164 = phoneE164(answers[key]); if (e164) answers[key] = e164; }
   // The registration box is composed from the ACN and the MARN; a value typed there earlier is not shown again. Fax is no longer asked.
   delete answers.agent_registration_number;
-  const acn = prefill?.agent_acn || (facts?.acn ? printAcn(facts.acn) : "");
-  const base: F04Draft = { answers, acn: acn ? printAcn(acn) : "", marn: "", declarations: {}, step: 0 };
-  if (!draft) return base;
-  return { answers: { ...answers, ...(draft.answers ?? {}) }, acn: draft.acn || base.acn, marn: draft.marn ?? "", declarations: { ...(draft.declarations ?? {}) },
+  const acn = acnDigits(prefill?.agent_acn || facts?.acn || "");
+  const base: F04Draft = { answers, acn: /^\d{9}$/.test(acn) ? acn : "", marn: "", declarations: {}, step: 0 };
+  const merged: F04Draft = !draft ? base : {
+    answers: { ...answers, ...Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k, v]) => String(v ?? "").trim() || blank(k))) },
+    acn: acnDigits(draft.acn) || base.acn, marn: draft.marn ?? "", declarations: { ...(draft.declarations ?? {}) },
     step: Math.min(Math.max(Number(draft.step) || 0, 0), F04_STEPS.length - 1) };
+  const m = merged.answers;
+  if (isPostcodeOnly(m.office_suburb)) m.office_suburb = "";
+  // The declarant is the agency contact unless the contact names someone else (round 3); both stay editable.
+  if (!String(m.declarant_name ?? "").trim()) m.declarant_name = [m.contact_given_name, m.contact_family_name].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ") || recipientName.trim();
+  if (!String(m.declarant_role ?? "").trim() && String(m.contact_position ?? "").trim()) m.declarant_role = m.contact_position.trim();
+  return merged;
 }
 
 /** The signing values (by field id): text by key (the Suburb box with its postcode, the registration box from ACN + MARN), a tick box "true" when chosen. */
@@ -98,8 +146,9 @@ export function f04Values(fields: readonly Field[], state: F04Draft): Record<str
     if (group) { values[f.id] = yesNo(a[group.key]) === group.answer ? "true" : "false"; continue; }
     if (f.type !== "text") continue;
     const key = keyOf(f);
+    const suburb = (a.office_suburb ?? "").trim();
     values[f.id] = key === "agent_registration_number" ? composeRegistrationNumber(state.acn, state.marn)
-      : key === "office_suburb" ? composeSuburb(a.office_suburb, a.office_postcode)
+      : key === "office_suburb" ? (suburb && !isPostcodeOnly(suburb) ? composeSuburb(suburb, a.office_postcode) : "")
       : key === "office_province" ? (/^\d{4}$/.test((a.office_province ?? "").trim()) ? "" : (a.office_province ?? "").trim())
       : (a[key] ?? "").trim();
   }
@@ -118,12 +167,13 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
   if (step === 0) {
     for (const key of COMPANY_KEYS) need(key, `Enter the ${COMPANY_LABEL[key].toLowerCase()}.`);
     if (!blank("agent_abn") && a.agent_abn.replace(/\s/g, "").length !== 11) p.agent_abn = "The ABN has 11 digits.";
-    if (state.acn.trim() && !/^\d{9}$/.test(state.acn.replace(/\s/g, ""))) p.acn = "The ACN has 9 digits.";
+    if (state.acn.trim() && !/^\d{9}$/.test(acnDigits(state.acn))) p.acn = "The ACN has 9 digits.";
     if (state.marn.trim() && !/^\d{1,10}$/.test(state.marn.replace(/\s/g, ""))) p.marn = "The MARN is a number: digits only.";
     if (!blank("agent_year_founded") && !/^\d{4}$/.test(a.agent_year_founded.trim())) p.agent_year_founded = "Enter the year as four digits, for example 2015.";
   }
   if (step === 1) {
     for (const [key, label] of [["contact_given_name", "given name"], ["contact_family_name", "family name"], ["contact_position", "position"], ["contact_email", "email"]] as const) need(key, `Enter the contact's ${label}.`);
+    if (!p.contact_position && choiceUnnamed(a.contact_position)) p.contact_position = "Type the position.";
     if (field("contact_phone") && blank("contact_phone")) p.contact_phone = "Enter the contact's phone with its country code.";
     else if (!blank("contact_phone") && !phoneE164(a.contact_phone)) p.contact_phone = "Enter a full phone number with its country code.";
     if (!blank("contact_email") && !EMAIL.test(a.contact_email.trim())) p.contact_email = "Enter a valid email address.";
@@ -131,6 +181,7 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
     if (title.error) p.contact_title = title.error;
     need("office_street_address", "Enter the office street address."); need("office_country", "Enter the country.");
     if (isAustralia(a.office_country) && !blank("office_postcode") && !/^\d{4}$/.test(a.office_postcode.trim())) p.office_postcode = "An Australian postcode has 4 digits.";
+    if (field("office_suburb") && blank("office_suburb") && !blank("office_postcode")) p.office_suburb = "Enter the suburb or city for this postcode.";
   }
   if (step === 2) {
     for (const q of QUESTIONS) {
@@ -158,9 +209,12 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
         p[/phone/i.test(checked.error) ? `${which}_phone` : /name/i.test(checked.error) ? `${which}_contact_name` : `${which}_email`] = checked.error;
       }
     }
+  }
+  if (step === REVIEW_STEP) {
     for (const d of F04_DECLARATIONS) if (state.declarations[d.key] !== true) p[`declaration_${d.key}`] = "Tick this statement to continue.";
-    need("declarant_name", "Enter your full name."); need("declarant_role", "Enter your role.");
+    need("declarant_name", "Enter your full name."); need("declarant_role", "Choose your role.");
     if ((a.declarant_name ?? "").trim().length < 2) p.declarant_name = "Enter your full name.";
+    if (!blank("declarant_role") && choiceUnnamed(a.declarant_role)) p.declarant_role = "Type your role.";
   }
   return p;
 }

@@ -132,7 +132,8 @@ async function recordValuesWithFacts(ctx: OnboardingContext, prepared: Pick<Prep
       register = f04Prefill({ details: found.details, confirmed: null, record: values });
     }
   }
-  const merged = normalizeOfficeAddress({ ...register, ...values });
+  // The register's Suburb box is the record's suburb with the postcode joined (never a postcode alone, round 3).
+  const merged: Record<string, string> = normalizeOfficeAddress({ ...register, ...values, ...(register.office_suburb ? { office_suburb: register.office_suburb } : {}) } as Record<string, string>);
   const phone = phoneE164(merged.contact_phone); if (phone) merged.contact_phone = phone;
   return { values: merged, facts };
 }

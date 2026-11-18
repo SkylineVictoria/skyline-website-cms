@@ -11,7 +11,7 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
-import { abrApplicationValues, abrFacts, checkApplicationAnswers, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails } from "../_shared/validation/abr.ts";
+import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, F04_ATTACHMENT_MAX, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
@@ -89,16 +89,23 @@ const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "
  * business record (sign-up, earlier answers on the profile) for the contact, website and office; the postcode in the Suburb box, phones as
  * E.164. Keys without a value are left out.
  */
-export function f04Prefill(input: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null; record: Record<string, unknown> }): Record<string, string> {
+export function f04Prefill(input: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null; record: Record<string, unknown>;
+  /** Round 3: the facts kept on the business profile stand in for the register when no lookup is at hand (year founded, ACN, names). */
+  facts?: Partial<AbrFacts> | null }): Record<string, string> {
   const record = input.record ?? {};
-  const abr = abrApplicationValues({ details: input.details, confirmed: input.confirmed, contact: {
+  const details = input.details ?? factsToDetails(input.facts);
+  const abr = abrApplicationValues({ details, confirmed: input.confirmed, contact: {
     givenName: textOf(input.confirmed?.givenName) || textOf(record.contact_given_name), familyName: textOf(input.confirmed?.familyName) || textOf(record.contact_family_name),
     email: textOf(record.contact_email), phone: textOf(record.contact_phone) } });
   const out: Record<string, string> = { ...abr };
   for (const key of F04_RECORD_KEYS) { const v = textOf(record[key]); if (v) out[key] = v; }
-  // The register's postcode joins a suburb the record holds without one.
-  if (abr.office_suburb && out.office_suburb) { const kept = splitSuburb(out.office_suburb); out.office_suburb = composeSuburb(kept.suburb, kept.postcode || abr.office_suburb); }
+  // The register's postcode joins a suburb the record names; a postcode alone never fills the Suburb box (round 3).
+  const postcode = String(input.confirmed?.postcode ?? "").trim() || details?.postcode || "";
+  if (out.office_suburb) { const kept = splitSuburb(out.office_suburb); out.office_suburb = kept.suburb ? composeSuburb(kept.suburb, kept.postcode || postcode) : ""; }
   const phone = phoneE164(out.contact_phone); if (phone) out.contact_phone = phone;
+  // Round 3: the declarant is the agency contact (name and position) unless the record names someone else.
+  if (!out.declarant_name) out.declarant_name = [out.contact_given_name, out.contact_family_name].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ");
+  if (!out.declarant_role && out.contact_position) out.declarant_role = out.contact_position;
   const normalized = normalizeOfficeAddress(out);
   return Object.fromEntries(Object.entries(normalized).filter(([, v]) => String(v ?? "").trim() !== ""));
 }
@@ -146,8 +153,9 @@ export function checkApplicationSubmission(input: unknown, answers: Record<strin
   if (unticked.length) throw new SigningError(`Tick every declaration statement before you sign (${unticked.length} not ticked).`);
   const marn = String(app.marn ?? "").replace(/\s/g, "");
   if (marn && !/^\d{1,10}$/.test(marn)) throw new SigningError("The MARN is a number: digits only.");
-  const acn = String(app.acn ?? "").replace(/\s/g, "");
-  if (acn && !/^\d{9}$/.test(acn)) throw new SigningError("The ACN has 9 digits.");
+  // Round 3: "004 028 077" / "004-028-077" are the same ACN: digits before the check and in storage.
+  const acn = acnDigits(String(app.acn ?? ""));
+  if (acn &&!/^\d{9}$/.test(acn)) throw new SigningError("The ACN has 9 digits.");
   const tick = (key: string) => String(answers[key] ?? "").toUpperCase();
   if (tick("litigation_involved") === "YES" && !String(answers.litigation_details ?? "").trim()) throw new SigningError("Give the details of the litigation or dispute.");
   if (tick("works_with_sub_agents") === "YES" && !String(answers.sub_agent_names ?? "").trim()) throw new SigningError("Give the name of the sub-agent agency.");
@@ -311,11 +319,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const fields = (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>;
           const valueOf = (key: string) => { const f = fields.find((x) => x.key === key); return f ? { f, v: String(values[f.id] ?? f.value ?? "").trim() } : null; };
           // 2026-11-19: a postcode is never kept in the Province box (it goes in the Suburb box); phones are kept as E.164.
+          // Round 3: the Suburb box never holds a postcode alone (normalizeOfficeAddress).
           const province = valueOf("office_province"), suburb = valueOf("office_suburb");
-          if (province && /^\d{4}$/.test(province.v)) {
-            values[province.f.id] = "";
-            if (suburb) values[suburb.f.id] = composeSuburb(suburb.v, province.v);
-          }
+          const office = normalizeOfficeAddress({ office_province: province?.v ?? "", office_suburb: suburb?.v ?? "" });
+          if (province && office.office_province !== province.v) values[province.f.id] = office.office_province;
+          if (suburb && office.office_suburb !== suburb.v) values[suburb.f.id] = office.office_suburb;
           for (const key of ["contact_phone", "ref1_phone", "ref2_phone"]) {
             const phone = valueOf(key); const e164 = phone ? phoneE164(phone.v) : null;
             if (phone && e164) values[phone.f.id] = e164;
@@ -410,14 +418,18 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
               }
             }
           }
-          const computed = f04Prefill({ details, confirmed: wizard?.abr?.confirmed ?? null, record: wizard?.record ?? {} });
+          const computed = f04Prefill({ details, confirmed: wizard?.abr?.confirmed ?? null, record: wizard?.record ?? {}, facts: facts as Partial<AbrFacts> | null });
           const fill = Object.fromEntries(blanks.filter((k) => computed[k]).map((k) => [k, computed[k]]));
           if (Object.keys(fill).length) {
             await ports.serviceRpc("agency_onboarding_prefill_blanks", { p_request: record.id, p_values: fill }).catch(() => undefined);
             fields = withFilled(fields, fill);
           }
+          // Round 3: the page fills its own blanks from these too: the values a request sent by an older version has no box for (legal name,
+          // the contact's name, the declarant) show on the cards and prefill the declaration; the ACN has no box at all.
           const acn = computed.agent_acn ?? ((facts as { acn?: string } | null)?.acn ?? "");
-          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill: acn ? { agent_acn: acn } : {}, filled: Object.keys(fill), attachments: wizard?.attachments ?? {} };
+          const prefill: Record<string, string> = Object.fromEntries(F04_OPEN_PREFILL_KEYS.filter((k) => computed[k]).map((k) => [k, computed[k]]));
+          if (acn) prefill.agent_acn = acn;
+          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill, filled: Object.keys(fill), attachments: wizard?.attachments ?? {} };
         } catch { application = { draft: null, facts: null, savedAt: null, prefill: {}, filled: [], attachments: {} }; }
       }
       const path = done ? record.signed_path : record.current_path ?? record.original_path;

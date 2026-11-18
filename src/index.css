@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Dancing+Script:wght@500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -688,4 +688,15 @@
   .step-in-forward, .step-in-back, .fade-in, .open-in, .field-filled, .drawer-backdrop, .drawer-panel, .check-pop, .check-draw, .toast-in { animation: none; }
   .check-draw { stroke-dasharray: none; }
   .doc-scan-line { display: none; }
+}
+
+/* F04 wizard success tick (round 3): the circle, then the check, drawn once; no motion when the reader asks for less. */
+.f04-tick-circle { stroke-dasharray: 152; stroke-dashoffset: 152; animation: f04-draw 0.6s ease-out forwards; }
+.f04-tick-check { stroke-dasharray: 40; stroke-dashoffset: 40; animation: f04-draw 0.35s 0.5s ease-out forwards; }
+.f04-tick-pop { animation: f04-pop 0.45s 0.75s ease-out both; }
+@keyframes f04-draw { to { stroke-dashoffset: 0; } }
+@keyframes f04-pop { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .f04-tick-circle, .f04-tick-check { animation: none; stroke-dashoffset: 0; }
+  .f04-tick-pop { animation: none; }
 }

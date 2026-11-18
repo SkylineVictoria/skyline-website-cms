@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 export const WIZARD_PRIMARY_CLASS =
   "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60";
 
-export default function WizardShell({ variant = "modal", title, subtitle, icon = "ri-magic-line", onClose, closeLabel = "Close", stepper, children, footerStart, footerEnd, notices, overlay }: {
+export default function WizardShell({ variant = "modal", title, subtitle, icon = "ri-magic-line", onClose, closeLabel = "Close", stepper, children, footerStart, footerEnd, notices, overlay, stickyFooter = false }: {
   /** "modal": a dialog over the page (students). "page": the same card in the page flow (staff link). */
   variant?: "modal" | "page";
   title: ReactNode;
@@ -28,6 +28,8 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
   notices?: ReactNode;
   /** WizardLock, while a file uploads or is read. */
   overlay?: ReactNode;
+  /** On a phone the footer (Back / Next) stays at the bottom of the screen as one row (the F04 wizard on the page). */
+  stickyFooter?: boolean;
 }) {
   const card = (
     <div className={variant === "modal" ? "relative my-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50" : "relative mx-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50"}>
@@ -64,7 +66,9 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
       <div className={variant === "modal" ? "max-h-[62vh] overflow-y-auto p-5 md:p-6" : "p-5 md:p-6"}>{children}</div>
 
       {/* Footer */}
-      <div className="flex flex-col gap-3 border-t border-background-200 p-5 sm:flex-row sm:items-center sm:justify-between md:px-6">
+      <div className={stickyFooter
+        ? "sticky bottom-0 z-20 flex flex-row items-center justify-between gap-3 rounded-b-xl border-t border-background-200 bg-background-50/95 px-4 py-3 backdrop-blur sm:static sm:bg-background-50 sm:p-5 md:px-6"
+        : "flex flex-col gap-3 border-t border-background-200 p-5 sm:flex-row sm:items-center sm:justify-between md:px-6"} data-testid="wizard-footer">
         <div className="flex items-center gap-3">{footerStart}</div>
         {footerEnd}
       </div>

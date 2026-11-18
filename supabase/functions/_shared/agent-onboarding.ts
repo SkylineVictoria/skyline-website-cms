@@ -217,6 +217,9 @@ export function composeRegistrationNumber(acn: string | null | undefined, marn: 
   const parts = [a ? `ACN ${a.length === 9 ? `${a.slice(0, 3)} ${a.slice(3, 6)} ${a.slice(6)}` : a}` : "", m ? `MARN ${m}` : ""].filter(Boolean);
   return parts.join(" / ");
 }
+/** The F04 wizard's position chips (contact position and the declarant's role); anything else is typed after "Other". */
+export const F04_POSITIONS = ["CEO", "Director", "Manager", "Owner"] as const;
+
 /** The OMARA public register search (staff check a MARN by hand; no automated lookup). */
 export const OMARA_REGISTER_URL = "https://portal.mara.gov.au/search-the-register-of-migration-agents/";
 
@@ -239,11 +242,18 @@ export function splitSuburb(text: string | null | undefined): { suburb: string; 
   const m = /^(.*\S)\s+(\d{4})$/.exec(t);
   return m ? { suburb: m[1], postcode: m[2] } : { suburb: t, postcode: "" };
 }
-/** A postcode found in the Province box moves to the Suburb box; nothing else changes. */
+/** True when the Suburb box holds a postcode and no suburb name ("3000"). */
+export const isPostcodeOnly = (text: string | null | undefined) => POSTCODE.test(String(text ?? "").trim());
+/**
+ * The office row as the form prints it (round 3, 2026-11-19): a postcode found in the Province box moves next to a named suburb; the Suburb
+ * box never holds a postcode alone (no suburb name known: it stays blank and the address search fills suburb, state and postcode).
+ */
 export function normalizeOfficeAddress<T extends Record<string, string>>(values: T): T {
   const province = String(values.office_province ?? "").trim();
-  if (!POSTCODE.test(province)) return values;
-  return { ...values, office_province: "", office_suburb: composeSuburb(values.office_suburb, province) };
+  let out = values;
+  if (POSTCODE.test(province)) out = { ...out, office_province: "", office_suburb: composeSuburb(out.office_suburb, isPostcodeOnly(out.office_suburb) ? "" : province) };
+  if ("office_suburb" in out && isPostcodeOnly(out.office_suburb)) out = { ...out, office_suburb: "" };
+  return out;
 }
 
 /**

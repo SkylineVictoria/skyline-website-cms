@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(957);
+select plan(959);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1282,7 +1282,13 @@ select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')
 select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'declarant_name','Ravi Kumar','the declarant is the contact');
 select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'agent_website','https://positive.example','what the agent entered last time prefills');
 -- F04 prefill fix (20261119153412): the sign-up postcode is printed in the Suburb box, never in Province.
-select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'office_suburb','3000','the sign-up postcode goes in the Suburb box');
+-- F04 round 3 (20261119171538): the Suburb box never holds a postcode alone; the postcode joins a named suburb.
+select ok(not (public.agent_onboarding_values('53000000-0000-0000-0000-000000000001') ? 'office_suburb'),'no suburb name known: no Suburb box value (the sign-up postcode alone is no suburb)');
+update public.agencies set profile = profile || '{"office_suburb":"Footscray"}' where id='13000000-0000-0000-0000-000000000001';
+select is(public.agent_onboarding_values('53000000-0000-0000-0000-000000000001')->>'office_suburb','Footscray 3000','the sign-up postcode joins a named suburb');
+update public.agencies set profile = profile || '{"office_suburb":"3011"}' where id='13000000-0000-0000-0000-000000000001';
+select ok(not (public.agent_onboarding_values('53000000-0000-0000-0000-000000000001') ? 'office_suburb'),'a postcode kept as the suburb is dropped');
+update public.agencies set profile = profile - 'office_suburb' where id='13000000-0000-0000-0000-000000000001';
 select ok(not (public.agent_onboarding_values('53000000-0000-0000-0000-000000000001') ? 'office_province'),'office_province never holds the sign-up postcode');
 select is((hr.sign_subject('agent','53000000-0000-0000-0000-000000000001')->'values')->>'contact_email','ravi.agent@example.test','hr.sign_subject(agent) adds the form variables');
 select is((hr.sign_subject('agent','53000000-0000-0000-0000-000000000001')->'values')->>'agent.name','Ravi Kumar','the agent.* variables stay');

@@ -117,12 +117,13 @@ export function abrApplicationValues(input: {
   const gst = c && c.gstRegistered !== null && c.gstRegistered !== undefined ? c.gstRegistered : d ? d.gstRegistered : null;
   // F04 wizard (2026-11-19): the ABN box holds the ABN only; the ACN is its own answer (printed with the MARN in the registration box).
   const abn = d?.abn ?? "";
+  // Round 3: no postcode alone in the Suburb box (the suburb itself is the contact's; f04Prefill joins the postcode to a named suburb).
   const values: Record<string, string> = {
     agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : "",
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
     // No postcode box on the F04: the postcode is printed in the Suburb box (never Province); the suburb itself is the contact's.
-    office_state: str(c?.state) || d?.state || "", office_suburb: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
-    agent_year_founded: (d?.statusFrom ?? "").slice(0, 4),
+    office_state: str(c?.state) || d?.state || "", office_country: "Australia",
+    agent_year_founded: d ? abrYearFounded(d.statusFrom, d.abnStatus) : "",
     contact_given_name: str(input.contact.givenName), contact_family_name: str(input.contact.familyName),
     contact_email: str(input.contact.email).toLowerCase(), contact_phone: str(input.contact.phone),
   };
@@ -130,9 +131,24 @@ export function abrApplicationValues(input: {
 }
 
 /** The keys of the F04 the prefill may fill (anything else from our records is left blank for the contact). */
-export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_acn", "agent_gst_registered", "office_state", "office_suburb", "office_country",
+export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_acn", "agent_gst_registered", "office_state", "office_country",
   "agent_year_founded", "contact_given_name", "contact_family_name", "contact_email", "contact_phone"] as const;
 
+/**
+ * Year founded from the ABN (round 3, 2026-11-19): the year of the date an active ABN took effect ("Active from 07 Jan 2015" -> "2015").
+ * A cancelled ABN's date is its cancellation, so it gives no year. An unknown status with a date counts as active (facts kept before the status was).
+ */
+export function abrYearFounded(statusFrom: string | null | undefined, status?: string | null): string {
+  const m = /^(\d{4})-\d{2}-\d{2}/.exec(String(statusFrom ?? "").trim());
+  if (!m) return "";
+  return str(status) && !/^active$/i.test(str(status)) ? "" : m[1];
+}
+/** 1999 / 2000: the ABN scheme started then, so the business may be older than its ABN. */
+export const yearMayPredateAbn = (year: string | null | undefined) => /^(1999|2000)$/.test(String(year ?? "").trim());
+export const YEAR_BEFORE_ABN_HINT = "Business may be older than its ABN; edit if needed.";
+
+/** "603 584 676" / "603-584-676" -> "603584676": the ACN as stored and checked (other characters left for the check to refuse). */
+export const acnDigits = (acn: string | null | undefined) => String(acn ?? "").replace(/[\s-]/g, "");
 /** "603 584 676": an ACN in its printed groups (other text unchanged). */
 export const printAcn = (acn: string) => { const d = String(acn ?? "").replace(/\D/g, ""); return d.length === 9 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : String(acn ?? "").trim(); };
 
@@ -151,6 +167,13 @@ export function pageToAbrDetails(page: AgencyAbnDetails): AbrDetails {
  * (agencies.profile.abr_facts). No box on the PDF.
  */
 export interface AbrFacts { abn: string; acn: string; abnStatus: string; statusFrom: string; entityName: string; entityType: string; gstRegistered: boolean; gstFrom: string; sourceUrl: string; fetchedAt: string }
+/** The facts kept on the business profile as register details (no business names, no postcode): the F04 prefill when no fresh lookup is at hand. */
+export function factsToDetails(f: Partial<AbrFacts> | null | undefined): AbrDetails | null {
+  if (!f || !str(f.abn)) return null;
+  const status = str(f.abnStatus);
+  return { abn: str(f.abn), acn: str(f.acn).replace(/\D/g, ""), abnStatus: status, active: /^active$/i.test(status), statusFrom: str(f.statusFrom), entityName: str(f.entityName),
+    entityType: str(f.entityType), businessNames: [], gstRegistered: f.gstRegistered === true, gstFrom: str(f.gstFrom), state: "", postcode: "", sourceUrl: str(f.sourceUrl) };
+}
 export function abrFacts(d: AbrDetails, fetchedAt: string): AbrFacts {
   return { abn: d.abn, acn: d.acn, abnStatus: d.abnStatus, statusFrom: d.statusFrom, entityName: d.entityName, entityType: d.entityType, gstRegistered: d.gstRegistered, gstFrom: d.gstFrom, sourceUrl: d.sourceUrl, fetchedAt };
 }

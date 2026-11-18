@@ -741,12 +741,12 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   const values = abrLib.abrApplicationValues({ details, confirmed: { legalEntity: "BHP GROUP LIMITED", tradingName: "BHP BILLITON", gstRegistered: true, state: "VIC", postcode: "3000" },
     contact: { givenName: "Pat", familyName: "Contact", email: "ZZ-Test-POC@blackhole.postmarkapp.com", phone: "+61412345678" } });
   assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49004028077", agent_acn: "004 028 077",
-    agent_gst_registered: "YES", office_state: "VIC", office_suburb: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
+    agent_gst_registered: "YES", office_state: "VIC", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
     contact_email: "zz-test-poc@blackhole.postmarkapp.com", contact_phone: "+61412345678" });
-  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_province" in values) && !("agent_registration_number" in values), "the postcode goes in the Suburb box, never Province; the registration number stays blank");
+  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_province" in values) && !("agent_registration_number" in values), "no postcode alone in the Suburb box (round 3) and never in Province; the registration number stays blank");
   // Staff edits win over the register; no business name falls back to the entity name; GST left to the contact.
   const edited = abrLib.abrApplicationValues({ details: { ...details!, businessNames: [], acn: "" }, confirmed: { legalEntity: "BHP Group Ltd", tradingName: "", gstRegistered: null, state: "WA", postcode: "6000" }, contact: { givenName: "", familyName: "", email: "", phone: "" } });
-  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_suburb, "6000"); assert.ok(!("office_province" in edited)); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
+  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.ok(!("office_suburb" in edited), "a postcode alone is no suburb"); assert.ok(!("office_province" in edited)); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
   assert.equal(edited.agent_abn, BHP);
 
   // Editable: with the prefill switch, every value we hold is the contact's field, already filled in (nothing printed); the GST pair comes ticked.
@@ -759,7 +759,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.equal(byKey.agent_legal_entity.value, "BHP GROUP LIMITED"); assert.equal(byKey.agent_legal_entity.role, "agent");
   assert.equal(byKey["agent_abn_form"].value, "49 004 028 077", "the ABN box holds the ABN only (the ACN goes to the registration box)"); assert.equal(byKey["agent_abn_form"].required, true);
   assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
-  assert.equal(byKey.office_suburb.value, "3000"); assert.equal(byKey.office_province.value, "", "Province never holds the postcode"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
+  assert.equal(byKey.office_suburb.value, "", "no suburb name known: blank for the address search"); assert.equal(byKey.office_province.value, "", "Province never holds the postcode"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
   assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
   // Registry fixes (2026-11-19): the registration number is the contact's field, never prefilled, even from a template installed when it was the sender's;
   // the signer is the "Business contact"; an activated onboarding reads "Business activated"; Ready to activate is shown for a signed business agreement.
@@ -892,15 +892,17 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
 
   // office_province never holds a postcode: the register's prefill, the wizard's values and the shared rule.
   const values = abrLib.abrApplicationValues({ details: purva, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } });
-  assert.ok(!("office_province" in values) && values.office_suburb === "3029" && values.office_state === "VIC");
+  assert.ok(!("office_province" in values) && !("office_suburb" in values) && values.office_state === "VIC", "round 3: no postcode alone in the Suburb box");
   assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "2166", office_suburb: "Cabramatta" }), { office_province: "", office_suburb: "Cabramatta 2166" });
   assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "Punjab", office_suburb: "Ludhiana" }), { office_province: "Punjab", office_suburb: "Ludhiana" }, "an overseas province stays");
   assert.deepEqual(onboarding.splitSuburb("Altona North 3025"), { suburb: "Altona North", postcode: "3025" });
   const wizFields = fieldsOf(sentValues) as unknown as Parameters<typeof logic.initialF04>[0];
   const wiz = logic.initialF04(wizFields, null, { agent_acn: "603 584 676" }, null);
-  assert.deepEqual([wiz.answers.office_province, wiz.answers.office_postcode, wiz.acn], ["", "3029", "603 584 676"], "the wizard moves the old Province postcode to its own box");
+  assert.deepEqual([wiz.answers.office_province, wiz.answers.office_postcode, wiz.acn], ["", "", "603584676"], "round 3: the old Province postcode is dropped (no suburb name known: the address search fills it); the ACN in digits");
   const signed = logic.f04Values(wizFields, { ...wiz, answers: { ...wiz.answers, office_suburb: "Altona North" } });
-  assert.deepEqual([signed[wizFields.find((f) => f.key === "office_suburb")!.id], signed[wizFields.find((f) => f.key === "office_province")!.id]], ["Altona North 3029", ""]);
+  assert.deepEqual([signed[wizFields.find((f) => f.key === "office_suburb")!.id], signed[wizFields.find((f) => f.key === "office_province")!.id]], ["Altona North", ""]);
+  const signedWithPostcode = logic.f04Values(wizFields, { ...wiz, answers: { ...wiz.answers, office_suburb: "Altona North", office_postcode: "3025" } });
+  assert.equal(signedWithPostcode[wizFields.find((f) => f.key === "office_suburb")!.id], "Altona North 3025");
 
   // Referees (server rule, shared with the page): different emails and phones, neither is the applicant; phones with a country code.
   const me = { contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", contact_phone: "+61412345678", declarant_name: "Ravi Kumar" };
@@ -920,8 +922,8 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   // E.164.
   assert.deepEqual(["0412 345 678", "+91 98765 43210", "03 9123 4567", "12345", ""].map((p) => abrLib.phoneE164(p)), ["+61412345678", "+919876543210", "+61391234567", null, null]);
 
-  // The short wizard: four steps; chips with Other; an upload asked for on Yes; referee problems before signing.
-  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References & sign"]);
+  // The short wizard: five steps since round 3 (Review & sign); chips with Other; an upload asked for on Yes; referee problems before signing.
+  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References", "Review & sign"]);
   assert.equal(logic.writeChips(["Accommodation", "Course counselling"], "Visa reviews", logic.SERVICES), "Course counselling, Accommodation, Visa reviews");
   assert.deepEqual(logic.readChips("Course counselling, Accommodation, Visa reviews", logic.SERVICES), { picked: ["Course counselling", "Accommodation"], other: "Visa reviews" });
   assert.deepEqual(logic.readChips("Canada, Other", logic.COUNTRIES), { picked: ["Canada"], other: "" }); assert.equal(logic.readChips("Canada", logic.COUNTRIES).other, null);
@@ -930,6 +932,94 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   assert.match(agencyStep({ org_chart_attached: "YES" }).attach_org_chart, /Upload the organisational chart, or answer No/);
   assert.equal(agencyStep({ org_chart_attached: "YES" }, { org_chart: { name: "chart.pdf", size: 10 } }).attach_org_chart, undefined);
   assert.match(agencyStep({ services_provided: "Accommodation, Other" }).services_provided, /Name the other services/);
+});
+
+test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (server and page, a blank draft value never hides it), names prefilled from the contact, Position chips with Other, I agree to all, ACN with spaces accepted at sign time, the Suburb box never a postcode alone", async () => {
+  const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  const field = (key: string, value = "", required = false) => ({ id: `f-${key}`, type: key.includes(":") ? "checkbox" : "text", key, label: key, page: 1, x: 0, y: 0, w: 0.1, h: 0.02, required, value });
+  type WizFields = Parameters<typeof logic.initialF04>[0];
+  // PURVA TECH (86 603 584 676) as kept on the business profile: Active from 07 Jan 2015, ACN 603 584 676, no business name.
+  const purvaFacts = { abn: "86603584676", acn: "603584676", abnStatus: "Active", statusFrom: "2015-01-07", entityName: "PURVA TECH PTY LTD", entityType: "Australian Private Company",
+    gstRegistered: true, gstFrom: "2015-01-07", sourceUrl: "https://abr.business.gov.au/ABN/View?abn=86603584676", fetchedAt: "2026-11-18T08:47:08Z" };
+
+  // 1. Year founded from the ABN date.
+  assert.deepEqual([abrLib.abrYearFounded("2015-01-07", "Active"), abrLib.abrYearFounded("2015-01-07", ""), abrLib.abrYearFounded("2019-03-01", "Cancelled"), abrLib.abrYearFounded("", "Active")], ["2015", "2015", "", ""],
+    "the year of an active ABN's date; a cancelled ABN's date is its cancellation");
+  assert.deepEqual(["1999", "2000", "2015", ""].map(abrLib.yearMayPredateAbn), [true, true, false, false], "1999 / 2000 (the ABN scheme's start) get the hint");
+  assert.equal(abrLib.YEAR_BEFORE_ABN_HINT, "Business may be older than its ABN; edit if needed.");
+  // Server: no register details at hand (lookup down, nothing cached), the profile's facts still give year, ACN, legal and trading name.
+  const fromFacts = signingCore.f04Prefill({ details: null, confirmed: null, record: {}, facts: purvaFacts });
+  assert.deepEqual([fromFacts.agent_year_founded, fromFacts.agent_acn, fromFacts.agent_legal_entity, fromFacts.agent_trading_name], ["2015", "603 584 676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD"]);
+  // Page: the field holds 2015 but the saved draft holds "" (the real PURVA TECH draft): the draft's blank never empties it.
+  const purvaFields = ["agent_trading_name", "agent_year_founded", "contact_position", "declarant_role", "office_suburb", "office_street_address"].map((k) => field(k)) as unknown as WizFields;
+  purvaFields.find((f) => f.key === "agent_year_founded")!.value = "2015";
+  const draft = { acn: "603 584 676", answers: { agent_trading_name: "PURVA TECH PTY LTD", agent_year_founded: "", contact_position: "Test", office_suburb: "Melbourne", office_postcode: "3000" }, declarations: {}, marn: "", step: 2 };
+  const purva = logic.initialF04(purvaFields, purvaFacts, { agent_acn: "603 584 676", contact_given_name: "Gourav", contact_family_name: "Gupta", agent_legal_entity: "PURVA TECH PTY LTD" }, draft, "Recipient Name");
+  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", 2]);
+  // Page fallback with the field blank and no server fill: the card's date gives the year.
+  const blankYear = logic.initialF04([field("agent_year_founded")] as unknown as WizFields, purvaFacts, null, null);
+  assert.equal(blankYear.answers.agent_year_founded, "2015", "the page takes the year from the card's Active-from date when the server left it blank");
+  assert.equal(logic.yearFromFacts({ statusFrom: "1999-11-01", abnStatus: "Active" }), "1999");
+
+  // 2. Names fill themselves: the declarant is the contact (name and position); trading name falls back to the legal name.
+  assert.deepEqual([purva.answers.declarant_name, purva.answers.declarant_role], ["Gourav Gupta", "Test"], "declarant from contact_given_name + contact_family_name, role from the position");
+  const server = signingCore.f04Prefill({ details: null, confirmed: null, record: { contact_given_name: "Pat", contact_family_name: "Contact", contact_position: "Director" }, facts: purvaFacts });
+  assert.deepEqual([server.declarant_name, server.declarant_role], ["Pat Contact", "Director"]);
+  assert.equal(logic.initialF04([field("declarant_name")] as unknown as WizFields, null, null, null, "Only Recipient").answers.declarant_name, "Only Recipient", "no contact name: the recipient's");
+  assert.equal(logic.initialF04([field("agent_trading_name"), field("agent_legal_entity", "ACME PTY LTD")] as unknown as WizFields, null, null, null).answers.agent_trading_name, "ACME PTY LTD");
+  assert.equal(logic.TRADING_SAME_HINT, "Same as legal name; change if you trade differently");
+
+  // 3. Position as chips: CEO / Director / Manager / Owner, or Other with the typed text (also the declaration's "Your role").
+  assert.deepEqual([...logic.POSITIONS], ["CEO", "Director", "Manager", "Owner"]);
+  assert.deepEqual(logic.readChoice("director", logic.POSITIONS), { picked: "Director", other: null });
+  assert.deepEqual(logic.readChoice("Test", logic.POSITIONS), { picked: null, other: "Test" }, "a position not on the list is Other with its text");
+  assert.deepEqual(logic.readChoice("Other", logic.POSITIONS), { picked: null, other: "" });
+  assert.deepEqual([logic.writeChoice("CEO", null), logic.writeChoice(null, ""), logic.writeChoice(null, "Head of admissions"), logic.writeChoice(null, null)], ["CEO", "Other", "Head of admissions", ""]);
+  const contactFields = [field("contact_position", "", true)] as unknown as WizFields;
+  const contactStep = (position: string) => logic.f04Problems(1, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: 1 }).contact_position;
+  assert.deepEqual([contactStep(""), contactStep("Other"), contactStep("Head of admissions"), contactStep("Owner")], ["Enter the contact's position.", "Type the position.", undefined, undefined]);
+  const reviewFields = [field("declarant_name", "", true), field("declarant_role", "", true)] as unknown as WizFields;
+  const reviewStep = (answers: Record<string, string>, declarations: Record<string, boolean> = logic.allDeclarations(true)) => logic.f04Problems(logic.REVIEW_STEP, reviewFields, { answers, acn: "", marn: "", declarations, step: logic.REVIEW_STEP });
+  assert.equal(reviewStep({ declarant_name: "Pat Contact", declarant_role: "Other" }).declarant_role, "Type your role.");
+  assert.deepEqual(reviewStep({ declarant_name: "Pat Contact", declarant_role: "Director" }), {});
+
+  // 4. I agree to all: every statement at once; some ticked = indeterminate; the server still needs each one.
+  const all = logic.allDeclarations(true);
+  assert.equal(logic.declarationsState(all), "all"); assert.equal(logic.declarationsState({}), "none");
+  assert.equal(logic.declarationsState({ ...all, [onboarding.F04_DECLARATIONS[0].key]: false }), "some");
+  assert.equal(logic.declarationsState(logic.allDeclarations(false)), "none", "unticking all clears every line");
+  assert.equal(Object.keys(reviewStep({ declarant_name: "Pat Contact", declarant_role: "Owner" }, { ...all, [onboarding.F04_DECLARATIONS[2].key]: false })).length, 1, "one line unticked: one problem");
+  assert.throws(() => signingCore.checkApplicationSubmission({ acn: "", marn: "", declarations: { ...all, [onboarding.F04_DECLARATIONS[0].key]: false } }, {}), /Tick every declaration statement/);
+
+  // 5. ACN: digits before the check and in storage; "004 028 077" (the test F04's draft) is accepted at sign time.
+  assert.equal(signingCore.checkApplicationSubmission({ acn: "004 028 077", marn: "", declarations: all }, {}).acn, "004028077");
+  assert.equal(signingCore.checkApplicationSubmission({ acn: "004-028-077", marn: "", declarations: all }, {}).acn, "004028077");
+  assert.throws(() => signingCore.checkApplicationSubmission({ acn: "004 028 07", marn: "", declarations: all }, {}), /The ACN has 9 digits/);
+  assert.equal(abrLib.printAcn("004028077"), "004 028 077", "shown in its groups");
+  assert.equal(logic.f04Problems(0, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: 0 }).acn, undefined, "the page accepts spaces too");
+
+  // 6. The Suburb box never holds a postcode alone (the test F04 stored "3000").
+  assert.deepEqual(onboarding.normalizeOfficeAddress({ office_suburb: "3000" }), { office_suburb: "" });
+  assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "3029", office_suburb: "" }), { office_province: "", office_suburb: "" });
+  assert.deepEqual(onboarding.normalizeOfficeAddress({ office_province: "3029", office_suburb: "3000" }), { office_province: "", office_suburb: "" });
+  assert.equal(signingCore.f04Prefill({ details: null, confirmed: null, record: { office_suburb: "3000" } }).office_suburb, undefined, "the open never fills a postcode alone");
+  assert.equal(signingCore.f04Prefill({ details: { ...abrLib.factsToDetails(purvaFacts)!, postcode: "3029" }, confirmed: null, record: { office_suburb: "Altona North" } }).office_suburb, "Altona North 3029", "the register's postcode joins a named suburb");
+  const zz = logic.initialF04([field("office_suburb", "3000"), field("office_street_address")] as unknown as WizFields, null, null, null);
+  assert.deepEqual([zz.answers.office_suburb, zz.answers.office_postcode], ["", ""], "a stored postcode alone opens blank for the address search");
+  const suburbField = [field("office_suburb")] as unknown as WizFields;
+  assert.equal(logic.f04Values(suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000" } })["f-office_suburb"], "", "never signed as a postcode alone");
+  assert.equal(logic.f04Problems(1, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
+  const sql = read("supabase/migrations/20261119171538_f04_round3.sql");
+  assert.ok(["if v_sub ~ '^\\d{4}$' then", "p := p - 'office_suburb';", "'office_suburb', nullif(v_sub, '')", "update hr.sign_fields f set value = null", "r.state in ('sent', 'viewed', 'email_failed')"].every((s) => sql.includes(s)),
+    "the send-side SQL drops a postcode-only suburb and unsigned F04s are cleaned");
+
+  // 7. Five steps with a review; the sticky footer, Enter = Next, autosave and the success screen are in the page.
+  assert.equal(logic.F04_STEPS[logic.REVIEW_STEP].id, "review");
+  const page = read("src/components/signing/F04Wizard.tsx");
+  assert.ok(["stickyFooter", "e.key !== \"Enter\"", "AUTOSAVE_PAUSE", "Saved ✓", "I agree to all of the above", "indeterminate", "We've emailed your 2 referees", "SLIT reviews", "You'll receive the agent agreement",
+    "Download signed PDF", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
+  assert.ok(read("src/index.css").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"), "the success tick respects reduced motion");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

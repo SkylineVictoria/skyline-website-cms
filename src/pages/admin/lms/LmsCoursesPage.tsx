@@ -12,7 +12,7 @@ import AddUnitsFromTga from "./AddUnitsFromTga";
 import { useNavigate } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
-type Tab = "overview" | "units" | "cricos" | "tga" | "master";
+type Tab = "overview" | "units" | "master";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
@@ -178,7 +178,6 @@ export default function LmsCoursesPage() {
   const selected = courses.find(c => c.id === selectedId);
   // Inactive units (electives not delivered) do not count toward the course.
   const units = (detail?.units ?? []).filter(unit => unit.isActive);
-  const nominalHours = units.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0);
   const slit = units.map(u => shownHours(u.id ? unitHours[u.id] : undefined, u.nominalHours));
   const slitHours = slit.reduce((sum, h) => sum + (h?.slitHours ?? 0), 0);
   const slitPending = slit.some(h => h && !h.confirmed);
@@ -193,10 +192,10 @@ export default function LmsCoursesPage() {
   };
   const facts: [string, string][] = selected ? [
     ["Duration", detailLoading ? "…" : slitDuration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
-    ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
+    ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "cricos", label: "CRICOS" }, { id: "tga", label: "Training.gov.au" }, { id: "master", label: "Master timetable" }] as const;
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "Master timetable" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
@@ -283,7 +282,7 @@ export default function LmsCoursesPage() {
             </div> : null}
           </div>
 
-          <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-6 sm:divide-x sm:divide-background-200">
+          <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
             {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
               <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
             </div>)}
@@ -304,7 +303,7 @@ export default function LmsCoursesPage() {
                 className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
             </div>
             <div role="tabpanel" className="pt-4">
-              {tab === "overview" ? <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+              {tab === "overview" ? <div className="space-y-6"><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 {([["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code], ["CRICOS code", selected.cricos],
                   ["Category", selected.category], ["Training package", selected.trainingPackage],
                   ["Duration", slitDuration ? `${slitDuration} (${slitHours.toLocaleString()} SLIT hrs ÷ ${HOURS_PER_WEEK} a week)` : ""],
@@ -314,10 +313,17 @@ export default function LmsCoursesPage() {
                     <dt className="text-xs text-foreground-500">{label}</dt>
                     <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
                   </div>)}
-              </dl> : null}
+              </dl>
+              {detail ? <section className="border-t border-background-200 pt-5">
+                <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">CRICOS</h3>
+                <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly />
+              </section> : null}
+              {detail ? <section className="border-t border-background-200 pt-5">
+                <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</h3>
+                <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />
+              </section> : null}
+              </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
-              {tab === "cricos" && detail ? <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /> : null}
-              {tab === "tga" && detail ? <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}

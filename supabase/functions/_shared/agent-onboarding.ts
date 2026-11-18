@@ -25,6 +25,8 @@ export interface OnboardingField {
   option?: string;
   /** Printed when the sender holds a value; otherwise a field the agent fills in (optional unless `required`). */
   autoOrAgent?: boolean;
+  /** Never prefilled from our records or ABN Lookup: the signer types it (Business/MARA/Registration number). */
+  noPrefill?: boolean;
   /** An ABN, a date, a percentage: how the typed value is shown. */
   format?: "abn" | "date" | "percent";
 }
@@ -38,7 +40,8 @@ export const AGENT_ONBOARDING_DOCS: Record<OnboardingDoc, OnboardingDocument> = 
 };
 /** The agreement runs for two years from its commencement (Item 5). */
 export const AGREEMENT_TERM_YEARS = 2;
-export const ONBOARDING_SIGNER_ROLE = { key: "agent", label: "Agent", order: 1, required: true };
+// The signer of the F04 and the P06 is the business's point of contact (2026-11-19); the role key stays "agent" (stored on requests and templates).
+export const ONBOARDING_SIGNER_ROLE = { key: "agent", label: "Business contact", order: 1, required: true };
 export const REFEREE_SIGNER_ROLE = { key: "referee", label: "Referee", order: 1, required: true };
 /** The one signer of each document: the agent (application form, agreement) or the referee (referee check). */
 export const signerRole = (doc: OnboardingDoc) => doc === "referee" ? REFEREE_SIGNER_ROLE : ONBOARDING_SIGNER_ROLE;
@@ -48,7 +51,7 @@ export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "can
 export const STAGE_LABEL: Record<OnboardingStage, string> = {
   legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
   references_received: "References received: review", references_approved: "References approved", agreement_sent: "Agreement sent", agreement_signed: "Agreement signed",
-  cancelled: "Cancelled", expired: "Expired", declined: "Declined", activated: "Agent activated",
+  cancelled: "Cancelled", expired: "Expired", declined: "Declined", activated: "Business activated",
 };
 
 const auto = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", ...extra });
@@ -88,11 +91,13 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
   agent_agency_name: autoOrAgent("form", "Agency name", { required: true }),
   agent_legal_entity: autoOrAgent("form", "Legal entity"),
   agent_trading_name: autoOrAgent("form", "Trading name"),
-  agent_registration_number: autoOrAgent("form", "Registration number (ACN)"),
+  // The form's "Business/Mara/Registration Number" box: typed by the contact, never prefilled (not the ABN or the ACN).
+  agent_registration_number: agent("form", "Business/MARA/Registration number", { noPrefill: true }),
   "agent_gst_registered:YES": { doc: "form", label: "GST registered: Yes", type: "checkbox", role: "sender", source: "auto", autoOrAgent: true, group: { key: "agent_gst_registered", answer: "YES" } },
   "agent_gst_registered:NO": { doc: "form", label: "GST registered: No", type: "checkbox", role: "sender", source: "auto", autoOrAgent: true, group: { key: "agent_gst_registered", answer: "NO" } },
   agent_abn_form: autoOrAgent("form", "ABN", { format: "abn", required: true }),
-  contact_title: autoOrAgent("form", "Contact title (Mr, Ms, Dr)"),
+  // One of F04_TITLES (_shared/validation/abr.ts): a list on the signing page, checked again by the sign step.
+  contact_title: autoOrAgent("form", "Title (Mr, Mrs, Ms, Miss, Dr, Other)"),
   contact_given_name: autoOrAgent("form", "Contact given name", { required: true }),
   contact_family_name: autoOrAgent("form", "Contact family name", { required: true }),
   contact_position: autoOrAgent("form", "Contact position", { required: true }),
@@ -256,9 +261,10 @@ export function resolveFields(fields: PlacedField[], values: Record<string, stri
   for (const f of fields) {
     const spec = AGENT_ONBOARDING_FIELDS[f.key];
     const key = answerKey(f.key);
-    if (f.role !== "sender") {
-      const prefill = spec?.type === "text" ? printedValue(f.key, values[key] ?? "") : "";
-      recipient.push({ ...f, value: prefill.slice(0, 500) });
+    // A field the registry gives to the signer is theirs even when an older installed template stored it as the sender's (registration number).
+    if (f.role !== "sender" || (spec && spec.role !== "sender")) {
+      const prefill = spec?.type === "text" && !spec.noPrefill ? printedValue(f.key, values[key] ?? "") : "";
+      recipient.push({ ...f, ...(spec ? { role: spec.role === "sender" ? f.role : spec.role, label: spec.label, required: spec.required === true } : {}), value: prefill.slice(0, 500) });
       continue;
     }
     const group = groupOf(f.key);

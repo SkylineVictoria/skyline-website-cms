@@ -42,7 +42,8 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
   const latest = current ?? rows?.[0] ?? null;
   const received = latest ? latest.referees.filter((r) => r.status === "received").length : 0;
   const agreement = business.agreement ?? { status: "none" as const, commencementDate: null, expiryDate: null, onboardingId: null };
-  const badge = agreement.status === "signed" && !business.agreement?.expired ? <Badge tone="success">Agreement signed</Badge>
+  const badge = business.onboarding?.readyToActivate ? <Badge tone="success">Ready to activate</Badge>
+    : agreement.status === "signed" && !business.agreement?.expired ? <Badge tone="success">Agreement signed</Badge>
     : agreement.status === "signed" ? <Badge tone="warn">Agreement expired</Badge>
     : current ? <Badge tone="warn">{stageWords(current.stage, received, current.referees.length)}</Badge>
     : latest?.stage === "declined" ? <Badge tone="warn">Declined</Badge> : <Badge tone="muted">Not started</Badge>;

@@ -742,6 +742,14 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
   assert.equal(byKey.office_suburb.value, "3000"); assert.equal(byKey.office_province.value, ""); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
   assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
+  // Registry fixes (2026-11-19): the registration number is the contact's field, never prefilled, even from a template installed when it was the sender's;
+  // the signer is the "Business contact"; an activated onboarding reads "Business activated"; Ready to activate is shown for a signed business agreement.
+  const oldTemplate = onboarding.resolveFields([{ ...box, key: "agent_registration_number", type: "text", role: "sender", label: "Registration number (ACN)" }], { ...values, agent_registration_number: "ACN 004 028 077" });
+  assert.deepEqual([oldTemplate.printed.length, oldTemplate.recipient[0]?.role, oldTemplate.recipient[0]?.value, oldTemplate.recipient[0]?.label], [0, "agent", "", "Business/MARA/Registration number"]);
+  assert.equal(onboarding.AGENT_ONBOARDING_FIELDS.agent_registration_number.role, "agent"); assert.ok(!onboarding.AGENT_ONBOARDING_FIELDS.agent_registration_number.autoOrAgent);
+  assert.equal(onboarding.ONBOARDING_SIGNER_ROLE.label, "Business contact"); assert.equal(onboarding.STAGE_LABEL.activated, "Business activated");
+  assert.ok(read("src/pages/admin/lib/agentOnboarding.ts").includes(`if (kind === "business" && stage === "agreement_signed") return "Ready to activate";`), "Ready to activate in the stage words");
+  assert.equal(values.agent_year_founded, "2000", "Year founded is passed as agent_year_founded");
   // Without the switch (no ABR confirmation on the business), the earlier behaviour: values we hold are printed.
   assert.ok(onboarding.resolveFields(placed, values).printed.some((f) => f.key === "agent_legal_entity"), "earlier behaviour unchanged without the prefill");
 

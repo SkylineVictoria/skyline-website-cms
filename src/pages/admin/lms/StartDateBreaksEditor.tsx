@@ -1,7 +1,8 @@
 // Step 4 of the new course wizard: the start date and the term breaks of a course, each in a table, and the master timetable
-// they give: every unit's start and end date, one unit after another in its weeks (from its SLIT hours), prerequisites
+// they give for one cycle: every unit's start and end date, one unit after another in its weeks (from its SLIT hours), prerequisites
 // first, term breaks left out. The server (public.rto_master_timetable) calculates the dates; Save keeps them as the master
-// timetable, which the Master timetable tab shows and edits afterwards.
+// timetable, which the Master timetable tab shows and edits afterwards. The course has no end: when its last unit ends the
+// units start again (the next cycle), so only the cycle has a last day.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -119,7 +120,7 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
 
   return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Start date and term breaks · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
-      <span className="text-sm text-foreground-700">{start && master?.endDate ? <><b>{shortDate(start)} to {shortDate(master.endDate)}</b> · {order.length} units · {weeksLabel(totalWeeks)} classroom weeks</> : "Enter the start date to see the dates."}</span>
+      <span className="text-sm text-foreground-700">{start ? <><b>Starts {shortDate(start)}</b> · one cycle of {order.length} units, {weeksLabel(totalWeeks)} classroom weeks, then the units start again · no end date</> : "Enter the start date to see the dates."}</span>
       <div className="flex gap-2">
         {saved ? <><Button variant="outline" onClick={onClose}>{nextStep ? "Later" : "Done"}</Button>{nextStep ? <Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button> : null}</>
           : <><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
@@ -127,17 +128,18 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
       </div>
     </div>}>
     {error ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
-    {saved ? <p role="status" className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Saved. This is now the master timetable of {course.code}; every intake follows these dates.</p> : null}
+    {saved ? <p role="status" className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Saved. This is now the master timetable of {course.code}; every intake follows these dates, and the units run again in the next cycle.</p> : null}
     {!master && !error ? <p className="text-sm text-foreground-500">Loading the units…</p> : master ? <div className="space-y-5">
       {problems.length ? <ul role="alert" className="list-disc rounded-lg border border-red-200 bg-red-50 py-2 pl-8 pr-3 text-sm text-red-700">{problems.map(p => <li key={p}>{p}</li>)}</ul> : null}
 
       <section>
         <h3 className="mb-2 text-sm font-bold text-foreground-950">1. Start date</h3>
-        <table className="w-full max-w-md overflow-hidden rounded-lg border border-background-200 text-sm">
-          <thead className="bg-background-100"><tr><th className={th}>Course starts</th><th className={th}>Course ends</th></tr></thead>
+        <table className="w-full max-w-2xl overflow-hidden rounded-lg border border-background-200 text-sm">
+          <thead className="bg-background-100"><tr><th className={th}>Course starts</th><th className={th}>One cycle (every unit once)</th><th className={th}>Course ends</th></tr></thead>
           <tbody><tr className="border-t border-background-100">
             <td className="px-2 py-1.5"><input type="date" aria-label="Start date" className={input + " border-2 border-primary-300 font-semibold"} value={start} disabled={!canEdit || busy} onChange={e => changeStart(e.target.value)} /></td>
-            <td className="px-2 py-1.5 font-semibold text-foreground-950">{start && master.endDate ? shortDate(master.endDate) : "—"}</td>
+            <td className="px-2 py-1.5 text-foreground-800">{start && master.endDate ? <>{weeksLabel(totalWeeks)} weeks, last unit ends {shortDate(master.endDate)}</> : `${weeksLabel(totalWeeks)} weeks`}</td>
+            <td className="px-2 py-1.5 font-semibold text-foreground-950">Never: the units start again</td>
           </tr></tbody>
         </table>
       </section>
@@ -171,7 +173,7 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-bold text-foreground-950">3. Master timetable <span className="font-normal text-foreground-500">(calculated)</span></h3>
+        <h3 className="mb-2 text-sm font-bold text-foreground-950">3. Master timetable <span className="font-normal text-foreground-500">(calculated: the first cycle; the units then repeat)</span></h3>
         {!order.length ? <p className="rounded-lg border border-background-200 p-4 text-center text-sm text-foreground-500">This course has no active units. Add units first.</p>
           : <div className="max-h-[40vh] overflow-auto rounded-lg border border-background-200">
           <table className="w-full min-w-[720px] text-sm">

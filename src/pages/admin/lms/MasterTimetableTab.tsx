@@ -151,7 +151,7 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
           <input type="date" className={input + " mt-1 block"} value={start} disabled={!canEdit || busy} onChange={e => change(e.target.value, order)} />
         </label>
         <dl className="flex gap-5 text-sm">
-          <div><dt className="text-xs text-foreground-500">Ends</dt><dd className="font-semibold text-foreground-950">{master.endDate ? shortDate(master.endDate) : "—"}</dd></div>
+          <div><dt className="text-xs text-foreground-500" title="The course has no end: the units start again in the next cycle">This cycle ends</dt><dd className="font-semibold text-foreground-950">{master.endDate ? shortDate(master.endDate) : "—"}</dd></div>
           <div><dt className="text-xs text-foreground-500">Units</dt><dd className="font-semibold text-foreground-950">{order.length}</dd></div>
           <div><dt className="text-xs text-foreground-500">Classroom weeks</dt><dd className="font-semibold text-foreground-950">{weeksLabel(totalWeeks)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Classroom hours</dt><dd className="font-semibold text-foreground-950">{totalHours.toLocaleString()}</dd></div>

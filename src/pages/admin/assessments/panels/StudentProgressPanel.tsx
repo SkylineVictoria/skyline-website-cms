@@ -4,7 +4,7 @@ import ProgressList, { type Progress } from "@/components/assessment/ProgressLis
 import { asmAdmin } from "@/pages/admin/lib/assessments";
 import AttemptDrawer from "./AttemptDrawer";
 
-/** Student page: competency progress across the units of their batches. */
+/** Student page: competency progress across the units of their intakes. */
 export default function StudentProgressPanel({ studentId }: { studentId: string }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");

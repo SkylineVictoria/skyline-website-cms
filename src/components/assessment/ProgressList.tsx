@@ -7,9 +7,9 @@ export interface ProgressUnit {
 }
 export interface Progress { studentId: string; units: ProgressUnit[] }
 
-/** A student's competency progress: every unit of their batches' courses, the assessments on it and the signed outcome. */
+/** A student's competency progress: every unit of their intakes' courses, the assessments on it and the signed outcome. */
 export default function ProgressList({ progress, onOpenAttempt, onOpenAssignment }: { progress: Progress; onOpenAttempt?: (attemptId: string) => void; onOpenAssignment?: (assignmentId: string) => void }) {
-  if (!progress.units.length) return <p className="text-sm text-foreground-600">No units yet: the student is not enrolled in a batch.</p>;
+  if (!progress.units.length) return <p className="text-sm text-foreground-600">No units yet: the student is not placed in an intake yet.</p>;
   return (
     <ul className="divide-y divide-background-100 rounded-md border border-background-200">
       {progress.units.map((u) => (

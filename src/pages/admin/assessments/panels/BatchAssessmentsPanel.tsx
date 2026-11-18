@@ -6,8 +6,8 @@ import { asmAdmin, type AssignmentRow } from "@/pages/admin/lib/assessments";
 import { AssignmentDrawer } from "./AssignmentsPanel";
 import AttemptDrawer from "./AttemptDrawer";
 
-/** Batch page, section 5: the assessments assigned to this batch and their progress. */
-export default function BatchAssessmentsPanel({ batchId }: { batchId: string }) {
+/** Intake (class group) page: the assessments assigned to this intake and their progress. `batchId` is the intake id. */
+export default function IntakeAssessmentsPanel({ batchId }: { batchId: string }) {
   const [rows, setRows] = useState<AssignmentRow[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<AssignmentRow | null>(null);
@@ -16,7 +16,7 @@ export default function BatchAssessmentsPanel({ batchId }: { batchId: string }) 
   useEffect(() => { void load(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (error) return <p className="text-sm text-primary-700">{error}</p>;
   if (rows === null) return <p className="text-sm text-foreground-600">Loading…</p>;
-  if (rows.length === 0) return <p className="rounded-md bg-background-100 px-3 py-4 text-center text-sm text-foreground-600">No assessment is assigned to this batch yet. Assign one from <Link className="underline" to="/admin/assessments">Master Data › Assessments</Link>.</p>;
+  if (rows.length === 0) return <p className="rounded-md bg-background-100 px-3 py-4 text-center text-sm text-foreground-600">No assessment is assigned to this intake yet. Assign one from <Link className="underline" to="/admin/assessments">Master Data › Assessments</Link>.</p>;
   return (
     <>
       <ul className="divide-y divide-background-100">{rows.map((a) => (

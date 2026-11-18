@@ -166,22 +166,27 @@ function ClassDetails({ c, clash, onClose }: { c: CalClass; clash?: string; onCl
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
-    loadClassStudents(c.id).then((r) => { if (live) setStudents(r); }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Students did not load."); });
+    if (c.prerequisite) {
+      setStudents((c.studentList ?? []).map((s) => ({ ...s, joined: null, carryOver: false, prereqFirst: true, status: "active", mark: null })));
+    } else {
+      loadClassStudents(c.id).then((r) => { if (live) setStudents(r); }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "Students did not load."); });
+    }
     return () => { live = false; };
-  }, [c.id]);
+  }, [c.id, c.prerequisite, c.studentList]);
   const row = (label: string, value: string) => <div><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-medium text-foreground-950">{value}</dd></div>;
   return (
     <Modal open title={`${c.courseCode} ${c.batch} · ${shortDate(c.date)}`} onClose={onClose} width="max-w-2xl"
       footer={<div className="flex flex-wrap justify-end gap-2">
+        {c.prerequisite ? <Link to="/admin/lms/courses" className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open course › Prerequisite class</Link> : <>
         <Link to={`/admin/lms/intakes#${c.intakeId}`} className="rounded-md border border-background-300 px-3 py-1.5 text-sm font-medium hover:bg-background-100">Open intake</Link>
-        <Link to={`/admin/batches/${c.batchId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open batch</Link>
+        <Link to={`/admin/batches/${c.batchId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open batch</Link></>}
       </div>}>
       {clash ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">Clash: {clash}</p> : null}
       <dl className="grid gap-3 sm:grid-cols-3">
         {row("Time", `${timeRange(c.start, c.end)} (${c.type})`)}
         {row("Unit", c.unitCode ? `${c.unitCode} ${c.unitName ?? ""}` : "—")}
         {row("Course", `${c.courseCode} ${c.courseName}`)}
-        {row("Intake", `${shortDate(c.intakeStart)} – ${shortDate(c.intakeEnd)}`)}
+        {row("Intake", c.prerequisite ? "Prerequisite class (late joiners)" : `${shortDate(c.intakeStart)} – ${shortDate(c.intakeEnd)}`)}
         {row("Room", c.room ? `${c.campus ? c.campus + " · " : ""}${c.room}` : "No room")}
         {row("Trainer", trainerNames(c))}
         {row("Attendance", c.attendance ? (c.attendance === "final" ? "Final register" : `Register ${c.attendance}`) : c.date <= todayIso() ? "Not marked yet" : "Not due yet")}

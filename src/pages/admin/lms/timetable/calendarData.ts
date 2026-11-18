@@ -7,6 +7,8 @@ export interface CalClass {
   courseId: string; courseCode: string; courseName: string; unitId: string | null; unitCode: string | null; unitName: string | null;
   roomId: string | null; room: string | null; campus: string | null; trainers: { id: string; name: string }[];
   students: number; attendance: string | null;
+  /** A class of the course's Prerequisite class (late joiners' prerequisite units), with its students listed. */
+  prerequisite?: boolean; studentList?: { id: string; name: string; email: string | null }[];
 }
 export interface CalFilter { courseId?: string; intakeId?: string; batchId?: string; staffId?: string; roomId?: string; studentId?: string }
 export interface CalPeople {
@@ -28,8 +30,11 @@ async function call<T>(fn: string, args: Record<string, unknown>): Promise<T> {
   if (error) throw new Error(error.message);
   return data as T;
 }
-export const loadCalendar = (from: string, to: string, filter: CalFilter = {}) =>
-  call<CalClass[]>("admin_class_calendar", { p_from: from, p_to: to, p_filter: Object.fromEntries(Object.entries(filter).filter(([, v]) => v)) });
+export async function loadCalendar(from: string, to: string, filter: CalFilter = {}) {
+  const p = { p_from: from, p_to: to, p_filter: Object.fromEntries(Object.entries(filter).filter(([, v]) => v)) };
+  const [main, pre] = await Promise.all([call<CalClass[]>("admin_class_calendar", p), call<CalClass[]>("admin_prereq_sessions", p).catch(() => [] as CalClass[])]);
+  return [...main, ...pre].sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+}
 export const loadPeople = () => call<CalPeople>("admin_calendar_people", {});
 export const loadClassStudents = (id: string) => call<ClassStudent[]>("admin_class_session_students", { p_session: id });
 export const loadTimeline = (from: string, to: string) => call<TimelineIntake[]>("admin_intakes_timeline", { p_from: from, p_to: to });

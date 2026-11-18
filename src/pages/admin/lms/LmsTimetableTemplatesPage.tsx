@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ListPane from "@/pages/admin/components/ListPane";
+import { useListPane } from "@/pages/admin/lib/listPane";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -18,6 +20,7 @@ const short = (t: string) => t.slice(0, 5);
  * A batch picks one with "Use course timetable" in its class timing on the Batch calendar.
  */
 export default function LmsTimetableTemplatesPage() {
+  const pane = useListPane("timetable-templates");
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [courseId, setCourseId] = useState("");
   const [courseSearch, setCourseSearch] = useState("");
@@ -74,7 +77,8 @@ export default function LmsTimetableTemplatesPage() {
     </header>
     {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     {notice && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className={"grid items-start gap-5 " + pane.grid}>
+      <ListPane pane={pane} label="Courses">
       <aside className={card + " p-3"}>
         <label className="relative block"><span className="sr-only">Search courses</span>
           <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
@@ -88,6 +92,7 @@ export default function LmsTimetableTemplatesPage() {
             <span className="shrink-0 text-xs text-foreground-500" title={`${counts[c.id] ?? 0} templates`}>{counts[c.id] ?? 0}</span>
           </button>)}</div>
       </aside>
+      </ListPane>
       <section className={card + " min-w-0 p-5"}>
         {!course ? <p className="py-10 text-center text-sm text-foreground-500">Select a course.</p> : <>
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{course.code}</p>

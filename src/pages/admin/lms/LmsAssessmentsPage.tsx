@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ListPane from "@/pages/admin/components/ListPane";
+import { useListPane } from "@/pages/admin/lib/listPane";
 import { Link } from "react-router-dom";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
@@ -6,6 +8,7 @@ import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 
 /** LMS assessment-only workspace. Reuses authoritative assessment records and creation dialog. */
 export default function LmsAssessmentsPage() {
+  const pane = useListPane("assessments");
   const [courses,setCourses] = useState<RtoCourse[]>([]);
   const [units,setUnits] = useState<RtoUnit[]>([]);
   const [unitsLoading,setUnitsLoading] = useState(false);
@@ -103,7 +106,8 @@ export default function LmsAssessmentsPage() {
     {notice&&<p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}<button type="button" className="ml-3 underline" onClick={()=>setNotice("")}>Dismiss</button></p>}
     {error&&<p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}<button className="ml-3 underline" onClick={()=>void load()}>Retry</button></p>}
 
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className={"grid items-start gap-5 " + pane.grid}>
+      <ListPane pane={pane} label="Courses and units">
       <div className="min-w-0 space-y-5">
         <section className={card+" p-3"}>
           <h2 className={sectionTitle+" mb-2 px-1"}>Course</h2>
@@ -117,6 +121,7 @@ export default function LmsAssessmentsPage() {
           {unitsLoading?<p className="py-6 text-center text-sm text-foreground-500">Loading…</p>:!unitOptions.length?<p className="py-6 text-center text-sm text-foreground-500">No units in this course.</p>:null}
         </section>
       </div>
+      </ListPane>
       <section className={card+" min-w-0 p-5"}>
         <div className="min-w-0">
           <p className={sectionTitle}>{selectedCourse?.code??"Assessment library"}</p>

@@ -144,32 +144,34 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
   }));
   const blocked = busy || !start || !order.length || order.some(row => !(row.weeks > 0)) || master.problems.length > 0;
 
-  return <div className="space-y-4">
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-sm font-medium text-foreground-800">Start date
-          <input type="date" className={input + " mt-1 block"} value={start} disabled={!canEdit || busy} onChange={e => change(e.target.value, order)} />
+  const small = "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-foreground-700 hover:bg-background-100 disabled:opacity-50";
+  const fact = (label: string, value: string, warn = false) => <span className="whitespace-nowrap"><span className="text-foreground-500">{label}</span> <b className={warn ? "text-red-700" : "text-foreground-900"}>{value}</b></span>;
+  return <div className="space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-background-200 bg-background-100/60 px-3 py-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+        <label className="flex items-center gap-2 text-xs font-semibold text-foreground-700">Start
+          <input type="date" aria-label="Start date" className={input + " py-1"} value={start} disabled={!canEdit || busy} onChange={e => change(e.target.value, order)} />
         </label>
-        <dl className="flex gap-5 text-sm">
-          <div><dt className="text-xs text-foreground-500" title="The course has no end: the units start again in the next cycle">This cycle ends</dt><dd className="font-semibold text-foreground-950">{master.endDate ? shortDate(master.endDate) : "—"}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Units</dt><dd className="font-semibold text-foreground-950">{order.length}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Classroom weeks</dt><dd className="font-semibold text-foreground-950">{weeksLabel(totalWeeks)}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Classroom hours</dt><dd className="font-semibold text-foreground-950">{totalHours.toLocaleString()}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Most hours a week</dt><dd className={"font-semibold " + (need > 40 ? "text-red-700" : "text-foreground-950")}>{need ? need.toFixed(1).replace(/\.0$/, "") : "—"}</dd></div>
-        </dl>
+        <span title="The course has no end: the units start again in the next cycle">{fact("This cycle ends", master.endDate ? shortDate(master.endDate) : "—")}</span>
+        {fact("Units", String(order.length))}
+        {fact("Weeks", weeksLabel(totalWeeks))}
+        {fact("Hours", totalHours.toLocaleString())}
+        {fact("Max a week", need ? need.toFixed(1).replace(/\.0$/, "") + " h" : "—", need > 40)}
       </div>
       {canEdit ? <div className="flex items-center gap-2">
         <span className="text-xs text-foreground-500" role="status">{dirty ? "Unsaved changes" : master.saved ? "Saved" : "Not saved yet"}</span>
-        <button type="button" disabled={busy || !order.length} onClick={() => fitWeeks(20)} title="Sets every unit's weeks from its classroom hours at 20 hours a week (40 hours = 2 weeks)"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Weeks from hours (20 a week)</button>
-        <button type="button" disabled={busy} onClick={() => setBreakDraft({ label: "Term break", startDate: "", endDate: "" })}
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Add term break</button>
         <button type="button" disabled={blocked || (!dirty && master.saved)} onClick={() => void save()}
-          className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Saving…" : "Save master timetable"}</button>
+          className="rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
       </div> : null}
     </div>
+    {canEdit ? <div className="flex flex-wrap items-center gap-1">
+      <button type="button" disabled={busy || !order.length} onClick={() => fitWeeks(20)} title="Sets every unit's weeks from its classroom hours at 20 hours a week (40 hours = 2 weeks)" className={small}>
+        <i className="ri-scales-3-line" aria-hidden="true" />Weeks from hours (20 a week)</button>
+      <button type="button" disabled={busy} onClick={() => setBreakDraft({ label: "Term break", startDate: "", endDate: "" })} className={small}>
+        <i className="ri-calendar-close-line" aria-hidden="true" />Add term break</button>
+      {!start ? <span className="ml-2 text-xs text-foreground-500">Enter the start date: every unit gets its dates. Add term breaks first.</span> : null}
+    </div> : null}
 
-    {!start ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Enter the start date and every unit gets its start and end date. Add the term breaks first so the dates are right.</p> : null}
     {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
     {notice ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</p> : null}
     {master.problems.length ? <ul role="alert" className="list-disc rounded-lg border border-red-200 bg-red-50 py-2 pl-8 pr-3 text-sm text-red-700">
@@ -187,8 +189,8 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
     </div> : null}
 
     {!order.length ? <p className="py-10 text-center text-sm text-foreground-500">This course has no active units. Add units first.</p> : <div className="overflow-x-auto rounded-lg border border-background-200">
-      <table className="w-full min-w-[860px] text-sm">
-        <thead className="border-b border-background-200 bg-background-100"><tr>
+      <table className="w-full min-w-[860px] text-sm [&_td]:py-1.5">
+        <thead className="sticky top-0 z-[1] border-b border-background-200 bg-background-100"><tr>
           <th className={th}>Sr. No.</th><th className={th}>Unit code</th><th className={th}>Unit name</th><th className={th} title="Core or elective">C/E</th>
           <th className={th + " text-right"}>Classroom hours</th><th className={th + " text-right"}>Classroom weeks</th><th className={th + " text-right"} title="Classroom hours divided by classroom weeks: every intake's class times must give at least this many hours a week">Hours a week</th><th className={th}>Pre-requisite</th>
           <th className={th}>Start date</th><th className={th}>End date</th>{canEdit ? <th className={th}><span className="sr-only">Move</span></th> : null}

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ListPane from "@/pages/admin/components/ListPane";
+import { useListPane } from "@/pages/admin/lib/listPane";
 import { courseWeeksLabel, HOURS_PER_WEEK, loadUnitHours, rto, shownHours, type CourseDetail, type RtoCourse, type UnitHours } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
@@ -68,6 +70,7 @@ export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [addingCourse, setAddingCourse] = useState<null | "tga">(null);
   const [selectedId, setSelectedId] = useState("");
+  const pane = useListPane("courses");
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [unitHours, setUnitHours] = useState<Record<string, UnitHours>>({});
   const [query, setQuery] = useState("");
@@ -248,7 +251,8 @@ export default function LmsCoursesPage() {
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
 
-    <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className={"grid items-start gap-5 " + pane.grid}>
+      <ListPane pane={pane} label="Courses" current={selected?.code}>
       <section className={card + " p-3"}>
         <label className="relative block"><span className="sr-only">Search courses</span>
           <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
@@ -272,6 +276,7 @@ export default function LmsCoursesPage() {
             </button>)}
         </div>
       </section>
+      </ListPane>
 
       <section className={card + " min-w-0 p-5"}>
         {!selected ? <p className="py-20 text-center text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>

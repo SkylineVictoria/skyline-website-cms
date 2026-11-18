@@ -1840,7 +1840,7 @@ set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';
 select throws_ok($$select public.agency_onboarding_prefill_blanks(gen_random_uuid(),'{}')$$,'42501',null,'a signed-in user cannot fill an application form');
 select throws_ok($$select public.abr_business_cache_get('86603584676')$$,'42501',null,'a signed-in user cannot read the ABR cache');
 select throws_ok($$select public.agency_onboarding_attachments_list(gen_random_uuid())$$,'42501',null,'only administrators list the uploaded files');
--- F04 follow-ups (20261119184213): a company's ACN from its ABN; a postcode never stays in the Province of the stored values; service role only.
+-- F04 follow-ups (20261119190841): a company's ACN from its ABN; a postcode never stays in the Province of the stored values; service role only.
 select throws_ok($$select public.agency_onboarding_record_fill(gen_random_uuid(),'{}')$$,'42501',null,'a signed-in user cannot change an application''s stored values');
 reset role;
 select is(public.acn_from_abn('86 603 584 676','Australian Private Company'),'603584676','ACN: the last nine digits of a company''s ABN (check digit passes)');

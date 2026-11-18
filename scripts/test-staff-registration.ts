@@ -1042,7 +1042,7 @@ test("F04 follow-ups (2026-11-18): a company's ACN from its ABN when the registe
   const page = logic.initialF04([] as unknown as Parameters<typeof logic.initialF04>[0], { ...abrLib.abrFacts(purva, "2026-11-18T08:47:08Z") }, null, null);
   assert.equal(page.acn, "603584676", "page fallback");
   assert.ok(read("supabase/functions/document-signing/onboarding.ts").includes("if (values.agent_acn) values.agent_acn = acnDigits(values.agent_acn);"), "send: the stored values keep the ACN as digits");
-  const sql = read("supabase/migrations/20261119184213_f04_acn_province.sql");
+  const sql = read("supabase/migrations/20261119190841_f04_acn_province.sql");
   assert.ok(["create or replace function public.acn_from_abn", "agency_onboarding_record_fill", "agency_onboarding_office_fix", "v := v - 'office_province'", "update hr.sign_fields f set value = null",
     "r.state in ('sent', 'viewed', 'email_failed')", "grant execute on function public.agency_onboarding_record_fill(uuid, jsonb) to service_role"].every((s) => sql.includes(s)), "the migration fills the ACN and clears a Province postcode on unsigned F04s only");
 });

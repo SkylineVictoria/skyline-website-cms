@@ -716,18 +716,18 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
     assert.ok(!down.ok && down.reason === "unavailable" && /still add the business/.test(down.message), "the register being down never blocks Add business");
   }
 
-  // The F04 prefill (brief): Legal Entity, Trading / Agency name (the chosen business name), ABN/ACN, GST, State, postcode in the Suburb box
-  // (the Province box is for an overseas region), Country, Year founded; the contact from Add business; nothing else.
+  // The F04 prefill (brief): Legal Entity, Trading / Agency name (the chosen business name), ABN/ACN, GST, State, postcode in the
+  // "Province / postcode" box (Suburb left for the contact), Country, Year founded; the contact from Add business; nothing else.
   const details = ok.ok ? ok.details : null;
   const values = abrLib.abrApplicationValues({ details, confirmed: { legalEntity: "BHP GROUP LIMITED", tradingName: "BHP BILLITON", gstRegistered: true, state: "VIC", postcode: "3000" },
     contact: { givenName: "Pat", familyName: "Contact", email: "ZZ-Test-POC@blackhole.postmarkapp.com", phone: "+61412345678" } });
   assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49 004 028 077 (ACN 004 028 077)",
-    agent_gst_registered: "YES", office_state: "VIC", office_suburb: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
+    agent_gst_registered: "YES", office_state: "VIC", office_province: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
     contact_email: "zz-test-poc@blackhole.postmarkapp.com", contact_phone: "+61412345678" });
-  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_province" in values) && !("agent_registration_number" in values), "Province and the registration number stay blank");
+  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_suburb" in values) && !("agent_registration_number" in values), "Suburb and the registration number stay blank");
   // Staff edits win over the register; no business name falls back to the entity name; GST left to the contact.
   const edited = abrLib.abrApplicationValues({ details: { ...details!, businessNames: [], acn: "" }, confirmed: { legalEntity: "BHP Group Ltd", tradingName: "", gstRegistered: null, state: "WA", postcode: "6000" }, contact: { givenName: "", familyName: "", email: "", phone: "" } });
-  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_suburb, "6000"); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
+  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_province, "6000"); assert.ok(!("office_suburb" in edited)); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
   assert.equal(edited.agent_abn, BHP);
 
   // Editable: with the prefill switch, every value we hold is the contact's field, already filled in (nothing printed); the GST pair comes ticked.
@@ -740,7 +740,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.equal(byKey.agent_legal_entity.value, "BHP GROUP LIMITED"); assert.equal(byKey.agent_legal_entity.role, "agent");
   assert.equal(byKey["agent_abn_form"].value, "49 004 028 077 (ACN 004 028 077)"); assert.equal(byKey["agent_abn_form"].required, true);
   assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
-  assert.equal(byKey.office_suburb.value, "3000"); assert.equal(byKey.office_province.value, ""); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
+  assert.equal(byKey.office_province.value, "3000"); assert.equal(byKey.office_suburb.value, "", "Suburb is left for the contact"); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
   assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
   // Registry fixes (2026-11-19): the registration number is the contact's field, never prefilled, even from a template installed when it was the sender's;
   // the signer is the "Business contact"; an activated onboarding reads "Business activated"; Ready to activate is shown for a signed business agreement.

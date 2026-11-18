@@ -102,8 +102,8 @@ export const F04_TITLES = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Other"] as const;
 
 /**
  * The F04 prefill from the register (owner brief): Legal Entity = EntityName; Trading Name and Agent/Agency Name = the chosen business
- * name (fallback EntityName); ABN/ACN; GST Registered; State; postcode in the Suburb box (the form's Province box is for an overseas
- * region; Australian addresses have no province); Country = Australia; Year founded = year of the ABN's status date. From Add business:
+ * name (fallback EntityName); ABN/ACN; GST Registered; State; postcode in the "Province / postcode" box (Suburb is left for the contact);
+ * Country = Australia; Year founded = year of the ABN's status date. From Add business:
  * the contact's given and family name, email and phone. Everything else is left for the contact. Staff edits win over the register.
  */
 export function abrApplicationValues(input: {
@@ -119,7 +119,7 @@ export function abrApplicationValues(input: {
   const values: Record<string, string> = {
     agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abnAcn,
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
-    office_state: str(c?.state) || d?.state || "", office_suburb: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
+    office_state: str(c?.state) || d?.state || "", office_province: str(c?.postcode) || d?.postcode || "", office_country: "Australia",
     agent_year_founded: (d?.statusFrom ?? "").slice(0, 4),
     contact_given_name: str(input.contact.givenName), contact_family_name: str(input.contact.familyName),
     contact_email: str(input.contact.email).toLowerCase(), contact_phone: str(input.contact.phone),
@@ -128,7 +128,7 @@ export function abrApplicationValues(input: {
 }
 
 /** The keys of the F04 the prefill may fill (anything else from our records is left blank for the contact). */
-export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_gst_registered", "office_state", "office_suburb", "office_country",
+export const ABR_PREFILL_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_gst_registered", "office_state", "office_province", "office_country",
   "agent_year_founded", "contact_given_name", "contact_family_name", "contact_email", "contact_phone"] as const;
 
 /** Signing-time checks of a signed F04 (owner brief): the title is one of the list; the two referees have different emails. */

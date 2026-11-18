@@ -194,7 +194,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className="mr-auto text-sm text-foreground-600">Step 1 of 3 · Course. Next: 2 · Units, 3 · First intake.</span>
+        <span className="mr-auto text-sm text-foreground-600">Step 1 of 5 · Course. Next: 2 Units, 3 First intake, 4 Batch, 5 Students (optional).</span>
         <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={() => { setReview(null); setError(""); }}>Back to results</button>
         <button type="button" className={actionClass} disabled={Boolean(busy)} onClick={saveOnly}
           title="Adds the course with its core units, then opens Add units to choose the electives">Next: choose units</button>

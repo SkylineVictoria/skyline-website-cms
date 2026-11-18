@@ -9,7 +9,7 @@ import LmsUnitsPage from "./LmsUnitsPage";
 import MasterTimetableTab from "./MasterTimetableTab";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
 type Tab = "overview" | "units" | "master";
@@ -106,7 +106,15 @@ export default function LmsCoursesPage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not load courses."); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  const [params, setParams] = useSearchParams();
+  useEffect(() => { void load(params.get("course") ?? undefined); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A link such as the dashboard's "Open master timetable" names the course and the tab.
+  useEffect(() => {
+    const wanted = params.get("tab");
+    if (!params.get("course") || !courses.length) return;
+    if (wanted === "master" || wanted === "units") setTab(wanted);
+    setParams({}, { replace: true });
+  }, [courses, params, setParams]);
   useEffect(() => {
     setDetail(null); setDetailError("");
     if (!selectedId) return;

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import NeedsActionBoard from "@/pages/admin/components/NeedsActionBoard";
+import MasterTimetableDue from "@/pages/admin/components/MasterTimetableDue";
 import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Card, EmptyState, PageHeader, StatCard, StatusBadge } from "@/pages/admin/components/ui";
 
@@ -29,6 +30,7 @@ export default function DashboardPage() {
 
   return (
     <div>
+      <MasterTimetableDue />
       <PageHeader
         title={`Welcome back, ${user?.name.split(" ")[0] ?? "there"}`}
         description="What needs your attention today, then the website at a glance."

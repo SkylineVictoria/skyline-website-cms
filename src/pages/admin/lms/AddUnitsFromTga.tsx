@@ -46,6 +46,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   const [manual, setManual] = useState<UnitLookup | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState("");
+  const [note, setNote] = useState("");
   const onCourse = useMemo(() => new Map(units.map(unit => [unit.code.trim().toUpperCase(), unit])), [units]);
   const active = (code: string) => onCourse.get(code.toUpperCase())?.isActive === true;
 
@@ -82,7 +83,23 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
   const selected = (code: string) => active(code) || chosen.has(code) || imported.some(unit => unit.code === code.toUpperCase());
 
   const toggle = (code: string, on: boolean) => {
-    setChosen(s => { const next = new Set(s); if (on) next.add(code); else next.delete(code); return next; });
+    setChosen(s => {
+      const next = new Set(s);
+      if (on) next.add(code);
+      else {
+        // Unticking a prerequisite also unticks the picked units that need it (they always go together).
+        const drop = [code.toUpperCase()];
+        for (let i = 0; i < drop.length; i++) {
+          for (const other of [...next]) {
+            const found = lookups[other.toUpperCase()];
+            if (found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === drop[i]) && !drop.includes(other.toUpperCase())) drop.push(other.toUpperCase());
+          }
+        }
+        for (const item of [...next]) if (drop.includes(item.toUpperCase())) next.delete(item);
+        if (drop.length > 1) setNote(`Also unticked ${drop.slice(1).join(", ")}: ${drop.length > 2 ? "they need" : "it needs"} ${code}.`);
+      }
+      return next;
+    });
     // Prerequisites are read only for the units picked, and only the missing ones are shown.
     if (on && official.get(code.toUpperCase())?.unit.hasPrerequisites !== false) lookup(code);
   };
@@ -91,6 +108,22 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     + imported.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
   const count = chosen.size + imported.length;
   const needsAttest = (rules?.unchecked.length ?? 0) > 0;
+  // A picked unit brings its prerequisites with it: those in this qualification are ticked automatically.
+  useEffect(() => {
+    const add: string[] = [];
+    for (const code of chosen) {
+      const found = lookups[code.toUpperCase()];
+      if (!found || "error" in found) continue;
+      for (const need of found.prerequisiteCodes) {
+        const key = need.toUpperCase();
+        if (!selected(key) && official.has(key) && !add.includes(key)) add.push(key);
+      }
+    }
+    if (!add.length) return;
+    add.forEach(key => toggle(official.get(key)!.unit.code, true));
+    setNote(`Added the prerequisite${add.length === 1 ? "" : "s"} ${add.join(", ")}: a unit and its prerequisites are added together.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a unit's prerequisites have been read
+  }, [lookups, chosen]);
   const blocked = !release || !count || check?.ok === false || (needsAttest && !attested);
 
   function lookup(code: string) {
@@ -141,6 +174,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
     ...imported.map(unit => ({ unit: unit.code, needs: unit.prerequisiteCodes.filter(item => !selected(item)) })),
   ].filter(item => item.needs.length);
   const readingPrereqs = [...chosen].some(code => lookups[code.toUpperCase()] === null);
+  // A unit cannot be added without its prerequisites (they must be on the course or picked too).
+  const prereqBlocked = missingPrereqs.length > 0 || readingPrereqs;
   const brokenRules = check?.lines.filter(line => line.state === "broken") ?? [];
   const pendingRules = check?.lines.filter(line => line.state === "pending") ?? [];
 
@@ -164,7 +199,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
         <span className="text-sm text-foreground-600">{count} selected{hours ? ` · ${hours} nominal hours` : ""}
           {check?.ok === false ? <span className="ml-2 font-semibold text-red-700">Packaging rules not followed</span> : null}</span>
         <div className="flex gap-2"><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button disabled={busy || blocked} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : `Add ${count} unit${count === 1 ? "" : "s"}`}</Button></div>
+          <Button disabled={busy || blocked || prereqBlocked} title={prereqBlocked ? "Add the prerequisites of the units you picked first" : undefined} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : `Add ${count} unit${count === 1 ? "" : "s"}`}</Button></div>
       </div>}>
     {error ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
     {result ? <div className="space-y-1 text-sm text-foreground-800">
@@ -187,6 +222,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone }: {
           {item.needs.map(code => <button key={code} type="button" disabled={busy} onClick={() => addPrerequisite(code)}
             className="rounded border border-amber-400 bg-background-50 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-100">Add {code}</button>)}</p>)}
         {readingPrereqs ? <p className="text-xs text-foreground-500">Checking the prerequisites of the units you picked…</p> : null}
+        {missingPrereqs.length ? <p role="alert" className="text-sm font-semibold text-amber-900">A unit and its prerequisites are added together: add the prerequisites above (or untick the unit) before adding.</p> : null}
+        {note ? <p role="status" className="text-xs text-foreground-700"><i className="ri-information-line mr-1" aria-hidden="true" />{note}</p> : null}
         {needsAttest && rules ? <div className="text-sm text-amber-900">
           <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={attested} disabled={busy} onChange={e => setAttested(e.target.checked)} />
             <span>I have checked this selection against the official packaging rules (some rules cannot be checked automatically).</span></label>

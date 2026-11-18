@@ -1,4 +1,4 @@
-// LMS > Timetable: Today strip + Calendar, Trainers, Rooms, Students, Intakes timeline and Setup (weekly class timing per batch).
+// LMS > Timetable: Today strip + Calendar, Trainers, Rooms, Students, Intakes timeline and Setup (weekly class timing per intake).
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/pages/admin/components/ui";
@@ -52,7 +52,7 @@ export default function LmsTimetableHub() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Timetable" description="Every class across courses, intakes and batches: who teaches, who studies, which room, and when." />
+      <PageHeader title="Timetable" description="Every class across courses and intakes: who teaches, who studies, which room, and when." />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label="Today">
         {strip.map((s) => (
           <div key={s.label} className={`rounded-card border px-3 py-2 ${s.warn && s.value ? "border-amber-300 bg-amber-50" : "border-background-200 bg-background-50"}`}>

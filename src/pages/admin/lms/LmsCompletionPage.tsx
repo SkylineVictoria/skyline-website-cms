@@ -10,13 +10,12 @@ type Row = { enrolmentId: string; studentId: string; studentName: string; enrolm
 const select = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
 const btn = "rounded-md border border-background-300 px-2.5 py-1 text-xs font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50";
 
-/** LMS > Completion: each student's unit results in a batch; issue a Certificate (every unit Competent) or a Statement of Attainment. */
+/** LMS > Completion: each student's unit results in an intake; issue a Certificate (every unit Competent) or a Statement of Attainment. */
 export default function LmsCompletionPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [intakes, setIntakes] = useState<RtoIntake[]>([]);
   const [courseId, setCourseId] = useState("");
   const [intakeId, setIntakeId] = useState("");
-  const [batchId, setBatchId] = useState("");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -26,10 +25,10 @@ export default function LmsCompletionPage() {
     Promise.all([rto<RtoCourse[]>("course_list"), rto<RtoIntake[]>("intake_list")])
       .then(([c, i]) => { setCourses(c); setIntakes(i); setCourseId(c[0]?.id ?? ""); }).catch((e) => setError(e.message));
   }, []);
-  const courseIntakes = useMemo(() => intakes.filter((i) => i.courseId === courseId), [intakes, courseId]);
+  const courseIntakes = useMemo(() => intakes.filter((i) => i.courseId === courseId && (i.batchList?.length ?? 0) > 0), [intakes, courseId]);
   useEffect(() => { setIntakeId((o) => (courseIntakes.some((i) => i.id === o) ? o : bestIntake(courseIntakes))); }, [courseIntakes]);
-  const batches = useMemo(() => courseIntakes.find((i) => i.id === intakeId)?.batchList ?? [], [courseIntakes, intakeId]);
-  useEffect(() => { setBatchId((o) => (batches.some((b) => b.id === o) ? o : batches[0]?.id ?? "")); }, [batches]);
+  // The intake is the class group: its id is what course_completion_list calls p_batch.
+  const batchId = courseIntakes.find((i) => i.id === intakeId)?.batchList?.[0]?.id ?? "";
 
   const load = useCallback(async () => {
     if (!batchId) { setRows([]); return; }
@@ -61,16 +60,15 @@ export default function LmsCompletionPage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Completion &amp; certificates</h1>
         <p className="text-sm text-foreground-500">When every unit is marked Competent, issue the certificate and record of results. A statement of attainment lists the units achieved so far. RTO Managers issue and revoke.</p>
       </header>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs font-semibold text-foreground-500">Course<select className={select + " mt-1"} value={courseId} onChange={(e) => setCourseId(e.target.value)}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
         <label className="text-xs font-semibold text-foreground-500">Intake<select className={select + " mt-1"} value={intakeId} onChange={(e) => setIntakeId(e.target.value)}>{courseIntakes.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
-        <label className="text-xs font-semibold text-foreground-500">Batch<select className={select + " mt-1"} value={batchId} onChange={(e) => setBatchId(e.target.value)}>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
       </div>
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {message ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{message}</p> : null}
       <section className="rounded-2xl border border-background-200 bg-background-50 p-4 shadow-sm">
-        {!batchId ? <p className="py-8 text-center text-sm text-foreground-500">This intake has no batch yet. A batch opens when students are added to the intake (<a className="font-semibold text-primary-700 underline" href={`/admin/lms/intakes#${intakeId}`}>open the intake</a>).</p> : rows === null ? <p className="py-8 text-center text-sm text-foreground-500">Loading…</p>
-          : !rows.length ? <p className="py-8 text-center text-sm text-foreground-500">No students in this batch.</p> : (
+        {!batchId ? <p className="py-8 text-center text-sm text-foreground-500">No intake of this course has its classes set up yet (<a className="font-semibold text-primary-700 underline" href="/admin/lms/intakes">open the intakes</a>).</p> : rows === null ? <p className="py-8 text-center text-sm text-foreground-500">Loading…</p>
+          : !rows.length ? <p className="py-8 text-center text-sm text-foreground-500">No students in this intake.</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">

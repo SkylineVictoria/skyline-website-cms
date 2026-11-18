@@ -1,4 +1,4 @@
-// One student's timetable: pick a placed student, see their study (intake, batch, units, progress) and their own classes.
+// One student's timetable: pick a placed student, see their study (intake, units, progress) and their own classes.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { TextInput } from "@/pages/admin/components/ui";
@@ -26,7 +26,7 @@ export default function StudentsView({ people }: { people: CalPeople | null }) {
               <b className="block truncate text-foreground-950">{s.name}</b><span className="block truncate text-xs text-foreground-500">{s.email}</span>
             </button>
           ))}
-          {people && !list.length ? <p className="p-3 text-sm text-foreground-500">{query ? "No student matches." : "No student is placed in a batch yet."}</p> : null}
+          {people && !list.length ? <p className="p-3 text-sm text-foreground-500">{query ? "No student matches." : "No student is placed in an intake yet."}</p> : null}
           {!people ? <p className="p-3 text-sm text-foreground-500">Loading…</p> : null}
         </div>
       </section>

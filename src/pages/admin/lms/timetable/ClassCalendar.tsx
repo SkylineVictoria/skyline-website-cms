@@ -1,4 +1,4 @@
-// Every class as a month, week or day calendar, with filters (course › intake › batch, trainer, room, student) and a class's details.
+// Every class as a month, week or day calendar, with filters (course › intake, trainer, room, student) and a class's details.
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Modal, Select } from "@/pages/admin/components/ui";
@@ -59,7 +59,8 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
   const set = (k: keyof CalFilter, v: string) => setFilter((f) => {
     const next = { ...f, [k]: v || undefined };
     if (k === "courseId") { next.intakeId = undefined; next.batchId = undefined; }
-    if (k === "intakeId") next.batchId = undefined;
+    // The intake is the class group: the database filters on either key, so send the intake id as both.
+    if (k === "intakeId") next.batchId = v || undefined;
     return next;
   });
 
@@ -143,7 +144,6 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
   };
 
   const courseIntakes = (people?.intakes ?? []).filter((i) => i.courseId === filter.courseId);
-  const intakeBatches = (people?.batches ?? []).filter((b) => b.intakeId === filter.intakeId);
   const sel = "!w-auto min-w-0 max-w-[14rem] !py-1.5 text-sm";
 
   return (
@@ -169,9 +169,6 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
           </Select>
           {filter.courseId ? <Select className={sel} aria-label="Intake" value={filter.intakeId ?? ""} onChange={(e) => set("intakeId", e.target.value)}>
             <option value="">All intakes</option>{courseIntakes.map((i) => <option key={i.id} value={i.id}>{shortDate(i.startDate)} – {shortDate(i.endDate)}</option>)}
-          </Select> : null}
-          {filter.intakeId ? <Select className={sel} aria-label="Batch" value={filter.batchId ?? ""} onChange={(e) => set("batchId", e.target.value)}>
-            <option value="">All batches</option>{intakeBatches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </Select> : null}
           <Select className={sel} aria-label="Trainer" value={filter.staffId ?? ""} onChange={(e) => set("staffId", e.target.value)}>
             <option value="">All trainers</option>{people.trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -232,8 +229,7 @@ function ClassDetails({ c, clash, onClose }: { c: CalClass; clash?: string; onCl
     <Modal open title={`${c.courseCode} ${c.batch} · ${shortDate(c.date)}`} onClose={onClose} width="max-w-2xl"
       footer={<div className="flex flex-wrap justify-end gap-2">
         {c.prerequisite ? <Link to="/admin/lms/courses" className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open course › Prerequisite class</Link> : <>
-        <Link to={`/admin/lms/intakes#${c.intakeId}`} className="rounded-md border border-background-300 px-3 py-1.5 text-sm font-medium hover:bg-background-100">Open intake</Link>
-        <Link to={`/admin/batches/${c.batchId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open batch</Link></>}
+        <Link to={`/admin/lms/intakes#${c.intakeId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open intake</Link></>}
       </div>}>
       {clash ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">Clash: {clash}</p> : null}
       <dl className="grid gap-3 sm:grid-cols-3">

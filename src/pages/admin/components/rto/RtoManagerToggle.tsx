@@ -3,7 +3,7 @@ import { Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { rto } from "@/pages/admin/lib/rto";
 
-/** Users › edit: grant or remove the RTO Manager permission (courses, units, fees, intakes, schedules, batches). Admins and RTO Managers only. */
+/** Users › edit: grant or remove the RTO Manager permission (courses, units, fees, intakes, schedules, class setup). Admins and RTO Managers only. */
 export default function RtoManagerToggle({ userId }: { userId: string }) {
   const { push } = useToast();
   const [state, setState] = useState<{ rtoManager: boolean; canManage: boolean } | null>(null);
@@ -23,7 +23,7 @@ export default function RtoManagerToggle({ userId }: { userId: string }) {
   return (
     <div className="rounded-md border border-background-200 p-3">
       <Toggle checked={state.rtoManager} disabled={busy} onChange={(v) => void change(v)} label="RTO Manager" />
-      <p className="mt-1 text-xs text-foreground-500">Edits courses, units, fees, intakes, schedules, batches and classrooms. Saved straight away.</p>
+      <p className="mt-1 text-xs text-foreground-500">Edits courses, units, fees, intakes, schedules, class setup and classrooms. Saved straight away.</p>
     </div>
   );
 }

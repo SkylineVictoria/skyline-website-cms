@@ -10,6 +10,12 @@ import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
 import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
 
+/** /admin/batches/:id (old links): a batch id is its intake id, so the intake list opens that intake in its sheet. */
+export function OldBatchRedirect() {
+  const { id = "" } = useParams();
+  return <Navigate to={`/admin/lms/intakes${id ? `#${id}` : ""}`} replace />;
+}
+
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   // Retired areas stay in the URL space so old links redirect instead of 404ing.

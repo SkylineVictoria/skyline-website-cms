@@ -1,4 +1,4 @@
-import LmsPage from "@/pages/admin/lms/LmsPage";
+import LmsPage, { OldBatchRedirect } from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
@@ -7,7 +7,7 @@ import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPa
 import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
 import IntegrationSettingsPage from "@/pages/admin/integrations/SettingsPage";
 import ApplicationStatusesPage from "@/pages/admin/ApplicationStatusesPage";
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import SiteLayout from "@/components/feature/SiteLayout";
 import Home from "@/pages/home/page";
@@ -120,11 +120,6 @@ import BookingsHub from "@/pages/bookings/BookingsHub";
 import PublicBookingPage from "@/pages/bookings/PublicBookingPage";
 import ManageBookingPage from "@/pages/bookings/ManageBookingPage";
 
-/** /admin/batches/:id (old links): a batch id is its intake id, so the intake list opens that intake in its sheet. */
-function OldBatchRedirect() {
-  const { id = "" } = useParams();
-  return <Navigate to={`/admin/lms/intakes${id ? `#${id}` : ""}`} replace />;
-}
 
 const routes: RouteObject[] = [
   {

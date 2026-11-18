@@ -10,7 +10,7 @@ import RoomsBoard from "@/pages/admin/components/rto/RoomsBoard";
 
 type View = "courses" | "intakes" | "rooms";
 
-/** Master Data › Courses: the one course list. A course's facts, units, fees, intakes, batches and website content open from here. */
+/** Master Data › Courses: the one course list. A course's facts, units, fees, intakes, class setup and website content open from here. */
 export default function CourseFeesPage() {
   const [rows, setRows] = useState<RtoCourse[] | null>(null);
   const [error, setError] = useState("");
@@ -38,7 +38,7 @@ export default function CourseFeesPage() {
 
   return (
     <div data-testid="course-fees-page">
-      <PageHeader title="Courses" description={view === "rooms" ? "Which batch is in which room, week by week." : view === "intakes" ? "Every intake of every course. Open one for its timeline, batches and students." : "One record per course: open a course to set it up step by step (details, units & timetable, fees, intakes, website)."} />
+      <PageHeader title="Courses" description={view === "rooms" ? "Which intake is in which room, week by week." : view === "intakes" ? "Every intake of every course. Open one for its timeline, class setup and students." : "One record per course: open a course to set it up step by step (details, units & timetable, fees, intakes, website)."} />
       <div className="mb-4 inline-flex rounded-full border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View">
         {([["courses", "Courses"], ["intakes", "Intakes"], ["rooms", "Rooms"]] as const).map(([v, label]) => (
           <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => switchView(v)}

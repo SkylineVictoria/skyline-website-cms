@@ -5,11 +5,11 @@ import { ErrorNote, ReadOnlyNote } from "@/pages/admin/components/rto/shared";
 import { SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import { rto, rtoFlow, type LocationRooms, type Room } from "@/pages/admin/lib/rto";
 
-/** Master Data › Rooms (also opened from Courses › Rooms): the rooms batches meet in, by location. RTO Managers edit; others view. */
+/** Master Data › Rooms (also opened from Courses › Rooms): the rooms intakes meet in, by location. RTO Managers edit; others view. */
 export default function ClassroomsPage() {
   return (
     <div>
-      <PageHeader title="Rooms" description="The rooms batches meet in, by location. A batch picks its rooms in its class timing." />
+      <PageHeader title="Rooms" description="The rooms intakes meet in, by location. An intake picks its rooms in its class setup." />
       <RoomsManager />
     </div>
   );

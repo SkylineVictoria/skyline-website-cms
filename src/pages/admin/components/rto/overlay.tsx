@@ -1,4 +1,4 @@
-// Overlays and small pieces shared by the intake, batch and rooms screens: a right-hand sheet, a "⋯" menu, skeleton cards and
+// Overlays and small pieces shared by the intake and rooms screens: a right-hand sheet, a "⋯" menu, skeleton cards and
 // keyboard shortcuts. Motion is 150–250 ms ease-out and is switched off for people who ask for reduced motion.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";

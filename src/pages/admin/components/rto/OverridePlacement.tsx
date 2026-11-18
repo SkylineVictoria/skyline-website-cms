@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { rto, todayIso, type EnrolmentType, type StudentOption } from "@/pages/admin/lib/rto";
+import { friendlyDbError, rto, todayIso, type EnrolmentType, type StudentOption } from "@/pages/admin/lib/rto";
 
 interface BatchOption { id: string; name: string; full?: boolean }
 
@@ -34,7 +34,7 @@ export function PlaceByHandDrawer({ open, courseId, batches, batchId, intakeStar
     setBusy(true); setError("");
     const { error: e } = await supabase.rpc("rto_staff_place", { p_batch: batch, p_student: student.id, p_type: type, p_on: on, p_reason: reason });
     setBusy(false);
-    if (e) { setError(e.message); return; }
+    if (e) { setError(friendlyDbError(e.message)); return; }
     onDone(`${student.name} placed by hand.`);
   };
   return (
@@ -82,7 +82,7 @@ export function OverrideStudentDrawer({ open, mode, enrolmentId, studentName, ba
       ? await supabase.rpc("rto_staff_move", { p_enrolment: enrolmentId, p_to_batch: to, p_reason: reason })
       : await supabase.rpc("rto_staff_remove", { p_enrolment: enrolmentId, p_reason: reason });
     setBusy(false);
-    if (e) { setError(e.message); return; }
+    if (e) { setError(friendlyDbError(e.message)); return; }
     onDone(mode === "move" ? `${studentName} moved.` : `${studentName} removed from the intake.`);
   };
   return (

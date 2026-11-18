@@ -1,4 +1,4 @@
-// Intakes as cards (month, dates, status you can click, students against places, batch chips, "⋯" for Duplicate / Delete). A card
+// Intakes as cards (month, dates, status you can click, students against places, class setup line, "⋯" for Duplicate / Delete). A card
 // opens the intake in a sheet whose address ends in #<intake id>. N = new intake.
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -16,8 +16,8 @@ import {
 export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, onDuplicate, onDelete }: {
   intake: RtoIntake; showCourse: boolean; canEdit: boolean; onOpen: () => void; onStatus: (s: IntakeStatus) => void; onDuplicate: () => void; onDelete: () => void;
 }) {
-  const batches = i.batchList ?? [];
-  const places = i.capacity ?? (batches.length && batches.every((b) => b.capacity) ? batches.reduce((s, b) => s + (b.capacity ?? 0), 0) : null);
+  const group = (i.batchList ?? []).find((b) => b.id === i.id) ?? (i.batchList ?? [])[0] ?? null;
+  const places = i.capacity ?? group?.capacity ?? null;
   const when = phase(i);
   return (
     <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
@@ -46,12 +46,11 @@ export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, o
         </div>
       </div>
       <div className="mt-3 flex min-h-[1.75rem] flex-wrap gap-1.5">
-        {batches.length === 0 ? <span className="text-xs text-foreground-400">No batches yet</span> : batches.map((b) => (
-          <span key={b.id} className={`rounded-full border px-2 py-0.5 text-xs font-medium ${b.isActive ? "border-secondary-200 bg-secondary-50 text-secondary-900" : "border-background-300 text-foreground-500 line-through"}`}
-            title={b.days.length ? b.days.join(" ") : undefined}>
-            {b.name} <span className="tabular-nums text-foreground-500">{b.enrolled}{b.capacity ? `/${b.capacity}` : ""}</span>
+        {!group || !group.days.length ? <span className="text-xs text-foreground-400">Classes not set up yet</span> : (
+          <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${group.isActive ? "border-secondary-200 bg-secondary-50 text-secondary-900" : "border-background-300 text-foreground-500"}`} title="Class days">
+            <i className="ri-time-line mr-1" aria-hidden="true" />{group.days.join(" ")}
           </span>
-        ))}
+        )}
       </div>
     </div>
   );
@@ -66,7 +65,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
   const location = useLocation();
   const navigate = useNavigate();
   const openId = /^#([0-9a-f-]{36})$/i.exec(location.hash)?.[1] ?? null;
-  // ?wizard=1 (new course wizard): the intake opens on step 5, its class timing.
+  // ?wizard=1 (new course wizard): the intake opens on step 5, its class setup.
   const wizard = new URLSearchParams(location.search).get("wizard") === "1";
   const [start, setStart] = useState<{ tab?: SheetTab; addBatch?: boolean }>(() => (wizard ? { addBatch: true } : {}));
   const [creating, setCreating] = useState(false);
@@ -119,7 +118,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
         onCreated={(d: IntakeDetail, addBatch) => { setCreating(false); onReload(); push(`${d.intake.name} created.`); open(d.intake.id, addBatch ? { addBatch: true } : { tab: "timeline" }); }} />
       {duplicating ? <DuplicateDrawer intake={duplicating} onClose={() => setDuplicating(null)} onDone={(d) => { setDuplicating(null); onReload(); push(`${d.intake.name} created as a draft.`); open(d.intake.id); }} /> : null}
       <ConfirmDialog open={deleting !== null} title={`Delete ${deleting?.name ?? "this intake"}?`} confirmLabel="Delete intake"
-        message="Its timeline and batches go too. Students in it are taken out and wait for you to place them in a new intake (Override: place a student). An intake with issued certificates, set assessments or recorded attendance cannot be deleted; close it instead."
+        message="Its timeline and class setup go too. Students in it are taken out and wait for you to place them in a new intake (Override: place a student). An intake with issued certificates, set assessments or recorded attendance cannot be deleted; close it instead."
         onCancel={() => setDeleting(null)} onConfirm={() => { const i = deleting; setDeleting(null); if (i) void remove(i); }} />
     </>
   );
@@ -142,7 +141,7 @@ function DuplicateDrawer({ intake, onClose, onDone }: { intake: RtoIntake; onClo
       <Field label="New start date" required hint={`This one starts ${shortDate(intake.startDate)}. Every unit date moves by the same number of days.`}>
         <TextInput type="date" autoFocus value={start} onChange={(e) => setStart(e.target.value)} />
       </Field>
-      <p className="text-sm text-foreground-600">Copied: the timeline, batches, trainers, class times and rooms, and dates changed for a batch. Not copied: students. The copy starts as a draft.</p>
+      <p className="text-sm text-foreground-600">Copied: the timeline, trainers, class times and rooms. Not copied: students. The copy starts as a draft.</p>
     </Drawer>
   );
 }

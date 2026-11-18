@@ -1,7 +1,7 @@
 // Sync with training.gov.au: every qualification on the site's RTO scope (Settings > RTO code) is matched to its CMS course
 // by qualification code. One missing qualification is picked at a time: it is created as a draft course with its core units
 // through the tga-course-import function, and the new course wizard opens on it (Add units with every unit of the
-// qualification, then hours, start date and term breaks, first intake, batch).
+// qualification, then hours, start date and term breaks, first intake with its class setup).
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
@@ -83,7 +83,7 @@ export default function TrainingGovBulkSync({ open, courses, onClose, onDone, on
     {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
     {scope ? <div className="space-y-3 text-sm">
       <p className="text-foreground-600">{scope.items.filter(i => i.current).length} qualifications are on the scope of RTO {scope.rto}; {missing} {missing === 1 ? "is" : "are"} not in the CMS yet.
-        Pick <strong>one</strong> to import: it is created with its units from Training.gov.au and the new course wizard opens on it (units, hours, start date and term breaks, first intake, batch).</p>
+        Pick <strong>one</strong> to import: it is created with its units from Training.gov.au and the new course wizard opens on it (units, hours, start date and term breaks, first intake with its class setup).</p>
       <table className="w-full text-left">
         <thead><tr className="border-b border-background-200 text-xs text-foreground-500">
           <th className="py-2 pr-2" /><th className="py-2 pr-2">Code</th><th className="py-2 pr-2">Qualification</th><th className="py-2 pr-2">On scope until</th><th className="py-2">In the CMS</th></tr></thead>

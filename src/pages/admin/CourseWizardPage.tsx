@@ -15,8 +15,8 @@ const STEPS: { id: CourseStep; short: string; title: string; icon: string; hint:
   { id: "details", short: "Details", title: "Course details", icon: "ri-information-line", hint: "Name, codes, category, duration and campus." },
   { id: "timetable", short: "Units & Timetable", title: "Units & master timetable", icon: "ri-list-check-2", hint: "The units in delivery order with their weeks and hours. Every intake is generated from this." },
   { id: "fees", short: "Fees", title: "Fees", icon: "ri-money-dollar-circle-line", hint: "The fee lines as the offer letter prints them. Every intake uses these unless its fees are changed for that intake." },
-  { id: "intakes", short: "Intakes", title: "Intakes and batches", icon: "ri-calendar-event-line", hint: "Each intake is one run of the course with its own dates. Open one for its timeline, batches and students." },
-  { id: "assessments", short: "Assessments", title: "Assessments per unit", icon: "ri-edit-box-line", hint: "The form-built assessments mapped to each unit of competency; versions are published, then assigned to batches." },
+  { id: "intakes", short: "Intakes", title: "Intakes", icon: "ri-calendar-event-line", hint: "Each intake is one run of the course with its own dates. Open one for its timeline, class setup and students." },
+  { id: "assessments", short: "Assessments", title: "Assessments per unit", icon: "ri-edit-box-line", hint: "The form-built assessments mapped to each unit of competency; versions are published, then assigned to intakes." },
   { id: "website", short: "Website", title: "Website", icon: "ri-global-line", hint: "Marketing settings and the publish checklist; facts come from the steps before." },
 ];
 
@@ -104,7 +104,7 @@ export default function CourseWizardPage() {
               aria-current={sectionIndex === index ? "page" : undefined}
               className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${sectionIndex === index ? "bg-primary-600 text-white" : "text-foreground-600 hover:bg-background-100 hover:text-foreground-900"}`}
             >
-              <span>{section.id === "details" ? "Overview" : section.id === "timetable" ? "Curriculum" : section.id === "intakes" ? "Intakes & Batches" : section.short}</span>
+              <span>{section.id === "details" ? "Overview" : section.id === "timetable" ? "Curriculum" : section.id === "intakes" ? "Intakes" : section.short}</span>
               {notes[section.id].length > 0 ? <span aria-label={`${notes[section.id].length} items need attention`} title={notes[section.id].join(" · ")} className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs ${sectionIndex === index ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"}`}>{notes[section.id].length}</span> : null}
             </Link>
           ))}
@@ -115,7 +115,7 @@ export default function CourseWizardPage() {
         <p className="mt-1 text-sm text-foreground-600">{current.hint}</p>
       </div>
       {notes[current.id].length ? <div className="mb-3 overflow-hidden rounded-md border border-background-200"><WizardNotice tone="warn">Needs attention: {notes[current.id].join(" · ")}</WizardNotice></div> : null}
-      {!canEdit && current.id !== "website" ? <div className="mb-3"><ReadOnlyNote>{role.admin ? "You can view this course and enrol students into existing batches. Only an RTO Manager changes it." : "Read only."}</ReadOnlyNote></div> : null}
+      {!canEdit && current.id !== "website" ? <div className="mb-3"><ReadOnlyNote>{role.admin ? "You can view this course and enrol students into existing intakes. Only an RTO Manager changes it." : "Read only."}</ReadOnlyNote></div> : null}
 
       {current.id === "details" ? <div className="space-y-5">
         <CourseFacts course={c} readOnly={!canEdit} busy={busy} autosave onSave={(data) => void save("course_save", data)} />

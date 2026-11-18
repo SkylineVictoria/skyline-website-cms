@@ -95,7 +95,7 @@ export default function LmsCoursesPage() {
   const [reloadKey, setReloadKey] = useState(0);
   // New course wizard: 1 course (Add course / Sync), 2 units in the Add units popup (packaging rules met), 3 the units' SLIT
   // hours (required), 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first
-  // intake/batch with its class timing (a course template or by hand). Students are added only through the enrolment wizard.
+  // intake with its class setup (a course template or by hand). Students are added only through the enrolment wizard.
   // A step closed with X stays waiting (hidden): the bar at the top of the page opens it again.
   const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "intake"; hidden?: boolean } | null>(null);
   const navigate = useNavigate();
@@ -258,7 +258,7 @@ export default function LmsCoursesPage() {
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
         nextStep={detail?.intakes.length ? undefined : { label: "Next: intake and class timing", onClick: () => { setWizard({ courseId: wizard.courseId, step: "intake" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Step 5 of 5 · Intake/Batch" createLabel="Create and set class timing"
+      allowBatch={false} requireUnitSchedule title="Step 5 of 5 · Intake" createLabel="Create and set up classes"
       onClose={() => setWizard(null)}
       onCreated={d => { setWizard(null); navigate(`/admin/lms/intakes?wizard=1#${d.intake.id}`); }} /> : null}
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}

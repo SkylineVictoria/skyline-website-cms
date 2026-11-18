@@ -102,14 +102,16 @@ Deno.serve(async req => {
     if (input.action === "add_units") {
       // `codes`: units from the qualification's own lists; `imported`: electives from elsewhere, typed by hand.
       const imported = "imported" in input && Array.isArray(input.imported) ? input.imported : [];
+      // `remove`: electives on the course to switch off in the same save (changing a unit for another).
+      const remove = "remove" in input && Array.isArray(input.remove) ? input.remove : [];
       if (!("courseId" in input) || typeof input.courseId !== "string" || !input.courseId || !("codes" in input) || !Array.isArray(input.codes)
-          || !(input.codes.length + imported.length) || input.codes.length > 250 || imported.length > 30
-          || [...input.codes, ...imported].some(code => typeof code !== "string")) {
+          || !(input.codes.length + imported.length + remove.length) || input.codes.length > 250 || imported.length > 30 || remove.length > 100
+          || [...input.codes, ...imported, ...remove].some(code => typeof code !== "string")) {
         return json({ error: "Choose the units to add." }, 400);
       }
       stage = "add_units";
       return await addUnits(db, scope.tenantId ?? null, input.courseId, input.codes as string[], hoursLookup,
-        { imported: imported as string[], attested: "attested" in input && input.attested === true });
+        { imported: imported as string[], remove: remove as string[], attested: "attested" in input && input.attested === true });
     }
     if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
       return json({ error: "Invalid qualification request." }, 400);

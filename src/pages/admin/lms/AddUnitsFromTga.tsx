@@ -12,7 +12,7 @@ interface Release {
   code: string; name: string; releaseNumber: string; core: TgaUnit[]; electives: TgaUnit[]; groups: Record<string, string>;
   requiredElectives: number | null; packagingRules: string; specialisations: { code: string; title: string; core: number; elective: number }[];
 }
-interface AddResult { added: number; activated: number; alreadyOn: number; detailsSynced: number; elementsAdded: number; detailsFailed: number; imported?: number; rulesComplete?: boolean }
+interface AddResult { removed?: number; added: number; activated: number; alreadyOn: number; detailsSynced: number; elementsAdded: number; detailsFailed: number; imported?: number; rulesComplete?: boolean }
 interface UnitLookup {
   code: string; title: string; usage: string; current: boolean; packageCode: string; packageTitle: string;
   nominalHours: number | null; prerequisites: string | null; prerequisiteCodes: string[]; detailsRead: boolean;
@@ -51,8 +51,11 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState("");
   const [note, setNote] = useState("");
+  // Electives on the course that staff unticked: switched off when the change is saved (to change a unit for another).
+  const [removing, setRemoving] = useState<Set<string>>(new Set());
   const onCourse = useMemo(() => new Map(units.map(unit => [unit.code.trim().toUpperCase(), unit])), [units]);
-  const active = (code: string) => onCourse.get(code.toUpperCase())?.isActive === true;
+  const active = (code: string) => onCourse.get(code.toUpperCase())?.isActive === true && !removing.has(code.toUpperCase());
+  const onCourseNow = (code: string) => onCourse.get(code.toUpperCase())?.isActive === true;
 
   useEffect(() => {
     let live = true;
@@ -79,11 +82,11 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
       if (!listed) electives.set(code.toUpperCase(), { code, groups: null });
       else if (!listed.core) electives.set(code.toUpperCase(), { code, groups: listed.unit.groups });
     };
-    units.filter(unit => unit.isActive && unit.unitType !== "core").forEach(unit => add(unit.code.trim()));
+    units.filter(unit => unit.isActive && unit.unitType !== "core" && !removing.has(unit.code.trim().toUpperCase())).forEach(unit => add(unit.code.trim()));
     chosen.forEach(add);
     imported.forEach(unit => add(unit.code));
     return checkElectives(rules, [...electives.values()]);
-  }, [rules, official, units, chosen, imported]);
+  }, [rules, official, units, chosen, imported, removing]);
   const selected = (code: string) => active(code) || chosen.has(code) || imported.some(unit => unit.code === code.toUpperCase());
 
   const toggle = (code: string, on: boolean) => {
@@ -111,6 +114,15 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const hours = [...(release?.core ?? []), ...(release?.electives ?? [])].filter(unit => chosen.has(unit.code)).reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0)
     + imported.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
   const count = chosen.size + imported.length;
+  const changes = count + removing.size;
+  // Untick / tick again an elective that is already on the course.
+  const toggleOnCourse = (code: string, keep: boolean) => setRemoving(s => {
+    const next = new Set(s); if (keep) next.delete(code.toUpperCase()); else next.add(code.toUpperCase()); return next;
+  });
+  // A unit on the course that another unit staying on it needs cannot be removed.
+  const neededBy = (code: string) => units.filter(unit => unit.isActive && !removing.has(unit.code.trim().toUpperCase()) && unit.code.trim().toUpperCase() !== code.toUpperCase())
+    .filter(unit => { const found = lookups[unit.code.trim().toUpperCase()]; return !!found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === code.toUpperCase()); })
+    .map(unit => unit.code.trim());
   const needsAttest = (rules?.unchecked.length ?? 0) > 0;
   // Read the prerequisites of every listed unit Training.gov.au marks as having them, so each row can name them.
   useEffect(() => {
@@ -135,7 +147,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a unit's prerequisites have been read
   }, [lookups, chosen]);
   // Units are added only when the course then meets every packaging rule (owner, 2026-11-19): a broken or unfinished rule blocks.
-  const blocked = !release || !count || check?.ok === false || (check !== null && !check.complete) || (needsAttest && !attested);
+  const removeBlocked = [...removing].flatMap(code => neededBy(code).map(other => `${code} is needed by ${other}`));
+  const blocked = !release || !changes || removeBlocked.length > 0 || check?.ok === false || (check !== null && !check.complete) || (needsAttest && !attested);
 
   function lookup(code: string) {
     const key = code.toUpperCase();
@@ -173,7 +186,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   async function add() {
     setBusy(true); setError("");
     try {
-      setResult(await call<AddResult>({ action: "add_units", courseId: course.id, codes: [...chosen], imported: imported.map(unit => unit.code), attested }));
+      setResult(await call<AddResult>({ action: "add_units", courseId: course.id, codes: [...chosen], imported: imported.map(unit => unit.code), remove: [...removing], attested }));
       onDone();
     } catch (e) { setError(e instanceof Error ? e.message : "The units could not be added."); }
     finally { setBusy(false); }
@@ -210,13 +223,19 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   };
   const row = (unit: TgaUnit) => {
     const on = active(unit.code);
-    return <div key={unit.code} className={"rounded px-2 py-1.5 text-sm " + (on ? "opacity-70" : "hover:bg-background-100")}>
+    const was = onCourseNow(unit.code);
+    const core = official.get(unit.code.toUpperCase())?.core === true;
+    const leaving = was && !on;
+    return <div key={unit.code} className={"rounded px-2 py-1.5 text-sm " + (leaving ? "bg-red-50" : on && core ? "opacity-70" : "hover:bg-background-100")}>
       <div className="flex items-start gap-2">
         <label className="flex min-w-0 flex-1 items-start gap-2">
-          <input type="checkbox" className="mt-1" disabled={on || busy} checked={on || chosen.has(unit.code)} onChange={e => toggle(unit.code, e.target.checked)} />
+          <input type="checkbox" className="mt-1" disabled={(was && core) || busy} checked={on || chosen.has(unit.code)}
+            title={was && !core ? "Untick to take this elective off the course" : undefined}
+            onChange={e => was ? toggleOnCourse(unit.code, e.target.checked) : toggle(unit.code, e.target.checked)} />
           <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
             <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "hours not published",
-              unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : "", on ? "already on the course" : ""].filter(Boolean).join(" · ")}</span>
+              unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : "", leaving ? "will be removed from the course" : on ? core ? "already on the course" : "on the course (untick to change it)" : ""].filter(Boolean).join(" · ")}</span>
+            {leaving && neededBy(unit.code).length ? <span className="block text-xs font-semibold text-red-700">Needed first by {neededBy(unit.code).join(", ")}: it cannot be removed while they stay.</span> : null}
             {prereqLine(unit)}</span>
         </label>
       </div>
@@ -232,12 +251,13 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
           {check?.ok === false ? <span className="ml-2 font-semibold text-red-700">Packaging rules not followed</span>
             : check && !check.complete && count ? <span className="ml-2 font-semibold text-amber-800">Select units until every packaging rule is met</span> : null}</span>
         <div className="flex gap-2"><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button disabled={busy || blocked || prereqBlocked} title={prereqBlocked ? "Add the prerequisites of the units you picked first" : undefined} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : `Add ${count} unit${count === 1 ? "" : "s"}`}</Button></div>
+          <Button disabled={busy || blocked || prereqBlocked} title={prereqBlocked ? "Add the prerequisites of the units you picked first" : undefined} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : removing.size ? `Save changes (${count ? `add ${count}, ` : ""}remove ${removing.size})` : `Add ${count} unit${count === 1 ? "" : "s"}`}</Button></div>
       </div>}>
     {error ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
     {result ? <div className="space-y-1 text-sm text-foreground-800">
-      <p className="font-semibold text-green-700">Units added to {course.code}.</p>
-      <p>{result.added} added, {result.activated} switched back on{result.alreadyOn ? `, ${result.alreadyOn} were already on the course` : ""}.</p>
+      <p className="font-semibold text-green-700">{result.removed ? "Units changed" : "Units added"} on {course.code}.</p>
+      <p>{result.added} added, {result.activated} switched back on{result.removed ? `, ${result.removed} removed` : ""}{result.alreadyOn ? `, ${result.alreadyOn} were already on the course` : ""}.</p>
+      {result.removed ? <p className="text-amber-800">Removed units keep their content and students' results. If the course has a master timetable, open it and save it so the intakes use the new units.</p> : null}
       <p>Training.gov.au content saved for {result.detailsSynced} units; elements, criteria and evidence for {result.elementsAdded}.</p>
       {result.rulesComplete === false ? <p className="text-amber-700">The electives on the course do not yet meet every packaging rule. Add the remaining units when ready.</p> : null}
       {result.detailsFailed ? <p className="text-amber-700">{result.detailsFailed} units could not be read from training.gov.au; use Sync on the course later.</p> : null}

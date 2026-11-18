@@ -186,7 +186,7 @@ export async function fillUnitContent(db: SupabaseClient, active: { id: string; 
 /** Add Unit: the chosen units of the course's current release are put on the course (inactive ones switched on,
  *  missing ones added active) and get their training.gov.au content. */
 export async function addUnits(db: SupabaseClient, tenantId: string | null, courseId: string, codes: string[], hoursLookup: HoursLookup,
-  options: { imported?: string[]; attested?: boolean } = {}) {
+  options: { imported?: string[]; attested?: boolean; remove?: string[] } = {}) {
   let query = db.from("cms_courses").select("id,code").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
   const { data: course } = await query.maybeSingle();
@@ -206,9 +206,24 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
   const invalid = imported.filter(item => !/^[A-Z][A-Z0-9]{4,19}$/.test(item));
   if (invalid.length) throw new ImportError(`Not a unit code: ${invalid.join(", ")}.`, 422);
 
-  type Row = { id: string; code: string; sort: number | null; is_active: boolean; unit_type: string | null };
-  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active,unit_type").eq("course_id", courseId);
+  type Row = { id: string; code: string; sort: number | null; is_active: boolean; unit_type: string | null; prerequisite_ids: string[] | null; tga_prerequisites: string | null };
+  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active,unit_type,prerequisite_ids,tga_prerequisites").eq("course_id", courseId);
   const existing = new Map(((units ?? []) as Row[]).map(unit => [unit.code.trim().toUpperCase(), unit]));
+
+  // Electives switched off in the same save (a unit changed for another). Core units stay; a unit another active unit needs stays.
+  const remove = clean(options.remove ?? []).filter(item => !wanted.includes(item) && !imported.includes(item));
+  for (const item of remove) {
+    const unit = existing.get(item);
+    if (!unit || !unit.is_active) throw new ImportError(`${item} is not an active unit of this course.`, 422);
+    if (unit.unit_type === "core" || official.get(item)?.core) throw new ImportError(`${item} is a core unit and cannot be removed.`, 422);
+  }
+  const staying = [...existing.values()].filter(unit => unit.is_active && !remove.includes(unit.code.trim().toUpperCase()));
+  for (const item of remove) {
+    const unit = existing.get(item)!;
+    const needs = staying.filter(other => (other.prerequisite_ids ?? []).includes(unit.id)
+      || new RegExp(`\\b${item}\\b`).test((other.tga_prerequisites ?? "").toUpperCase()));
+    if (needs.length) throw new ImportError(`${item} cannot be removed: ${needs.map(other => other.code).join(", ")} ${needs.length === 1 ? "needs" : "need"} it first.`, 422);
+  }
 
   // Units from outside the qualification must be current units of competency on training.gov.au.
   const summaries = new Map<string, UnitSummary>();
@@ -226,7 +241,7 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
     if (!listed) electives.set(item, { code: item, groups: null });
     else if (!listed.core) electives.set(item, { code: item, groups: listed.unit.groups });
   };
-  for (const [item, unit] of existing) if (unit.is_active && unit.unit_type !== "core") elective(item);
+  for (const [item, unit] of existing) if (unit.is_active && unit.unit_type !== "core" && !remove.includes(item)) elective(item);
   [...wanted, ...imported].forEach(elective);
   const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups));
   const check = checkElectives(rules, [...electives.values()]);
@@ -243,6 +258,10 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
     throw new ImportError("Part of the packaging rules could not be checked automatically. Tick the confirmation that the selection follows the official packaging rules.", 422);
   }
 
+  if (remove.length) {
+    const { error } = await db.from("cms_course_units").update({ is_active: false }).in("id", remove.map(item => existing.get(item)!.id)).eq("course_id", courseId);
+    if (error) return reply({ error: "The units could not be removed." }, 500);
+  }
   const activate = [...wanted, ...imported].map(item => existing.get(item)).filter((unit): unit is Row => !!unit && !unit.is_active);
   if (activate.length) {
     const { error } = await db.from("cms_course_units").update({ is_active: true }).in("id", activate.map(unit => unit.id)).eq("course_id", courseId);
@@ -274,5 +293,5 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
   const content = await fillUnitContent(db, [...activate, ...inserted].map(unit => ({ id: unit.id, code: unit.code })));
   return reply({ courseId, code, added: inserted.length, activated: activate.length,
     alreadyOn: wanted.length + imported.length - inserted.length - activate.length, imported: summaries.size,
-    rulesComplete: check.complete, ...content });
+    rulesComplete: check.complete, removed: remove.length, ...content });
 }

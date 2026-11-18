@@ -190,7 +190,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
             className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100">
             <i className="ri-time-line mr-1" aria-hidden="true" />Edit all hours</button>
-          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add units</button></div> : null}
+          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add or change units</button></div> : null}
       </div>
       {(() => {
         const units = details.find(d => d.course.id === selectedCourse.id)?.units ?? [];

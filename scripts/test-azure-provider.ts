@@ -1,6 +1,8 @@
 // P05-02 Azure adapter contract, P05-03 leased-job orchestration (REG-DOC / REG-JOBS) and P07-02 notification delivery (REG-NOTIFY). Deterministic mocks only:
 // the global fetch is replaced so any accidental network use fails, and the
 // adapter receives an injected fake Azure plus a fake clock/sleep.
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-azure-provider"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildExtractionEnvelope, type ExtractionCategory, type ExtractionRequest, type ExtractionSuccess } from "../supabase/functions/_shared/document-extraction/contract.ts";

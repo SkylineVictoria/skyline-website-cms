@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-portal-document-attachments"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import test from "node:test";
 import { documentCategoryForField, extractionStatus } from "../src/pages/agency/lib/documentAttachments.ts";

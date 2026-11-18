@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-public-assistant"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 const migration=await readFile("supabase/migrations/20261015103645_public_assistant_knowledge.sql","utf8");

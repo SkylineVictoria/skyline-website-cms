@@ -5,6 +5,7 @@
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
+import { abrApplicationValues, lookupAbr, type AbrConfirmed, type AbrDetails } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
@@ -89,9 +90,9 @@ async function installedTemplate(ctx: OnboardingContext, which: OnboardingDoc): 
 }
 
 /** The document of one template for one send: the sender's values printed into it, the signer's fields to place. */
-async function buildDocument(ctx: OnboardingContext, template: OnboardingTemplate, values: Record<string, string>, title: string) {
+async function buildDocument(ctx: OnboardingContext, template: OnboardingTemplate, values: Record<string, string>, title: string, options: { editablePrefill?: boolean } = {}) {
   const source = await ctx.fileBytes(template.sourcePath, template.sourceHash);
-  const { printed, recipient } = resolveFields(numbered(template.fields), values);
+  const { printed, recipient } = resolveFields(numbered(template.fields), values, options);
   let bytes = source;
   if (printed.length) {
     bytes = await (await signingPdfModule()).stampDocument(source, { reference: "", title, recipients: [],
@@ -128,6 +129,35 @@ async function recordValues(prepared: Pick<Prepared, "agency" | "values">): Prom
   return values;
 }
 
+/** What the business keeps from ABN Lookup (agencies.abr_*): the register's answer, the values staff confirmed, the contact's names. */
+interface BusinessAbr { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null; fetchedAt: string | null }
+/**
+ * ABN prefill (2026-11-19): a business added with an ABN Lookup confirmation gets the F04 prefilled from what is kept on the business (no new
+ * call to the register), every prefilled value editable by the contact; everything else is blank. A business without one keeps the earlier values.
+ */
+async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null }> {
+  let abr: BusinessAbr | null = null;
+  try { abr = await ctx.rpc("agency_abr_get", { p_agency: prepared.agency.id }) as BusinessAbr | null; } catch { abr = null; }
+  if (!abr?.confirmed) return { values: await recordValues(prepared), prefill: null };
+  const record = prepared.values ?? {};
+  const parts = String(prepared.agent?.name ?? "").trim().split(/\s+/);
+  const prefill = abrApplicationValues({ details: abr.details, confirmed: abr.confirmed, contact: {
+    givenName: abr.confirmed.givenName || String(record.contact_given_name ?? "") || parts.slice(0, -1).join(" ") || parts[0] || "",
+    familyName: abr.confirmed.familyName || String(record.contact_family_name ?? "") || (parts.length > 1 ? parts[parts.length - 1] : ""),
+    email: String(prepared.agent?.email ?? ""), phone: String(record.contact_phone ?? "") } });
+  return { values: { ...prefill }, prefill };
+}
+
+/** Add business: the ABN typed is looked up on the register (EF_ABR_GUID); the answer is cached by ABN for the business about to be saved. */
+export async function abnLookup(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const outcome = await lookupAbr(String(ctx.body.abn ?? ""), ctx.ports.abr?.guid, ctx.ports.abr?.fetch ?? fetch);
+  if (!outcome.ok) return { configured: outcome.reason !== "not_configured", ok: false, reason: outcome.reason, message: outcome.message };
+  let cached = true;
+  try { await ctx.rpc("abr_lookup_save", { p_abn: outcome.details.abn, p_raw: outcome.raw, p_details: outcome.details }); } catch { cached = false; }
+  return { configured: true, ok: true, details: outcome.details, fetchedAt: outcome.fetchedAt, cached };
+}
+
 /** Stage 1: the application form (F04) to the business's agent. */
 export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const agencyId = String(ctx.body.agencyId ?? "");
@@ -135,9 +165,9 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const template = await installedTemplate(ctx, "form");
   // The referee checks go out by themselves when the form is signed (no browser to install a blank then): all three must exist now.
   await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
-  const values = await recordValues(prepared);
+  const { values, prefill } = await applicationValues(ctx, prepared);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
-  const made = await buildDocument(ctx, template, values, title);
+  const made = await buildDocument(ctx, template, values, title, { editablePrefill: prefill !== null });
   const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
@@ -154,7 +184,9 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
     throw error;
   }
   ctx.commit();
-  return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, agent: { name: prepared.agent!.name, email: prepared.agent!.email }, printed: made.printed.length, fields: made.recipient.length });
+  // The onboarding history says which values were prefilled; the database compares them with the signed answers (prefill_reviewed).
+  if (prefill) { try { await ctx.rpc("agency_onboarding_prefill_record", { p_onboarding: onboarding.id, p_prefill: prefill }); } catch { /* the form still goes; only the history line is missing */ } }
+  return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, agent: { name: prepared.agent!.name, email: prepared.agent!.email }, printed: made.printed.length, fields: made.recipient.length, prefilled: prefill ? Object.keys(prefill).length : 0 });
 }
 async function sendRequest(ctx: OnboardingContext, id: string, result: Record<string, unknown>) {
   const { provider, config } = ctx.ports.mail;
@@ -228,9 +260,16 @@ export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
   if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(contactEmail)) throw new SigningError("Enter the point of contact's email address.");
   const created = await ctx.rpc("admin_business_create", { p_agency: agency, p_contact_email: contactEmail, p_contact_name: contactName }) as
     { agencyId: string; businessId: string; agencyName: string; contactAgentId: string };
+  // ABN prefill: the values staff confirmed from ABN Lookup (and the register's cached answer) are kept on the business for the F04.
+  let abrWarning: string | null = null;
+  const abr = ctx.body.abr && typeof ctx.body.abr === "object" ? ctx.body.abr as Record<string, unknown> : null;
+  if (abr) {
+    try { await ctx.rpc("agency_abr_attach", { p_agency: created.agencyId, p_confirmed: abr }); }
+    catch (error) { abrWarning = `The ABN details could not be kept on the business (${(error as Error).message}); the application form goes without the ABN prefill.`; }
+  }
   try {
     const application = await sendApplication({ ...ctx, body: { agencyId: created.agencyId, agentId: created.contactAgentId, message: ctx.body.message } });
-    return { ...created, application };
+    return { ...created, application, ...(abrWarning ? { abrWarning } : {}) };
   } catch (error) {
     // The business is saved; the form can be sent again from its page (Resend application).
     return { ...created, application: null, warning: `The business was saved, but the application form could not be sent: ${(error as Error).message}` };
@@ -454,6 +493,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_referee_upload: uploadRefereeForm,
   agent_onboarding_business_create: createBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
+  agent_onboarding_abn_lookup: abnLookup,
   // Retired (2026-11-19): agents have no onboarding of their own.
   agent_onboarding_add_agent: retired,
   agent_onboarding_agent_activate: retired,

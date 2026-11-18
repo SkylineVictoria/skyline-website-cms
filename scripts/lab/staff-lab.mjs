@@ -43,6 +43,8 @@
 // 57392 that answers two fixed addresses, nothing for a query with "nowhere" and a fault for one with "outage"; nothing reaches Geoscape.
 // Document reading: staff-onboarding's reader calls OpenAI, redirected (local only, EF_OPENAI_API_URL) to a mock on port 57391
 // that answers a fixed passport (name, middle name, date of birth); nothing reaches OpenAI.
+import { assertLocalCommand, refuseHosted } from "./hosted-guard.mjs";
+refuseHosted("staff-lab"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import http from "node:http";
 import nodeCrypto from "node:crypto";
 import zlib from "node:zlib";
@@ -127,7 +129,7 @@ end $$;
 };
 
 const isWin = process.platform === "win32";
-function run(bin, args, options = {}) {
+function run(bin, args, options = {}) { assertLocalCommand(bin, args, "staff-lab");
   const res = spawnSync(bin, args, { cwd: REPO, encoding: "utf8", shell: isWin, maxBuffer: 64 * 1024 * 1024, ...options });
   return { code: res.status ?? 1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }

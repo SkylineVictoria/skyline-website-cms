@@ -1,4 +1,6 @@
 // Local-only native API fixture. Never reads .env, CLI credentials or hosted data.
+import { refuseHosted } from './hosted-guard.mjs';
+refuseHosted('native-lab'); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import {readFile,writeFile,readdir,mkdir} from 'node:fs/promises';
 import {createHmac} from 'node:crypto';
 import {docker,assertInspection,assertDatabaseIdentity,APPROVED_PROJECT,TEST_DATABASE} from './local-db.mjs';

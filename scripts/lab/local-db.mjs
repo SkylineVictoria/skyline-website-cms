@@ -1,3 +1,5 @@
+import { refuseHosted } from './hosted-guard.mjs';
+refuseHosted('local-db'); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 

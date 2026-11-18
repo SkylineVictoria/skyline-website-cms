@@ -10,6 +10,7 @@ import { fieldGroup, formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, 
 const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
+import { checkApplicationAnswers, F04_TITLES } from "../../supabase/functions/_shared/validation/abr";
 
 /*
  * The signing page a link holder opens (/sign#t=token): the offer letter a student signs, or any other document sent for signature.
@@ -187,7 +188,7 @@ export default function SigningPage() {
       if (!next.recipient) { setLegacy(true); return; }
       setView(next); setName((current) => current || next.recipient.name);
       // A field the sender prefilled (agent onboarding: the signatory's name, the contact details we hold) starts with that text; the signer may change it.
-      setValues((current) => { const seeded = { ...current }; for (const f of next.fields) if (f.type === "text" && f.value && seeded[f.id] === undefined) seeded[f.id] = f.value; return seeded; });
+      setValues((current) => { const seeded = { ...current }; for (const f of next.fields) if ((f.type === "text" && f.value || f.type === "checkbox" && f.value === "true") && seeded[f.id] === undefined) seeded[f.id] = f.value!; return seeded; });
       await loadPay();
     } catch (e) { setError(e instanceof Error ? e.message : "The document could not be opened."); }
   }, [token, loadPay]);
@@ -281,7 +282,9 @@ export default function SigningPage() {
   const signatureReady = method === "typed" ? name.trim().length >= 2 : !!picture;
   const choices = canSign ? view.fields.filter((f) => f.type === "choice") : [];
   const setChoice = (id: string, answer: "YES" | "NO") => setValues((current) => ({ ...current, [id]: answer }));
-  const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length && (!view.requireCode || !!codeSession) && !payFirst;
+  // Agent Application Form: the title comes from the list; the two referees need different emails (refused); the same contact name is a warning.
+  const application = canSign && view.onboarding?.kind === "application" ? checkApplicationAnswers(Object.fromEntries(view.fields.filter((f) => f.type === "text" && f.key).map((f) => [f.key!, values[f.id] ?? ""]))) : { error: null, warnings: [] };
+  const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length && !application.error && (!view.requireCode || !!codeSession) && !payFirst;
   const goTo = (id: string) => document.querySelector(`[data-field="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   // TPL-02: a [token] of the template is one question, however often it appears; its answer fills every copy of it.
   const tokenLabels = canSign ? [...new Set(view.fields.filter((f) => f.type === "text" && isTokenFieldLabel(f.label)).map((f) => f.label))] : [];
@@ -421,6 +424,10 @@ export default function SigningPage() {
                 if (auto(f)) return <div key={f.id} data-field={f.id} data-auto-field="true" title={AUTO_TITLE} aria-label={`${f.label}: ${AUTO_TITLE}`}
                   className="absolute flex cursor-not-allowed items-center gap-1 overflow-hidden rounded-sm border-2 border-dashed border-background-400 bg-background-200/80 px-1 text-2xs text-foreground-500 sm:text-xs" style={style}>
                   {f.type === "checkbox" ? <input type="checkbox" disabled aria-hidden="true" className="h-3 w-3" /> : null}<span className="truncate">{f.label}</span></div>;
+                // The contact's title on the Agent Application Form is chosen from a list (Mr, Mrs, Ms, Miss, Dr, Other).
+                if (f.type === "text" && f.key === "contact_title") return <select key={f.id} data-field={f.id} aria-label={f.label || "Title"} value={values[f.id] ?? ""}
+                  onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} data-testid="contact-title">
+                  <option value="">Title…</option>{F04_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}</select>;
                 if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
                   onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} />;
                 if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>
@@ -460,6 +467,8 @@ export default function SigningPage() {
                     <input type="radio" name={`choice-${f.id}`} value={answer} checked={values[f.id] === answer} onChange={() => setChoice(f.id, answer)} className="sr-only" data-testid={`choice-${answer.toLowerCase()}`} />{answer}</label>)}</div>
               </div>)}
             </fieldset>}
+            {application.error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm" data-testid="application-error">{application.error}</p>}
+            {application.warnings.map((w) => <p key={w} role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm" data-testid="application-warning">{w}</p>)}
             {missing.length > 0 && <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">{missing.length} required field{missing.length === 1 ? "" : "s"} in the document still need{missing.length === 1 ? "s" : ""} an answer.{" "}
               <button type="button" className="font-semibold underline" onClick={() => goTo(missing[0].id)}>Go to the next one</button></p>}
             <Field label="Your full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} required maxLength={150} autoComplete="name" className="!text-base" /></Field>

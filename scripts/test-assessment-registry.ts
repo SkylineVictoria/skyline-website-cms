@@ -5,6 +5,8 @@
  * The fixture is the same definition the pgTAP suite (supabase/tests/assessment_management.sql) submits, so a rule that passes
  * here and there is the same rule on both sides of the wire.
  */
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-assessment-registry"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import { conditionMet } from "../src/lib/assessment/conditions";
 import { cloneQuestion, countQuestions, earlierQuestionIds, flattenQuestions, moveItem, removeQuestion, updateQuestion } from "../src/lib/assessment/definition";
 import { newQuestion, QUESTION_TYPES, questionType, withSchema } from "../src/lib/assessment/registry";

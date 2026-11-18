@@ -20,8 +20,8 @@
     "test:staff-registration": "jiti scripts/test-staff-registration.ts",
     "test:public-assistant": "node scripts/test-public-assistant.mjs",
     "test:public-assistant:local-acceptance": "node scripts/test-public-assistant-local-acceptance.mjs",
-    "test:public-assistant:integration": "npx supabase test db supabase/tests/public_assistant_integration.sql",
-    "test:document-extraction:integration": "npx supabase test db supabase/tests/document_extraction_integration.sql",
+    "test:public-assistant:integration": "node scripts/lab/hosted-guard.mjs -- npx supabase test db supabase/tests/public_assistant_integration.sql",
+    "test:document-extraction:integration": "node scripts/lab/hosted-guard.mjs -- npx supabase test db supabase/tests/document_extraction_integration.sql",
     "test:holiday-import": "jiti scripts/test-holiday-import.ts",
     "test:assessment-registry": "jiti scripts/test-assessment-registry.ts"
   },

@@ -1,17 +1,18 @@
 import { normalizeAbn, validateAbn, type AgencyAbnDetails } from "../../../../supabase/functions/_shared/validation/abn";
+import type { AbrDetails } from "../../../../supabase/functions/_shared/validation/abr";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
-import { Button, Card, Field, TextInput } from "@/pages/admin/components/ui";
+import { Button, Card, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { EMPTY_AGENCY_FORM, suggestAgencyCode, validateAgencyForm, type AgencyFormErrors, type AgencyFormState } from "@/pages/admin/lib/agencyForm";
-import { createBusinessWithOnboarding } from "@/lib/signingApi";
+import { createBusinessWithOnboarding, lookupAbnDetails, type AbnLookupResult, type BusinessAbrInput } from "@/lib/signingApi";
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
 import EmailField from "@/components/identity/EmailField";
 import { isEmailTakenError } from "@/lib/identity/email";
 
-type Errors = AgencyFormErrors & { form?: string };
+type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string };
 
 export interface CreatedBusiness {
   agencyId: string;
@@ -21,6 +22,11 @@ export interface CreatedBusiness {
   message: string;
 }
 
+const STATES = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"] as const;
+/** The register's values as staff confirm (and may edit) them before saving; they prefill the Agent Application Form. */
+interface Confirmed { legalEntity: string; tradingName: string; otherName: boolean; gst: "yes" | "no" | ""; state: string; postcode: string; override: boolean; reason: string }
+const EMPTY_CONFIRMED: Confirmed = { legalEntity: "", tradingName: "", otherName: false, gst: "", state: "", postcode: "", override: false, reason: "" };
+type AbrFailure = Extract<AbnLookupResult, { ok: false }>;
 
 /** Keeps only digits (at most 11) and groups them as an ABN is written: 12 345 678 901. */
 function formatAbnInput(value: string): string {
@@ -30,9 +36,12 @@ function formatAbnInput(value: string): string {
 
 /**
  * The one Add business form, used on Businesses > Add business and wherever a business is added on the way (new
- * application, add student). The administrator enters only the ABN; the government register fills and locks the
- * business details (Edit unlocks them). The business starts inactive with its point of contact recorded; it is activated
- * (and the contact invited) from the business screen once the signed agent agreement is in.
+ * application, add student). The administrator enters the ABN; the government register fills the business details.
+ *
+ * ABN prefill (2026-11-19): when ABN Lookup (the ABR web service) is set up, the register's legal name, business names, GST status and
+ * state / postcode are shown to confirm and edit before saving (a business with several registered names picks its trading name); they and
+ * the contact's names prefill the Agent Application Form. A cancelled ABN needs a reason to be added; when the register does not answer the
+ * business can still be added by hand (the form then goes without the prefill). Not set up: the earlier lookup and form, unchanged.
  */
 export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDialog = false }: {
   onCreated: (created: CreatedBusiness) => void;
@@ -54,6 +63,13 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
   const [retry, setRetry] = useState(0);
+  // ABN prefill: "abr" once the ABR service answered as set up, "legacy" when it is not set up (or not deployed yet).
+  const [mode, setMode] = useState<"abr" | "legacy" | null>(null);
+  const [abr, setAbr] = useState<AbrDetails | null>(null);
+  const [abrFailure, setAbrFailure] = useState<AbrFailure | null>(null);
+  const [confirmed, setConfirmed] = useState<Confirmed>(EMPTY_CONFIRMED);
+  const [givenName, setGivenName] = useState("");
+  const [familyName, setFamilyName] = useState("");
 
   const [form, setForm] = useState<AgencyFormState>(EMPTY_AGENCY_FORM);
   const [editing, setEditing] = useState(false);
@@ -63,18 +79,37 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [emailError, setEmailError] = useState<unknown>(null);
   const [emailBlocking, setEmailBlocking] = useState(false);
 
-  // Look the ABN up once it is complete and valid; a newer ABN discards an older response.
+  // Look the ABN up once it is complete and valid (Fetch from ABN and leaving the field look it up again); a newer ABN discards an older answer.
   useEffect(() => {
-    setDetails(null); setExisting(null); setLookupError(""); setEditing(false);
+    setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null);
     if (abnProblem) { setLookupLoading(false); return; }
     let cancelled = false;
     setLookupLoading(true);
     const timer = window.setTimeout(async () => {
       try {
-        const [result, already] = await Promise.all([
-          invokePortalUsers({ action: "lookup_agency_abn", abn }),
-          findAgencyByAbn(abn),
-        ]);
+        // The ABR service first; a function without it (not deployed yet) or without a GUID answers "not set up": the earlier lookup runs.
+        const [abrResult, already] = await Promise.all([lookupAbnDetails(abn).catch(() => null), findAgencyByAbn(abn)]);
+        if (cancelled) return;
+        if (abrResult?.configured) {
+          setMode("abr");
+          setExisting(already);
+          if (abrResult.ok) {
+            const d = abrResult.details;
+            const trading = d.businessNames[0] ?? d.entityName;
+            setAbr(d);
+            setConfirmed({ legalEntity: d.entityName, tradingName: trading, otherName: false, gst: d.gstRegistered ? "yes" : "no", state: d.state, postcode: d.postcode, override: false, reason: "" });
+            setForm(prev => ({ ...prev, registrationNumber: abn, name: trading, code: suggestAgencyCode(trading, suffix.current), country: "Australia",
+              address: [d.state, d.postcode].filter(Boolean).join(" "), status: "Active" }));
+          } else {
+            setAbrFailure(abrResult);
+            // The register did not answer: the business can be added by hand, without the prefill.
+            if (abrResult.reason === "unavailable") { setForm(prev => ({ ...prev, registrationNumber: abn, country: prev.country || "Australia", status: "Active" })); setEditing(true); }
+          }
+          setErrors({});
+          return;
+        }
+        setMode("legacy");
+        const result = await invokePortalUsers({ action: "lookup_agency_abn", abn });
         if (cancelled) return;
         const business = result.business as AgencyAbnDetails | undefined;
         if (!business || business.abn !== abn || !business.legalName) throw new Error("The lookup returned an unexpected business. Try again.");
@@ -100,10 +135,19 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     if (next.name !== undefined && prev.code === suggestAgencyCode(prev.name, suffix.current)) merged.code = next.name.trim() ? suggestAgencyCode(next.name, suffix.current) : "";
     return merged;
   });
+  // The trading name is also the agency's name (as staff see it) until that is edited.
+  const setTrading = (tradingName: string, otherName = confirmed.otherName) => {
+    setConfirmed(prev => ({ ...prev, tradingName, otherName }));
+    if (form.name === confirmed.tradingName) patch({ name: tradingName });
+  };
 
-  // Only an ABN the government register shows as active can be added.
+  // Legacy (no ABR service): only an ABN the government register shows as active can be added.
   const abnInactive = Boolean(details && details.abn === abn && !/^active/i.test(details.abnStatus.trim()));
-  const ready = Boolean(details && details.abn === abn && !existing && !abnInactive);
+  const legacyReady = Boolean(details && details.abn === abn && !existing && !abnInactive);
+  // ABR: an active ABN, a cancelled one with a reason, or the register not answering (details typed by hand).
+  const abrManual = mode === "abr" && abrFailure?.reason === "unavailable";
+  const abrReady = mode === "abr" && !existing && ((abr !== null && abr.abn === abn && (abr.active || confirmed.override)) || abrManual);
+  const ready = mode === "abr" ? abrReady : legacyReady;
 
   const pickExisting = async () => {
     if (!existing || !onUseExisting) return;
@@ -116,11 +160,29 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     event.stopPropagation();
     if (saving || lookupLoading || emailBlocking) return;
     setEmailError(null);
-    if (!ready) { setAbnTouched(true); setErrors({ registrationNumber: abnProblem || (abnInactive ? "This ABN is not active on the government register." : "Look up this ABN successfully before creating the business.") }); return; }
-    const checked = validateAgencyForm({ ...form, registrationNumber: abn }, true);
+    if (!ready) {
+      setAbnTouched(true);
+      setErrors({ registrationNumber: abnProblem || (abnInactive ? "This ABN is not active on the government register."
+        : mode === "abr" && abr && !abr.active ? "This ABN is cancelled: tick Add it anyway and give the reason." : abrFailure?.message || "Look up this ABN successfully before creating the business.") });
+      return;
+    }
+    const contactName = mode === "abr" ? `${givenName.trim()} ${familyName.trim()}`.trim() : form.primaryContact.trim();
+    const checked = validateAgencyForm({ ...form, primaryContact: contactName, registrationNumber: abn }, true);
     const next: Errors = { ...checked.errors };
-    const contactName = validateName(form.primaryContact);
-    if (contactName) next.primaryContact = contactName;
+    if (mode === "abr") {
+      if (!givenName.trim()) next.givenName = "Enter the contact's given name.";
+      if (!familyName.trim()) next.familyName = "Enter the contact's family name.";
+      if (!next.givenName && !next.familyName) { const problem = validateName(contactName); if (problem) next.givenName = problem; }
+      if (abr) {
+        if (!confirmed.legalEntity.trim()) next.legalEntity = "Enter the legal entity name.";
+        if (!confirmed.tradingName.trim()) next.tradingName = "Choose or type the trading name.";
+        if (confirmed.postcode && !/^\d{4}$/.test(confirmed.postcode.trim())) next.postcode = "A postcode has 4 digits.";
+        if (!abr.active && confirmed.reason.trim().length < 5) next.override = "Say why this business is added although its ABN is cancelled.";
+      }
+    } else {
+      const problem = validateName(form.primaryContact);
+      if (problem) next.primaryContact = problem;
+    }
     // The same check as every other phone field: a country code plus a number valid for that country.
     if (!parseStoredPhone(form.phone)?.national) next.phone = "Enter the contact's phone number.";
     else { const phoneProblem = validateStoredPhone(form.phone); if (phoneProblem) next.phone = phoneProblem; else delete next.phone; }
@@ -134,17 +196,22 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       // One call (2026-11-19): the business (onboarding until an administrator activates it) and its point of contact are saved, and the
       // Agent Application Form goes to the contact at once. A missing blank is installed before anything is saved, so a retry adds nothing twice.
       const email = form.businessEmail.trim().toLowerCase();
+      const abrInput: BusinessAbrInput | undefined = mode === "abr" && abr ? {
+        legalEntity: confirmed.legalEntity.trim(), tradingName: confirmed.tradingName.trim(), gstRegistered: confirmed.gst === "" ? null : confirmed.gst === "yes",
+        state: confirmed.state, postcode: confirmed.postcode.trim(), cancelledOverride: abr.active ? undefined : confirmed.reason.trim(), givenName: givenName.trim(), familyName: familyName.trim(),
+      } : undefined;
       const data = await createBusinessWithOnboarding({
         agency: {
           name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
-          phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: form.primaryContact.trim(),
+          phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: contactName,
         },
-        contactEmail: email, contactName: form.primaryContact.trim(),
+        contactEmail: email, contactName, ...(abrInput ? { abr: abrInput } : {}),
       });
       const id = String(data.agencyId ?? "");
       if (!id) throw new Error("The business was created but could not be opened. Find it in Businesses.");
+      const prefilled = data.application && "prefilled" in data.application && Number(data.application.prefilled) > 0 ? " It was prefilled from ABN Lookup; the contact can correct any value before signing." : "";
       const message = data.application?.sent
-        ? `Business added. The Agent Application Form (${data.application.reference}) was emailed to ${email}; the referee checks and the agreement follow. Activate the business once the agreement is signed.`
+        ? `Business added. The Agent Application Form (${data.application.reference}) was emailed to ${email}.${prefilled} The referee checks and the agreement follow. Activate the business once the agreement is signed.${data.abrWarning ? ` ${data.abrWarning}` : ""}`
         : `Business added, but the application form was not emailed: ${data.warning ?? data.application?.warning ?? "signing email is not configured"}. Use Resend application on the business page.`;
       onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
     } catch (e) {
@@ -177,16 +244,83 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const box = (children: ReactNode, className = "") =>
     inDialog ? <section className={className}>{children}</section> : <Card className={`p-5 ${className}`}>{children}</Card>;
 
+  // ABN prefill: what the register says, to confirm and edit before saving.
+  const abrPanel = () => abr ? (
+    <section className={`mt-4 rounded-lg border p-4 ${abr.active ? "border-green-300 bg-green-50" : "border-amber-300 bg-amber-50"}`} aria-label="Business details from ABN Lookup" data-testid="abr-details">
+      <p className={`flex items-center gap-1.5 text-sm font-semibold ${abr.active ? "text-green-900" : "text-amber-900"}`}>
+        <i className={abr.active ? "ri-shield-check-line" : "ri-error-warning-line"} aria-hidden="true" />From ABN Lookup: check this is the right business
+      </p>
+      <p className="mt-0.5 text-xs text-foreground-700">
+        ABN {abr.abn.replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3 $4")} · {abr.abnStatus}{abr.statusFrom ? ` from ${abr.statusFrom.split("-").reverse().join("/")}` : ""}
+        {abr.entityType ? ` · ${abr.entityType}` : ""}{abr.acn ? ` · ACN ${abr.acn}` : ""}
+        {" · "}<a href={abr.sourceUrl} target="_blank" rel="noreferrer" className="underline">Government record</a>
+      </p>
+      {!abr.active ? <div className="mt-3 rounded-md border border-amber-300 bg-white p-3 text-sm" role="alert">
+        <p className="font-medium text-amber-900">This ABN is {abr.abnStatus.toLowerCase() || "not active"} on the government register.</p>
+        <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={confirmed.override} disabled={saving} onChange={e => setConfirmed(prev => ({ ...prev, override: e.target.checked }))} data-testid="abr-override" />Add it anyway</label>
+        {confirmed.override ? <Field label="Reason" required hint="Kept on the business's history."><TextArea rows={2} value={confirmed.reason} disabled={saving} maxLength={500} onChange={e => setConfirmed(prev => ({ ...prev, reason: e.target.value }))} /></Field> : null}
+        {error("override")}
+      </div> : null}
+      <p className="mt-3 text-xs text-foreground-600">These values prefill the Agent Application Form. Change any of them if the register is out of date; the contact can also correct them before signing.</p>
+      <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div>
+          <Field label="Legal entity name" required hint={errors.legalEntity ? undefined : "The register's entity name."}>
+            <TextInput disabled={saving} value={confirmed.legalEntity} onChange={e => setConfirmed(prev => ({ ...prev, legalEntity: e.target.value }))} aria-invalid={Boolean(errors.legalEntity)} />
+          </Field>{error("legalEntity")}
+        </div>
+        <div>
+          {abr.businessNames.length > 1 ? (
+            <fieldset data-testid="abr-trading-names">
+              <legend className="text-label font-medium text-foreground-800">Trading name <span className="text-red-600">*</span></legend>
+              <p className="text-xs text-foreground-500">The register lists {abr.businessNames.length} business names; choose the one this business trades as.</p>
+              <div className="mt-1 space-y-1">
+                {abr.businessNames.map(n => <label key={n} className="flex items-center gap-2 text-sm"><input type="radio" name="abr-trading" disabled={saving} checked={!confirmed.otherName && confirmed.tradingName === n} onChange={() => setTrading(n, false)} />{n}</label>)}
+                <label className="flex items-center gap-2 text-sm"><input type="radio" name="abr-trading" disabled={saving} checked={confirmed.otherName} onChange={() => setTrading(confirmed.tradingName, true)} />Another name</label>
+                {confirmed.otherName ? <TextInput disabled={saving} value={confirmed.tradingName} onChange={e => setTrading(e.target.value, true)} aria-label="Trading name" /> : null}
+              </div>
+            </fieldset>
+          ) : (
+            <Field label="Trading name" required hint={errors.tradingName ? undefined : abr.businessNames.length ? "The registered business name." : "No business name is registered: the entity name is used."}>
+              <TextInput disabled={saving} value={confirmed.tradingName} onChange={e => setTrading(e.target.value)} aria-invalid={Boolean(errors.tradingName)} />
+            </Field>
+          )}
+          {error("tradingName")}
+        </div>
+        <Field label="GST registered">
+          <Select disabled={saving} value={confirmed.gst} onChange={e => setConfirmed(prev => ({ ...prev, gst: e.target.value as Confirmed["gst"] }))} data-testid="abr-gst">
+            <option value="yes">Yes{abr.gstRegistered && abr.gstFrom ? ` (from ${abr.gstFrom.split("-").reverse().join("/")})` : ""}</option><option value="no">No</option><option value="">Leave for the contact</option>
+          </Select>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="State">
+            <Select disabled={saving} value={confirmed.state} onChange={e => setConfirmed(prev => ({ ...prev, state: e.target.value }))}>
+              <option value="">—</option>{STATES.map(st => <option key={st} value={st}>{st}</option>)}
+            </Select>
+          </Field>
+          <div>
+            <Field label="Postcode"><TextInput disabled={saving} inputMode="numeric" maxLength={4} value={confirmed.postcode} onChange={e => setConfirmed(prev => ({ ...prev, postcode: e.target.value.replace(/\D/g, "").slice(0, 4) }))} aria-invalid={Boolean(errors.postcode)} /></Field>
+            {error("postcode")}
+          </div>
+        </div>
+        {input("name", "Agency name", "How the business appears to staff and on applications (the trading name unless changed).", { required: true })}
+        {input("code", "Agency code", "A short unique code, for example GPE-001.", { required: true })}
+      </div>
+    </section>
+  ) : null;
+
   return (
     <form onSubmit={submit} noValidate>
       {box(<>
         <div className="max-w-md">
           <Field label="ABN" required hint={errors.registrationNumber || abnShownProblem ? undefined : `Enter the 11-digit ABN to look up the business (${abn.length} of 11 digits).`}>
             {/* Digits only, at most 11, grouped 2-3-3-3 as typed; pasted spaces, dashes and letters are dropped. */}
-            <TextInput autoFocus disabled={saving} required inputMode="numeric" autoComplete="off" placeholder="12 345 678 901" value={abnInput}
-              aria-invalid={Boolean(errors.registrationNumber || abnShownProblem)}
-              onChange={e => { setAbnInput(formatAbnInput(e.target.value)); setErrors(prev => (prev.registrationNumber ? { ...prev, registrationNumber: undefined } : prev)); }}
-              onBlur={() => setAbnTouched(true)} />
+            <div className="flex gap-2">
+              <TextInput autoFocus disabled={saving} required inputMode="numeric" autoComplete="off" placeholder="12 345 678 901" value={abnInput}
+                aria-invalid={Boolean(errors.registrationNumber || abnShownProblem)}
+                onChange={e => { setAbnInput(formatAbnInput(e.target.value)); setErrors(prev => (prev.registrationNumber ? { ...prev, registrationNumber: undefined } : prev)); }}
+                onBlur={() => { setAbnTouched(true); if (!abnProblem && !lookupLoading && !abr && !details && (lookupError || abrFailure?.reason === "unavailable")) setRetry(n => n + 1); }} />
+              <Button type="button" variant="secondary" icon="ri-search-line" disabled={saving || lookupLoading || Boolean(abnProblem)} onClick={() => setRetry(n => n + 1)} data-testid="abn-fetch">Fetch from ABN</Button>
+            </div>
           </Field>
           {abnShownProblem ? <p role="alert" className="mt-1 text-xs font-medium text-red-700">{abnShownProblem}</p> : error("registrationNumber")}
           {abnInactive && details ? <p role="alert" className="mt-1 text-xs font-medium text-red-700">This ABN is {details.abnStatus || "not active"} on the government register, so the business cannot be added.</p> : null}
@@ -194,6 +328,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <div className="mt-3 text-sm" aria-live="polite">
           {lookupLoading ? <p role="status" className="text-foreground-600">Looking up the ABN…</p> : null}
           {lookupError ? <p role="alert" className="text-red-700">{lookupError} <button type="button" className="underline" onClick={() => setRetry(n => n + 1)}>Retry lookup</button></p> : null}
+          {abrFailure && abrFailure.reason !== "invalid" ? <p role="alert" className={abrFailure.reason === "unavailable" ? "text-amber-800" : "text-red-700"} data-testid="abr-failure">{abrFailure.message}{" "}
+            <button type="button" className="underline" onClick={() => setRetry(n => n + 1)}>Try again</button></p> : null}
           {existing ? (
             <p role="alert" className="text-red-700">
               {existing.name || "A business"} is already added with this ABN.{" "}
@@ -204,7 +340,20 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           ) : null}
         </div>
 
-        {ready && details ? (
+        {mode === "abr" && !existing ? abrPanel() : null}
+        {abrManual && !existing ? (
+          <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
+            <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
+            <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+              {input("name", "Business name", "As it appears to staff and on applications.", { required: true })}
+              {input("code", "Agency code", "A short unique code, for example GPE-001.", { required: true })}
+              {input("country", "Country", "Where the business is based.")}
+              {input("address", "Address", "Street address, if known.")}
+            </div>
+          </section>
+        ) : null}
+
+        {mode !== "abr" && legacyReady && details ? (
           <section className="mt-4 rounded-lg border border-green-300 bg-green-50 p-4" aria-label="Business details from ABN Lookup">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -246,7 +395,18 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           <h2 className="font-heading text-base font-semibold">Business admin agent (point of contact)</h2>
           <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s first agent, as its business admin agent. The email and mobile below are theirs and are saved on their agent record; their sign-in invitation goes to this email once the business is activated.</p>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
+            {mode === "abr" ? <>
+              <div>
+                <Field label="Given name" required hint={errors.givenName ? undefined : "Printed on the application form."}>
+                  <TextInput disabled={saving} required autoComplete="given-name" value={givenName} aria-invalid={Boolean(errors.givenName)} onChange={e => setGivenName(e.target.value)} />
+                </Field>{error("givenName")}
+              </div>
+              <div>
+                <Field label="Family name" required hint={errors.familyName ? undefined : "Printed on the application form."}>
+                  <TextInput disabled={saving} required autoComplete="family-name" value={familyName} aria-invalid={Boolean(errors.familyName)} onChange={e => setFamilyName(e.target.value)} />
+                </Field>{error("familyName")}
+              </div>
+            </> : input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
             <div>
               <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: the Agent Application Form goes here as soon as the business is added; the sign-in link follows after activation."} required>
                 <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}

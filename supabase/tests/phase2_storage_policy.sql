@@ -1,4 +1,6 @@
 begin;
+-- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
+do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- Policy-only test: native Storage's API sets this transaction-local context.
 -- RLS remains enabled; real byte/API deletion is covered by native-auth-storage.
 set local storage.allow_delete_query = 'true';

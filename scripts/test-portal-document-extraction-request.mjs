@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-portal-document-extraction-request"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 

@@ -7,6 +7,7 @@ import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplicati
 import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
+import { AGENT_ONBOARDING_FIELDS } from "../../../../supabase/functions/_shared/agent-onboarding";
 
 /**
  * Businesses > {name}: agent onboarding in stages. The application form (F04) goes to the agent; when signed, a referee check (F05) goes
@@ -41,7 +42,8 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
   const latest = current ?? rows?.[0] ?? null;
   const received = latest ? latest.referees.filter((r) => r.status === "received").length : 0;
   const agreement = business.agreement ?? { status: "none" as const, commencementDate: null, expiryDate: null, onboardingId: null };
-  const badge = agreement.status === "signed" && !business.agreement?.expired ? <Badge tone="success">Agreement signed</Badge>
+  const badge = business.onboarding?.readyToActivate ? <Badge tone="success">Ready to activate</Badge>
+    : agreement.status === "signed" && !business.agreement?.expired ? <Badge tone="success">Agreement signed</Badge>
     : agreement.status === "signed" ? <Badge tone="warn">Agreement expired</Badge>
     : current ? <Badge tone="warn">{stageWords(current.stage, received, current.referees.length)}</Badge>
     : latest?.stage === "declined" ? <Badge tone="warn">Declined</Badge> : <Badge tone="muted">Not started</Badge>;
@@ -100,6 +102,8 @@ const STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
   { label: "Staff review", stages: ["references_received"] }, { label: "Agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Ready to activate", stages: ["agreement_signed"] },
 ];
 function stepIndex(stage: OnboardingStage, steps = STEPS) { const i = steps.findIndex((s) => s.stages.includes(stage)); return i < 0 ? -1 : i; }
+/** A prefilled F04 field in words (the registry label), for the history. */
+const prefillLabel = (key: string) => (Object.entries(AGENT_ONBOARDING_FIELDS).find(([k]) => k.replace(/_(form|referee)$/, "").replace(/:.*$/, "") === key && AGENT_ONBOARDING_FIELDS[k].doc === "form")?.[1].label ?? key).replace(/: (Yes|No)$/, "");
 function detailWords(event: string, detail: Record<string, unknown>): string {
   const parts: string[] = [];
   if (typeof detail.request === "string") parts.push(detail.request);
@@ -110,6 +114,11 @@ function detailWords(event: string, detail: Record<string, unknown>): string {
   if (event === "references_received" || event === "references_approved") parts.push(`${String(detail.received ?? "")} of ${String(detail.total ?? "")}`);
   if (event === "activated") parts.push(detail.invitation ? "set-password email" : detail.login ? "already signs in" : "no invitation");
   if (event === "agreement_uploaded") parts.push(`${String(detail.file ?? "")} · reason: ${String(detail.reason ?? "")}`);
+  if (event === "application_prefilled" && Array.isArray(detail.fields)) parts.push(`${detail.fields.length} field${detail.fields.length === 1 ? "" : "s"}: ${(detail.fields as string[]).map(prefillLabel).join(", ")}`);
+  if (event === "prefill_reviewed") {
+    const changed = Array.isArray(detail.changed) ? detail.changed as Array<{ field: string; prefilled: string; submitted: string }> : [];
+    parts.push(changed.length ? `changed by the contact: ${changed.map((c) => `${prefillLabel(c.field)} "${c.prefilled}" → "${c.submitted}"`).join("; ")}` : "all prefilled values kept");
+  }
   if (event === "agreement_sent" && typeof detail.template === "string") parts.push(`template ${detail.template}${detail.version ? ` v${String(detail.version)}` : ""}`);
   return parts.length ? ` · ${parts.join(" · ")}` : "";
 }

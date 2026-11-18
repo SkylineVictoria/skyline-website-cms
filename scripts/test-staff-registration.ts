@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-staff-registration"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
@@ -527,6 +529,10 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   } } as typeof ports;
   const values = Object.fromEntries(fieldRows.filter((f) => f.type === "text").map((f) => [f.id, f.value || "x"]));
   values[fieldRows.find((f) => f.key === "litigation_involved:NO")!.id] = "true"; values[fieldRows.find((f) => f.key === "eatc_completed:YES")!.id] = "true";
+  // The title is chosen from the list since 2026-11-19 (ABN prefill brief): a free-text "x" is refused.
+  const titleField = fieldRows.find((f) => f.key === "contact_title"); if (titleField) values[titleField.id] = "Mr";
+  // The two referees need different emails (2026-11-19).
+  for (const n of [1, 2]) { const email = fieldRows.find((f) => f.key === `ref${n}_email`); if (email) values[email.id] = referees[n - 1].email; }
   const signed = await signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values, documentHash: originalHash }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts) as { signed: boolean; complete: boolean };
   assert.ok(signed.signed && signed.complete);
   assert.equal((signData as unknown as { form_base64?: string }).form_base64, undefined, "a staged request is not split: its signed PDF is the document");
@@ -671,6 +677,120 @@ test("onboarding per business (2026-11-19): Add business checks the blanks befor
   assert.equal(decline.to, poc.email);
   assert.ok(!decline.textBody.includes("Referee 2") && /unable to proceed/.test(decline.textBody), "the decline email is polite and never shows the reason");
 });
+
+test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs the GUID, reads a found / cancelled / missing ABN and survives the register being down; the F04 prefill maps the brief's fields, stays editable and is recorded; the title and the referees are checked", async () => {
+  const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
+  const BHP = "49004028077"; // BHP Group Limited, a large listed company (public ABN)
+  const answer = (body: Record<string, unknown>) => `c(${JSON.stringify(body)})`;
+  const found = { Abn: BHP, AbnStatus: "Active", AbnStatusEffectiveFrom: "2000-11-01", Acn: "004028077", AddressDate: "2019-04-08", AddressPostcode: "3000", AddressState: "VIC",
+    BusinessName: ["BHP", "BHP BILLITON", "BHP"], EntityName: "BHP GROUP LIMITED", EntityTypeCode: "PUB", EntityTypeName: "Australian Public Company", Gst: "2000-07-01", Message: "" };
+  let calls: string[] = [];
+  const fetchWith = (respond: (url: string) => Response | Promise<Response>) => (async (url: string) => { calls.push(String(url)); return respond(String(url)); }) as unknown as typeof fetch;
+
+  // A mistyped number is refused before any call; no GUID: nothing is called and Add business keeps its earlier behaviour.
+  calls = [];
+  const invalid = await abrLib.lookupAbr("49 004 028 078", "guid-1", fetchWith(() => new Response("")));
+  assert.ok(!invalid.ok && invalid.reason === "invalid" && calls.length === 0, "an invalid checksum is never sent");
+  const notSet = await abrLib.lookupAbr(BHP, "", fetchWith(() => new Response("")));
+  assert.ok(!notSet.ok && notSet.reason === "not_configured" && calls.length === 0, "no GUID, no call");
+
+  // Found: the JSONP answer is read; the GUID is in the query string (server side only).
+  const ok = await abrLib.lookupAbr("49 004 028 077", "guid-1", fetchWith(() => new Response(answer(found))));
+  assert.ok(ok.ok, "found");
+  assert.match(calls[calls.length - 1], /^https:\/\/abr\.business\.gov\.au\/json\/AbnDetails\.aspx\?abn=49004028077&callback=c&guid=guid-1$/);
+  if (ok.ok) {
+    assert.deepEqual({ ...ok.details, sourceUrl: undefined }, { abn: BHP, acn: "004028077", abnStatus: "Active", active: true, statusFrom: "2000-11-01", entityName: "BHP GROUP LIMITED",
+      entityType: "Australian Public Company", businessNames: ["BHP", "BHP BILLITON"], gstRegistered: true, gstFrom: "2000-07-01", state: "VIC", postcode: "3000", sourceUrl: undefined });
+    assert.equal(ok.raw.EntityName, "BHP GROUP LIMITED", "the raw answer is kept for the business record");
+  }
+  // Cancelled: found, not active (staff are warned and may add it with a reason).
+  const cancelled = await abrLib.lookupAbr("53 004 085 616", "guid-1", fetchWith(() => new Response(answer({ ...found, Abn: "53004085616", AbnStatus: "Cancelled", AbnStatusEffectiveFrom: "2015-06-30", Gst: null, BusinessName: [] }))));
+  assert.ok(cancelled.ok && !cancelled.details.active && cancelled.details.abnStatus === "Cancelled" && !cancelled.details.gstRegistered, "a cancelled ABN is reported, not hidden");
+  // Not found, a refused GUID, the register down (timeout, HTTP 500, unreadable body): never throws.
+  const missing = await abrLib.lookupAbr(BHP, "guid-1", fetchWith(() => new Response(answer({ Abn: "", Message: "No records found", BusinessName: [] }))));
+  assert.ok(!missing.ok && missing.reason === "not_found");
+  const badGuid = await abrLib.lookupAbr(BHP, "guid-x", fetchWith(() => new Response(answer({ Abn: "", Message: "The GUID entered is not recognised as a Registered Party" }))));
+  assert.ok(!badGuid.ok && badGuid.reason === "unavailable" && /EF_ABR_GUID/.test(badGuid.message), "a refused GUID is a set-up problem");
+  for (const respond of [() => { throw new DOMException("The operation timed out.", "TimeoutError"); }, () => new Response("oops", { status: 500 }), () => new Response("<html>maintenance</html>")]) {
+    const down = await abrLib.lookupAbr(BHP, "guid-1", fetchWith(respond as () => Response));
+    assert.ok(!down.ok && down.reason === "unavailable" && /still add the business/.test(down.message), "the register being down never blocks Add business");
+  }
+
+  // The F04 prefill (brief): Legal Entity, Trading / Agency name (the chosen business name), ABN/ACN, GST, State, postcode in the Suburb box
+  // (the Province box is for an overseas region), Country, Year founded; the contact from Add business; nothing else.
+  const details = ok.ok ? ok.details : null;
+  const values = abrLib.abrApplicationValues({ details, confirmed: { legalEntity: "BHP GROUP LIMITED", tradingName: "BHP BILLITON", gstRegistered: true, state: "VIC", postcode: "3000" },
+    contact: { givenName: "Pat", familyName: "Contact", email: "ZZ-Test-POC@blackhole.postmarkapp.com", phone: "+61412345678" } });
+  assert.deepEqual(values, { agent_legal_entity: "BHP GROUP LIMITED", agent_trading_name: "BHP BILLITON", agent_agency_name: "BHP BILLITON", agent_abn: "49 004 028 077 (ACN 004 028 077)",
+    agent_gst_registered: "YES", office_state: "VIC", office_suburb: "3000", office_country: "Australia", agent_year_founded: "2000", contact_given_name: "Pat", contact_family_name: "Contact",
+    contact_email: "zz-test-poc@blackhole.postmarkapp.com", contact_phone: "+61412345678" });
+  assert.ok(Object.keys(values).every((k) => (abrLib.ABR_PREFILL_KEYS as readonly string[]).includes(k)) && !("office_province" in values) && !("agent_registration_number" in values), "Province and the registration number stay blank");
+  // Staff edits win over the register; no business name falls back to the entity name; GST left to the contact.
+  const edited = abrLib.abrApplicationValues({ details: { ...details!, businessNames: [], acn: "" }, confirmed: { legalEntity: "BHP Group Ltd", tradingName: "", gstRegistered: null, state: "WA", postcode: "6000" }, contact: { givenName: "", familyName: "", email: "", phone: "" } });
+  assert.equal(edited.agent_trading_name, "BHP Group Ltd"); assert.equal(edited.office_state, "WA"); assert.equal(edited.office_suburb, "6000"); assert.equal(edited.agent_gst_registered, "YES", "the register's GST when staff leave it");
+  assert.equal(edited.agent_abn, BHP);
+
+  // Editable: with the prefill switch, every value we hold is the contact's field, already filled in (nothing printed); the GST pair comes ticked.
+  const box = { page: 1, x: 0.1, y: 0.1, w: 0.2, h: 0.02, required: false, label: "", value: "" };
+  const placed = ["agent_legal_entity", "agent_registration_number", "agent_abn_form", "agent_gst_registered:YES", "agent_gst_registered:NO", "office_suburb", "office_province", "agent_year_founded", "contact_title"]
+    .map((key) => ({ ...box, key, type: onboarding.AGENT_ONBOARDING_FIELDS[key].type, role: onboarding.AGENT_ONBOARDING_FIELDS[key].role, label: onboarding.AGENT_ONBOARDING_FIELDS[key].label }));
+  const editable = onboarding.resolveFields(placed, values, { editablePrefill: true });
+  const byKey = Object.fromEntries(editable.recipient.map((f) => [f.key, f]));
+  assert.equal(editable.printed.length, 0, "nothing prefilled is printed (the contact can change all of it)");
+  assert.equal(byKey.agent_legal_entity.value, "BHP GROUP LIMITED"); assert.equal(byKey.agent_legal_entity.role, "agent");
+  assert.equal(byKey["agent_abn_form"].value, "49 004 028 077 (ACN 004 028 077)"); assert.equal(byKey["agent_abn_form"].required, true);
+  assert.equal(byKey["agent_gst_registered:YES"].value, "true"); assert.equal(byKey["agent_gst_registered:NO"].value, "");
+  assert.equal(byKey.office_suburb.value, "3000"); assert.equal(byKey.office_province.value, ""); assert.equal(byKey.agent_registration_number.value, "", "Business/MARA/Registration Number stays manual");
+  assert.equal(byKey.agent_year_founded.value, "2000"); assert.equal(byKey.contact_title.value, "");
+  // Registry fixes (2026-11-19): the registration number is the contact's field, never prefilled, even from a template installed when it was the sender's;
+  // the signer is the "Business contact"; an activated onboarding reads "Business activated"; Ready to activate is shown for a signed business agreement.
+  const oldTemplate = onboarding.resolveFields([{ ...box, key: "agent_registration_number", type: "text", role: "sender", label: "Registration number (ACN)" }], { ...values, agent_registration_number: "ACN 004 028 077" });
+  assert.deepEqual([oldTemplate.printed.length, oldTemplate.recipient[0]?.role, oldTemplate.recipient[0]?.value, oldTemplate.recipient[0]?.label], [0, "agent", "", "Business/MARA/Registration number"]);
+  assert.equal(onboarding.AGENT_ONBOARDING_FIELDS.agent_registration_number.role, "agent"); assert.ok(!onboarding.AGENT_ONBOARDING_FIELDS.agent_registration_number.autoOrAgent);
+  assert.equal(onboarding.ONBOARDING_SIGNER_ROLE.label, "Business contact"); assert.equal(onboarding.STAGE_LABEL.activated, "Business activated");
+  assert.ok(read("src/pages/admin/lib/agentOnboarding.ts").includes(`if (kind === "business" && stage === "agreement_signed") return "Ready to activate";`), "Ready to activate in the stage words");
+  assert.equal(values.agent_year_founded, "2000", "Year founded is passed as agent_year_founded");
+  // Without the switch (no ABR confirmation on the business), the earlier behaviour: values we hold are printed.
+  assert.ok(onboarding.resolveFields(placed, values).printed.some((f) => f.key === "agent_legal_entity"), "earlier behaviour unchanged without the prefill");
+
+  // Signing checks: the title from the list; different referee emails; the same name is only a warning.
+  assert.match(String(abrLib.checkApplicationAnswers({ contact_title: "Pat Contact" }).error), /title from the list/);
+  assert.equal(abrLib.checkApplicationAnswers({ contact_title: "Dr" }).error, null);
+  assert.match(String(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }).error), /different email/);
+  assert.deepEqual(abrLib.checkApplicationAnswers({ ref1_email: "a@example.test", ref2_email: "b@example.test", ref1_contact_name: "Sam Lee", ref2_contact_name: "sam lee" }), { error: null, warnings: ["Both references have the same contact name. Check that they are two different people."] });
+
+  // The function: the lookup is admin-only, cached by ABN, and reports "not set up" without a GUID; Add business keeps the confirmed values
+  // on the business (a failure there still saves the business and sends the form, without the prefill).
+  const rpcs: Array<[string, Record<string, unknown>]> = []; const adminCalls: string[] = [];
+  const mkPorts = (guid: string) => ({ isServiceCaller: false, later: (w: Promise<unknown>) => w.then(() => undefined), letterhead: async () => null, uuid: () => "00000000-0000-4000-8000-00000000eeee",
+    abr: { guid, fetch: fetchWith(() => new Response(answer(found))) },
+    admin: async (action: string) => { adminCalls.push(action); if (action === "subject_search") return []; throw new Error(`unexpected ${action}`); },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "abr_lookup_save") return "2026-11-19T00:00:00Z";
+      if (name === "agency_onboarding_templates") return [];
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    serviceRpc: async () => { throw new Error("no service calls"); }, service: async () => false,
+    storage: { download: async () => null, upload: async () => true, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: null, config: { from: null, siteUrl: "", adminTo: [] } } }) as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const looked = await signingCore.handleSigning({ body: { action: "agent_onboarding_abn_lookup", abn: "49 004 028 077" }, upload: null, ip: null, userAgent: null }, mkPorts("guid-1")) as { configured: boolean; ok: boolean; details: { entityName: string }; cached: boolean };
+  assert.ok(looked.configured && looked.ok && looked.details.entityName === "BHP GROUP LIMITED" && looked.cached, "looked up and cached");
+  assert.ok(adminCalls.includes("subject_search"), "administrators only");
+  const saved = rpcs.find(([name]) => name === "abr_lookup_save")!;
+  assert.equal(saved[1].p_abn, BHP); assert.equal((saved[1].p_raw as { EntityName: string }).EntityName, "BHP GROUP LIMITED");
+  const unset = await signingCore.handleSigning({ body: { action: "agent_onboarding_abn_lookup", abn: BHP }, upload: null, ip: null, userAgent: null }, mkPorts("")) as { configured: boolean; ok: boolean };
+  assert.deepEqual([unset.configured, unset.ok], [false, false], "no GUID: the CMS uses the earlier lookup");
+
+  // The source: the GUID only from the function's environment, the sign step runs the checks, the signing page has the title list.
+  assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_ABR_GUID"\) \|\| Deno\.env\.get\("ABR_GUID"\)/);
+  assert.ok(!/EF_ABR_GUID|ABR_GUID/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the GUID never reaches the browser");
+  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey)"), "the server refuses what the page refuses");
+  assert.ok(read("src/pages/SigningPage.tsx").includes(`f.key === "contact_title"`) && read("src/pages/SigningPage.tsx").includes("F04_TITLES.map"), "the title is a list on the signing page");
+  const migration = read("supabase/migrations/20261119103517_abn_prefill.sql");
+  assert.ok(["create table public.abr_lookups", "abr_raw jsonb", "abr_fetched_at timestamptz", "agency_abr_attach", "agency_onboarding_prefill_record", "'prefill_reviewed'", "after update of answers on public.agency_onboarding"].every((s) => migration.includes(s)), "cache, business record, prefill history");
+});
+
 
 /* ------------------------------------------------------------------ phone normalisation */
 

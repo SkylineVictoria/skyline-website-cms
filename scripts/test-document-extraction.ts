@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-document-extraction"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatExtractionCandidates, hasLegacyExtractionOnly, reprocessedExtractionMetadata } from "../src/pages/agency/lib/documentExtraction.ts";

@@ -4,6 +4,8 @@
 // native gateway (node scripts/lab/server.mjs --p04-complete) to be running.
 // Synthetic actors only; never reads .env or hosted credentials; writes its result
 // JSON to the OS temp dir (skyline-native-extraction), never into the repo.
+import { refuseHosted } from './hosted-guard.mjs';
+refuseHosted('native-extraction'); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';

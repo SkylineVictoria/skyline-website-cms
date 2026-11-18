@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import type { AbrConfirmed, AbrDetails } from "../../supabase/functions/_shared/validation/abr";
 import { docxXmlToText } from "../../supabase/functions/_shared/signing";
 
 export type SignFieldType = "signature" | "initials" | "date" | "name" | "text" | "checkbox";
@@ -114,7 +115,7 @@ export interface SigningView {
   requireCode?: boolean; codeTo?: string | null; offer?: { studentName: string; applicationReference: string; prepaidMore: "YES" | "NO" | null } | null;
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };
   /** Agent onboarding (2026-11-17): the application form (the first `formPages` pages) and the agreement, sent as one document. */
-  onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string } | null;
+  onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string; kind?: string; stage?: string } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
   // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
   fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;
@@ -239,9 +240,17 @@ export const rejectOnboarding = (input: { onboardingId: string; reason: string }
  * to the contact at once (the three blanks are installed first when missing, before anything is saved). `warning` when the business was
  * saved but the form could not be sent (Resend application on its page).
  */
-export interface BusinessCreateResult { agencyId: string; businessId: string; agencyName: string; contactAgentId: string; application: AgentOnboardingSendResult | null; warning?: string }
-export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string }) =>
+export interface BusinessCreateResult { agencyId: string; businessId: string; agencyName: string; contactAgentId: string; application: AgentOnboardingSendResult | null; warning?: string; abrWarning?: string }
+/** What staff confirmed from ABN Lookup on Add business (kept on the business for the F04 prefill). */
+export type BusinessAbrInput = AbrConfirmed & { givenName: string; familyName: string };
+export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string; abr?: BusinessAbrInput }) =>
   onboardingAction<BusinessCreateResult>({ action: "agent_onboarding_business_create", ...input });
+/**
+ * ABN Lookup on Add business (ABR JSON service, administrators): configured false = no GUID set up yet (the earlier lookup is used);
+ * ok false with reason invalid / not_found / unavailable; the answer is cached for the business about to be saved.
+ */
+export type AbnLookupResult = { configured: boolean; ok: true; details: AbrDetails; fetchedAt: string; cached: boolean } | { configured: boolean; ok: false; reason: "not_configured" | "invalid" | "not_found" | "unavailable"; message: string };
+export const lookupAbnDetails = (abn: string) => signingAction<AbnLookupResult>({ action: "agent_onboarding_abn_lookup", abn });
 /** Activate (administrator): the business, its point of contact and every agent added meanwhile become active; one set-password email each. */
 export interface BusinessActivateResult { businessId: string; name: string; contact: { id: string; name: string; email: string }; heldReleased: number; emailed: string[]; failed: string[]; skipped: Array<{ email: string; reason: string }> }
 export const activateBusinessOnboarding = (businessId: string) => signingAction<BusinessActivateResult>({ action: "agent_onboarding_business_activate", businessId });

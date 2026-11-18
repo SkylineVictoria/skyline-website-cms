@@ -1,5 +1,7 @@
 -- SQL role simulation only; does not verify Auth API/JWT validation.
 begin;
+-- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
+do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 select plan(8);
 insert into public.agencies(id,name,code) values
  ('11000000-0000-0000-0000-000000000001','Identity fixture','P2-ID');

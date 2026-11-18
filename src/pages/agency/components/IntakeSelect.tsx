@@ -6,6 +6,10 @@ export const FALLBACK_MESSAGE = "No intake dates are published for this course y
 /** The dropdown value of "+ Add new intake…" (RTO Managers only); never a stored answer. */
 export const ADD_INTAKE_VALUE = "__add_intake__";
 
+const day = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+/** What the dropdown shows: the intake's start and end dates ("19 Jan 2027 – 9 Nov 2029"); a fallback month keeps its month name. */
+const intakeDates = (i: OpenIntake) => (i.fallback || !i.startDate ? i.display : i.endDate ? `${day(i.startDate)} – ${day(i.endDate)}` : `Starts ${day(i.startDate)}`);
+
 /**
  * The intake dropdown of the enrolment form (INT-01): the open intakes of the chosen course, loaded from the database, or, for a
  * course without published intakes, the start months the database offers instead (so enrolment never stops). Without a course it is
@@ -41,7 +45,7 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
         <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : fallback ? "Select a start month" : "Select intake"}</option>
-        {intakes.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.display}{intake.running ? " (running now)" : ""}</option>)}
+        {intakes.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intakeDates(intake)}{intake.running ? " (running now)" : ""}</option>)}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
       </select>
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">

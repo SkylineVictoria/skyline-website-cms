@@ -9,6 +9,8 @@ import LmsTimetableHub from "./timetable/LmsTimetableHub";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
 import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
+import CreateTimetablePage from "./timetable/CreateTimetablePage";
+import TimetableSettingsPage from "./timetable/TimetableSettingsPage";
 
 /** /admin/batches/:id (old links): a batch id is its intake id, so the intake list opens that intake in its sheet. */
 export function OldBatchRedirect() {
@@ -34,6 +36,8 @@ export default function LmsPage() {
   // An intake is the class group; the old batch screens redirect to Intakes.
   if (area === "batches" || area === "batch-allocation" || area === "unit-delivery") return <Navigate to="/admin/lms/intakes" replace />;
   if (area === "timetable") return <LmsTimetableHub />;
+  if (area === "timetable-create") return <CreateTimetablePage />;
+  if (area === "timetable-settings") return <TimetableSettingsPage />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
   if (area === "locations") return <LmsLocationsPage />;
   if (area === "timetable-templates") return <LmsTimetableTemplatesPage />;

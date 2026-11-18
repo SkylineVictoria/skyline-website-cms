@@ -76,6 +76,8 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
   // A menu route may carry ?view= (the Timetable views): it is current when the path and the view both match.
   const isCurrent = (route: string) => {
     const [path, query = ""] = route.split("?");
+    // A route without ?view= (the calendar) is current for every view of its page: the views are tabs inside it.
+    if (!query) return pathname === path;
     return pathname === path && (new URLSearchParams(search).get("view") ?? "") === (new URLSearchParams(query).get("view") ?? "");
   };
   const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));

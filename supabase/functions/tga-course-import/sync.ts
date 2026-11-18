@@ -234,6 +234,11 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
     throw new ImportError("The packaging rules do not allow this selection. " + check.lines.filter(line => line.state === "broken")
       .map(line => `${line.label}: ${line.detail}.`).join(" "), 422);
   }
+  // Units are added only when the course then meets every packaging rule (owner, 2026-11-19).
+  if (!check.complete) {
+    throw new ImportError("Select units until every packaging rule is met. " + check.lines.filter(line => line.state !== "met")
+      .map(line => `${line.label}: ${line.detail}.`).join(" "), 422);
+  }
   if (rules.unchecked.length && options.attested !== true) {
     throw new ImportError("Part of the packaging rules could not be checked automatically. Tick the confirmation that the selection follows the official packaging rules.", 422);
   }

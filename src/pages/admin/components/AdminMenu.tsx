@@ -72,15 +72,20 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
 
 /** LMS is additive navigation; it does not mutate the DB-driven Master Data menu. */
 function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+  // A menu route may carry ?view= (the Timetable views): it is current when the path and the view both match.
+  const isCurrent = (route: string) => {
+    const [path, query = ""] = route.split("?");
+    return pathname === path && (new URLSearchParams(search).get("view") ?? "") === (new URLSearchParams(query).get("view") ?? "");
+  };
   const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));
   useEffect(() => { if (pathname.startsWith("/admin/lms")) setExpanded(true); }, [pathname]);
-  const timetableOpen = LMS_MENU.some(i => i.parent === "timetable" && i.route === pathname);
+  const timetableOpen = LMS_MENU.some(i => i.parent === "timetable" && isCurrent(i.route));
   const [timetable, setTimetable] = useState(timetableOpen);
   useEffect(() => { if (timetableOpen) setTimetable(true); }, [timetableOpen]);
   const link = (item: (typeof LMS_MENU)[number]) => <NavLink to={item.route} end onClick={close}
     title={collapsed ? item.label : undefined}
-    className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (pathname === item.route ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
+    className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (isCurrent(item.route) ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
     <i className={item.icon + " text-lg"} aria-hidden="true" />
     {collapsed ? <span className="sr-only">{item.label}</span> : <span className="truncate">{item.label}</span>}
   </NavLink>;

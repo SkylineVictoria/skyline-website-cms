@@ -216,7 +216,8 @@ async function up() {
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
     let text = fs.readFileSync(path.join(REPO, "supabase", "migrations", file), "utf8");
     for (const [from, to] of LAB_TWEAKS[file] ?? []) text = text.replace(from, to);
-    fs.writeFileSync(path.join(migrations, HOSTED_LATER[file] ?? file), text);
+    // Every later file that makes a pg_temp helper too (20261118041529, ...): the same one-session clash, the same lab-only answer.
+    text = text.replaceAll("create function pg_temp.", "create or replace function pg_temp.");    fs.writeFileSync(path.join(migrations, HOSTED_LATER[file] ?? file), text);
   }
   copyFunctions(path.join(REPO, "supabase", "functions"), path.join(WORK, "supabase", "functions"));
   fs.writeFileSync(path.join(WORK, "supabase", "functions", ".env"), Object.entries(LAB_SECRETS).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");

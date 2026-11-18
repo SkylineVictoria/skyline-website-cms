@@ -98,9 +98,9 @@ export default function AgentDetailPage() {
           {awaitingPassword(agent) && agent.email
             ? <Button variant="outline" icon="ri-mail-send-line" disabled={busy} onClick={() => void resend()}>{busy ? "Sending…" : "Resend invite"}</Button>
             : null}
-          {agent.status === "Onboarding" || agent.status === "Declined"
-            ? <Link to={`/admin/businesses/${agent.business.id}?tab=agents`} className="text-sm font-semibold text-primary-700 hover:underline">Open their onboarding</Link>
-            : agent.status === "Inactive"
+          {agent.status === "Onboarding"
+            ? <Link to={`/admin/businesses/${agent.business.id}`} className="text-sm font-semibold text-primary-700 hover:underline">Open the business&apos;s onboarding</Link>
+            : agent.status === "Inactive" || agent.status === "Declined"
             ? <Button onClick={() => setDialog(true)}>Activate agent</Button>
             : <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate agent</Button>}
         </>}
@@ -111,11 +111,11 @@ export default function AgentDetailPage() {
         </p>
       ) : agent.status === "Onboarding" ? (
         <p role="status" className="-mt-2 mb-5 rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950" data-testid="agent-onboarding-status">
-          In onboarding: {agentOnboardingWords(agent.onboarding)}. They have no sign-in and get their invitation only when an administrator activates them on the business&apos;s Agents tab.
+          {agentOnboardingWords(agent.onboarding)}. Agents have no onboarding of their own: their business&apos;s onboarding covers them, and their sign-in invitation goes out when an administrator activates the business.
         </p>
       ) : agent.status === "Declined" ? (
         <p role="status" className="-mt-2 mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-          Rejected during onboarding. They were never invited; their onboarding can be started again from the business&apos;s Agents tab.
+          Rejected in an earlier per-agent onboarding; never invited. Agents now only need their business&apos;s onboarding: Activate agent adds them again (invited at once, or when the business is activated).
         </p>
       ) : agent.status === "Inactive" ? (
         <p role="status" className="-mt-2 mb-5 rounded-md border border-background-300 bg-background-100 px-4 py-3 text-sm text-foreground-700">

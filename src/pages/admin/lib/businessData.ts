@@ -88,6 +88,10 @@ export interface BusinessDetail {
     /** The latest onboarding's stage (agency_onboarding.stage), if any. */
     stage?: string | null;
     onboardingId?: string | null;
+    /** The agreement is signed (online or an uploaded copy) and the business is still onboarding: an administrator presses Activate. */
+    readyToActivate?: boolean;
+    /** Agents added while the business is onboarding: their sign-in invitations go out at Activate. */
+    heldAgents?: number;
     contact: { agentId: string; name: string; email: string; hasLogin: boolean } | null;
   };
   /** The agent agreement sent through the onboarding documents (2026-11-17): where it is up to and its two-year term. */
@@ -205,7 +209,7 @@ export const listBusinesses = (f: { search?: string; status?: string; limit: num
 
 export const getBusiness = (id: string) => call<BusinessDetail | null>("admin_business_detail", { p_business: id }, "We could not load this business.");
 
-/** Add business: the business starts inactive (onboarding) with its point of contact; nothing is sent. */
+/** The business and its point of contact only (no email). The CMS uses createBusinessWithOnboarding (signingApi), which also sends the application form. */
 export const createBusiness = (agency: Record<string, string>, contactEmail: string, contactName: string) =>
   call<{ agencyId: string; businessId: string; agencyName: string; contactAgentId: string }>("admin_business_create",
     { p_agency: agency, p_contact_email: contactEmail, p_contact_name: contactName }, "We could not create this business.");
@@ -277,27 +281,16 @@ export const getStudent = (id: string) => call<StudentDetail | null>("admin_stud
 /**
  * Active: approved (their business is active); they may not have set a password yet, see awaitingPassword.
  * Invited: waiting for their business to be approved. Inactive: everything else (the default).
- * Onboarding: added to a business and going through their own onboarding (application form, two references, then an administrator
- * activates them); no login and no invitation until then. Declined: an administrator rejected their onboarding (never invited).
+ * Onboarding: added to a business that is still onboarding (2026-11-19): covered by the business's onboarding, their sign-in invitation
+ * held until an administrator activates the business. Declined: rejected in a per-agent onboarding before 2026-11-19 (never invited).
  */
 export type AgentStatus = "Active" | "Invited" | "Inactive" | "Onboarding" | "Declined";
 export interface AgentCounts { all: number; active: number; invited: number; inactive: number; onboarding?: number; declined?: number }
-/** An agent's own onboarding (migration 20261118004521): its stage and the references received so far. */
+/** An agent's own onboarding from before 2026-11-19 (migration 20261118004521), kept for the record. */
 export interface AgentOnboardingSummary { id: string; stage: string; createdAt: string; received: number; total: number; ready: boolean; agreementState?: string | null }
-/** The agent's onboarding in plain words for lists. */
-export function agentOnboardingWords(o: AgentOnboardingSummary | null | undefined): string {
-  if (!o) return "Onboarding";
-  switch (o.stage) {
-    case "application_sent": return "Application form sent";
-    case "application_signed": case "references_pending": return `References ${o.received} of ${o.total}`;
-    case "references_received": return "References received: send agreement";
-    case "agreement_sent": return o.agreementState === "partial" ? "Agent signed (awaiting SLIT)" : "Agreement sent";
-    case "agreement_signed": return "Fully signed: ready to activate";
-    case "activated": return "Activated";
-    case "declined": return "Rejected";
-    case "cancelled": case "expired": return `Onboarding ${o.stage}`;
-    default: return o.stage.replaceAll("_", " ");
-  }
+/** An agent waiting for their business (2026-11-19): agents have no onboarding of their own, the business's covers them. */
+export function agentOnboardingWords(_o?: AgentOnboardingSummary | null): string {
+  return "Covered by business onboarding: invitation held until the business is activated";
 }
 
 export interface DirectoryAgent {
@@ -349,6 +342,8 @@ export interface AgentOverview {
 export interface ActivationResult {
   agentId: string; businessId: string; businessName: string; agencyId: string;
   businessCreated: boolean; businessActivated: boolean; hasLogin: boolean; email: string; name: string; role: "agent" | "agency_admin";
+  /** The business is still onboarding (2026-11-19): the agent is recorded, their sign-in invitation held until the business is activated. */
+  held?: boolean;
 }
 
 export const listAgentDirectory = (f: { search?: string; status?: string; businessId?: string | null; limit: number; offset: number }) =>

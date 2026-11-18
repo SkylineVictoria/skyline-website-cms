@@ -2,7 +2,6 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { supabase } from "@/pages/admin/lib/supabase";
-import { addAgentForOnboarding } from "@/lib/signingApi";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 import { invokePortalUsers, listAgencies, listInvitations, listPortalUsers, ROLE_LABELS, type InvitationRow, type PortalUserRow } from "@/pages/agency/lib/portalData";
 import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
@@ -117,15 +116,6 @@ function LegacyUsersPage() {
   );
 
   const submitAdd = async (values: UserFormValues) => {
-    if (!isSlit) {
-      // A business admin agent adds an agent through the agent's own onboarding (migration 20261118004521): the agent is emailed the
-      // application form; Skyline activates them once both references are back, and only then is the sign-in invitation sent.
-      const r = await addAgentForOnboarding({ name: values.name, email: values.email, role: values.role === "agency_admin" ? "agency_admin" : "agent" });
-      show(`${r.agent.name} was emailed the agent application form (${r.reference}). Once they sign it and both of their referees reply, Skyline reviews the application; they get their sign-in invitation only when Skyline activates them.`);
-      setDialog(null);
-      await load();
-      return;
-    }
     // An agency admin never sends an agency: the server uses the agency of their own membership.
     const data = await invokePortalUsers({
       action: "invite",

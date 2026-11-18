@@ -5,7 +5,7 @@ import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { Button, Card, Field, TextInput } from "@/pages/admin/components/ui";
 import { EMPTY_AGENCY_FORM, suggestAgencyCode, validateAgencyForm, type AgencyFormErrors, type AgencyFormState } from "@/pages/admin/lib/agencyForm";
-import { createBusiness } from "@/pages/admin/lib/businessData";
+import { createBusinessWithOnboarding } from "@/lib/signingApi";
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
 import EmailField from "@/components/identity/EmailField";
@@ -131,15 +131,21 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     }
     setSaving(true);
     try {
-      // One transaction: the business (inactive until its agent agreement is signed) and its point of contact. Nothing is emailed yet.
+      // One call (2026-11-19): the business (onboarding until an administrator activates it) and its point of contact are saved, and the
+      // Agent Application Form goes to the contact at once. A missing blank is installed before anything is saved, so a retry adds nothing twice.
       const email = form.businessEmail.trim().toLowerCase();
-      const data = await createBusiness({
-        name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
-        phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: form.primaryContact.trim(),
-      }, email, form.primaryContact.trim());
+      const data = await createBusinessWithOnboarding({
+        agency: {
+          name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
+          phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: form.primaryContact.trim(),
+        },
+        contactEmail: email, contactName: form.primaryContact.trim(),
+      });
       const id = String(data.agencyId ?? "");
       if (!id) throw new Error("The business was created but could not be opened. Find it in Businesses.");
-      const message = `Business added and waiting for onboarding. Upload or send the agent agreement for signature, then activate it to invite ${email}.`;
+      const message = data.application?.sent
+        ? `Business added. The Agent Application Form (${data.application.reference}) was emailed to ${email}; the referee checks and the agreement follow. Activate the business once the agreement is signed.`
+        : `Business added, but the application form was not emailed: ${data.warning ?? data.application?.warning ?? "signing email is not configured"}. Use Resend application on the business page.`;
       onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
@@ -242,7 +248,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             {input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
             <div>
-              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: used to sign in, and receives the invitation after activation."} required>
+              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: the Agent Application Form goes here as soon as the business is added; the sign-in link follows after activation."} required>
                 <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
                   onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
                   onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />

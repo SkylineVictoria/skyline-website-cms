@@ -11,12 +11,12 @@ import StudentsTable from "@/pages/admin/components/StudentsTable";
 import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
 import BusinessOnboarding from "@/pages/admin/components/BusinessOnboarding";
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
-import { AgentOnboardings } from "@/pages/admin/components/AgentOnboardingPanel";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
 import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
+import { activateBusinessOnboarding } from "@/lib/signingApi";
 
 type Tab = "details" | "agents" | "students" | "applications";
 const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
@@ -55,6 +55,17 @@ export default function BusinessDetailPage() {
     if (!business) return;
     setBusy(true);
     try {
+      if (next === "Active" && business.status === "Onboarding") {
+        const r = await activateBusinessOnboarding(business.id);
+        const parts = [`${business.name} is active.`];
+        if (r.emailed.length) parts.push(`Set-password email sent to ${r.emailed.join(", ")}.`);
+        if (r.heldReleased) parts.push(`${r.heldReleased} held agent invitation${r.heldReleased === 1 ? "" : "s"} released.`);
+        if (r.failed.length) parts.push(`Not emailed (use Resend invite on the Agents tab): ${r.failed.join(", ")}.`);
+        if (r.skipped.length) parts.push(`Skipped: ${r.skipped.map((x) => `${x.email} (${x.reason})`).join(", ")}.`);
+        push(parts.join(" "));
+        await load();
+        return;
+      }
       push(await changeBusinessStatus(business, next));
       await load();
     } catch (e) {
@@ -85,6 +96,7 @@ export default function BusinessDetailPage() {
   const stage = (business.onboarding?.stage ?? null) as OnboardingStage | null;
   const onboardingRunning = !!stage && ACTIVE_STAGES.includes(stage);
   const onboardingWords = operational ? "No active business admin agent yet."
+    : business.onboarding?.readyToActivate ? "Agreement signed: ready to activate."
     : onboardingRunning ? `Onboarding: ${STAGE_LABEL[stage!] ?? stage}.`
     : stage ? `Onboarding ${(STAGE_LABEL[stage] ?? stage).toLowerCase()}; start it again.` : "Onboarding not started.";
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
@@ -104,13 +116,14 @@ export default function BusinessDetailPage() {
         description={[agency.registrationNumber ? `ABN ${agency.registrationNumber}` : agency.code, agency.address, `since ${formatDate(agency.createdAt)}`].filter(Boolean).join(", ")}
         actions={
           <>
-            <AgencyStatusBadge status={business.effectiveStatus ?? business.status} />
+            {business.onboarding?.readyToActivate ? <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-200" data-testid="ready-to-activate">Ready to activate</span>
+              : <AgencyStatusBadge status={business.effectiveStatus ?? business.status} />}
             {business.status === "Active" && business.operational === false && business.gateReason ? <span className="text-xs font-medium text-amber-700" data-testid="business-gate-reason">{business.gateReason}</span> : null}
             <MessagePersonButton kind="agency" refId={agency.id} name={business.name} />
             {business.status === "Active"
               ? <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate business</Button>
               : <Button disabled={busy || !business.onboarding?.agreementReady} title={business.onboarding?.agreementReady ? undefined : "Needs the signed agent agreement"}
-                onClick={() => void change("Active")}>{busy ? "Activating…" : "Activate & invite"}</Button>}
+                onClick={() => void change("Active")} data-testid="activate-business">{busy ? "Activating…" : business.status === "Onboarding" ? "Activate" : "Activate & invite"}</Button>}
           </>
         }
       />
@@ -122,7 +135,7 @@ export default function BusinessDetailPage() {
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
         <Summary label="Agents" value={people} note={`${c.admins} business admin agent${c.admins === 1 ? "" : "s"}, ${c.agents} other agent${c.agents === 1 ? "" : "s"}${c.inactiveAgents ? `, ${c.inactiveAgents} inactive` : ""}`}
           warnText={c.admins === 0 ? onboardingWords : undefined}
-          action={c.admins === 0 && !operational && !onboardingRunning ? <Button size="sm" icon="ri-quill-pen-line" onClick={() => { setParams({}); setStartSignal((n) => n + 1); }} data-testid="summary-start-onboarding">Start onboarding</Button> : undefined}
+          action={c.admins === 0 && !operational && !onboardingRunning && !business.onboarding?.readyToActivate ? <Button size="sm" icon="ri-quill-pen-line" onClick={() => { setParams({}); setStartSignal((n) => n + 1); }} data-testid="summary-start-onboarding">{stage ? "Start again" : "Send application form"}</Button> : undefined}
           onClick={() => setParams({ tab: "agents" })} />
         <Summary label="Students" value={c.students} onClick={() => setParams({ tab: "students" })} />
         <div className="bg-background-50 px-4 py-3">
@@ -146,7 +159,7 @@ export default function BusinessDetailPage() {
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
       {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
-      {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null }} onChanged={load} /> : null}
+      {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
       {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
 
@@ -186,7 +199,7 @@ function DetailsSection({ agencyId, onSaved }: { agencyId: string; onSaved: () =
 }
 
 /** The business's agents: add, activate, deactivate, and resend a sign-in invitation still waiting. */
-function AgentsSection({ business, onChanged }: { business: { id: string; name: string; status: BusinessStatus; operational: boolean; gateReason: string | null }; onChanged: () => Promise<void> }) {
+function AgentsSection({ business, onChanged }: { business: { id: string; name: string; status: BusinessStatus; operational: boolean; gateReason: string | null; holding: boolean }; onChanged: () => Promise<void> }) {
   const { push } = useToast();
   const [rows, setRows] = useState<DirectoryAgent[] | null>(null);
   const [error, setError] = useState("");
@@ -229,14 +242,14 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
   return (
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
-        <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students. A new agent goes through their own onboarding (application form, two references) and gets a sign-in invitation only when an administrator activates them.</p>
-        {business.operational ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })} data-testid="add-agent">Add agent</Button>
+        <p className="text-sm text-foreground-600">Agents of {business.name}. Each agent has their own students. Agents are covered by the business&apos;s onboarding: adding one sends only their sign-in invitation{business.holding ? ", held until an administrator activates the business" : ""}.</p>
+        {business.operational || business.holding ? <Button size="sm" icon="ri-user-add-line" onClick={() => openDialog({ name: "", email: "", business })} data-testid="add-agent">Add agent</Button>
           : <span className="flex items-center gap-2"><Button size="sm" icon="ri-user-add-line" disabled title={business.gateReason ?? "Available once the business is active with a signed agent agreement."} data-testid="add-agent">Add agent</Button>
             <span className="text-xs font-medium text-amber-700" data-testid="add-agent-reason">{business.gateReason ?? "Agents can be added once the business is active with a signed, unexpired agent agreement."}</span></span>}
       </div>
       {error ? <ListMessage icon="ri-error-warning-line" title="Agents did not load" text={error} action={<Button size="sm" variant="outline" onClick={() => setReload((n) => n + 1)}>Try again</Button>} />
         : rows === null ? <p className="p-6 text-sm text-foreground-500">Loading agents…</p>
-        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text={business.operational ? "Add this business's first agent." : "Complete the onboarding first."} action={business.operational ? <Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button> : undefined} /> : (
+        : rows.length === 0 ? <ListMessage icon="ri-team-line" title="No agents yet" text={business.operational || business.holding ? "Add this business's first agent." : "Complete the onboarding first."} action={business.operational || business.holding ? <Button size="sm" onClick={() => openDialog({ name: "", email: "", business })}>Add agent</Button> : undefined} /> : (
           <ResponsiveTable>
             <thead>
               <tr>
@@ -266,8 +279,8 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
-                      {r.status === "Onboarding" || r.status === "Declined" ? <span className="text-xs text-foreground-500">See Agent onboarding below</span>
-                        : r.status === "Inactive"
+                      {r.status === "Onboarding" ? <span className="text-xs text-foreground-500">Sent at Activate</span>
+                        : r.status === "Inactive" || r.status === "Declined"
                         ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>
                         : <Button size="sm" variant="ghost" disabled={busyId === r.agentId} onClick={() => setConfirm(r)}>Deactivate</Button>}
                     </div>
@@ -277,7 +290,6 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
             </tbody>
           </ResponsiveTable>
         )}
-      <AgentOnboardings businessId={business.id} reloadKey={reload} onChanged={() => { setReload((n) => n + 1); void onChanged(); }} />
       <ActivateAgentDialog agent={activating} open={dialogOpen} onClose={() => setDialogOpen(false)} onDone={refresh} />
       <ConfirmDialog open={Boolean(confirm)} title={`Deactivate ${confirm?.name ?? "this agent"}?`}
         message="They will not be able to sign in, and an invitation still waiting is withdrawn. Their students and applications stay with the business."

@@ -3,7 +3,7 @@
 // checks go out when the agent has signed the form; staff are told when both referees are back). Everything goes through the Sign
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
-import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, printAbn, printDate, printPercent, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { AGENT_ONBOARDING_DOCS, expiryDate, isPdfDate, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { lookupAgencyAbn } from "../_shared/validation/abn.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -144,8 +144,15 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: values, original_hash: await sha256Hex(made.bytes), recipients,
     fields: recipientFields(made.recipient, signerRole("form").key), subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: text(ctx.body.message, 2000) || null, edited: false,
     template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
-  const onboarding = await ctx.rpc("agency_onboarding_create", { p_agency: agencyId, p_agent: prepared.agent!.id, p_request: id,
-    p_data: { form_pages: template.sourcePages, values, message: text(ctx.body.message, 2000) || null, admin_name: text(prepared.admin?.name, 150) } });
+  let onboarding: Json;
+  try {
+    onboarding = await ctx.rpc("agency_onboarding_create", { p_agency: agencyId, p_agent: prepared.agent!.id, p_request: id,
+      p_data: { form_pages: template.sourcePages, values, message: text(ctx.body.message, 2000) || null, admin_name: text(prepared.admin?.name, 150) } });
+  } catch (error) {
+    // One open onboarding per business (a double click, a retry): the draft made for this attempt is voided and never emailed.
+    try { await ctx.admin("void", id, { reason: "Not sent: the business already has an onboarding in progress" }); } catch { /* left as an unsent draft */ }
+    throw error;
+  }
   ctx.commit();
   return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, agent: { name: prepared.agent!.name, email: prepared.agent!.email }, printed: made.printed.length, fields: made.recipient.length });
 }
@@ -206,158 +213,72 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
 }
 
 /**
- * Agent-level onboarding (2026-11-17, fourth brief): Add agent (CMS) or the business admin agent (portal) adds the agent as Onboarding (no
- * login, no invitation) and the Agent Application Form (F04), prefilled with the business's details and the agent's contact, is made and
- * emailed from the database as the referee checks are (the portal caller is no Sign administrator). The rest runs as for a business: the
- * signed form sends the two referee checks; both back = Ready; an administrator activates (the congratulations set-password email) or rejects.
+ * Onboarding per business (2026-11-19, owner): Add business saves the business and its point of contact (POC) and sends the Agent
+ * Application Form (F04) to the POC at once, in one call. The three blanks are checked before anything is saved, so the CMS can install a
+ * missing one and call again without a second business. Only this call sends the first F04: an existing business never gets one by itself
+ * (staff use Resend application / Start again). The database allows one open onboarding per business, so a retry cannot send a second F04.
  */
-interface AgentAdded { onboardingId: string; agentId: string; agency: { id: string; name: string; abn: string | null }; agent: { id: string; name: string; email: string; role: string; status: string }; values: Record<string, unknown> }
-export async function addAgent(ctx: OnboardingContext): Promise<Json> {
-  // Both blanks must be installed before anything is recorded: the referee checks go out by themselves once the form is signed.
-  const form = await serviceRpc(ctx.ports, "agency_onboarding_template_get", { p_key: AGENT_ONBOARDING_DOCS.form.key }) as OnboardingTemplate | null;
-  if (!form) throw new SigningError(`${ONBOARDING_TEMPLATES_MISSING} (form)`);
-  if (!await serviceRpc(ctx.ports, "agency_onboarding_template_get", { p_key: AGENT_ONBOARDING_DOCS.referee.key })) throw new SigningError(`${ONBOARDING_TEMPLATES_MISSING} (referee)`);
-  const business = String(ctx.body.businessId ?? ""), agent = String(ctx.body.agentId ?? "");
-  const added = await ctx.rpc("agent_onboarding_agent_add", { p_business: UUID.test(business) ? business : null, p_name: text(ctx.body.name, 200), p_email: text(ctx.body.email, 254),
-    p_phone: text(ctx.body.phone, 40), p_role: ctx.body.role === "agency_admin" ? "agency_admin" : ctx.body.role === "agent" ? "agent" : null, p_message: text(ctx.body.message, 2000) || null,
-    p_agent: UUID.test(agent) ? agent : null }) as AgentAdded;
-  return await sendAgentApplicationForm(ctx, added, form);
-}
-async function sendAgentApplicationForm(ctx: OnboardingContext, added: AgentAdded, template: OnboardingTemplate): Promise<Json> {
+export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
+  const agency = ctx.body.agency && typeof ctx.body.agency === "object" ? ctx.body.agency as Record<string, unknown> : null;
+  if (!agency) throw new SigningError("Enter the business's details.");
+  const contactName = text(ctx.body.contactName, 100), contactEmail = text(ctx.body.contactEmail, 254).toLowerCase();
+  if (contactName.length < 2) throw new SigningError("Enter the point of contact's name (2 to 100 characters).");
+  if (!/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(contactEmail)) throw new SigningError("Enter the point of contact's email address.");
+  const created = await ctx.rpc("admin_business_create", { p_agency: agency, p_contact_email: contactEmail, p_contact_name: contactName }) as
+    { agencyId: string; businessId: string; agencyName: string; contactAgentId: string };
   try {
-    const values = await recordValues({ agency: added.agency, values: added.values });
-    const title = `Agent application form: ${text(added.agent.name, 80)} (${text(added.agency.name, 110)})`.slice(0, 200);
-    const made = await buildDocument(ctx, template, values, title);
-    const id = ctx.ports.uuid();
-    await ctx.store(`${id}/original.pdf`, made.bytes);
-    const role = signerRole("form");
-    const created = await serviceRpc(ctx.ports, "agency_onboarding_agent_application_create", { p_onboarding: added.onboardingId, p_data: { id, title, original_hash: await sha256Hex(made.bytes),
-      template_id: template.id, fields: recipientFields(made.recipient, role.key), role_key: role.key, role_label: role.label, form_pages: template.sourcePages,
-      message: text(ctx.body.message, 2000) || null, expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3, values } }) as { reference: string; requestId: string };
-    ctx.commit();
-    const mail = await drainSigningMail(ctx.ports);
-    return { onboardingId: added.onboardingId, agentId: added.agentId, agent: added.agent, agency: { id: added.agency.id, name: added.agency.name }, reference: created.reference,
-      requestId: created.requestId, sent: true, mail, printed: made.printed.length, fields: made.recipient.length };
+    const application = await sendApplication({ ...ctx, body: { agencyId: created.agencyId, agentId: created.contactAgentId, message: ctx.body.message } });
+    return { ...created, application };
   } catch (error) {
-    // Nothing usable was sent: the onboarding closes; the agent stays Onboarding and can be sent the form again.
-    await serviceRpc(ctx.ports, "agency_onboarding_agent_abort", { p_onboarding: added.onboardingId, p_reason: "not_sent" }).catch(() => undefined);
-    throw error;
+    // The business is saved; the form can be sent again from its page (Resend application).
+    return { ...created, application: null, warning: `The business was saved, but the application form could not be sent: ${(error as Error).message}` };
   }
 }
+
 /**
- * The agent's own agreement (2026-11-17, owner decision (a)): at both references back, staff send the active template of type Individual
- * agent agreement (CMS > Templates; never P06). The Sign module makes it as any template request for the agent (their name and email,
- * the business's name and ABN, the date). Two signers in order: the agent, then a SLIT signatory chosen from the active CMS Admins (the
- * sender by default), who is emailed their link once the agent has signed. The database links it to the onboarding.
+ * Activate (2026-11-19): the signed business agreement (or an uploaded signed copy) makes the business Ready to activate; an administrator
+ * presses Activate. The database makes the business, its POC and every agent added meanwhile Active and returns the invitations; each gets
+ * ONE set-password email here (an invitation already emailed is not emailed again).
  */
-export const AGENT_AGREEMENT_TEMPLATE_MISSING = "No individual agent agreement template yet";
-interface AgentAgreementTemplate { id: string; name: string; kind: string; roles: Array<{ key: string; label?: string; order?: number; required?: boolean }>; version: number; signatureRoles?: string[] }
-interface Countersigner { id: string; name: string; email: string; me: boolean }
-async function pickCountersigner(ctx: OnboardingContext, id: unknown): Promise<Countersigner> {
-  const people = (await ctx.rpc("agent_agreement_countersigners", {}) ?? []) as Countersigner[];
-  const chosen = typeof id === "string" && id ? people.find((p) => p.id === id) : people.find((p) => p.me);
-  if (!chosen) throw new SigningError(typeof id === "string" && id ? "The SLIT signatory must be an active CMS administrator." : "Choose who countersigns for SLIT.");
-  return chosen;
+interface BusinessActivation {
+  businessId: string; name: string; status: string; onboardingId: string | null; contact: { id: string; name: string; email: string }; heldReleased: number;
+  invitations: Array<{ id: string; email: string; name: string; role: string; expiresAt: string | null; sent: boolean; contact: boolean; agentId: string }>;
+  skipped: Array<{ email: string; reason: string }>;
 }
-export async function sendAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
-  const onboardingId = String(ctx.body.onboardingId ?? "");
-  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  const template = await ctx.rpc("agent_agreement_template", {}) as AgentAgreementTemplate | null;
-  if (!template?.id) throw new SigningError(AGENT_AGREEMENT_TEMPLATE_MISSING, 409);
-  const roles = (Array.isArray(template.roles) ? [...template.roles] : []).sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
-  const signed = new Set(template.signatureRoles ?? []);
-  if (roles.length !== 2 || Number(roles[0].order ?? 1) === Number(roles[1].order ?? 2)) {
-    throw new SigningError(`The ${template.name} template needs two signers in order: the Agent first, then SLIT. Fix it in Templates, then send again.`, 409);
+export async function activateBusinessByAdmin(ctx: OnboardingContext): Promise<Json> {
+  const businessId = String(ctx.body.businessId ?? "");
+  if (!UUID.test(businessId)) throw new SigningError("Choose a business.");
+  const result = await ctx.rpc("agency_business_activate", { p_business: businessId }) as BusinessActivation;
+  const emailed: string[] = [], failed: string[] = [];
+  for (const inv of result.invitations ?? []) {
+    if (inv.sent) continue;
+    const ok = await sendSetPasswordEmail(ctx.ports, { invitationId: inv.id, email: inv.email, name: inv.name, role: inv.role, agencyName: result.name, expiresAt: inv.expiresAt, kind: inv.contact ? "business" : "member" });
+    (ok ? emailed : failed).push(inv.email);
   }
-  if (template.kind === "pdf" && roles.some((r) => !signed.has(r.key))) {
-    throw new SigningError(`The ${template.name} template needs a signature box for both signers (the Agent and SLIT). Fix it in Templates, then send again.`, 409);
-  }
-  const follow = await serviceRpc(ctx.ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (follow.kind !== "agent") throw new SigningError("This is the business's onboarding: send the business's agreement from its page.");
-  if (follow.stage !== "references_received") throw new SigningError("The agreement can be sent once both references are back.");
-  if (!follow.agent?.email) throw new SigningError("The agent has no email address.");
-  // What the P06-based agreement prints from the business (refused, never guessed, without an ABN or a signed agreement to copy from):
-  // [Agent Organisation], ABN, Item 1 = the business agreement's commencement (so both terms end together), Item 3, Item 4, the agent's name.
-  const schedule = await ctx.rpc("agent_agreement_schedule", { p_onboarding: onboardingId }) as { businessName: string; abn: string; commencementDate: string; territory: string; commissionPercent: number | string; agentName: string };
-  const values = { agent_organisation_name: text(schedule.businessName, 200), agent_abn: printAbn(String(schedule.abn ?? "")), agreement_commencement_date: printDate(String(schedule.commencementDate ?? "")),
-    agent_territory: text(schedule.territory, 200), agent_commission_percent: printPercent(String(schedule.commissionPercent ?? "")), agent_signatory_name: text(schedule.agentName, 150) };
-  const slit = await pickCountersigner(ctx, ctx.body.countersignerId);
-  if (slit.email.toLowerCase() === follow.agent.email.toLowerCase()) throw new SigningError("The agent cannot countersign for SLIT.");
-  const record = await ctx.createRequest!({ templateId: template.id, subjectType: "agent", subjectId: follow.agent.id, message: text(ctx.body.message, 2000) || null, signingMode: "sequential", values,
-    recipients: [{ name: follow.agent.name, email: follow.agent.email, role: roles[0].key, label: roles[0].label || "Agent", order: 1, required: true },
-      { name: slit.name, email: slit.email, role: roles[1].key, label: roles[1].label || "SLIT", order: 2, required: true }] }) as { id: string; reference: string };
-  const linked = await ctx.rpc("agency_onboarding_agent_agreement_create", { p_onboarding: onboardingId, p_request: record.id }) as { stage: string };
-  return await sendRequest(ctx, record.id, { reference: record.reference, onboardingId, stage: linked.stage, template: { id: template.id, name: template.name, version: template.version },
-    agent: { name: follow.agent.name, email: follow.agent.email }, countersigner: { name: slit.name, email: slit.email } });
+  return { ...result, emailed, failed };
 }
-/** Change the SLIT signatory before they sign (their old links stop working; when it is their turn the new one is emailed at once). */
-export async function changeAgentCountersigner(ctx: OnboardingContext): Promise<Json> {
-  const onboardingId = String(ctx.body.onboardingId ?? "");
-  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  const slit = await pickCountersigner(ctx, ctx.body.countersignerId);
-  const changed = await ctx.rpc("agency_onboarding_agent_countersigner_change", { p_onboarding: onboardingId, p_cms_user: slit.id }) as { changed: boolean; invited?: boolean };
-  const mail = changed.invited ? await drainSigningMail(ctx.ports) : null;
-  return { onboardingId, ...changed, countersigner: { name: slit.name, email: slit.email }, mail };
-}
-/** The agent has signed their agreement: every active administrator is emailed; any of them countersigns from the business page. */
-export async function notifyAdminsToCountersign(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ sent: number }> {
+
+/** The business agreement is signed: staff are told the business is ready to activate (once); nothing goes to the business until then. */
+export async function notifyBusinessReady(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
   const { ports } = ctx;
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (follow.kind !== "agent" || follow.stage !== "agreement_sent") return { sent: 0 };
-  const { provider, config } = ports.mail;
-  const admins = (await serviceRpc(ports, "agent_agreement_countersigners", {}) ?? []) as Countersigner[];
-  if (!provider || !config.from || !admins.length) return { sent: 0 };
-  const link = config.siteUrl ? `${config.siteUrl.replace(/\/+$/, "")}/admin/businesses/${follow.agency.id}?tab=agents` : "";
-  let sent = 0;
-  for (const person of admins) {
-    const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-countersign-${onboardingId}-${(await sha256Hex(new TextEncoder().encode(person.email))).slice(0, 12)}`, from: config.from, to: person.email,
-      subject: `Countersign needed: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})`,
-      textBody: `Hello ${text(person.name, 80) || "there"},\n\n${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) has signed their individual agent agreement. It now needs a SLIT countersignature; any administrator can give it.\n\n`
-        + `Open Businesses > ${text(follow.agency.name, 120)} > Agents in the CMS and press Countersign${link ? `:\n${link}` : "."}\n\nThe agent can be activated once SLIT has countersigned.` + SIGN_OFF }));
-    if (outcome.state === "sent") sent++;
-  }
-  return { sent };
-}
-/** A signed agreement received outside the Sign module, recorded by an administrator with a reason; an open online request is voided. */
-export async function uploadAgentOwnAgreement(ctx: OnboardingContext): Promise<Json> {
-  const onboardingId = String(ctx.body.onboardingId ?? "");
-  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  if (!ctx.upload) throw new SigningError("Choose the signed agreement (PDF).");
-  const reason = text(ctx.body.reason, 1000);
-  if (reason.length < 5) throw new SigningError("Give the reason for recording a signed copy instead of the online agreement (kept on the record).");
-  if (ctx.body.bothSigned !== true) throw new SigningError("Confirm that the copy is signed by the agent and countersigned by SLIT.");
-  const inspected = await (await import("../_shared/offer-pdf.ts")).inspectOfferPdf(ctx.upload.bytes);
-  if (!inspected.ok) throw new SigningError(inspected.error.replaceAll("offer letter", "agreement"));
-  const stored = await ctx.rpc("agency_onboarding_agent_agreement_upload", { p_onboarding: onboardingId, p_file_name: text(ctx.upload.name, 200) || "agent-agreement.pdf",
-    p_base64: toBase64(ctx.upload.bytes), p_reason: reason, p_both_signed: true }) as { stage: string; previousRequestId: string | null };
-  if (stored.previousRequestId) { try { await ctx.admin("void", stored.previousRequestId, { reason: "Signed agreement recorded by staff" }); } catch { /* already closed */ } }
-  return { onboardingId, stage: stored.stage, voided: stored.previousRequestId ?? null };
-}
-/** The agent signed their agreement: staff are told they can activate (nothing goes to the agent until then). */
-export async function notifyAgentAgreementSigned(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
-  const { ports } = ctx;
-  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (follow.stage !== "agreement_signed") return { notified: false };
+  if (follow.kind === "agent" || follow.stage !== "agreement_signed") return { notified: false };
   const { provider, config } = ports.mail;
   const to = [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.sentBy?.email ? [] : config.adminTo)].filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
   if (!provider || !config.from || !to.length) return { notified: false };
-  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-agent-agreement-${onboardingId}`, from: config.from, to: to.join(", "),
-    subject: `Agent ready to activate: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})`,
-    textBody: `The individual agent agreement of ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) is fully signed (the agent and SLIT), and both references are in. The agent has been emailed the signed copy.\n\n`
-      + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to activate or reject the agent. Nothing is sent to the agent until you do.` + SIGN_OFF }));
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-ready-${onboardingId}`, from: config.from, to: to.join(", "),
+    subject: `Ready to activate: ${text(follow.agency.name, 120)}`,
+    textBody: `${text(follow.agent.name, 80)} has signed the Agent Agreement for ${text(follow.agency.name, 120)}.\n\n`
+      + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and press Activate. The business goes active, ${text(follow.agent.email, 254)} gets the set-password email, `
+      + "and every agent added to the business meanwhile gets their sign-in invitation. Nothing is sent to them until you do." + SIGN_OFF }));
   return { notified: outcome.state === "sent" };
 }
 
-/** Activate: both references are back and the agent's own agreement is signed; the agent becomes Active and gets ONE congratulations email with the set-password link. */
-export async function activateAgent(ctx: OnboardingContext): Promise<Json> {
-  const onboardingId = String(ctx.body.onboardingId ?? "");
-  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  const result = await ctx.rpc("agency_onboarding_agent_activate", { p_onboarding: onboardingId }) as Activation;
-  const invitation = result.invitation;
-  const invited = !!invitation && !invitation.sent && await sendSetPasswordEmail(ctx.ports, { invitationId: invitation.id, email: invitation.email, name: invitation.name, role: invitation.role,
-    agencyName: result.agency.name, expiresAt: invitation.expiresAt, kind: "agent" });
-  return { ...result, invited };
-}
+/** Agent-level onboarding was retired (2026-11-19): every per-agent action is refused; the business onboarding covers its agents. */
+const AGENT_LEVEL_RETIRED = "Agents have no onboarding of their own: the business onboarding covers them. Add the agent; their sign-in invitation goes out when the business is active.";
+const retired = (): Promise<Json> => Promise.reject(new SigningError(AGENT_LEVEL_RETIRED, 410));
 
 interface Followup {
   id: string; kind?: "business" | "agent"; stage: string; agency: { id: string; name: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
@@ -434,42 +355,23 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   return { notified: true };
 }
 
-/** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee, the activation after the agreement. */
+/** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee, the "ready to activate" email after the agreement. */
 export async function afterCompletion(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, plan: { id: string; kind?: string }): Promise<void> {
   if (plan.kind === "application") await sendRefereeChecks(ctx, plan.id);
   else if (plan.kind === "referee") await notifyReferencesReceived(ctx, plan.id);
-  else if (plan.kind === "agreement") {
-    // An agent's own agreement never activates anything: staff are told they can activate the agent.
-    const follow = await serviceRpc(ctx.ports, "agency_onboarding_followup", { p_onboarding: plan.id }) as Followup;
-    if (follow.kind === "agent") await notifyAgentAgreementSigned(ctx, plan.id);
-    else await activateBusiness(ctx, plan.id);
-  }
+  // The signed agreement activates nothing (2026-11-19): staff are told the business is ready; an administrator activates it.
+  else if (plan.kind === "agreement") await notifyBusinessReady(ctx, plan.id);
 }
 
-interface Activation {
-  onboardingId: string; agency: { id: string; name: string; status: string }; agent: { id: string; name: string; email: string; role: string; status: string } | null; loginExists: boolean;
-  invitation: { id: string; email: string; name: string; role: string; expiresAt: string | null; new: boolean; sent: boolean } | null;
-}
 const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 /**
- * The agreement is signed (2026-11-17): the database makes the business Active and the agent who signed its active business admin agent
- * (agency_onboarding_activation, service role); the ONE set-password email goes out here when an invitation was made and nothing was
- * sent for it yet. The link is our own page (/agency/accept-invite#t=…): the token is checked only when the person presses the button
- * there, so a mail scanner that opens the link does not use it up. A later resend (staff or the person) issues a new token and the old
- * link stops working.
+ * A new one-time link for an invitation, mailed through the signing mail provider; the database keeps only the token's hash. The link is
+ * our own page (/agency/accept-invite#t=…): the token is checked only when the person presses the button there, so a mail scanner that
+ * opens the link does not use it up. A later resend issues a new token and the old link stops working.
+ * kind "business": the POC at activation; "member": an agent added to the business (their invitation was held until activation).
  */
-export async function activateBusiness(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ activated: boolean; invited: boolean }> {
-  const { ports } = ctx;
-  const result = await serviceRpc(ports, "agency_onboarding_activation", { p_onboarding: onboardingId }) as Activation;
-  const invitation = result.invitation;
-  if (!invitation || invitation.sent) return { activated: true, invited: false };
-  const invited = await sendSetPasswordEmail(ports, { invitationId: invitation.id, email: invitation.email, name: invitation.name, role: invitation.role, agencyName: result.agency.name, expiresAt: invitation.expiresAt });
-  return { activated: true, invited };
-}
-
-/** A new one-time link for an invitation, mailed through the signing mail provider; the database keeps only the token's hash. */
-export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null; kind?: "business" | "agent" }): Promise<boolean> {
+export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null; kind?: "business" | "member" }): Promise<boolean> {
   const { provider, config } = ports.mail;
   if (!provider || !config.from || !config.siteUrl) return false;
   const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
@@ -478,11 +380,11 @@ export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitatio
   const link = `${config.siteUrl.replace(/\/+$/, "")}/agency/accept-invite#t=${token}`;
   const role = inv.role === "agency_admin" ? "the business admin agent" : "an agent";
   const until = inv.expiresAt && isoToday() <= inv.expiresAt.slice(0, 10) ? ` This link works until ${inv.expiresAt.slice(0, 10).split("-").reverse().join("/")}.` : "";
-  const agent = inv.kind === "agent";
+  const member = inv.kind === "member";
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-${hash.slice(0, 8)}`, from: config.from, to: inv.email,
-    subject: agent ? "Congratulations: your Skyline agent account is ready" : "Set your password for the Skyline agent portal",
+    subject: member ? `Your Skyline agent portal sign-in for ${text(inv.agencyName, 100)}` : "Set your password for the Skyline agent portal",
     textBody: `Hello ${text(inv.name, 80) || "there"},\n\n`
-      + (agent ? `Congratulations! Your application to become ${role} for Skyline Institute of Technology with ${text(inv.agencyName, 120)} has been approved.\n\n`
+      + (member ? `You have been added as ${role} of ${text(inv.agencyName, 120)} in the Skyline Institute of Technology agent portal.\n\n`
         : `Your agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. You are ${role} for it.\n\n`)
       + `Set your password to open the agent portal:\n${link}\n\nOpen the link and press the button on the page to continue.${until} If the link has expired, the page lets you ask for a new one.` + SIGN_OFF }));
   return outcome.state === "sent";
@@ -550,9 +452,12 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_reject: rejectOnboarding,
   agent_onboarding_referee_change: changeReferee,
   agent_onboarding_referee_upload: uploadRefereeForm,
-  agent_onboarding_add_agent: addAgent,
-  agent_onboarding_agent_activate: activateAgent,
-  agent_onboarding_agent_agreement_send: sendAgentOwnAgreement,
-  agent_onboarding_agent_agreement_upload: uploadAgentOwnAgreement,
-  agent_onboarding_agent_countersigner_change: changeAgentCountersigner,
+  agent_onboarding_business_create: createBusiness,
+  agent_onboarding_business_activate: activateBusinessByAdmin,
+  // Retired (2026-11-19): agents have no onboarding of their own.
+  agent_onboarding_add_agent: retired,
+  agent_onboarding_agent_activate: retired,
+  agent_onboarding_agent_agreement_send: retired,
+  agent_onboarding_agent_agreement_upload: retired,
+  agent_onboarding_agent_countersigner_change: retired,
 };

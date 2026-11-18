@@ -24,7 +24,7 @@ const active = (s: BatchStudent) => s.status === "active" || s.status === "defer
 
 export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "overview", startAddBatch = false, wizard = false, onClose, onChanged, onDuplicate, onDelete }: {
   intakeId: string; canEdit: boolean; canEnrol: boolean; startTab?: SheetTab; startAddBatch?: boolean;
-  /** New course wizard, steps 4 (batch) and 5 (students, optional), after the course, its units and its first intake. */
+  /** New course wizard, step 4 (batch), after the course, its units and its first intake. Students are never added here. */
   wizard?: boolean;
   onClose: () => void; onChanged: () => void; onDuplicate: (i: RtoIntake) => void; onDelete: (i: RtoIntake) => void;
 }) {
@@ -35,8 +35,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<SheetTab>(startAddBatch ? "batches" : startTab);
   const [adding, setAdding] = useState(startAddBatch);
-  const [wizStep, setWizStep] = useState<"batch" | "students" | null>(wizard ? "batch" : null);
-  const [placeNow, setPlaceNow] = useState(false);
+  const [wizStep, setWizStep] = useState<"batch" | null>(wizard ? "batch" : null);
   const [hours, setHours] = useState<Record<string, HoursCheck>>({});
   const batchKey = (detail?.batches ?? []).map((b) => `${b.id}:${(b.sessions ?? []).length}:${b.startTime}:${b.endTime}:${(b.classDays ?? []).join("")}`).join("|");
   useEffect(() => {
@@ -108,15 +107,11 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
       </div>
 
       {wizStep && canEdit ? <div className="shrink-0 border-b border-primary-200 bg-primary-50 px-4 py-2.5 sm:px-6" role="status">
-        {wizStep === "batch" ? <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 4 of 5 · Batch.</b> Add the class: days and times, trainer and room. Students are placed into it.</span>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="min-w-0 flex-1"><b>Step 4 of 4 · Batch.</b> Add the class: days and times, trainer and room. Students join through the enrolment wizard and are placed into it automatically.</span>
           <Button size="sm" icon="ri-add-line" onClick={() => { setTab("batches"); setAdding(true); }}>Add batch</Button>
-          <Button size="sm" variant="outline" onClick={() => { setWizStep("students"); setTab("students"); }}>Skip</Button>
-        </div> : <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Students (optional).</b> Students are placed automatically when their offer is accepted. Place one by hand now if you want.</span>
-          {canEnrol && detail?.batches.some((b) => b.isActive) ? <Button size="sm" icon="ri-user-add-line" onClick={() => { setTab("students"); setPlaceNow(true); }}>Place a student</Button> : null}
-          <Button size="sm" variant="outline" onClick={() => { setWizStep(null); push("Course set up: units, intake and batch are ready."); }}>Finish</Button>
-        </div>}
+          <Button size="sm" variant="outline" onClick={() => { setWizStep(null); push("Course set up. A batch opens by itself when the first student is placed."); }}>Finish without a batch</Button>
+        </div>
       </div> : null}
 
       {/* body */}
@@ -136,7 +131,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             {tab === "batches" ? <Batches detail={detail} canEdit={canEdit} hours={hours} onAdd={() => setAdding(true)}
               onOpenAnother={() => { const src = [...detail.batches].filter((b) => b.isActive).pop(); if (!src) return; void run(async () => { await rtoPlace("batch_open", { batchId: src.id }); return rto<IntakeDetail>("intake_get", { intakeId }); }).then((ok) => { if (ok) { push("Another batch opened with the same classes."); onChanged(); } }); }} /> : null}
             {tab === "students" ? (
-              <Students detail={detail} canEdit={canEdit} canOverride={canEnrol} startPlace={placeNow} onPlaceOpened={() => setPlaceNow(false)} onChanged={() => { void load(); onChanged(); }} notify={(m) => push(m)} onAddBatch={() => { setTab("batches"); setAdding(true); }} />
+              <Students detail={detail} canEdit={canEdit} canOverride={canEnrol} onChanged={() => { void load(); onChanged(); }} notify={(m) => push(m)} onAddBatch={() => { setTab("batches"); setAdding(true); }} />
             ) : null}
           </div>
         )}
@@ -146,7 +141,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
         <BatchTimingDrawer intake={detail.intake} batches={detail.batches} onClose={() => setAdding(false)}
           onSaved={(out: BatchSaved) => {
             setAdding(false); setDetail(out); onChanged();
-            if (wizStep === "batch") { setWizStep("students"); setTab("students"); }
+            if (wizStep === "batch") { setWizStep(null); push("Course set up: units, intake and batch are ready. Students join through the enrolment wizard."); }
             const made = out.batches.find((b) => b.id === out.batchId);
             push(out.clashes.length ? `${made?.name ?? "Batch"} added. ${clashText(out.clashes[0])}.` : `${made?.name ?? "Batch"} added.`, out.clashes.length ? "info" : "success");
           }} />
@@ -301,11 +296,9 @@ export function BatchCard({ batch: b, onOpen, upcoming = false, hours }: { batch
 }
 
 // ------------------------------------------------------------------ Students: one column per batch; drag a student to move them
-function Students({ detail, canEdit, canOverride, startPlace = false, onPlaceOpened, onChanged, notify, onAddBatch }: { detail: IntakeDetail; canEdit: boolean; canOverride: boolean; startPlace?: boolean; onPlaceOpened?: () => void; onChanged: () => void; notify: (m: string) => void; onAddBatch: () => void }) {
+function Students({ detail, canEdit, canOverride, onChanged, notify, onAddBatch }: { detail: IntakeDetail; canEdit: boolean; canOverride: boolean; onChanged: () => void; notify: (m: string) => void; onAddBatch: () => void }) {
   const batches = detail.batches.filter((b) => b.isActive);
   const [place, setPlace] = useState(false);
-  // The wizard's "Place a student" opens the override dialog.
-  useEffect(() => { if (startPlace && canOverride) { setPlace(true); onPlaceOpened?.(); } }, [startPlace, canOverride, onPlaceOpened]);
   const [act, setAct] = useState<null | { mode: "move" | "remove"; enrolmentId: string; name: string; batchId: string }>(null);
   if (!batches.length) {
     return <Empty icon="ri-group-line" title="No batches yet" text="Students are placed automatically when their offer is accepted: a batch opens for them from the course's usual classes. Add a batch yourself only to set its trainer, days or room." action={canEdit ? <Button icon="ri-add-line" onClick={onAddBatch}>Add batch</Button> : undefined} />;

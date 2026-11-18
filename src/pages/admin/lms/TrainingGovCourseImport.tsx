@@ -83,9 +83,6 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Qualification[] | null>(null);
   const [review, setReview] = useState<Review | null>(null);
-  const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
-  const [attested, setAttested] = useState(false);
-  const [specialisation, setSpecialisation] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -121,42 +118,6 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
           occupations: [], industrySectors: [], foundationSkills: "", documents: [], companionUrl: "", ...data.government,
         },
       });
-      setSelectedCodes([]);
-      setAttested(false);
-      setSpecialisation("");
-    });
-  }
-
-  const chosenUnits = review ? [...review.core, ...review.electives.filter(unit => selectedCodes.includes(unit.code))] : [];
-  const knownHours = chosenUnits.filter(unit => unit.nominalHours !== null);
-  const hoursTotal = knownHours.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
-  const minimum = review?.minimumGroup;
-  const needsConfirmation = Boolean(review) && (!review?.canValidate || Boolean(review?.specialisations.length && specialisation));
-  const groupSelected = minimum ? review.electives.filter(unit =>
-    unit.groups.includes(minimum.group) && selectedCodes.includes(unit.code)).length : 0;
-  const spec = review?.specialisations.find(item => item.code === specialisation) ?? null;
-  const required = spec ? spec.elective : review?.requiredElectives ?? null;
-  // A specialisation is optional: when one is chosen its published elective count applies and the user confirms the group rules.
-  const canSave = !review ? false : spec
-    ? selectedCodes.length === spec.elective && attested
-    : review.canValidate
-    ? selectedCodes.length === review.requiredElectives && (!minimum || groupSelected >= minimum.count) && (!review.requiresElectiveAttestation || attested)
-    // Rules not checked automatically: the user confirms them; electives must be chosen when the release lists any.
-    : attested && (!review.electives.length || selectedCodes.length > 0);
-  const blocker = !review || canSave ? "" : spec
-    ? selectedCodes.length !== spec.elective ? `${spec.title} needs exactly ${spec.elective} electives (${selectedCodes.length} selected).` : "Tick the confirmation above to save."
-    : review.canValidate
-    ? selectedCodes.length !== review.requiredElectives ? `Select exactly ${review.requiredElectives} electives (${selectedCodes.length} selected).`
-      : minimum && groupSelected < minimum.count ? `Select at least ${minimum.count} electives from Group ${minimum.group}.` : "Tick the confirmation above to save."
-    : review.electives.length && !selectedCodes.length ? "Select the electives this course delivers." : "Tick the confirmation above to save.";
-
-  function save() {
-    if (!review || !canSave || busy) return;
-    void run("Saving course…", async () => {
-      const result = await request<{ courseId: string }>({
-        action: "save", code: review.code, revision: review.revision, electives: selectedCodes, attested, specialisation: spec?.code ?? null,
-      });
-      onSaved(result.courseId, "intake");
     });
   }
 
@@ -215,15 +176,7 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
         <summary className="cursor-pointer text-sm font-semibold">Official packaging rules</summary>
         <p className="mt-2 max-h-72 overflow-auto whitespace-pre-line text-sm">{review.packagingRules}</p>
       </details>
-      {review.specialisations.length > 0 && <label className="block text-sm">
-        <span className="font-semibold">Specialisation</span>
-        <select className="mt-1 block w-full rounded-lg border border-background-300 bg-background-50 p-2" value={specialisation} disabled={Boolean(busy)}
-          onChange={event => { setSpecialisation(event.target.value); setAttested(false); }}>
-          <option value="">No specialisation (optional)</option>
-          {review.specialisations.map(item => <option key={item.code} value={item.code}>{item.title} · {item.core} core + {item.elective} electives</option>)}
-        </select>
-        <span className="mt-1 block text-xs text-foreground-600">Optional. Choosing one applies its published elective count.</span>
-      </label>}
+      {review.specialisations.length > 0 && <p className="text-sm text-foreground-600">Specialisations: {review.specialisations.map(item => `${item.title} (${item.core} core + ${item.elective} electives)`).join("; ")}.</p>}
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-background-200 p-3">
           <h4 className="mb-2 text-sm font-semibold">Core units ({review.core.length})</h4>
@@ -231,51 +184,20 @@ export default function TrainingGovCourseImport({ onClose, onSaved }: {
             {review.core.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}{prereq(unit)}</span></li>)}
           </ul>
         </div>
-        <fieldset disabled={Boolean(busy)} className="min-w-0 rounded-lg border border-background-200 p-3">
-          <legend className="px-1 text-sm font-semibold">Electives ({selectedCodes.length}{required !== null ? ` of ${required}` : ""})</legend>
-          {minimum && <p className="mb-2 text-sm text-foreground-700">Group {minimum.group} · {groupSelected} selected, {minimum.count} required</p>}
-          <div className="max-h-80 space-y-1 overflow-auto">
-            {review.electives.map(unit => <label key={unit.code} className="flex gap-2 rounded p-2 text-sm hover:bg-background-100">
-              <input type="checkbox" className="mt-1 shrink-0 self-start" checked={selectedCodes.includes(unit.code)}
-                disabled={(review.canValidate || Boolean(spec)) && required !== null && !selectedCodes.includes(unit.code) && selectedCodes.length >= required}
-                onChange={event => {
-                  setAttested(false);
-                  setSelectedCodes(previous => event.target.checked ? [...previous, unit.code] : previous.filter(code => code !== unit.code));
-                }} />
-              <span><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}{prereq(unit)}</span>
-                {unit.groups.length > 0 && <span className="mt-0.5 block text-xs text-foreground-600">
-                  {unit.groups.map(group => `${group} · ${review.groups[group]}`).join(" / ")}
-                </span>}
-              </span>
-            </label>)}
-          </div>
-        </fieldset>
+        <div className="min-w-0 rounded-lg border border-background-200 p-3">
+          <h4 className="mb-2 text-sm font-semibold">Electives offered ({review.electives.length}{review.requiredElectives !== null ? `, ${review.requiredElectives} to choose` : ""})</h4>
+          <p className="mb-2 text-xs text-foreground-600">You choose them in the next step, where the packaging rules and prerequisites are checked.</p>
+          <ul className="max-h-80 space-y-1 overflow-auto text-sm">
+            {review.electives.map(unit => <li key={unit.code}><strong>{unit.code}</strong> {unit.name} <span className="text-foreground-600">· {unit.nominalHours === null ? "Hours unavailable" : `${unit.nominalHours} nominal hrs (NCVER)`}{prereq(unit)}</span>
+              {unit.groups.length > 0 && <span className="block text-xs text-foreground-600">{unit.groups.map(group => `${group} · ${review.groups[group]}`).join(" / ")}</span>}</li>)}
+          </ul>
+        </div>
       </div>
-      {required !== null && <p role="status" className="text-sm font-semibold" aria-live="polite">
-        Electives selected: {selectedCodes.length} / {required}
-        {selectedCodes.length !== required && (review.canValidate || spec
-          ? ` — select exactly ${required} electives to save.`
-          : ` — the first rule lists ${required}; follow the packaging rules that apply.`)}
-      </p>}
-      <p className="text-sm" role="status">Known nominal hours: <strong>{hoursTotal} hrs</strong> across {knownHours.length} of {chosenUnits.length} selected units{knownHours.length !== chosenUnits.length ? " (partial total; missing hours are not counted)" : ""}. Source: NCVER national reporting dataset; confirm Victorian funded hours separately.</p>
-      {needsConfirmation && <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-        <p role="status">This release’s packaging rules (for example specialisations or group minimums) can’t be checked automatically. Check your elective choice against the packaging rules above, then confirm to save.</p>
-        <label className="flex gap-2">
-          <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
-          <span>I have checked the core and selected elective units against the official packaging rules for this qualification (including any specialisation).</span>
-        </label>
-      </div>}
-      {review.canValidate && !spec && review.requiresElectiveAttestation && <label className="flex gap-2 text-sm">
-        <input type="checkbox" checked={attested} disabled={Boolean(busy)} onChange={event => setAttested(event.target.checked)} />
-        <span>I confirm the selected electives meet the relevance, AQF alignment and vocational outcome requirements in the packaging rules.</span>
-      </label>}
-      {blocker ? <p role="status" className="text-right text-sm font-semibold text-amber-800">To add the units: {blocker} Or use Add course, then choose units.</p> : null}
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="mr-auto text-sm text-foreground-600">Step 1 of 3 · Course. Next: 2 · Units, 3 · First intake.</span>
         <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={() => { setReview(null); setError(""); }}>Back to results</button>
-        <button type="button" className={secondaryClass} disabled={Boolean(busy)} onClick={saveOnly}
-          title="Adds the course with its core units, then opens Add units to choose the electives">Add course, then choose units</button>
-        <button type="button" className={actionClass} disabled={!canSave || Boolean(busy)} onClick={save}
-          title="Adds the course with its core units and the electives selected above">Add course and units</button>
+        <button type="button" className={actionClass} disabled={Boolean(busy)} onClick={saveOnly}
+          title="Adds the course with its core units, then opens Add units to choose the electives">Next: choose units</button>
       </div>
     </>}
   </section>;

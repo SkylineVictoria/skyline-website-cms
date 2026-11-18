@@ -29,10 +29,12 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
 }
 
 
-export default function AddUnitsFromTga({ course, units, onClose, onDone, nextStep }: {
+export default function AddUnitsFromTga({ course, units, onClose, onDone, nextStep, stepLabel }: {
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
   /** Shown once the units are added and every packaging rule is met (a new course: "Create first intake"). */
   nextStep?: { label: string; onClick: () => void };
+  /** New course wizard: "Step 2 of 3 · Units" in the title. */
+  stepLabel?: string;
 }) {
   const [release, setRelease] = useState<Release | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -221,7 +223,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     </div>;
   };
 
-  return <Modal open title={`Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
+  return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
     footer={result ? <div className="flex justify-end gap-2">{nextStep && result.rulesComplete !== false
         ? <><Button variant="outline" onClick={onClose}>Later</Button><Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button></>
         : <Button onClick={onClose}>Close</Button>}</div>

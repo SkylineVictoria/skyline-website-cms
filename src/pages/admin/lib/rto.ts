@@ -2,6 +2,25 @@
 // public.rto_admin, which checks the role (RTO Manager edits; Admin enrols; any CMS user reads and edits website settings).
 import { supabase } from "@/pages/admin/lib/supabase";
 
+/** The database refuses duplicate LMS rows (migration 20261119184213_no_duplicate_lms_rows); say which one in plain words. */
+const DUPLICATES: Array<[RegExp, string]> = [
+  [/intake_units_no_duplicate_unit/, "This unit is already in this intake."],
+  [/batch_sessions_no_duplicate_time|class_sessions_batch_id_session_date_start_time/, "This batch already has a class on that day at that start time."],
+  [/prereq_class_times_no_duplicate_time/, "The Prerequisite class already has a class on that day at that start time."],
+  [/cms_courses_code_no_duplicate|cms_courses_cricos_course_code/, "A course with this code already exists."],
+  [/cms_course_units_code|cms_course_units_course_code/, "This course already has a unit with this code."],
+  [/course_intakes_name_no_duplicate/, "This course already has an intake with this name."],
+  [/batches_name_no_duplicate|batches_intake_id_name_key/, "This intake already has a batch with this name."],
+  [/locations_name/, "A location with this name already exists."],
+  [/classrooms_name_no_duplicate/, "This location already has a room with this name."],
+  [/course_fee_items_label_no_duplicate/, "This fee line is already on the course."],
+  [/batch_enrolments_batch_id_student_id|lms_intake_students_pkey|lms_unit_students_pkey/, "This student is already there."],
+];
+export function friendlyDbError(message: string): string {
+  if (!/duplicate key|unique constraint/i.test(message)) return message;
+  return DUPLICATES.find(([re]) => re.test(message))?.[1] ?? "This is already saved: duplicates are not allowed.";
+}
+
 export type FeeType = "application" | "registration" | "enrolment" | "material" | "tuition" | "other" | "oshc" | "initial_deposit";
 export type GstTreatment = "gst_free" | "inclusive" | "exclusive";
 export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number; includedInTotal?: boolean; refundable?: boolean; gstTreatment?: GstTreatment }
@@ -101,14 +120,14 @@ export const stepPath = (courseId: string, step: CourseStep) => `/admin/courses/
 
 export async function rtoFlow<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_course_flow", { p_action: action, p_data: data });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return out as T;
 }
 
 /** Seats, automatic new batches and course class defaults (public.rto_batch_place). */
 export async function rtoPlace<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_batch_place", { p_action: action, p_data: data });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return out as T;
 }
 /** Does a batch's weekly timetable give enough class hours to finish the course by the intake's end? (public.rto_batches_hours_check) */
@@ -125,7 +144,7 @@ export interface UnplacedStudent { studentId: string; name: string; intakeId: st
 
 export async function rto<T>(action: string, data: Record<string, unknown> = {}): Promise<T> {
   const { data: out, error } = await supabase.rpc("rto_admin", { p_action: action, p_data: data });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return out as T;
 }
 
@@ -233,7 +252,7 @@ export async function listBreaks(courseId?: string | null): Promise<AcademicBrea
     await supabase.from("academic_breaks").select("label, start_date, end_date, course_id").order("start_date");
   // Before the COURSE-BREAKS update (migration 20261116140000) there is no course_id: every break is for every course.
   if (res.error && /course_id/i.test(res.error.message)) res = await supabase.from("academic_breaks").select("label, start_date, end_date").order("start_date");
-  if (res.error) throw new Error(res.error.message);
+  if (res.error) throw new Error(friendlyDbError(res.error.message));
   return ((res.data ?? []) as Row[]).map(b => ({ label: b.label, startDate: b.start_date, endDate: b.end_date, courseId: b.course_id ?? null }))
     .filter(b => !courseId || !b.courseId || b.courseId === courseId);
 }
@@ -293,13 +312,13 @@ export function shownHours(saved: UnitHours | undefined, nominalHours: number | 
 }
 export async function loadUnitHours(courseId: string): Promise<UnitHours[]> {
   const { data, error } = await supabase.rpc("rto_unit_hours_list", { p_course_id: courseId });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return (data ?? []) as UnitHours[];
 }
 export async function saveUnitHours(unitId: string, h: HoursSplit): Promise<UnitHours> {
   const { data, error } = await supabase.rpc("rto_unit_hours_save", { p_unit_id: unitId, p_slit: h.slitHours, p_theory: h.theoryHours,
     p_practical: h.practicalHours, p_assessment: h.assessmentHours });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return data as UnitHours;
 }
 
@@ -315,7 +334,7 @@ export interface GenerateResult { created: number; kept: number; from: string; e
 /** Sessions between two dates (YYYY-MM-DD) for one batch, or every batch when batchId is null. */
 export async function loadClassSessions(batchId: string | null, from: string, to: string): Promise<ClassSession[]> {
   const { data, error } = await supabase.rpc("rto_class_sessions_list", { p_batch: batchId, p_from: from, p_to: to });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return (data ?? []) as ClassSession[];
 }
 /** CoE intakes have 20 class hours a week, VoE intakes 40. */
@@ -328,7 +347,7 @@ const missingLoad = (m: string) => /rto_intake_load|study_load|schema cache|does
 /** Study load per intake ({intakeId: "coe" | "voe"}); every intake reads as CoE until the INTAKE-STUDY-LOAD update is applied. */
 export async function loadIntakeLoads(courseId?: string): Promise<Record<string, StudyLoad>> {
   const { data, error } = await supabase.rpc("rto_intake_loads", { p_course: courseId ?? null });
-  if (error) { if (missingLoad(error.message)) return {}; throw new Error(error.message); }
+  if (error) { if (missingLoad(error.message)) return {}; throw new Error(friendlyDbError(error.message)); }
   return (data ?? {}) as Record<string, StudyLoad>;
 }
 /** Sets an intake to CoE or VoE and lays its unit timeline out again at that rate. */
@@ -346,12 +365,12 @@ export async function resetClassSessions(batchId: string, regenerate: boolean): 
 }
 export async function generateClassSessions(batchId: string): Promise<GenerateResult> {
   const { data, error } = await supabase.rpc("rto_class_sessions_generate", { p_batch: batchId });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return data as GenerateResult;
 }
 export async function updateClassSession(id: string, change: Partial<{ status: "scheduled" | "cancelled"; roomId: string | null; date: string; startTime: string; endTime: string }>): Promise<{ id: string; clashes: SessionClash[] }> {
   const { data, error } = await supabase.rpc("rto_class_session_update", { p_id: id, p_data: change });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return data as { id: string; clashes: SessionClash[] };
 }
 

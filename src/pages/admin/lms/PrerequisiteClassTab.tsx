@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Select, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { rto, rtoFlow, shortDate, type LocationRooms, type StaffOption } from "@/pages/admin/lib/rto";
+import { friendlyDbError, rto, rtoFlow, shortDate, type LocationRooms, type StaffOption } from "@/pages/admin/lib/rto";
 
 interface Time { weekday: number; start: string; end: string; type: "theory" | "practical" | "assessment"; roomId: string | null }
 interface Member {
@@ -17,7 +17,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 async function call(action: "get" | "save", data: Record<string, unknown>) {
   const { data: out, error } = await supabase.rpc("prereq_class_admin", { p_action: action, p_data: data });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyDbError(error.message));
   return out as PrereqClass;
 }
 
@@ -46,6 +46,7 @@ export default function PrerequisiteClassTab({ courseId, canEdit }: { courseId: 
   const rooms = locations.flatMap((l) => l.rooms.filter((r) => r.isActive).map((r) => ({ id: r.id, label: `${l.name} · ${r.name}` })));
   const setTime = (i: number, patch: Partial<Time>) => setTimes((t) => t.map((x, n) => (n === i ? { ...x, ...patch } : x)));
   const bad = times.some((t) => !t.start || !t.end || t.end <= t.start);
+  const dup = new Set(times.map((t) => `${t.weekday}|${t.start}`)).size < times.length;
   const save = async () => {
     setBusy(true); setError(""); setSaved("");
     try {
@@ -100,8 +101,9 @@ export default function PrerequisiteClassTab({ courseId, canEdit }: { courseId: 
             onClick={() => setTimes((x) => [...x, { weekday: 1, start: "09:00", end: "13:00", type: "theory", roomId: null }])}>Add class time</Button> : null}
         </div>
         {canEdit ? <div className="flex flex-wrap items-center gap-3">
-          <Button disabled={busy || bad} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
+          <Button disabled={busy || bad || dup} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
           {bad ? <span className="text-sm text-red-700">Each class must end after it starts.</span> : null}
+          {dup ? <span className="text-sm text-red-700">Two classes start on the same day at the same time: remove one.</span> : null}
           {saved ? <span className="text-sm text-green-700">{saved}</span> : null}
         </div> : <p className="text-sm text-foreground-500">Only an RTO Manager can change this class.</p>}
       </section>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { courseWeeksLabel, HOURS_PER_WEEK, loadUnitHours, rto, shownHours, type CourseDetail, type RtoCourse, type UnitHours } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
@@ -94,20 +94,24 @@ export default function LmsCoursesPage() {
   const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "intake"; hidden?: boolean } | null>(null);
   const navigate = useNavigate();
 
+  // Only the latest load picks the course: an older one finishing later must not switch back (it hid the wizard after Sync).
+  const loadSeq = useRef(0);
   const load = useCallback(async (courseId?: string) => {
+    const mine = ++loadSeq.current;
     setLoading(true);
     try {
       const [cs, me] = await Promise.all([
         rto<RtoCourse[]>("course_list"),
         rto<{rtoManager:boolean}>("me"),
       ]);
+      if (mine !== loadSeq.current) return;
       setCourses(cs); setCanEdit(me.rtoManager); setError("");
       setSelectedId(previous => {
         const preferred = courseId ?? previous;
         return cs.some(c => c.id === preferred) ? preferred : (cs[0]?.id ?? "");
       });
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not load courses."); }
-    finally { setLoading(false); }
+    } catch (e) { if (mine === loadSeq.current) setError(e instanceof Error ? e.message : "Could not load courses."); }
+    finally { if (mine === loadSeq.current) setLoading(false); }
   }, []);
   const [params, setParams] = useSearchParams();
   useEffect(() => { void load(params.get("course") ?? undefined); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps

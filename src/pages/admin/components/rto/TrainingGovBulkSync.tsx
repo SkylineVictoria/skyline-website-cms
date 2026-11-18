@@ -60,8 +60,8 @@ export default function TrainingGovBulkSync({ open, courses, onClose, onDone, on
       const out = await tga<{ courseId: string; coreUnits: number; electives: number }>({ action: "create_core", code: item.code });
       setResults({ [item.code]: `Draft course created with ${out.coreUnits} core unit${out.coreUnits === 1 ? "" : "s"}.` });
       setRunning(false);
-      onDone();
-      if (onAddUnits) onAddUnits(out.courseId);
+      // The wizard reloads the list on the new course itself; onDone would reload on the old one.
+      if (onAddUnits) onAddUnits(out.courseId); else onDone();
     } catch (e) {
       setResults({ [item.code]: `Failed: ${e instanceof Error ? e.message : "error"}` });
       setRunning(false);

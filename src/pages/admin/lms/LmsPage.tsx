@@ -13,7 +13,7 @@ import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
 /** LMS entrypoints reuse the authoritative CRM/RTO screens. Never copy master records. */
 export default function LmsPage() {
   // Retired areas stay in the URL space so old links redirect instead of 404ing.
-  const { area } = useParams<{ area?: LmsArea | "dashboard" | "assessment-allocation" | "submissions" | "unit-delivery" | "room-grid" }>();
+  const { area } = useParams<{ area?: LmsArea | "dashboard" | "batches" | "batch-allocation" | "assessment-allocation" | "submissions" | "unit-delivery" | "room-grid" }>();
   const [query] = useSearchParams();
   const selected = LMS_MENU.find(x => x.id === area);
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
@@ -25,7 +25,7 @@ export default function LmsPage() {
   if (area === "assessments") return <LmsAssessmentsPage />;
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
-  // Batches are managed inside their intake (Intakes/Batches); the old Batches screens redirect there.
+  // An intake is the class group; the old batch screens redirect to Intakes.
   if (area === "batches" || area === "batch-allocation" || area === "unit-delivery") return <Navigate to="/admin/lms/intakes" replace />;
   if (area === "timetable") return <LmsTimetableHub />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
@@ -35,8 +35,7 @@ export default function LmsPage() {
   if (area === "attendance") return <LmsAttendancePage />;
   if (area === "completion") return <LmsCompletionPage />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
-    batches: [{ label: "Find an intake and its batches", to: "/admin/intakes", note: "Batches are managed within their parent intake; no duplicate batch master." }],
-    attendance: [{ label: "Open batch and student list", to: "/admin/intakes", note: "Student attendance requires a dedicated dated-session register before marking can be enabled." }],
+    attendance: [{ label: "Open an intake and its students", to: "/admin/intakes", note: "Student attendance requires a dedicated dated-session register before marking can be enabled." }],
   };
   return <div className="mx-auto max-w-5xl space-y-6 pb-10">
     <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>

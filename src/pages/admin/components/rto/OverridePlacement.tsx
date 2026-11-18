@@ -1,5 +1,5 @@
 // Staff override of the automatic placement. Students are placed automatically when their offer is accepted; an Admin or RTO Manager can still place a
-// student by hand, move one to another batch, or remove one, always with a reason that is kept on the record.
+// student by hand, move one to another intake, or remove one, always with a reason that is kept on the record.
 import { useEffect, useState } from "react";
 import { Button, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
@@ -8,7 +8,7 @@ import { rto, todayIso, type EnrolmentType, type StudentOption } from "@/pages/a
 
 interface BatchOption { id: string; name: string; full?: boolean }
 
-/** Place a student in a chosen batch on a chosen day (override). */
+/** Place a student in a chosen intake on a chosen day (override). `batches` = the intake(s) to choose from (their class group ids). */
 export function PlaceByHandDrawer({ open, courseId, batches, batchId, intakeStart, intakeEnd, onClose, onDone }: {
   open: boolean; courseId: string; batches: BatchOption[]; batchId?: string; intakeStart: string; intakeEnd: string | null; onClose: () => void; onDone: (message: string) => void;
 }) {
@@ -57,7 +57,8 @@ export function PlaceByHandDrawer({ open, courseId, batches, batchId, intakeStar
           </div>
         )}
       </Field>
-      <Field label="Batch" required><Select value={batch} onChange={(e) => setBatch(e.target.value)}>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}{b.full ? " (full)" : ""}</option>)}</Select></Field>
+      {batches.length > 1 ? <Field label="Intake" required><Select value={batch} onChange={(e) => setBatch(e.target.value)}>{batches.map((b) => <option key={b.id} value={b.id}>{b.name}{b.full ? " (full)" : ""}</option>)}</Select></Field>
+        : batches[0]?.full ? <p className="text-sm text-amber-800">This intake is full.</p> : null}
       <Field label="How they study"><Select value={type} onChange={(e) => setType(e.target.value as EnrolmentType)}><option value="CoE">CoE</option><option value="VoE">VoE</option><option value="Domestic">Domestic</option></Select></Field>
       <Field label="Joins on" hint="Between the intake's first and last day."><TextInput type="date" value={on} min={intakeStart} max={intakeEnd ?? undefined} onChange={(e) => setOn(e.target.value)} /></Field>
       <Field label="Reason" required><TextArea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this student placed by hand?" /></Field>
@@ -82,7 +83,7 @@ export function OverrideStudentDrawer({ open, mode, enrolmentId, studentName, ba
       : await supabase.rpc("rto_staff_remove", { p_enrolment: enrolmentId, p_reason: reason });
     setBusy(false);
     if (e) { setError(e.message); return; }
-    onDone(mode === "move" ? `${studentName} moved.` : `${studentName} removed from the batch.`);
+    onDone(mode === "move" ? `${studentName} moved.` : `${studentName} removed from the intake.`);
   };
   return (
     <Drawer open={open} title={mode === "move" ? `Move ${studentName}` : `Remove ${studentName}`} onClose={onClose}

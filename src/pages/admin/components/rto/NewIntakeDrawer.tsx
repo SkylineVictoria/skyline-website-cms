@@ -18,7 +18,7 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: "the next free Monday" };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake" }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
@@ -30,6 +30,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   requireUnitSchedule?: boolean;
   /** Stacking layer when opened over another dialog (the wizard). */
   zIndex?: string;
+  title?: string;
 }) {
   const [chosen, setChosen] = useState(courseId ?? "");
   const [course, setCourse] = useState<CourseDetail | null>(null);
@@ -74,7 +75,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   };
 
   return (
-    <Drawer open={open} title="New intake" onClose={onClose} zIndex={zIndex}
+    <Drawer open={open} title={title} onClose={onClose} zIndex={zIndex}
       footer={<>
         <Button variant={allowBatch ? "outline" : undefined} disabled={blocked} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : "Create"}</Button>
         {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & add batch"}</Button> : null}

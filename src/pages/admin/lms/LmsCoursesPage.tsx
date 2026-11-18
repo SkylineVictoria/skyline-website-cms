@@ -82,6 +82,9 @@ export default function LmsCoursesPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
+  // After "Add course and units" the new course opens on its Units tab with the Add units picker open.
+  const [pickUnits, setPickUnits] = useState("");
+  const pickerOpened = useCallback(() => setPickUnits(""), []);
 
   const load = useCallback(async (courseId?: string) => {
     setLoading(true);
@@ -177,7 +180,10 @@ export default function LmsCoursesPage() {
   const slitDuration = detail && slitHours > 0 ? courseWeeksLabel(slitHours) : "";
 
   const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
-  const reloadAfterAdd = (courseId: string) => { setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); void load(courseId); };
+  const reloadAfterAdd = (courseId: string, addUnits = false) => {
+    setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
+    setTab(addUnits ? "units" : "overview"); setPickUnits(addUnits ? courseId : ""); setReloadKey(k => k + 1); void load(courseId);
+  };
   const facts: [string, string][] = selected ? [
     ["Duration", detailLoading ? "…" : slitDuration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
     ["Units", detail ? String(units.length) : "…"], ["Nominal hours", detailLoading ? "…" : detail ? nominalHours.toLocaleString() : "—"],
@@ -200,7 +206,8 @@ export default function LmsCoursesPage() {
     </header>
 
     <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
-      onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }} />
+      onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
+      onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, true); }} />
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
 
@@ -292,7 +299,7 @@ export default function LmsCoursesPage() {
                     <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
                   </div>)}
               </dl> : null}
-              {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
+              {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} openPicker={pickUnits === selectedId} onPickerOpened={pickerOpened} /> : null}
               {tab === "cricos" && detail ? <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /> : null}
               {tab === "tga" && detail ? <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /> : null}
             </div>

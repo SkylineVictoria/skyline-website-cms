@@ -4,7 +4,7 @@
 // qualification, then hours, start date and term breaks, first intake, batch).
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { invokeTga } from "@/pages/admin/lib/tga";
 import type { RtoCourse } from "@/pages/admin/lib/rto";
 
 interface ScopeItem { code: string; title: string; status: string; endDate: string; current: boolean }
@@ -14,7 +14,7 @@ const norm = (value: string | null | undefined) => (value ?? "").trim().toUpperC
 /** training.gov.au answers from Australia only, so the function runs in Sydney whoever calls it. The region goes in the
  *  URL (forceFunctionRegion), not the x-region header, which the function's CORS rules do not allow. */
 async function tga<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>("tga-course-import?forceFunctionRegion=ap-southeast-2", { body });
+  const { data, error } = await invokeTga<T>(body);
   if (error) {
     let message = error.message;
     try { const detail = await (error as { context?: Response }).context?.json(); if (detail?.error) message = detail.error; } catch { /* keep the generic message */ }

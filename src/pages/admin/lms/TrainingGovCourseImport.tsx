@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { invokeTga } from "@/pages/admin/lib/tga";
 import UnitTgaList from "./UnitTgaList";
 import type { RtoUnit } from "@/pages/admin/lib/rto";
 
@@ -65,7 +66,7 @@ const actionClass = "rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold
 const secondaryClass = "rounded-lg border border-background-300 px-4 py-2.5 text-sm font-semibold disabled:opacity-50";
 
 async function request<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>("tga-course-import", { body });
+  const { data, error } = await invokeTga<T>(body);
   if (error) {
     const detail = error.context instanceof Response
       ? await error.context.json().catch(() => null) : null;

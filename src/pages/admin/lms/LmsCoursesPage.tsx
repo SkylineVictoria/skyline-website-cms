@@ -5,6 +5,7 @@ import { courseWeeksLabel, HOURS_PER_WEEK, loadUnitHours, rto, shownHours, type 
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { invokeTga } from "@/pages/admin/lib/tga";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
 import LmsUnitsPage from "./LmsUnitsPage";
@@ -177,7 +178,7 @@ export default function LmsCoursesPage() {
   const sync = useCallback(async () => {
     if (!canEdit || !selectedId || syncing) return;
     setSyncing(true); setDetailError(""); setSyncNote([]);
-    const { data, error: syncError } = await supabase.functions.invoke<SyncResult>("tga-course-import", { body: { action: "sync", courseId: selectedId } });
+    const { data, error: syncError } = await invokeTga<SyncResult>({ action: "sync", courseId: selectedId });
     setSyncing(false);
     if (syncError || !data) {
       const detail = syncError && "context" in syncError && syncError.context instanceof Response ? await syncError.context.json().catch(() => null) : null;

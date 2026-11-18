@@ -3,7 +3,7 @@
 // their Training.gov.au details and core units through the tga-course-import sync.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { invokeTga } from "@/pages/admin/lib/tga";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import { listProviderCourses, loadCricos, lookupCricos, saveCricos, siteProviderCode, type ProviderCourse } from "@/pages/admin/lib/cricos";
 
@@ -52,7 +52,7 @@ export default function CricosBulkSync({ open, courses, onClose, onDone }: {
   }, [rows]);
 
   async function tgaSync(courseId: string) {
-    const { data, error: syncError } = await supabase.functions.invoke<{ coreAdded?: number }>("tga-course-import", { body: { action: "sync", courseId } });
+    const { data, error: syncError } = await invokeTga<{ coreAdded?: number }>({ action: "sync", courseId });
     if (syncError || !data) return "Training.gov.au details not filled (use Sync on the course).";
     return `Training.gov.au details filled${data.coreAdded ? `, ${data.coreAdded} core units added` : ""}.`;
   }

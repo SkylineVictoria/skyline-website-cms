@@ -3,7 +3,7 @@
 // the server runs before saving), and a unit's prerequisites can be read from training.gov.au.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { invokeTga } from "@/pages/admin/lib/tga";
 import type { RtoCourse, RtoUnit } from "@/pages/admin/lib/rto";
 import { checkElectives, parseElectiveRules, type ElectiveUnit } from "../../../../supabase/functions/tga-course-import/packaging";
 
@@ -19,7 +19,7 @@ interface UnitLookup {
 }
 
 async function call<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>("tga-course-import", { body });
+  const { data, error } = await invokeTga<T>(body);
   if (error || !data) {
     const context = error && "context" in error ? (error as { context: unknown }).context : null;
     const detail = context instanceof Response ? await context.json().catch(() => null) : null;

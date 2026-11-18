@@ -369,6 +369,12 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
       groups[group] = heading[2];
       continue;
     }
+    // "General Electives": units after it belong to no lettered group (GEN), not to the group above them.
+    if (index >= electiveStart && /^General electives?(?:\s+units?)?$/i.test(line)) {
+      group = "GEN";
+      groups[group] = "General electives";
+      continue;
+    }
     const unit = unitPattern.exec(line);
     if (!unit) {
       // Formatting, headings and prose in the official release are not units.

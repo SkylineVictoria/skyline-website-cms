@@ -9,7 +9,7 @@ import { rto, rtoFlow, type LocationRooms, type Room } from "@/pages/admin/lib/r
 export default function ClassroomsPage() {
   return (
     <div>
-      <PageHeader title="Rooms" description="The rooms intakes meet in, by location. An intake picks its rooms in its class setup." />
+      <PageHeader title="Rooms" description="The rooms intakes meet in, by location. An intake picks its rooms in its weekly timetable." />
       <RoomsManager />
     </div>
   );

@@ -24,7 +24,7 @@ const hasSetup = (g: RtoBatch) => (g.sessions ?? []).length > 0 || g.classDays.l
 
 export type SheetTab = "overview" | "timeline" | "classes" | "students" | "assessments";
 const TABS: { id: SheetTab; label: string }[] = [
-  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Class setup" }, { id: "students", label: "Students" }, { id: "assessments", label: "Assessments" },
+  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "students", label: "Students" }, { id: "assessments", label: "Assessments" },
 ];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
 
@@ -79,7 +79,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
       if (ok) undoable(`${monthYear(i.startDate)} intake is now ${status[0].toUpperCase()}${status.slice(1)}.`, () => setStatus(before));
     });
   };
-  const setupLabel = group && hasSetup(group) ? "Edit class setup" : "Set up classes";
+  const setupLabel = group && hasSetup(group) ? "Change weekly timetable" : "Select weekly timetable";
 
   return (
     <Sheet open label={i ? `${i.courseCode} ${monthYear(i.startDate)} intake` : "Intake"} onClose={onClose}>
@@ -119,7 +119,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
 
       {wizStep && canEdit ? <div className="shrink-0 border-b border-primary-200 bg-primary-50 px-4 py-2.5 sm:px-6" role="status">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Class setup.</b> Set the class timetable of this intake: the days and times, room and trainer. Students join through the enrolment wizard.</span>
+          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Select weekly timetable.</b> Choose this intake's days and times, room and trainer. Students join through the enrolment wizard.</span>
           <Button size="sm" icon="ri-time-line" onClick={() => { setTab("classes"); setSetup(true); }}>{setupLabel}</Button>
         </div>
       </div> : null}
@@ -145,18 +145,18 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 onSetup={() => { setTab("classes"); setSetup(true); }} />
             ) : null}
             {tab === "assessments" ? (group ? <IntakeAssessmentsPanel batchId={group.id} />
-              : <Empty icon="ri-file-list-3-line" title="Classes not set up yet" text="Assessments are assigned to an intake once its classes are set up." />) : null}
+              : <Empty icon="ri-file-list-3-line" title="Weekly timetable not selected yet" text="Assessments are assigned to an intake once its classes are set up." />) : null}
           </div>
         )}
       </div>
 
       {setup && detail ? (
-        <ClassWeekDialog title={`Class timetable · ${detail.intake.customName || detail.intake.name}`} intakeId={detail.intake.id} courseId={detail.intake.courseId} canEdit={canEdit}
+        <ClassWeekDialog title={`Select weekly timetable · ${detail.intake.customName || detail.intake.name}`} intakeId={detail.intake.id} courseId={detail.intake.courseId} canEdit={canEdit}
           onClose={() => setSetup(false)}
           onSaved={({ detail: out }) => {
             setSetup(false); setDetail(out); onChanged(); setCalendarKey((k) => k + 1);
             if (wizStep === "classes") { setWizStep(null); push("Course set up: units, hours, dates, intake and classes are ready. Students join through the enrolment wizard."); }
-            else push("Class timetable saved.");
+            else push("Weekly timetable saved.");
           }} />
       ) : null}
     </Sheet>
@@ -206,7 +206,7 @@ function Overview({ detail, canEdit, busy, run, undoable, openTab }: {
         <Fact label="Dates" value={`${shortDate(first)} – ${shortDate(last)}`} />
         <Fact label="Length" value={weeks ? `${weeks} weeks` : "—"} note={registered ? `Course: ${registered} weeks` : undefined} />
         <Fact label="Teaching hours" value={hours ? `${hours} hours` : "—"} note={`${detail.schedule.length} units`} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab("timeline")}>See timeline</button>} />
-        <Fact label="Class setup" value={group && hasSetup(group) ? timingShort(group) || "Set" : "Classes not set up yet"} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab("classes")}>{group && hasSetup(group) ? "See class setup" : "Set up classes"}</button>} />
+        <Fact label="Weekly timetable" value={group && hasSetup(group) ? timingShort(group) || "Set" : "Weekly timetable not selected yet"} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab("classes")}>{group && hasSetup(group) ? "See class setup" : "Set up classes"}</button>} />
         <div className="rounded-card border border-background-200 bg-background-50 p-3">
           <p className="text-xs font-medium text-foreground-500">Students</p>
           <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-foreground-950">{i.enrolled}{places ? <span className="text-sm font-normal text-foreground-500"> of {places} places</span> : null}</p>
@@ -264,7 +264,7 @@ function ClassSetup({ detail, group: g, canEdit, hours, setupLabel, calendarKey,
 }) {
   if (!g || !hasSetup(g)) {
     return (
-      <Empty icon="ri-time-line" title="Classes not set up yet" text="Set the room, seats, trainer and weekly class times of this intake. Students are placed automatically once the classes are set up."
+      <Empty icon="ri-time-line" title="Weekly timetable not selected yet" text="Set the room, seats, trainer and weekly class times of this intake. Students are placed automatically once the classes are set up."
         action={canEdit ? <Button icon="ri-time-line" onClick={onSetup}>{setupLabel}</Button> : undefined} />
     );
   }
@@ -274,7 +274,7 @@ function ClassSetup({ detail, group: g, canEdit, hours, setupLabel, calendarKey,
   const upcoming = detail.intake.startDate > todayIso();
   return (
     <div className="space-y-4">
-      <Section title="Class setup" helper="Where and when this intake meets each week, and who teaches it."
+      <Section title="Weekly timetable" helper="Where and when this intake meets each week, and who teaches it."
         action={canEdit ? <Button size="sm" variant="outline" icon="ri-edit-line" onClick={onSetup}>{setupLabel}</Button> : undefined}>
         <div className="grid gap-3 sm:grid-cols-3">
           <SetupFact label="Room" value={rooms.length ? rooms.join(" · ") : g.classroom ?? "No room yet"} warn={!rooms.length && !g.classroom} />
@@ -342,8 +342,8 @@ function Students({ detail, group: g, canEdit, canOverride, onChanged, notify, o
     return () => { live = false; };
   }, [canOverride, i.courseId, i.id]);
   if (!g) {
-    return <Empty icon="ri-group-line" title="Classes not set up yet" text="Students are placed automatically when their offer is accepted, once the classes of this intake are set up (room, trainer, class times)."
-      action={canEdit ? <Button icon="ri-time-line" onClick={onSetup}>Set up classes</Button> : undefined} />;
+    return <Empty icon="ri-group-line" title="Weekly timetable not selected yet" text="Students are placed automatically when their offer is accepted, once the classes of this intake are set up (room, trainer, class times)."
+      action={canEdit ? <Button icon="ri-time-line" onClick={onSetup}>Select weekly timetable</Button> : undefined} />;
   }
   const list = g.students.filter(active);
   const seats = g.seats ?? g.capacity;

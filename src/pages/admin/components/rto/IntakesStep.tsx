@@ -1,4 +1,4 @@
-// Course wizard › Intakes: the course's intakes as cards. A card opens the intake (timeline, batches, students) in a sheet.
+// Course wizard › Intakes: the course's intakes as cards. A card opens the intake (timeline, class setup, students) in a sheet.
 import { IntakesView } from "@/pages/admin/components/rto/IntakeCards";
 import ClassDefaults from "@/pages/admin/components/rto/ClassDefaults";
 import NeedsBatch from "@/pages/admin/components/rto/NeedsBatch";

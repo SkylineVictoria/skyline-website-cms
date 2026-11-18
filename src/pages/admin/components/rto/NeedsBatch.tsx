@@ -1,4 +1,4 @@
-// Course wizard > Intakes: students whose offer is accepted but who are not in a batch yet. Nothing to click: placement is automatic and retries by itself
+// Course wizard > Intakes: students whose offer is accepted but who are not in an intake yet. Nothing to click: placement is automatic and retries by itself
 // (every 15 minutes, and as soon as the course's usual classes are saved). This only explains why they are waiting.
 import { useEffect, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -15,9 +15,9 @@ export default function NeedsBatch({ courseId }: { courseId: string; canEnrol?: 
   if (!list.length) return null;
   return (
     <div className="mb-4 rounded-card border border-amber-300 bg-amber-50 p-4" data-testid="needs-batch" role="status">
-      <p className="text-sm font-medium text-amber-900">{list.length} student{list.length === 1 ? "" : "s"} with an accepted offer {list.length === 1 ? "is" : "are"} waiting for a batch</p>
+      <p className="text-sm font-medium text-amber-900">{list.length} student{list.length === 1 ? "" : "s"} with an accepted offer {list.length === 1 ? "is" : "are"} waiting for an intake place</p>
       <p className="mt-1 text-sm text-amber-900">{list.map((s) => s.name).join(", ")}</p>
-      <p className="mt-2 text-xs text-amber-900">They are placed automatically as soon as a batch can be opened. Set the course&apos;s usual classes below (days, times, room) and it happens by itself.</p>
+      <p className="mt-2 text-xs text-amber-900">They are placed automatically as soon as an intake with classes set up has a free seat. Set the course&apos;s usual classes below (days, times, room) and it happens by itself.</p>
     </div>
   );
 }

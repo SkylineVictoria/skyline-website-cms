@@ -63,7 +63,7 @@ export default function IntakesTimeline() {
                   <div key={i.id} className="grid grid-cols-[260px_minmax(0,1fr)] border-b border-background-200">
                     <Link to={`/admin/lms/intakes#${i.id}`} className="px-3 py-2 text-sm hover:bg-background-100">
                       <b className="text-foreground-950">{shortDate(i.startDate)} – {shortDate(i.endDate)}</b>
-                      <span className="block text-xs text-foreground-500">{[i.studyLoad?.toUpperCase(), i.autoCreated ? "automatic" : "made by staff", `${i.batches} batch${i.batches === 1 ? "" : "es"}`, `${i.students} student${i.students === 1 ? "" : "s"}`, i.status === "closed" ? "closed" : ""].filter(Boolean).join(" · ")}</span>
+                      <span className="block text-xs text-foreground-500">{[i.studyLoad?.toUpperCase(), i.autoCreated ? "automatic" : "made by staff", i.batches ? "classes set up" : "classes not set up", `${i.students} student${i.students === 1 ? "" : "s"}`, i.status === "closed" ? "closed" : ""].filter(Boolean).join(" · ")}</span>
                     </Link>
                     <div className="relative h-14">
                       {months.map((m) => <span key={m} className="absolute top-0 h-full border-l border-background-200" style={{ left: pct(m) }} />)}

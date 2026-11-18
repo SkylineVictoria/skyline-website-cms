@@ -8,12 +8,12 @@ const monthKey = (s: string) => s.slice(0, 7);
 const tone: Record<string, string> = { theory: "bg-sky-50 ring-sky-200", practical: "bg-amber-50 ring-amber-200", assessment: "bg-emerald-50 ring-emerald-200" };
 
 /**
- * The batch's whole course, month by month from the intake start: every class with its time, unit, room and trainer.
+ * The intake's whole course, month by month from the intake start: every class with its time, unit, room and trainer.
  * Term-break days are greyed out. Classes come from the saved class timing (generated when the timing is saved).
  */
 export default function BatchCourseCalendar({ batchId, courseId, intakeStart, intakeEnd, hasSlots, canManage, reloadKey, onRemoved }: {
   batchId: string; courseId: string; intakeStart: string; intakeEnd: string | null; hasSlots: boolean; canManage: boolean; reloadKey: number;
-  /** After Remove calendar: clears the weekly class timing too, so the batch starts again from scratch. */
+  /** After Remove calendar: clears the weekly class timing too, so the intake's class setup starts again from scratch. */
   onRemoved?: () => Promise<void>;
 }) {
   const [rows, setRows] = useState<ClassSession[]>([]);
@@ -29,7 +29,7 @@ export default function BatchCourseCalendar({ batchId, courseId, intakeStart, in
     const changed = rows.filter(r => r.manual).length;
     const ask = regenerate
       ? `Recreate the whole course calendar from ${shortDate(intakeStart)} using the weekly class timing?${changed ? ` The ${changed} class${changed === 1 ? "" : "es"} you changed by hand will be lost.` : ""}`
-      : `Remove this batch's course calendar (${rows.length} classes) and its weekly class timing? You then start again from scratch with a template or by hand.`;
+      : `Remove this intake's course calendar (${rows.length} classes) and its weekly class timing? You then start again from scratch with a template or by hand.`;
     if (!window.confirm(ask)) return;
     setResetting(true); setError(""); setNotice("");
     try {
@@ -164,7 +164,7 @@ function ClassEditor({ session, breaks, onClose, onSaved }: { session: ClassSess
       onSaved(message + (clash ? ` Note: ${clash.room} is also booked by ${clash.otherBatch} at that time.` : ""));
     } catch (e) {
       const m = e instanceof Error ? e.message : "The class was not changed.";
-      setError(/duplicate|unique/i.test(m) ? "This batch already has a class starting at that date and time." : m);
+      setError(/duplicate|unique/i.test(m) ? "This intake already has a class starting at that date and time." : m);
     } finally { setBusy(false); }
   };
   const field = "mt-1 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";

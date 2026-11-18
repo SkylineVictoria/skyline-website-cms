@@ -52,7 +52,7 @@ export default function LmsTermBreaksPage() {
   const overlaps = (r: { id: string | null; startDate: string; endDate: string; courseId: string | null }) =>
     rows.filter(o => o.id !== r.id && o.startDate <= r.endDate && r.startDate <= o.endDate && (!o.courseId || !r.courseId || o.courseId === r.courseId));
 
-  /** Re-plans every batch that has classes from today on, or class times in an intake still running, so they follow the breaks. */
+  /** Re-plans every intake that has classes from today on, or class times in an intake still running, so they follow the breaks. */
   const replanClasses = async () => {
     const until = new Date(parse(today).getTime() + 399 * DAY).toISOString().slice(0, 10);
     const [upcoming, intakes] = await Promise.all([
@@ -62,10 +62,10 @@ export default function LmsTermBreaksPage() {
     const ids = new Set(upcoming.map(s => s.batchId));
     for (const i of intakes) if (!i.endDate || i.endDate >= today) for (const b of i.batchList ?? []) if (b.isActive && b.days.length) ids.add(b.id);
     let done = 0;
-    for (const id of ids) { try { await generateClassSessions(id); done += 1; } catch { /* a batch without class times has nothing to plan */ } }
+    for (const id of ids) { try { await generateClassSessions(id); done += 1; } catch { /* an intake without class times has nothing to plan */ } }
     return done;
   };
-  const replanNote = (n: number) => n ? ` Classes updated for ${n} batch${n === 1 ? "" : "es"}.` : "";
+  const replanNote = (n: number) => n ? ` Classes updated for ${n} intake${n === 1 ? "" : "s"}.` : "";
 
   const draftProblem = !draft ? "" : !draft.label.trim() ? "Enter a name."
     : draft.label.trim().length > 80 ? "The name can be at most 80 characters."
@@ -110,7 +110,7 @@ export default function LmsTermBreaksPage() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Term breaks</h1>
-        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. A break can apply to every course or to one course. When you add, change or delete a break, every running batch's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
+        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. A break can apply to every course or to one course. When you add, change or delete a break, every running intake's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
       </div>
       {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "", courseId: filter || null }); setNotice(""); }}
         className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add break</button>}

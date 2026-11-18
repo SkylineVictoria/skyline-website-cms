@@ -25,7 +25,7 @@ function statusOf(a: MyAssessment): { label: string; tone: "primary" | "accent" 
   return { label: STATE_LABEL[last.state] ?? last.state, tone: "primary" };
 }
 
-/** Student portal: assessments resolved through enrolment > batch > assignment; results and competency; calendar; notifications. */
+/** Student portal: assessments resolved through enrolment > intake > assignment; results and competency; calendar; notifications. */
 export default function StudentAssessmentsPage() {
   const [tab, setTab] = useState("assessments");
   const [rows, setRows] = useState<MyAssessment[] | null>(null);
@@ -51,7 +51,7 @@ export default function StudentAssessmentsPage() {
           <ul className="mt-2 space-y-1">{toAcknowledge.map(({ a, t }) => <li key={t.id} className="flex flex-wrap items-center justify-between gap-2"><span>{a.title}: attempt {t.attemptNo} is {t.outcome ? OUTCOME_LABEL[t.outcome as keyof typeof OUTCOME_LABEL] : STATE_LABEL[t.state] ?? t.state}</span><Button size="sm" variant="outline" icon="ri-check-line" onClick={() => void acknowledge(t.id)}>I have read this result</Button></li>)}</ul>
         </div>
       ) : null}
-      {tab === "assessments" ? (rows === null ? <PortalLoading label="Loading your assessments…" /> : rows.length === 0 ? <PortalEmpty icon="ri-file-list-3-line" title="No assessments yet" message="When your trainer assigns an assessment to your batch it appears here." /> : (
+      {tab === "assessments" ? (rows === null ? <PortalLoading label="Loading your assessments…" /> : rows.length === 0 ? <PortalEmpty icon="ri-file-list-3-line" title="No assessments yet" message="When your trainer assigns an assessment to your intake it appears here." /> : (
         <ul className="space-y-3">{rows.map((a) => { const s = statusOf(a); return (
           <li key={a.assignmentId} className="rounded-card border border-background-200 bg-background-50 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">

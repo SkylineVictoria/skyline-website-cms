@@ -1,4 +1,4 @@
-import LmsPage from "@/pages/admin/lms/LmsPage";
+import LmsPage, { OldBatchRedirect } from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
@@ -106,7 +106,6 @@ import CourseFeesPage from "@/pages/admin/CourseFeesPage";
 import CourseWizardPage, { CourseWizardRedirect } from "@/pages/admin/CourseWizardPage";
 import IntakesPage from "@/pages/admin/IntakesPage";
 import IntakeDetailPage from "@/pages/admin/IntakeDetailPage";
-import BatchPage from "@/pages/admin/BatchPage";
 import TimesheetsPage from "@/pages/admin/TimesheetsPage";
 import LeaveAdminPage from "@/pages/admin/LeaveAdminPage";
 import PaySchedulesPage from "@/pages/admin/PaySchedulesPage";
@@ -280,7 +279,7 @@ const routes: RouteObject[] = [
           { path: "staff/candidates/:id", element: <RequireAdmin><CandidateDetailPage /></RequireAdmin> },
           { path: "jobs", element: <RequireAdmin><JobsPage /></RequireAdmin> },
           { path: "course-fees", element: <RequireAdmin><CourseFeesPage /></RequireAdmin> },
-          // One course record (facts, units, fees, intakes, batches, website); website editors see the Website tab only.
+          // One course record (facts, units, fees, intakes, class setup, website); website editors see the Website tab only.
           { path: "course-fees/:id", element: <CourseWizardRedirect /> },
           // The guided course flow: /admin/courses/:id/details | timetable | fees | intakes | website (website editors: website only).
           { path: "courses/:id/:step", element: <CourseWizardPage /> },
@@ -288,7 +287,8 @@ const routes: RouteObject[] = [
           { path: "intakes/:id", element: <RequireAdmin><IntakeDetailPage /></RequireAdmin> },
           // Rooms live in LMS › Locations & rooms (one place for rooms and their seats).
           { path: "classrooms", element: <Navigate to="/admin/lms/locations" replace /> },
-          { path: "batches/:id", element: <RequireAdmin><BatchPage /></RequireAdmin> },
+          // The old batch page: a batch is its intake (same id), so the address opens that intake.
+          { path: "batches/:id", element: <OldBatchRedirect /> },
           // Assessment Management (ASM-01): library, builder, mapping, assignments, submissions, outcomes, reports, settings, audit.
           { path: "assessments", element: <RequireAdmin><AssessmentsPage /></RequireAdmin> },
           { path: "assessments/:id", element: <RequireAdmin><AssessmentDetailPage /></RequireAdmin> },

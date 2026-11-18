@@ -78,7 +78,7 @@ export default function LmsAssessmentsPage() {
       let message=`"${name}" created as a draft.`;
       if(source!=="blank"){
         const pub=await asmAdmin<{ok:boolean;errors?:{message:string}[]}>("version_publish",{assessmentId:result.id});
-        message=pub.ok?`"${name}" created and published. Assign it under Batches › Assessments.`:`"${name}" created as a draft but not published: ${pub.errors?.map(e=>e.message).join(" ")??""} Open it to fix and publish.`;
+        message=pub.ok?`"${name}" created and published. Open it to assign it to intakes.`:`"${name}" created as a draft but not published: ${pub.errors?.map(e=>e.message).join(" ")??""} Open it to fix and publish.`;
       }
       closeCreate();setNotice(message);
       await load();
@@ -143,7 +143,7 @@ export default function LmsAssessmentsPage() {
       <label className="block text-sm font-semibold">Assessment title<input className={field+" mt-1"} value={title} onChange={e=>setTitle(e.target.value)} placeholder="Assessment title" autoFocus /></label>
       <label className="block text-sm font-semibold">Code (optional)<input className={field+" mt-1"} value={code} onChange={e=>setCode(e.target.value)} /></label>
       <label className="block text-sm font-semibold">Description<textarea className={field+" mt-1"} value={description} onChange={e=>setDescription(e.target.value)} rows={3}/></label>
-      <p className="text-xs text-foreground-500">{source==="blank"?"A blank assessment is created as a draft; add tasks and publish it before assigning.":"The assessment is created under this unit and published, ready to assign to batches."}</p>
+      <p className="text-xs text-foreground-500">{source==="blank"?"A blank assessment is created as a draft; add tasks and publish it before assigning.":"The assessment is created under this unit and published, ready to assign to intakes."}</p>
       {dialogError&&<p role="alert" className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{dialogError}</p>}
       <div className="flex justify-end gap-2"><button type="button" className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={closeCreate}>Cancel</button><button type="button" className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" disabled={saving||(source==="blank"&&!title.trim())||(source==="upload"&&(!uploadText||!title.trim()))||(source==="template"&&!fromId)} onClick={()=>void create()}>{saving?"Saving…":source==="blank"?"Create assessment":"Create & publish"}</button></div>
     </div></div>}

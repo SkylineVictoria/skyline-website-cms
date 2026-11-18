@@ -7,7 +7,7 @@ import type { BatchStudent } from "@/pages/admin/lib/rto";
 const SIGNED = new Set(["signed"]);
 const CLOSED = new Set(["declined", "void", "expired"]);
 
-/** UNIT-DOCS: the selected unit's document templates (Sign › Templates › Units), sent to each active student of the batch to sign. */
+/** UNIT-DOCS: the selected unit's document templates (Sign › Templates › Units), sent to each active student of the intake to sign (batchId / batchName are the intake's). */
 export default function UnitDocumentsPanel({ batchId, batchName, unitId, students, disabled }: {
   batchId: string; batchName: string; unitId: string; students: BatchStudent[]; disabled?: boolean;
 }) {

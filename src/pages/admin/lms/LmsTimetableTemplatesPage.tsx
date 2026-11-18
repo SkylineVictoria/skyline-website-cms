@@ -17,7 +17,7 @@ const short = (t: string) => t.slice(0, 5);
 
 /**
  * Timetable templates: each course's weekly class times (days, times, class type, room, trainer).
- * A batch picks one with "Use course timetable" in its class timing on the Batch calendar.
+ * An intake picks one with "Use course template" in its class setup.
  */
 export default function LmsTimetableTemplatesPage() {
   const pane = useListPane("timetable-templates");
@@ -57,7 +57,7 @@ export default function LmsTimetableTemplatesPage() {
   useEffect(() => { void loadTemplates(); }, [loadTemplates]);
 
   const remove = async (t: CourseTiming) => {
-    if (!window.confirm(`Delete the template "${t.name}"? Batches already using its times keep them.`)) return;
+    if (!window.confirm(`Delete the template "${t.name}"? Intakes already using its times keep them.`)) return;
     const { error: e } = await supabase.from("course_timing_templates").delete().eq("id", t.id);
     if (e) { setError(e.message); return; }
     setNotice(`Template ${t.name} deleted.`); void loadTemplates();
@@ -69,7 +69,7 @@ export default function LmsTimetableTemplatesPage() {
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Timetable templates</h1>
-        <p className="text-sm text-foreground-500">Each course's weekly class times. On the Batch calendar, open a batch's class timing and click <strong>Use course timetable</strong> to copy one.</p>
+        <p className="text-sm text-foreground-500">Each course's weekly class times. In an intake, open its class setup and click <strong>Use a course template</strong> to copy one.</p>
       </div>
       {canEdit && course && <button type="button" onClick={() => { setNotice(""); setEditing("new"); }}
         className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700">
@@ -97,7 +97,7 @@ export default function LmsTimetableTemplatesPage() {
         {!course ? <p className="py-10 text-center text-sm text-foreground-500">Select a course.</p> : <>
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{course.code}</p>
           <h2 className="font-heading text-xl font-bold text-foreground-950">{course.name}</h2>
-          {need ? <p className="mt-1 text-sm text-foreground-600">The course needs <strong>{need.total} SLIT hours</strong>{need.total ? ` (${splitText(need)})` : ""} over {need.units} units. A template must give enough hours a week to finish them by the intake end; the Batch calendar checks this against each intake's dates.</p> : null}
+          {need ? <p className="mt-1 text-sm text-foreground-600">The course needs <strong>{need.total} SLIT hours</strong>{need.total ? ` (${splitText(need)})` : ""} over {need.units} units. A template must give enough hours a week to finish them by the intake end; each intake's class setup checks this against its dates.</p> : null}
           {!templates.length ? <div className="py-10 text-center">
             <p className="text-sm text-foreground-500">No templates for this course yet.</p>
             {canEdit && <button type="button" onClick={() => setEditing("new")} className="mt-3 inline-flex items-center gap-2 rounded-lg border-2 border-dashed border-primary-300 px-4 py-2 text-sm font-semibold text-primary-700 hover:border-primary-500 hover:bg-primary-50">

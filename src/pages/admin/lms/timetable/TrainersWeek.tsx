@@ -69,7 +69,7 @@ export default function TrainersWeek({ people }: { people: CalPeople | null }) {
               ))}
               {rows.none.length ? (
                 <tr className="border-t border-background-200 bg-amber-50 align-top">
-                  <td className="px-2 py-2 text-sm"><b className="text-amber-900">No trainer set</b><span className="block text-xs text-amber-800">{rows.none.length} class{rows.none.length === 1 ? "" : "es"}: set a trainer on the batch</span></td>
+                  <td className="px-2 py-2 text-sm"><b className="text-amber-900">No trainer set</b><span className="block text-xs text-amber-800">{rows.none.length} class{rows.none.length === 1 ? "" : "es"}: set a trainer on the intake</span></td>
                   {days.map((d) => <td key={d} className="space-y-1 px-1 py-1.5">{rows.none.filter((c) => c.date === d).map((c) => chip(c, false))}</td>)}
                 </tr>
               ) : null}

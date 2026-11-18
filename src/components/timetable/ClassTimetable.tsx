@@ -46,7 +46,7 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
       </div>
       {error ? <p role="alert" className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {rows === null && !error ? <p className="mt-4 text-sm text-foreground-500">Loading classes…</p> : null}
-      {rows && !rows.length ? <p className="mt-4 rounded-lg border border-background-200 bg-white p-4 text-sm text-foreground-600">No classes this week.{who === "student" ? " Your classes show here once you are enrolled in a class." : " Classes of the batches and units you teach show here."}</p> : null}
+      {rows && !rows.length ? <p className="mt-4 rounded-lg border border-background-200 bg-white p-4 text-sm text-foreground-600">No classes this week.{who === "student" ? " Your classes show here once you are enrolled in a class." : " Classes of the intakes and units you teach show here."}</p> : null}
       {rows && rows.length ? (
         <ol className="mt-4 space-y-3">
           {days.map((d) => {

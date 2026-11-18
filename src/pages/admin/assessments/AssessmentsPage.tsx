@@ -27,7 +27,7 @@ export default function AssessmentsPage() {
   useEffect(() => { void asmAdmin<{ assessmentAdmin: boolean }>("me").then(setMe).catch(() => setMe({ assessmentAdmin: false })); }, []);
   return (
     <div>
-      <PageHeader breadcrumb="Master Data" title="Assessments" description="Form-built assessments mapped to course and unit, assigned to batches, marked by trainers, with reassessment and competency outcomes." />
+      <PageHeader breadcrumb="Master Data" title="Assessments" description="Form-built assessments mapped to course and unit, assigned to intakes, marked by trainers, with reassessment and competency outcomes." />
       {me && !me.assessmentAdmin ? <ErrorNote text="Only an Admin or an RTO Manager can manage assessments." /> : null}
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t })} />
       {tab === "library" ? <Library /> : null}
@@ -115,7 +115,6 @@ export function Submissions() {
   const [ov, setOv] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState<string | null>(null);
-  const [batchId, setBatchId] = useState("");
   const [batches, setBatches] = useState<BatchOption[]>([]);
   const [courseId, setCourseId] = useState("");
   const [intakeId, setIntakeId] = useState("");
@@ -123,17 +122,17 @@ export function Submissions() {
   const [assessment, setAssessment] = useState("");
   const [studentQuery, setStudentQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [search, setSearch] = useState(["", "", ""]);
+  const [search, setSearch] = useState(["", ""]);
   const [page, setPage] = useState(1);
+  // An intake is the class group: its id is the id the API still calls batchId.
+  const batchId = intakeId;
   const load = useCallback(() => asmAdmin<Overview>("overview", { batchId: batchId || undefined }).then(v => { setOv(v); setError(""); }).catch((e) => setError(fail(e))), [batchId]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void asmAdmin<BatchOption[]>("batch_list", { includeInactive: true }).then(setBatches).catch(e => setError(fail(e))); }, []);
   const courses = Array.from(new Map(batches.map(b => [b.courseId, { id: b.courseId, name: b.courseName }])).values());
   const intakes = Array.from(new Map(batches.filter(b => b.courseId === courseId).map(b => [b.intakeId, { id: b.intakeId, name: b.intake }])).values());
-  const selectedBatches = batches.filter(b => b.courseId === courseId && b.intakeId === intakeId);
   useEffect(() => { setCourseId(old => courses.some(c => c.id === old) ? old : courses[0]?.id ?? ""); }, [batches]);
   useEffect(() => { setIntakeId(old => intakes.some(i => i.id === old) ? old : intakes[0]?.id ?? ""); }, [courseId, batches]);
-  useEffect(() => { setBatchId(old => selectedBatches.some(b => b.id === old) ? old : selectedBatches[0]?.id ?? ""); }, [intakeId, courseId, batches]);
   const pending = ov?.pendingMarking ?? [];
   const units = Array.from(new Set(pending.map(p => p.unitCode).filter((x): x is string => !!x)));
   const assessmentTitles = Array.from(new Set(pending.filter(p => !unitCode || p.unitCode === unitCode).map(p => p.assessmentTitle)));
@@ -146,22 +145,18 @@ export function Submissions() {
   const option = (selected: boolean) => `w-full rounded-lg border px-3 py-3 text-left text-sm ${selected ? "border-primary-500 bg-primary-50 font-semibold" : "border-background-200 hover:bg-background-100"}`;
   return <div className="space-y-4">
     {error ? <ErrorNote text={error} /> : null}
-    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,0.9fr)_minmax(170px,0.9fr)_minmax(420px,2.6fr)]">
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,0.9fr)_minmax(420px,2.6fr)]">
       <section className={panel}><h3 className="mb-3 font-semibold">1. Course</h3>
-        <input aria-label="Search courses" placeholder="Search courses…" className={input+" mb-3"} value={search[0]} onChange={e=>setSearch(v=>[e.target.value,v[1],v[2]])}/>
+        <input aria-label="Search courses" placeholder="Search courses…" className={input+" mb-3"} value={search[0]} onChange={e=>setSearch(v=>[e.target.value,v[1]])}/>
         <div className="space-y-2">{courses.filter(c=>c.name.toLowerCase().includes(search[0].toLowerCase())).map(c=><button type="button" key={c.id} className={option(courseId===c.id)} onClick={()=>setCourseId(c.id)}>{c.name}</button>)}</div>
       </section>
       <section className={panel}><h3 className="mb-3 font-semibold">2. Intake</h3>
-        <input aria-label="Search intakes" placeholder="Search intakes…" className={input+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value,v[2]])}/>
+        <input aria-label="Search intakes" placeholder="Search intakes…" className={input+" mb-3"} value={search[1]} onChange={e=>setSearch(v=>[v[0],e.target.value])}/>
         <div className="space-y-2">{intakes.filter(i=>i.name.toLowerCase().includes(search[1].toLowerCase())).map(i=><button type="button" key={i.id} className={option(intakeId===i.id)} onClick={()=>setIntakeId(i.id)}>{i.name}</button>)}</div>
       </section>
-      <section className={panel}><h3 className="mb-3 font-semibold">3. Batch</h3>
-        <input aria-label="Search batches" placeholder="Search batches…" className={input+" mb-3"} value={search[2]} onChange={e=>setSearch(v=>[v[0],v[1],e.target.value])}/>
-        <div className="space-y-2">{selectedBatches.filter(b=>b.name.toLowerCase().includes(search[2].toLowerCase())).map(b=><button type="button" key={b.id} className={option(batchId===b.id)} onClick={()=>setBatchId(b.id)}>{b.name}</button>)}</div>
-      </section>
       <section className={panel}>
-        <h3 className="mb-3 font-semibold">4. Submissions</h3>
-        {!batchId?<p className="text-sm text-foreground-500">Select a batch to view submissions.</p>:<>
+        <h3 className="mb-3 font-semibold">3. Submissions</h3>
+        {!batchId?<p className="text-sm text-foreground-500">Select an intake to view submissions.</p>:<>
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="text-xs font-semibold">Unit<select className={input+" mt-1"} value={unitCode} onChange={e=>{setUnitCode(e.target.value);setAssessment("");}}><option value="">All units with pending marking</option>{units.map(u=><option key={u} value={u}>{u}</option>)}</select></label>
             <label className="text-xs font-semibold">Assessment<select className={input+" mt-1"} value={assessment} onChange={e=>setAssessment(e.target.value)}><option value="">All assessments</option>{assessmentTitles.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
@@ -239,7 +234,7 @@ function Bank() {
 function AdminCalendar() {
   const [batches, setBatches] = useState<BatchOption[]>([]); const [batchId, setBatchId] = useState("");
   useEffect(() => { void asmAdmin<BatchOption[]>("batch_list").then(setBatches).catch(() => setBatches([])); }, []);
-  return <div className="space-y-3"><Select className="w-auto" value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">All batches (assessment events only)</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.courseName} · {b.intake} · {b.name}</option>)}</Select><CalendarView batchId={batchId || null} /></div>;
+  return <div className="space-y-3"><Select className="w-auto" value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">All intakes (assessment events only)</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.courseName} · {b.name}</option>)}</Select><CalendarView batchId={batchId || null} /></div>;
 }
 
 function Reports() {
@@ -251,8 +246,8 @@ function Reports() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">
-        <Field label="Report"><Select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}><option value="cohort">Cohort: every student × assessment of a batch</option><option value="assessment">Assessment: per batch counts</option></Select></Field>
-        {kind === "cohort" ? <Field label="Batch"><Select value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">Choose…</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.courseName} · {b.intake} · {b.name}</option>)}</Select></Field> : null}
+        <Field label="Report"><Select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}><option value="cohort">Cohort: every student × assessment of an intake</option><option value="assessment">Assessment: counts per intake</option></Select></Field>
+        {kind === "cohort" ? <Field label="Intake"><Select value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">Choose…</option>{batches.map((b) => <option key={b.id} value={b.id}>{b.courseName} · {b.name}</option>)}</Select></Field> : null}
         <Field label="Assessment"><Select value={assessmentId} onChange={(e) => setAssessmentId(e.target.value)}><option value="">{kind === "cohort" ? "All" : "Choose…"}</option>{assessments.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</Select></Field>
         <Button icon="ri-play-line" disabled={(kind === "cohort" && !batchId) || (kind === "assessment" && !assessmentId)} onClick={() => void run()}>Run</Button>
         {rows?.length ? <Button variant="outline" icon="ri-download-2-line" onClick={() => downloadCsv(`${kind}-report.csv`, rows)}>Export CSV</Button> : null}
@@ -281,7 +276,7 @@ function SettingsTab() {
         <Field label="Due-soon reminder (days before)"><TextInput type="number" min={1} max={30} value={s.due_soon_days} onChange={(e) => setS({ ...s, due_soon_days: Number(e.target.value) })} /></Field>
         <Field label="Late submissions"><Select value={s.late_submission} onChange={(e) => setS({ ...s, late_submission: e.target.value as Settings["late_submission"] })}><option value="allow">Allow (flagged as late)</option><option value="block">Block after the late date</option></Select></Field>
         <Field label="Task rollup suggestion"><Select value={s.rollup_rule} onChange={(e) => setS({ ...s, rollup_rule: e.target.value as Settings["rollup_rule"] })}><option value="all_satisfactory">All questions S → task S (suggestion only)</option><option value="assessor_only">No suggestion; the assessor decides</option></Select></Field>
-        <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} onChange={(e) => setS({ ...s, require_trainer_role: e.target.value === "role" })}><option value="role">Batch trainers with the Trainer role, named assessors, admins</option><option value="any">Any active batch trainer, named assessors, admins</option></Select></Field>
+        <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} onChange={(e) => setS({ ...s, require_trainer_role: e.target.value === "role" })}><option value="role">Intake trainers with the Trainer role, named assessors, admins</option><option value="any">Any active intake trainer, named assessors, admins</option></Select></Field>
         <Field label="Evidence file limit (MB)"><TextInput type="number" min={1} max={200} value={s.evidence_max_mb} onChange={(e) => setS({ ...s, evidence_max_mb: Number(e.target.value) })} /></Field>
       </div>
       <Field label="Student declaration (shown and signed at submission; its hash is kept with every submission)"><TextArea rows={4} value={s.declaration_text} onChange={(e) => setS({ ...s, declaration_text: e.target.value })} /></Field>

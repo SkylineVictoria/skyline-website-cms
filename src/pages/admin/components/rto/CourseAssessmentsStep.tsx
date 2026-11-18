@@ -13,7 +13,7 @@ export default function CourseAssessmentsStep({ courseId, units }: { courseId: s
   return (
     <Card className="p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-700">One or more assessments per unit; each is built in the assessment builder, mapped to the unit's elements and published before it is assigned to a batch.</p>
+        <p className="text-sm text-foreground-700">One or more assessments per unit; each is built in the assessment builder, mapped to the unit's elements and published before it is assigned to an intake.</p>
         <Link to="/admin/assessments"><Button size="sm" icon="ri-external-link-line">Open Assessments</Button></Link>
       </div>
       {error ? <p className="text-sm text-primary-700">{error.includes("Only an Admin") ? "Assessments are managed by Admins and RTO Managers." : error}</p> : null}

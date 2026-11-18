@@ -1,5 +1,5 @@
-// Set an intake's class timing (the intake is the class group; this makes its batch), or change it: a week strip (Mon–Sun), each day's classes (morning / afternoon / evening with
-// editable times, theory / practical / assessment, a room picked by location), "Use course timetable" and "Copy timing from G1"
+// Set up an intake's classes (the intake is the class group: trainers, seats, weekly class times and rooms), or change them: a week strip (Mon–Sun), each day's classes (morning / afternoon / evening with
+// editable times, theory / practical / assessment, a room picked by location), "Use course timetable"
 // in one click, and a live warning when a room is already taken.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Field, Select, TextInput } from "@/pages/admin/components/ui";
@@ -28,7 +28,7 @@ const withClass = (list: Draft[], weekday: number): Draft[] => {
 };
 export type BatchSaved = IntakeDetail & { batchId: string; clashes: Clash[]; generated?: GenerateResult | null };
 
-export default function BatchTimingDrawer({ intake, batches: given, batch, onClose, onSaved, startDay, showTemplates = false, startManual = false }: {
+export default function IntakeClassSetupDrawer({ intake, batches: given, batch, onClose, onSaved, startDay, showTemplates = false, startManual = false }: {
   intake: Pick<RtoIntake, "id" | "courseId" | "name">;
   /** The intake's batches (to copy timing from and to name a new batch); loaded when not given. */
   batches?: RtoBatch[];
@@ -54,7 +54,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   const [studyLoad, setStudyLoad] = useState<StudyLoad>("coe");
   const [closed, setClosed] = useState<((day: string) => boolean) | null>(null);
   const [rows, setRows] = useState<Draft[]>(() => { const base = (batch?.sessions ?? []).map(toDraft); return startDay ? withClass(base, startDay) : base; });
-  const [name, setName] = useState(batch?.name ?? (intake as { customName?: string | null }).customName ?? "");
+  const [name] = useState(batch?.name ?? (intake as { customName?: string | null }).customName ?? "");
   const [capacity, setCapacity] = useState(batch?.capacity ? String(batch.capacity) : "");
   const [trainerIds, setTrainerIds] = useState<string[]>(() => (batch?.trainers ?? []).map((t) => t.id));
   const [clashes, setClashes] = useState<Clash[]>([]);
@@ -99,7 +99,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
     if (t.trainerStaffId && trainerIds.length === 0) setTrainerIds([t.trainerStaffId]);
   };
   const deleteTemplate = async (t: CourseTiming) => {
-    if (!window.confirm(`Delete the course timetable "${t.name}"? Batches already using its times keep them.`)) return;
+    if (!window.confirm(`Delete the course timetable "${t.name}"? Intakes already using its times keep them.`)) return;
     const { error: e } = await supabase.from("course_timing_templates").delete().eq("id", t.id);
     if (e) { setError(e.message); return; }
     setTimings((list) => list.filter((x) => x.id !== t.id)); setMenu("");
@@ -166,22 +166,21 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
   ));
 
   return (
-    <Drawer open width="max-w-2xl" title={adding ? `Class timing · ${intake.name}` : `Class timing · ${batch.name}`} onClose={onClose}
+    <Drawer open width="max-w-2xl" title={`Class setup · ${intake.name}`} onClose={onClose}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button disabled={busy || !!invalid || !!overlap || short} onClick={() => void save()}>{busy ? "Saving…" : adding ? "Save class timing" : "Save timing"}</Button></>}>
+        <Button disabled={busy || !!invalid || !!overlap || short} onClick={() => void save()}>{busy ? "Saving…" : "Save class setup"}</Button></>}>
       <ErrorNote text={error} />
       {adding ? (
-        <div className="grid gap-3 sm:grid-cols-[8rem_minmax(0,1fr)_7rem]">
-          <Field label="Name" hint="G1, G2 … by default"><TextInput value={name} placeholder={newName} onChange={(e) => setName(e.target.value)} /></Field>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <Field label="Trainer">
             <Select value="" onChange={(e) => { const id = e.target.value; if (id) setTrainerIds((t) => (t.includes(id) ? t : [...t, id])); }}>
               <option value="">{trainerIds.length ? "Add another trainer" : "Choose a trainer"}</option>
               {staff.filter((s) => !trainerIds.includes(s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
           </Field>
-          <Field label="Places"><TextInput inputMode="numeric" value={capacity} placeholder="e.g. 25" onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ""))} /></Field>
+          <Field label="Seats"><TextInput inputMode="numeric" value={capacity} placeholder="e.g. 25" onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ""))} /></Field>
           {trainerIds.length ? (
-            <div className="flex flex-wrap gap-1.5 sm:col-span-3">
+            <div className="flex flex-wrap gap-1.5 sm:col-span-2">
               {trainerIds.map((id) => (
                 <span key={id} className="inline-flex items-center gap-1 rounded-full bg-secondary-100 py-0.5 pl-2.5 pr-1 text-xs font-medium text-secondary-900">
                   {staff.find((s) => s.id === id)?.name ?? "Trainer"}
@@ -233,7 +232,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
               <span className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white">Start<i className="ri-arrow-right-line" aria-hidden="true" /></span>
             </button>
           </div>
-          {copyFrom.length ? <p className="text-xs text-foreground-600">Or copy another batch: {copyFrom.map((b) => <button key={b.id} type="button" className="ml-1 font-semibold text-primary-700 hover:underline" onClick={() => { copyTiming(b); }}>{b.name}</button>)}</p> : null}
+          {copyFrom.length ? <p className="text-xs text-foreground-600">Or copy the class times of: {copyFrom.map((b) => <button key={b.id} type="button" className="ml-1 font-semibold text-primary-700 hover:underline" onClick={() => { copyTiming(b); }}>{b.name}</button>)}</p> : null}
         </div>
       ) : <>
       <div>
@@ -325,7 +324,7 @@ export default function BatchTimingDrawer({ intake, batches: given, batch, onClo
         <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <p className="font-medium"><i className="ri-error-warning-line mr-1" aria-hidden="true" />Room already taken</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">{clashLines.map((t) => <li key={t}>{t}.</li>)}</ul>
-          <p className="mt-1 text-xs text-amber-800">You can still save; the rooms board shows the clash in red until one batch moves.</p>
+          <p className="mt-1 text-xs text-amber-800">You can still save; the rooms board shows the clash in red until one intake moves.</p>
         </div>
       ) : null}
     </Drawer>

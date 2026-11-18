@@ -16,7 +16,7 @@ export function RateBadge({ counts }: { counts: AttendanceCounts }) {
   );
 }
 
-/** Attendance per student of a batch, or per enrolment of a student, from finalised registers. */
+/** Attendance per student of an intake (its id is p_batch), or per enrolment of a student, from finalised registers. */
 export default function AttendanceSummary({ batchId, studentId }: { batchId?: string; studentId?: string }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState("");
@@ -32,7 +32,7 @@ export default function AttendanceSummary({ batchId, studentId }: { batchId?: st
 
   if (error) return <p role="alert" className="py-4 text-sm text-red-700">{error}</p>;
   if (!rows) return <p className="py-4 text-sm text-foreground-500">Loading attendance…</p>;
-  if (!rows.length) return <p className="py-4 text-sm text-foreground-500">{studentId ? "Not enrolled in a batch yet." : "No students in this batch."}</p>;
+  if (!rows.length) return <p className="py-4 text-sm text-foreground-500">{studentId ? "Not placed in an intake yet." : "No students in this intake."}</p>;
   const low = rows.filter((r) => { const rate = attendanceRate(r); return rate !== null && rate < ATTENDANCE_THRESHOLD; }).length;
   return (
     <div>
@@ -44,7 +44,7 @@ export default function AttendanceSummary({ batchId, studentId }: { batchId?: st
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">
-            <th className="px-3 py-2">{studentId ? "Course / batch" : "Student"}</th><th className="px-3 py-2">Classes</th><th className="px-3 py-2">Present</th>
+            <th className="px-3 py-2">{studentId ? "Course / intake" : "Student"}</th><th className="px-3 py-2">Classes</th><th className="px-3 py-2">Present</th>
             <th className="px-3 py-2">Late</th><th className="px-3 py-2">Absent</th><th className="px-3 py-2">Excused</th><th className="px-3 py-2">Attendance</th>
           </tr></thead>
           <tbody>{rows.map((r) => (

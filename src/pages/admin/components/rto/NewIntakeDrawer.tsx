@@ -29,7 +29,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   /** Opened from a course (or the enrolment wizard): the course is fixed and not shown as a choice. */
   courseId?: string;
   onCreated: (detail: IntakeDetail, addBatch: boolean) => void;
-  /** "Create & set class timing" is for the LMS pages; the enrolment wizard only creates the intake. */
+  /** "Create & set up classes" is for the LMS pages; the enrolment wizard only creates the intake. */
   allowBatch?: boolean;
   requireUnitSchedule?: boolean;
   /** Stacking layer when opened over another dialog (the wizard). */
@@ -105,7 +105,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
     <Drawer open={open} title={title} onClose={onClose} zIndex={zIndex}
       footer={<>
         <Button variant={allowBatch ? "outline" : undefined} disabled={blocked} onClick={() => void create(false)} data-testid="new-intake-create">{busy === "create" ? "Creating…" : createLabel}</Button>
-        {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & set class timing"}</Button> : null}
+        {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & set up classes"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
       {courseId ? null : (

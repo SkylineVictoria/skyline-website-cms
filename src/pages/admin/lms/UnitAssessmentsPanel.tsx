@@ -41,7 +41,7 @@ export default function UnitAssessmentsPanel({ courseId, unitId, canEdit }: { co
   return (
     <div className="space-y-4" data-testid="unit-assessments">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-600">Assessments for this unit. Build the questions in the editor, publish, then assign them to batches under Batches › Assessments.</p>
+        <p className="text-sm text-foreground-600">Assessments for this unit. Build the questions in the editor, publish, then assign them to intakes from the assessment's Assignments tab.</p>
         {canEdit && !adding ? <button type="button" onClick={() => { setAdding(true); setCreated(null); }} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">+ New assessment</button> : null}
       </div>
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
@@ -63,7 +63,7 @@ export default function UnitAssessmentsPanel({ courseId, unitId, canEdit }: { co
           <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
             <div className="min-w-0">
               <p className="truncate font-semibold text-foreground-950">{a.code ? `${a.code} · ` : ""}{a.title}</p>
-              <p className="text-xs text-foreground-500">{a.currentVersionStatus ? `${STATUS[a.currentVersionStatus] ?? a.currentVersionStatus} v${a.currentVersionNo}` : "Draft"}{a.hasDraft && a.currentVersionStatus === "published" ? " · draft changes" : ""} · {a.assignments} batch assignment{a.assignments === 1 ? "" : "s"}</p>
+              <p className="text-xs text-foreground-500">{a.currentVersionStatus ? `${STATUS[a.currentVersionStatus] ?? a.currentVersionStatus} v${a.currentVersionNo}` : "Draft"}{a.hasDraft && a.currentVersionStatus === "published" ? " · draft changes" : ""} · {a.assignments} intake assignment{a.assignments === 1 ? "" : "s"}</p>
             </div>
             <Link to={`/admin/assessments/${a.id}`} className="shrink-0 rounded-lg border border-background-300 px-3 py-1.5 text-xs font-semibold text-foreground-800 hover:bg-background-100">Open editor</Link>
           </li>))}</ul>}

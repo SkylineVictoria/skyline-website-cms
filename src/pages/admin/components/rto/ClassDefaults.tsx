@@ -1,5 +1,5 @@
-// Course wizard > Intakes: the course's usual classes (days, times, room) and seats. A new intake with no batch gets its first batch from
-// these, so its dated calendar appears at once; a full batch opens the next one the same way.
+// Course wizard > Intakes: the course's usual classes (days, times, room) and seats. A new intake with no class setup gets it from
+// these, so its dated calendar appears at once.
 import { useEffect, useState } from "react";
 import { Button, Select, TextInput } from "@/pages/admin/components/ui";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
@@ -36,11 +36,11 @@ export default function ClassDefaults({ courseId, canEdit }: { courseId: string;
         Usual classes and seats <span className="ml-2 font-normal text-foreground-500">{value.sessions.length ? `${value.sessions.length} class${value.sessions.length === 1 ? "" : "es"} a week` : "not set"}{value.seats ? ` · ${value.seats} seats` : ""}</span>
       </summary>
       <div className="space-y-3 border-t border-background-200 px-4 py-3">
-        <p className="text-sm text-foreground-600">A new intake without a batch gets its first batch from these (so its dated classes appear straight away), and a full batch opens the next one. Seats are the room&apos;s physical seats; the number here applies when no room is chosen.</p>
+        <p className="text-sm text-foreground-600">A new intake without a class setup gets its classes from these (so its dated classes appear straight away). Seats are the room&apos;s physical seats; the number here applies when no room is chosen.</p>
         <ErrorNote text={error} />
         {weeklyHours > 0 && weeklyHours < 20 ? (
           <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="defaults-hours-warning">
-            <i className="ri-error-warning-line mr-1" aria-hidden="true" />These classes give {weeklyHours} hours a week. CoE students have 20 class hours a week (VoE 40), so a batch opened from these may not finish the course by the intake&apos;s end.
+            <i className="ri-error-warning-line mr-1" aria-hidden="true" />These classes give {weeklyHours} hours a week. CoE students have 20 class hours a week (VoE 40), so an intake set up from these may not finish the course by the intake&apos;s end.
           </p>
         ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
@@ -52,7 +52,7 @@ export default function ClassDefaults({ courseId, canEdit }: { courseId: string;
           <label className="block text-sm"><span className="mb-1 block font-medium text-foreground-800">Seats when there is no room</span>
             <TextInput inputMode="numeric" disabled={!canEdit} value={value.seats ?? ""} placeholder="25" onChange={(e) => set({ seats: e.target.value.replace(/\D/g, "") ? Number(e.target.value.replace(/\D/g, "")) : null })} /></label>
         </div>
-        {room?.capacity ? <p className="text-xs text-foreground-500">{room.name} has {room.capacity} seats, so a batch here seats {room.capacity} at most.</p> : null}
+        {room?.capacity ? <p className="text-xs text-foreground-500">{room.name} has {room.capacity} seats, so an intake here seats {room.capacity} at most.</p> : null}
         <div className="space-y-2">
           <p className="text-sm font-medium text-foreground-800">Weekly classes</p>
           {value.sessions.length === 0 ? <p className="text-sm text-foreground-500">No classes yet.</p> : null}

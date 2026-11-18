@@ -1,6 +1,6 @@
 import type { HoursCheck } from "@/pages/admin/lib/rto";
 
-/** A warning when a batch's weekly classes cannot fit the course hours by the intake's end. Nothing is shown when they fit. */
+/** A warning when an intake's weekly classes cannot fit the course hours by the intake's end. Nothing is shown when they fit. */
 export default function HoursNote({ check, compact = false }: { check?: HoursCheck; compact?: boolean }) {
   if (!check || check.fits || !check.message) return null;
   return (

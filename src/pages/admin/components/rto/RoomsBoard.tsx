@@ -1,5 +1,5 @@
 // Courses › Rooms: every room (by location) against the days of a week and morning / afternoon / evening, from the batches'
-// class timing. Two batches in one room at the same time are red. An empty slot: put a batch there; a filled one opens the batch.
+// class setup. Two intakes in one room at the same time are red. An empty slot: put an intake there; a filled one opens the intake.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, TextInput } from "@/pages/admin/components/ui";
@@ -28,7 +28,7 @@ export default function RoomsBoard({ canEdit }: { canEdit: boolean }) {
   }, [week]);
   useEffect(() => { setData(null); void load(); }, [load]);
 
-  // Two classes clash: same room and weekday, overlapping times, and both batches run in overlapping dates.
+  // Two classes clash: same room and weekday, overlapping times, and both intakes run in overlapping dates.
   const clashing = useMemo(() => {
     const out = new Set<string>();
     const list = (data?.sessions ?? []).filter((s) => s.roomId);
@@ -49,7 +49,7 @@ export default function RoomsBoard({ canEdit }: { canEdit: boolean }) {
     try {
       const out = await rtoFlow<{ sessionId: string; clashes: Clash[] }>("session_add", { batchId, weekday: t.weekday, slot: t.slot, roomId: t.roomId });
       const b = data?.batches.find((x) => x.id === batchId);
-      const label = `${b?.courseCode ?? ""} ${b?.name ?? "The batch"}`.trim();
+      const label = `${b?.courseCode ?? ""} ${b?.intakeName ?? "The intake"}`.trim();
       push(`${label} now uses ${t.room} on ${WEEKDAYS[t.weekday - 1]} ${t.slot}${out.clashes.length ? " (the room is double-booked)" : ""}.`, out.clashes.length ? "info" : "success", {
         label: "Undo", onClick: () => { rtoFlow("session_delete", { sessionId: out.sessionId }).then(() => void load()).catch(() => undefined); },
       });
@@ -72,7 +72,7 @@ export default function RoomsBoard({ canEdit }: { canEdit: boolean }) {
           {canEdit ? <MoreMenu label="Rooms options" items={[{ label: "Manage rooms…", icon: "ri-building-line", onClick: () => setManage(true) }]} /> : null}
         </span>
       </div>
-      <p className="text-sm text-foreground-600">Each room’s classes this week. {canEdit ? "Click an empty slot to put a batch there; click a batch to open it." : "Click a batch to open it."}</p>
+      <p className="text-sm text-foreground-600">Each room’s classes this week. {canEdit ? "Click an empty slot to put an intake there; click a class to open its intake." : "Click a class to open its intake."}</p>
       <ErrorNote text={error} />
       {!data ? <SkeletonLines lines={8} /> : (
         <div className="max-w-full overflow-x-auto rounded-card border border-background-200 bg-background-50">
@@ -89,15 +89,15 @@ export default function RoomsBoard({ canEdit }: { canEdit: boolean }) {
             <tbody>
               {data.locations.map((l) => (
                 <LocationRows key={l.id ?? "other"} name={l.name} rooms={l.rooms.filter((r) => r.isActive)} days={days} cell={cell} clashing={clashing} canEdit={canEdit}
-                  onOpen={(s) => navigate(`/admin/batches/${s.batchId}`)} onEmpty={(t) => setTarget(t)} />
+                  onOpen={(s) => navigate(`/admin/lms/intakes#${s.intakeId}`)} onEmpty={(t) => setTarget(t)} />
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {data && data.sessions.length === 0 ? <p className="text-sm text-foreground-500">No batch has classes in a room this week.</p> : null}
+      {data && data.sessions.length === 0 ? <p className="text-sm text-foreground-500">No intake has classes in a room this week.</p> : null}
       {noRoom.length ? (
-        <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />Classes without a room this week: {[...new Set(noRoom.map((s) => `${s.courseCode} ${s.batch} (${DAYS[s.weekday - 1]} ${timeRange(s.startTime, s.endTime)})`))].join(", ")}.</p>
+        <p className="text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />Classes without a room this week: {[...new Set(noRoom.map((s) => `${s.courseCode} ${s.intakeName} (${DAYS[s.weekday - 1]} ${timeRange(s.startTime, s.endTime)})`))].join(", ")}.</p>
       ) : null}
 
       {target && data ? <AssignDrawer target={target} batches={data.batches} onClose={() => setTarget(null)} onPick={(id) => void assign(id)} /> : null}
@@ -125,14 +125,14 @@ function LocationRows({ name, rooms, days, cell, clashing, canEdit, onOpen, onEm
                 {list.length ? (
                   <div className="space-y-0.5">
                     {list.map((c) => (
-                      <button key={c.id} type="button" onClick={() => onOpen(c)} title={`${c.courseCode} ${c.batch} · ${c.intakeName} · ${timeRange(c.startTime, c.endTime)}${c.trainers.length ? ` · ${c.trainers.join(", ")}` : ""}`}
+                      <button key={c.id} type="button" onClick={() => onOpen(c)} title={`${c.courseCode} · ${c.intakeName} · ${timeRange(c.startTime, c.endTime)}${c.trainers.length ? ` · ${c.trainers.join(", ")}` : ""}`}
                         className={`block w-full truncate rounded px-1.5 py-1 text-left font-medium transition-colors duration-150 ${clashing.has(c.id) ? "border border-red-300 bg-red-100 text-red-900 hover:bg-red-200" : c.type === "practical" ? "bg-accent-100 text-accent-900 hover:bg-accent-200" : c.type === "assessment" ? "bg-secondary-100 text-secondary-900 hover:bg-secondary-200" : "bg-primary-50 text-primary-900 hover:bg-primary-100"}`}>
-                        {c.courseCode} {c.batch}<span className="block text-2xs font-normal opacity-80">{timeRange(c.startTime, c.endTime)}</span>
+                        {c.courseCode} {c.intakeName}<span className="block text-2xs font-normal opacity-80">{timeRange(c.startTime, c.endTime)}</span>
                       </button>
                     ))}
                   </div>
                 ) : canEdit ? (
-                  <button type="button" aria-label={`Put a batch in ${r.name} on ${WEEKDAYS[d - 1]} ${s.label.toLowerCase()}`} onClick={() => onEmpty({ roomId: r.id, room: r.name, weekday: d, slot: s.id })}
+                  <button type="button" aria-label={`Put an intake in ${r.name} on ${WEEKDAYS[d - 1]} ${s.label.toLowerCase()}`} onClick={() => onEmpty({ roomId: r.id, room: r.name, weekday: d, slot: s.id })}
                     className="flex h-full min-h-[2.75rem] w-full items-center justify-center rounded text-foreground-300 opacity-0 transition-opacity duration-150 hover:bg-background-100 hover:text-primary-600 hover:opacity-100 focus-visible:opacity-100">
                     <i className="ri-add-line text-base" aria-hidden="true" />
                   </button>
@@ -152,13 +152,13 @@ function AssignDrawer({ target, batches, onClose, onPick }: { target: Target; ba
   const shown = batches.filter((b) => !q.trim() || `${b.courseCode} ${b.name} ${b.intakeName}`.toLowerCase().includes(q.trim().toLowerCase()));
   return (
     <Drawer open title={`${target.room} · ${WEEKDAYS[target.weekday - 1]} ${slot?.label.toLowerCase()}`} onClose={onClose}>
-      <p className="text-sm text-foreground-600">Choose the batch that meets here. Its class runs {timeRange(slot?.start, slot?.end)}; change the time on the batch’s page.</p>
-      <TextInput autoFocus placeholder="Search course or batch" aria-label="Search batches" value={q} onChange={(e) => setQ(e.target.value)} />
-      {shown.length === 0 ? <p className="text-sm text-foreground-500">No batch runs this week{q ? " with that name" : ""}.</p> : (
+      <p className="text-sm text-foreground-600">Choose the intake that meets here. Its class runs {timeRange(slot?.start, slot?.end)}; change the time in the intake’s class setup.</p>
+      <TextInput autoFocus placeholder="Search course or intake" aria-label="Search intakes" value={q} onChange={(e) => setQ(e.target.value)} />
+      {shown.length === 0 ? <p className="text-sm text-foreground-500">No intake runs this week{q ? " with that name" : ""}.</p> : (
         <div className="divide-y divide-background-200 rounded-md border border-background-200">
           {shown.map((b) => (
             <button key={b.id} type="button" onClick={() => onPick(b.id)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-background-100">
-              <span className="font-medium text-foreground-900">{b.courseCode} {b.name}</span><span className="truncate text-xs text-foreground-500">{b.intakeName}</span>
+              <span className="font-medium text-foreground-900">{b.courseCode} {b.intakeName}</span>
             </button>
           ))}
         </div>

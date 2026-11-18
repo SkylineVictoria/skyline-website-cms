@@ -9,7 +9,7 @@ import { asmAdmin, type AssignmentRow, type AssignmentStudent, type BatchOption,
 
 const fail = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
 
-/** Assignments of one assessment: batches, dates, trainers, practical sessions, and the students with their attempts. */
+/** Assignments of one assessment: intakes, dates, trainers, practical sessions, and the students with their attempts. */
 export default function AssignmentsPanel({ assessmentId, courseId, assignments, canAssign, onChanged, onOpenAttempt }: {
   assessmentId: string; courseId: string; assignments: AssignmentRow[]; canAssign: boolean; onChanged: () => void; onOpenAttempt: (attemptId: string) => void;
 }) {
@@ -19,15 +19,15 @@ export default function AssignmentsPanel({ assessmentId, courseId, assignments, 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-700">Assign the published version to batches. Students come from the batch's enrolments, assessors from its trainers.</p>
-        <Button size="sm" icon="ri-send-plane-line" disabled={!canAssign} title={canAssign ? "" : "Publish a version first"} onClick={() => setCreating(true)}>Assign to batches</Button>
+        <p className="text-sm text-foreground-700">Assign the published version to intakes. Students come from the intake's enrolments, assessors from its trainers.</p>
+        <Button size="sm" icon="ri-send-plane-line" disabled={!canAssign} title={canAssign ? "" : "Publish a version first"} onClick={() => setCreating(true)}>Assign to intakes</Button>
       </div>
-      {assignments.length === 0 ? <Empty icon="ri-group-line" title="Not assigned yet" text="Once published, assign the assessment to one or more batches with a due date." /> : (
+      {assignments.length === 0 ? <Empty icon="ri-group-line" title="Not assigned yet" text="Once published, assign the assessment to one or more intakes with a due date." /> : (
         <ul className="divide-y divide-background-100 rounded-md border border-background-200">{assignments.map((a) => (
           <li key={a.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(a)}><span className="block font-medium text-foreground-900">{a.batchName} · {a.intake}</span><span className="block text-xs text-foreground-600">v{a.versionNo} · due {fmtDateTime(a.dueAt)}{a.lateUntil ? ` · late until ${fmtDateTime(a.lateUntil)}` : ""} · {a.eligibleCount} student{a.eligibleCount === 1 ? "" : "s"}</span></button>
+            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(a)}><span className="block font-medium text-foreground-900">{a.intake || a.batchName}</span><span className="block text-xs text-foreground-600">v{a.versionNo} · due {fmtDateTime(a.dueAt)}{a.lateUntil ? ` · late until ${fmtDateTime(a.lateUntil)}` : ""} · {a.eligibleCount} student{a.eligibleCount === 1 ? "" : "s"}</span></button>
             <Badge tone={a.status === "open" ? "success" : a.status === "cancelled" ? "warn" : "muted"}>{a.status}</Badge>
-            <Link to={`/admin/batches/${a.batchId}`} className="text-xs text-foreground-600 hover:text-primary-700">Batch page</Link>
+            <Link to={`/admin/lms/intakes#${a.intakeId || a.batchId}`} className="text-xs text-foreground-600 hover:text-primary-700">Intake page</Link>
           </li>))}</ul>
       )}
       {creating ? <CreateDrawer assessmentId={assessmentId} courseId={courseId} onClose={() => setCreating(false)} onDone={() => { setCreating(false); onChanged(); push("Assigned."); }} /> : null}
@@ -58,17 +58,17 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
     } catch (e) { setError(fail(e)); } finally { setBusy(false); }
   };
   return (
-    <Drawer open title="Assign to batches" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || !dueAt} onClick={() => void submit()}>Assign</Button></>}>
+    <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || !dueAt} onClick={() => void submit()}>Assign</Button></>}>
       <div className="space-y-4">
-        <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Batches on this course</span>
-          {batches.length === 0 ? <p className="text-sm text-foreground-600">No batches on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex items-center gap-2 rounded-md border border-background-200 px-2 py-1.5 text-sm"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name} · {b.intake}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
+        <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Intakes on this course</span>
+          {batches.length === 0 ? <p className="text-sm text-foreground-600">No intakes on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex items-center gap-2 rounded-md border border-background-200 px-2 py-1.5 text-sm"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Available from"><TextInput type="datetime-local" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} /></Field>
           <Field label="Due" required><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
           <Field label="Late submissions until" hint="Only matters when the institution blocks late work"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
         </div>
-        <Field label="Extra assessors (the batch's trainers are always assessors)"><Select multiple size={4} value={trainers} onChange={(e) => setTrainers([...e.target.selectedOptions].map((o) => o.value))}>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isTrainer ? "" : " (no trainer role)"}</option>)}</Select></Field>
-        <Field label="When a student leaves or joins the batch"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_batch" | "keep")}><option value="follow_batch">Follow the batch: leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
+        <Field label="Extra assessors (the intake's trainers are always assessors)"><Select multiple size={4} value={trainers} onChange={(e) => setTrainers([...e.target.selectedOptions].map((o) => o.value))}>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isTrainer ? "" : " (no trainer role)"}</option>)}</Select></Field>
+        <Field label="When a student leaves or joins the intake"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_batch" | "keep")}><option value="follow_batch">Follow the student's intake: leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Practical / observation sessions (calendar)</span>
           <ul className="space-y-1.5">{events.map((ev, i) => <li key={i} className="grid gap-1.5 sm:grid-cols-[7rem_1fr_1fr_1fr_auto]"><Select value={ev.kind} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, kind: e.target.value } : x)))}><option value="practical">Practical</option><option value="observation">Observation</option><option value="other">Other</option></Select><TextInput placeholder="Title" value={ev.title} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, title: e.target.value } : x)))} /><TextInput type="datetime-local" value={ev.startsAt} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, startsAt: e.target.value } : x)))} /><TextInput type="datetime-local" value={ev.endsAt} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, endsAt: e.target.value } : x)))} /><Button size="sm" variant="ghost" icon="ri-delete-bin-line" aria-label="Remove" onClick={() => setEvents(events.filter((_, k) => k !== i))} /></li>)}</ul>
           <Button size="sm" variant="outline" icon="ri-add-line" className="mt-2" onClick={() => setEvents([...events, { kind: "practical", title: "", startsAt: "", endsAt: "" }])}>Add session</Button></div>
@@ -91,18 +91,18 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
   const save = async () => { try { await asmAdmin("assignment_update", { id: a.id, dueAt: fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), status }); push("Assignment saved."); onChanged(); } catch (e) { setError(fail(e)); } };
   const setStudent = async (studentId: string, data: Record<string, unknown>) => { try { await asmAdmin("assignment_student_set", { id: a.id, studentId, ...data }); await load(); onChanged(); } catch (e) { setError(fail(e)); } };
   return (
-    <Drawer open title={`${a.assessmentTitle} · ${a.batchName}`} onClose={onClose} width="max-w-3xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button onClick={() => void save()}>Save</Button></>}>
+    <Drawer open title={`${a.assessmentTitle} · ${a.intake || a.batchName}`} onClose={onClose} width="max-w-3xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button onClick={() => void save()}>Save</Button></>}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Due"><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
           <Field label="Late until"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
           <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value as AssignmentRow["status"])}><option value="open">Open</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option></Select></Field>
         </div>
-        <p className="text-xs text-foreground-600">Assessors: {a.trainers.map((t) => t.name).join(", ") || "none (add trainers to the batch)"}. Version {a.versionNo}.</p>
+        <p className="text-xs text-foreground-600">Assessors: {a.trainers.map((t) => t.name).join(", ") || "none (add trainers to the intake's class setup)"}. Version {a.versionNo}.</p>
         {error ? <p className="text-sm text-primary-700" role="alert">{error}</p> : null}
         <div>
           <span className="mb-1.5 block text-label font-medium text-foreground-800">Students</span>
-          {students === null ? <p className="text-sm text-foreground-600">Loading…</p> : students.length === 0 ? <p className="text-sm text-foreground-600">No active students in this batch.</p> : (
+          {students === null ? <p className="text-sm text-foreground-600">Loading…</p> : students.length === 0 ? <p className="text-sm text-foreground-600">No active students in this intake.</p> : (
             <ul className="divide-y divide-background-100 rounded-md border border-background-200">{students.map((s) => (
               <li key={s.studentId} className={`px-3 py-2 text-sm ${s.excluded ? "opacity-60" : ""}`}>
                 <div className="flex flex-wrap items-center gap-2">

@@ -13,7 +13,6 @@ export default function LmsSubmissionsPage() {
   const [assignments,setAssignments] = useState<AssignmentRow[]>([]);
   const [courseId,setCourseId] = useState("");
   const [intakeId,setIntakeId] = useState("");
-  const [batchId,setBatchId] = useState("");
   const [assignmentId,setAssignmentId] = useState("");
   const [students,setStudents] = useState<AssignmentStudent[]>([]);
   const [search,setSearch] = useState(["","","",""]);
@@ -30,10 +29,10 @@ export default function LmsSubmissionsPage() {
     } catch(e) {setError(e instanceof Error?e.message:"Unable to load submissions");}
   },[]);
   useEffect(()=>{void load();},[load]);
-  const matchingIntakes=useMemo(()=>intakes.filter(x=>x.courseId===courseId),[intakes,courseId]);
+  const matchingIntakes=useMemo(()=>intakes.filter(x=>x.courseId===courseId&&(x.batchList?.length??0)>0),[intakes,courseId]);
   useEffect(()=>setIntakeId(old=>matchingIntakes.some(x=>x.id===old)?old:matchingIntakes[0]?.id??""),[matchingIntakes]);
-  const batches=matchingIntakes.find(x=>x.id===intakeId)?.batchList??[];
-  useEffect(()=>setBatchId(old=>batches.some(x=>x.id===old)?old:batches[0]?.id??""),[intakeId,intakes]);
+  // The intake is the class group: assignments carry its id as batchId.
+  const batchId=matchingIntakes.find(x=>x.id===intakeId)?.batchList?.[0]?.id??"";
   const batchAssignments=useMemo(()=>assignments.filter(x=>x.batchId===batchId),[assignments,batchId]);
   useEffect(()=>setAssignmentId(old=>batchAssignments.some(x=>x.id===old)?old:batchAssignments[0]?.id??""),[batchAssignments]);
   const fetchStudents=useCallback(async()=>{
@@ -68,18 +67,17 @@ export default function LmsSubmissionsPage() {
   const choice=(values:{id:string;label:string;title?:string;sub?:string;dot?:boolean}[],value:string,onChange:(id:string)=>void,index:number)=> <div className="mt-3 max-h-[30vh] space-y-1 overflow-auto">{values.filter(v=>v.label.toLowerCase().includes(search[index].toLowerCase())).map(v=><button type="button" key={v.id} className={row(value===v.id)} onClick={()=>onChange(v.id)}>{v.dot!==undefined?<span className={"mt-1.5 h-2 w-2 shrink-0 rounded-full "+(v.dot?"bg-green-500":"bg-background-300")} title={v.dot?"Active":"Inactive"}/>:null}<span className="min-w-0"><span className="block text-sm font-semibold text-foreground-950">{v.title??v.label}</span>{v.sub?<span className="block truncate text-xs text-foreground-600">{v.sub}</span>:null}</span></button>)}</div>;
   const listCard=(title:string,searchLabel:string,index:number,list:ReactNode)=><section className={card+" p-3"}><h2 className={sectionTitle+" mb-2 px-1"}>{title}</h2><label className="relative block"><i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true"/><input className={searchField} aria-label={searchLabel} placeholder={searchLabel+"…"} value={search[index]} onChange={e=>{const t=e.target.value;setSearch(v=>v.map((x,i)=>i===index?t:x));}}/></label>{list}</section>;
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
-    <header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="font-heading text-2xl font-bold text-foreground-950">Submissions</h1><p className="text-sm text-foreground-500">Student submissions by batch and assessment.</p></div><div className="flex flex-wrap gap-2"><button type="button" className={secondaryBtn} onClick={()=>downloadCsv("lms-submissions.csv",filtered.map(r=>({studentId:r.student.studentId,student:r.student.name,assessment:selected?.assessmentTitle??"",status:r.state,attempt:r.latest?.attemptNo??"",submittedAt:r.latest?.submittedAt??""})))}>Export CSV</button><button type="button" className={secondaryBtn} onClick={()=>void fetchStudents()}>Refresh</button></div></header>
+    <header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="font-heading text-2xl font-bold text-foreground-950">Submissions</h1><p className="text-sm text-foreground-500">Student submissions by intake and assessment.</p></div><div className="flex flex-wrap gap-2"><button type="button" className={secondaryBtn} onClick={()=>downloadCsv("lms-submissions.csv",filtered.map(r=>({studentId:r.student.studentId,student:r.student.name,assessment:selected?.assessmentTitle??"",status:r.state,attempt:r.latest?.attemptNo??"",submittedAt:r.latest?.submittedAt??""})))}>Export CSV</button><button type="button" className={secondaryBtn} onClick={()=>void fetchStudents()}>Refresh</button></div></header>
     {error?<p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>:null}
     <div className={"grid items-start gap-5 " + pane.grid}>
       <ListPane pane={pane} label="Courses">
       <div className="min-w-0 space-y-5">
         {listCard("Course","Search course",0,choice(courses.map(c=>({id:c.id,label:c.label,title:c.code,sub:c.name+(c.variantLabel?` (${c.variantLabel})`:""),dot:c.isActive})),courseId,setCourseId,0))}
         {listCard("Intake","Search intake",1,choice(matchingIntakes.map(i=>({id:i.id,label:i.name})),intakeId,setIntakeId,1))}
-        {listCard("Batch","Search batch",2,choice(batches.map(b=>({id:b.id,label:b.name})),batchId,setBatchId,2))}
       </div>
       </ListPane>
       <section className={card+" min-w-0 p-5"}>
-        {!batchId?<p className="py-10 text-center text-sm text-foreground-500">Select a batch to view submissions.</p>:<>
+        {!batchId?<p className="py-10 text-center text-sm text-foreground-500">Select an intake with classes set up to view submissions.</p>:<>
           <label className="block text-xs font-semibold text-foreground-500">Unit / Assessment<select className={field+" mt-1 font-normal text-foreground-950"} value={assignmentId} onChange={e=>setAssignmentId(e.target.value)}><option value="">Select an assigned assessment</option>{batchAssignments.map(a=><option key={a.id} value={a.id}>{a.unitCode??"Course"} — {a.assessmentTitle}</option>)}</select></label>
           {selected?<p className="mt-2 text-xs text-foreground-500">{selected.batchName} · Due {new Date(selected.dueAt).toLocaleDateString()}</p>:null}
           <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-4 sm:divide-x sm:divide-background-200">{([["Students",rows.length],["Submitted",submitted],["Pending",rows.length-submitted-overdue],["Overdue",overdue]] as [string,number][]).map(([label,n])=><div key={label} className="px-3 py-2"><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{n}</dd></div>)}</dl>

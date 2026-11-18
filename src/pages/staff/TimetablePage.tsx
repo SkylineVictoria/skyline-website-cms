@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import ClassTimetable from "@/components/timetable/ClassTimetable";
 
-/** Staff > My classes: the week's classes of the batches and units this trainer teaches. */
+/** Staff > My classes: the week's classes of the intakes and units this trainer teaches. */
 export default function StaffTimetablePage() {
   return (
     <div className="min-h-screen bg-background-100 px-4 py-8 sm:px-6">

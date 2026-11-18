@@ -79,7 +79,7 @@ export default function LmsLocationsPage() {
       {rooms.map(r => <li key={r.id} className={"flex flex-wrap items-center gap-3 px-3 py-2 text-sm " + (r.isActive ? "" : "text-foreground-400")}>
         <i className="ri-door-open-line text-foreground-500" aria-hidden="true" />
         <span className="flex-1 font-semibold">{r.name}{!r.isActive && <span className="ml-2 rounded-full bg-background-200 px-2 py-0.5 text-xs font-medium">Inactive</span>}</span>
-        <span className="text-xs text-foreground-500">{r.capacity ? `${r.capacity} seats` : "No seat count: batches here use 25"}</span>
+        <span className="text-xs text-foreground-500">{r.capacity ? `${r.capacity} seats` : "No seat count: intakes here use 25"}</span>
         {canEdit && <span className="flex gap-3">
           <button type="button" disabled={busy} onClick={() => { setNotice(""); setRoom({ id: r.id, name: r.name, capacity: r.capacity ? String(r.capacity) : "", isActive: r.isActive, locationId: r.locationId }); }} className="text-xs font-semibold text-primary-700 hover:underline">Edit</button>
           <button type="button" disabled={busy} onClick={() => deleteRoom(r)} className="text-xs font-semibold text-red-700 hover:underline">Delete</button>

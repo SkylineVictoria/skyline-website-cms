@@ -20,7 +20,7 @@ const TABS = [
   { id: "assignments", label: "Assignments", icon: "ri-group-line" }, { id: "versions", label: "Versions & export", icon: "ri-git-branch-line" }, { id: "settings", label: "Settings", icon: "ri-settings-3-line" },
 ];
 
-/** One assessment: builder (autosaved draft), unit mapping with coverage, assignments to batches, versions / publish / export, overrides. */
+/** One assessment: builder (autosaved draft), unit mapping with coverage, assignments to intakes, versions / publish / export, overrides. */
 export default function AssessmentDetailPage() {
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();

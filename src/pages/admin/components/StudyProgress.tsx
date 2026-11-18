@@ -41,7 +41,7 @@ export default function StudyProgress({ courses }: { courses: ProgressCourse[] }
                 <li key={u.code} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
                   <span className="min-w-0 flex-1"><strong className="font-semibold text-foreground-950">{u.code}</strong> <span className="text-foreground-700">{u.name}</span></span>
                   <span className="text-xs text-foreground-500">
-                    {u.status === "competent" ? (u.signedOn ? `Finished ${shortDate(u.signedOn)}` : "") : u.start && u.end ? `${shortDate(u.start)} – ${shortDate(u.end)}${u.batch ? ` · batch ${u.batch}` : ""}` : ""}
+                    {u.status === "competent" ? (u.signedOn ? `Finished ${shortDate(u.signedOn)}` : "") : u.start && u.end ? `${shortDate(u.start)} – ${shortDate(u.end)}${u.intake ? ` · ${u.intake} intake` : ""}` : ""}
                   </span>
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${s.tone}`}>{s.label}</span>
                 </li>

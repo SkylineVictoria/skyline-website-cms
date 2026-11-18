@@ -5,6 +5,7 @@ import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestH
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
+import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 /** Filled from Training.gov.au or calculated: shown greyed out, not typed in. */
@@ -82,7 +83,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   }, [needs, details, courseId]);
   const rows = useMemo(() => details.flatMap(d => d.units.map((unit, index) => ({course:d.course,unit,index}))), [details]);
   const filtered = rows.filter(r => (!courseId || r.course.id === courseId) &&
-    (type === "all" || r.unit.unitType === type) && (status === "all" || (r.unit.isActive ? "active" : "inactive") === status) &&
+    (type === "all" || (type === "prereq" ? activeNeeded.has(r.unit.id ?? "") : type === "needs" ? Boolean(r.unit.id && needs[r.unit.id]?.length) : r.unit.unitType === type)) && (status === "all" || (r.unit.isActive ? "active" : "inactive") === status) &&
     (r.unit.code + " " + r.unit.name + " " + r.course.name).toLowerCase().includes(query.trim().toLowerCase()));
   const PAGE = 25;
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
@@ -207,21 +208,20 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           <i className="ri-search-line absolute left-3 top-2.5 text-sm text-foreground-400" aria-hidden="true" />
           <input aria-label="Search units" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" placeholder="Search units" value={query} onChange={e=>setQuery(e.target.value)} />
         </label>
-        {([["all","All"],["core","Core"],["elective","Electives"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={type===value} onClick={()=>setType(value)}
+        {([["all","All"],["core","Core"],["elective","Electives"],["prereq","Prerequisite units"],["needs","Needs prerequisites"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={type===value} onClick={()=>setType(value)}
           className={"rounded-full border px-2.5 py-1 font-semibold " + (type===value ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>{label}</button>)}
         <select aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
           <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
       </div>
       {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm">
-        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1000px] text-left text-sm">
+        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
           className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
           <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
-            {r.unit.isActive && r.unit.id && needs[r.unit.id]?.length ? <span className="mt-0.5 block text-xs font-medium text-amber-800" title="This unit is taught after the units it needs. A student who has not done them takes this unit later.">
-              <i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {needs[r.unit.id].map(n => n.code).join(", ")}</span>
-            : r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="mt-0.5 block text-xs font-medium text-emerald-800"><i className="ri-flag-line mr-1" aria-hidden="true" />Prerequisite unit: taught first</span> : null}</td>
-          <td className="px-3 py-2 capitalize">{r.unit.unitType}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
+            </td>
+          <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
+          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="font-medium text-amber-800">{needs[r.unit.id].map(n => n.code).join(", ")}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
           {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
             return <>
               <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>
@@ -264,6 +264,8 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
             <label className="block text-xs font-medium text-foreground-500">Unit name<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.name} /></label>
             <label className="flex items-center gap-2 text-sm font-medium text-foreground-800 sm:col-span-2"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>
           </div>
+          {draft.id && selectedCourse ? <UnitPrerequisitesPicker key={draft.id} unitId={draft.id} canEdit={canEdit} needs={needs}
+            courseUnits={details.find(d => d.course.id === selectedCourse.id)?.units ?? []} onSaved={setNeeds} /> : null}
           {draft.id ? <div className="space-y-3 border-t border-background-200 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Hours</h3>

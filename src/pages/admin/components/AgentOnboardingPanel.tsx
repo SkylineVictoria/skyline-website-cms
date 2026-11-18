@@ -7,7 +7,8 @@ import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplicati
 import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
-import { AGENT_ONBOARDING_FIELDS } from "../../../../supabase/functions/_shared/agent-onboarding";
+import { AGENT_ONBOARDING_FIELDS, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
+import { abrFactLines, type AbrFacts } from "../../../../supabase/functions/_shared/validation/abr";
 
 /**
  * Businesses > {name}: agent onboarding in stages. The application form (F04) goes to the agent; when signed, a referee check (F05) goes
@@ -48,6 +49,8 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
     : current ? <Badge tone="warn">{stageWords(current.stage, received, current.referees.length)}</Badge>
     : latest?.stage === "declined" ? <Badge tone="warn">Declined</Badge> : <Badge tone="muted">Not started</Badge>;
   const profile = PROFILE_LABELS.filter(([key]) => (business.profile ?? {})[key]);
+  // The register's facts kept when the application form was sent (or first opened): read-only.
+  const abrFacts = abrFactLines(((business.profile ?? {}) as Record<string, unknown>).abr_facts as Partial<AbrFacts> | null);
   return <>
     <Card className="p-5" data-testid="agent-onboarding-panel">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -84,8 +87,14 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
       <h2 className="font-heading text-base font-semibold text-foreground-950">Agent profile</h2>
       <p className="text-sm text-foreground-600">What the agent entered on the application form (prefilled next time).</p>
       <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
-        {profile.map(([key, label]) => <div key={key} className="flex gap-2"><dt className="w-44 shrink-0 text-foreground-500">{label}</dt><dd className="min-w-0 break-words text-foreground-900">{(business.profile ?? {})[key]}</dd></div>)}
+        {profile.map(([key, label]) => <div key={key} className="flex gap-2"><dt className="w-44 shrink-0 text-foreground-500">{label}</dt><dd className="min-w-0 break-words text-foreground-900">{(business.profile ?? {})[key]}
+          {/* The MARN is checked by hand on the OMARA public register (no automated lookup). */}
+          {key === "agent_marn" ? <a href={OMARA_REGISTER_URL} target="_blank" rel="noreferrer" className="ml-2 text-xs font-medium text-primary-700 underline underline-offset-2" data-testid="marn-register-link">Check on the OMARA register</a> : null}</dd></div>)}
       </dl>
+      {abrFacts.length ? <div className="mt-4 border-t border-background-200 pt-3" data-testid="agent-abr-facts">
+        <p className="text-xs font-medium uppercase tracking-wide text-foreground-500">Australian Business Register</p>
+        <dl className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-3">{abrFacts.map((f) => <div key={f.label}><dt className="text-xs text-foreground-500">{f.label}</dt><dd className="text-foreground-900">{f.value}</dd></div>)}</dl>
+      </div> : null}
     </Card> : null}
     {dialog === "application" ? <SendApplicationDialog agencyId={business.id} agencyName={business.name} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
     {dialog === "agreement" && current ? <SendAgreementDialog row={current} agencyId={business.id} agencyName={business.name} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}

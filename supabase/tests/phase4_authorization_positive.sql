@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(930);
+select plan(949);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1401,6 +1401,23 @@ select is(public.agency_onboarding_list('13000000-0000-0000-0000-000000000001')-
 select throws_ok($$select public.agency_onboarding_agreement_create(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000004','{"commencement_date":"2026-11-17","expiry_date":"2028-11-16","override_reason":"too early"}')$$,null,'The agreement can be sent once the application form is signed and the references are approved','no agreement before the form is signed, reason or not');
 reset role;
 select is(public.agency_onboarding_request_plan('73000000-0000-0000-0000-000000000003')->>'kind','application','the request is the application kind');
+-- F04 wizard (2026-11-19): "Save and continue later" drafts (service role only), the register's facts on the business, the extras after signing.
+create temp table f04_abn as select registration_number from public.agencies where id='13000000-0000-0000-0000-000000000001';
+update public.agencies set registration_number='86 603 584 676' where id='13000000-0000-0000-0000-000000000001';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.agency_onboarding_draft_save('73000000-0000-0000-0000-000000000003',pg_temp.rcp('73000000-0000-0000-0000-000000000003'),'{"step":1}')$$,'42501',null,'a signed-in user cannot write a link holder''s draft');
+select throws_ok($$select public.agency_abr_facts_record('13000000-0000-0000-0000-000000000001','{"abn":"12345678901"}')$$,null,'The ABN Lookup facts are for another business.','facts for another ABN are refused');
+reset role;
+select lives_ok($$select public.agency_onboarding_draft_save('73000000-0000-0000-0000-000000000003',pg_temp.rcp('73000000-0000-0000-0000-000000000003'),'{"step":1,"marn":"1234567","answers":{"contact_position":"Director"}}')$$,'the function saves the draft');
+select is(public.agency_onboarding_wizard_get('73000000-0000-0000-0000-000000000003')->'draft'->>'step','1','the draft comes back');
+select is(public.agency_onboarding_wizard_get('73000000-0000-0000-0000-000000000003')->>'abn','86603584676','with the business''s ABN for the lookup');
+select throws_ok($$select public.agency_onboarding_draft_save('73000000-0000-0000-0000-000000000003','73000000-0000-0000-0000-0000000000ff','{"step":2}')$$,null,'This application form is no longer waiting for a signature','another recipient cannot save a draft');
+select lives_ok($$select public.agency_onboarding_facts_save('73000000-0000-0000-0000-000000000003','{"abn":"86603584676","acn":"603584676","abnStatus":"Active","statusFrom":"2015-01-07","entityName":"PURVA TECH PTY LTD","entityType":"Australian Private Company","gstRegistered":true,"gstFrom":"2015-01-07","sourceUrl":"https://abr.business.gov.au/ABN/View?abn=86603584676","fetchedAt":"2026-11-19T00:00:00Z"}')$$,'the register''s facts are kept on the business');
+select is((select profile->'abr_facts'->>'gstFrom'||'|'||(profile->'abr_facts'->>'acn')||'|'||(profile->'abr_facts'->>'entityType') from public.agencies where id='13000000-0000-0000-0000-000000000001'),'2015-01-07|603584676|Australian Private Company','GST date, ACN and entity type on the profile');
+select public.agency_onboarding_facts_save('73000000-0000-0000-0000-000000000003','{"abn":"86603584676","acn":"603584676","abnStatus":"Cancelled","statusFrom":"2015-01-07","entityName":"PURVA TECH PTY LTD","entityType":"Australian Private Company","gstRegistered":true,"gstFrom":"2015-01-07","sourceUrl":"https://abr.business.gov.au/ABN/View?abn=86603584676","fetchedAt":"2026-11-19T00:00:00Z"}');
+select is((select profile->'abr_facts'->>'abnStatus' from public.agencies where id='13000000-0000-0000-0000-000000000001'),'Active','a later open does not overwrite the facts kept');
+select throws_ok($$select public.agency_onboarding_application_extra('73000000-0000-0000-0000-000000000003','{"agent_marn":"1234567"}')$$,null,'The application form is not signed yet','the extras wait for the signature');
 -- The agent signs the form: the referees are checked before anything is stored.
 update hr.sign_recipients set signer_name='Ravi Kumar' where request_id='73000000-0000-0000-0000-000000000003';
 update hr.sign_fields set value='true', filled_at=now() where request_id='73000000-0000-0000-0000-000000000003' and key in ('litigation_involved:NO','eatc_completed:YES');
@@ -1414,6 +1431,18 @@ select throws_ok($$select public.agency_onboarding_accept_signed(pg_temp.onb2('7
 update hr.sign_fields set value='Priya@Harbour.EDU.au' where request_id='73000000-0000-0000-0000-000000000003' and key='ref1_email';
 select lives_ok($$select public.agency_onboarding_accept_signed(pg_temp.onb2('73000000-0000-0000-0000-000000000003'),'73000000-0000-0000-0000-000000000003',pg_temp.rcp('73000000-0000-0000-0000-000000000003'),decode('255044462d312e34','hex'),decode('255044462d312e35','hex'),'{}')$$,'the application form completes');
 select is((select stage from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000003'),'application_signed','stage: application signed');
+select throws_ok($$select public.agency_onboarding_draft_save('73000000-0000-0000-0000-000000000003',pg_temp.rcp('73000000-0000-0000-0000-000000000003'),'{"step":4}')$$,null,'This application form is no longer waiting for a signature','no draft once the form is signed');
+create temp table f04_state as select state, signed_path, signed_hash, signed_at from hr.sign_requests where id='73000000-0000-0000-0000-000000000003';
+update hr.sign_requests set state='signed', signed_path='73000000-0000-0000-0000-000000000003/signed-1.pdf', signed_hash=repeat('a',64), signed_at=now() where id='73000000-0000-0000-0000-000000000003';
+select throws_ok($$select public.agency_onboarding_application_extra('73000000-0000-0000-0000-000000000003','{"agent_marn":"12A"}')$$,null,'The MARN is a number: digits only.','a MARN with letters is refused');
+select lives_ok($$select public.agency_onboarding_application_extra('73000000-0000-0000-0000-000000000003','{"agent_acn":"603 584 676","agent_marn":"1234567","declarations":{"dha_policies":true,"education_policies":true,"national_code":true,"conflicts_of_interest":true,"code_of_ethics":true},"declared_at":"2026-11-19T01:00:00Z"}')$$,'the ACN, the MARN and the declarations are recorded');
+select is((select answers->>'agent_acn'||'|'||(answers->>'agent_marn') from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000003'),'603584676|1234567','with the signed answers');
+select is((select count(*)::int from jsonb_object_keys((select answers->'declarations' from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000003'))),5,'every declaration kept');
+select is((select profile->>'agent_marn'||'|'||(profile->>'agent_acn')||'|'||coalesce(profile->>'declarations','none') from public.agencies where id='13000000-0000-0000-0000-000000000001'),'1234567|603584676|none','the ACN and the MARN on the business profile (not the declarations)');
+select is((select count(*)::int from public.agency_onboarding_drafts where request_id='73000000-0000-0000-0000-000000000003'),0,'the draft is removed');
+select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=pg_temp.onb2('73000000-0000-0000-0000-000000000003') and event='application_declarations'),1,'the history says so');
+update hr.sign_requests r set state=s.state, signed_path=s.signed_path, signed_hash=s.signed_hash, signed_at=s.signed_at from f04_state s where r.id='73000000-0000-0000-0000-000000000003';
+update public.agencies set registration_number=(select registration_number from f04_abn), profile=profile - 'abr_facts' - 'agent_acn' - 'agent_marn' where id='13000000-0000-0000-0000-000000000001';
 select is((select form_content||application_certificate_content from public.agency_onboarding where application_request_id='73000000-0000-0000-0000-000000000003'),decode('255044462d312e34255044462d312e35','hex'),'the signed form and its certificate are stored');
 select is((select count(*)::int from public.agency_onboarding_referees where onboarding_id=pg_temp.onb2('73000000-0000-0000-0000-000000000003')),2,'two referee rows from the form');
 select is((select email||'|'||contact_name||'|'||organisation||'|'||position_title||'|'||status from public.agency_onboarding_referees where id=pg_temp.ref('73000000-0000-0000-0000-000000000003',1)),'priya@harbour.edu.au|Priya Nair|Harbour College|Admissions Lead|pending','reference 1 as the form named them (email lower-cased)');
@@ -1508,7 +1537,7 @@ select is((select count(*)::int from public.agency_invitations where email='ravi
 select is(public.agency_onboarding_activation(pg_temp.onb2('73000000-0000-0000-0000-000000000003'))->'invitation','null'::jsonb,'an older function calling the activation after the signature gets no invitation');
 select is((select agreement_status||' '||agreement_commencement_date||' '||agreement_expiry_date from public.agencies where id='13000000-0000-0000-0000-000000000001'),'signed 2026-11-17 2028-11-16','the agency keeps the status and the two-year term');
 select is((select array_agg(event order by id) from public.agency_onboarding_events where onboarding_id=pg_temp.onb2('73000000-0000-0000-0000-000000000003'))::text,
- '{application_sent,application_signed,referee_check_sent,referee_check_sent,referee_received,referee_email_changed,referee_check_sent,referee_uploaded,references_received,references_approved,agreement_sent,agreement_signed,ready_to_activate}','the history tells the whole story');
+ '{application_sent,application_signed,application_declarations,referee_check_sent,referee_check_sent,referee_received,referee_email_changed,referee_check_sent,referee_uploaded,references_received,references_approved,agreement_sent,agreement_signed,ready_to_activate}','the history tells the whole story');
 -- A second business: the override (a reason at 0 of 2) is logged; cancelling its agreement request cancels the onboarding.
 insert into public.agents(id,business_id,profile_id,full_name,email,role,status) values ('53000000-0000-0000-0000-000000000002','13000000-0000-0000-0000-000000000002',null,'Bea Agent','bea.agent@example.test','agency_admin','Active');
 set local role authenticated;

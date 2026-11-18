@@ -58,6 +58,7 @@ export const EVENT_LABEL: Record<string, string> = {
   references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
   agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)", countersigner_changed: "SLIT signatory changed",
   application_prefilled: "Application form prefilled (ABN Lookup and Add business)", prefill_reviewed: "Prefilled values checked against the signed form",
+  application_declarations: "Declarations ticked, ACN / MARN recorded",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];
@@ -87,7 +88,8 @@ export async function openOnboardingFile(id: string, kind: OnboardingFileKind): 
 
 /** The form's own labels for the answers shown on the business page (the CMS reads them from the agency's profile). */
 export const PROFILE_LABELS: Array<[string, string]> = [
-  ["agent_legal_entity", "Legal entity"], ["agent_trading_name", "Trading name"], ["agent_registration_number", "Business/MARA/Registration number"], ["agent_gst_registered", "GST registered"],
+  ["agent_legal_entity", "Legal entity"], ["agent_trading_name", "Trading name"], ["agent_acn", "ACN"], ["agent_marn", "MARA number (MARN)"],
+  ["agent_registration_number", "Business/MARA/Registration number"], ["agent_gst_registered", "GST registered"],
   ["contact_title", "Contact title"], ["contact_given_name", "Contact given name"], ["contact_family_name", "Contact family name"], ["contact_position", "Contact position"],
   ["contact_email", "Contact email"], ["contact_phone", "Contact phone"], ["agent_website", "Website"], ["agent_fax", "Fax"],
   ["office_street_address", "Office street address"], ["office_suburb", "Suburb / city"], ["office_state", "State"], ["office_province", "Province / postcode"], ["office_country", "Country"],

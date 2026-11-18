@@ -116,6 +116,8 @@ export interface SigningView {
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };
   /** Agent onboarding (2026-11-17): the application form (the first `formPages` pages) and the agreement, sent as one document. */
   onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string; kind?: string; stage?: string } | null;
+  /** F04 wizard (2026-11-19): the saved draft ("Save and continue later") and the register's facts for the Company summary. */
+  application?: { draft: unknown; facts: unknown; savedAt: string | null } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
   // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
   fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;

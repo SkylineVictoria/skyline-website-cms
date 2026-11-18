@@ -114,6 +114,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   const hours = [...(release?.core ?? []), ...(release?.electives ?? [])].filter(unit => chosen.has(unit.code)).reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0)
     + imported.reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0);
   const count = chosen.size + imported.length;
+  // The electives picked here (by hand or automatically), listed with their prerequisites so each can be changed or removed.
+  const pickedElectives = (release?.electives ?? []).filter(unit => chosen.has(unit.code));
   const changes = count + removing.size;
   // Untick / tick again an elective that is already on the course.
   const toggleOnCourse = (code: string, keep: boolean) => setRemoving(s => {
@@ -322,6 +324,41 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
           <details className="ml-6 text-xs"><summary className="cursor-pointer">Rules to check by hand</summary><ul className="ml-4 list-disc">{rules.unchecked.map(line => <li key={line}>{line}</li>)}</ul></details>
         </div> : null}
       </section>
+
+      {pickedElectives.length || imported.length ? <section aria-label="Your selected units" className="rounded-lg border border-background-200 p-2">
+        <h4 className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Your selected units ({pickedElectives.length + imported.length})</h4>
+        <ul className="divide-y divide-background-200">
+          {pickedElectives.map(unit => {
+            const options = release.electives.filter(other => !selected(other.code) && (!unit.groups.length || other.groups.some(group => unit.groups.includes(group))));
+            return <li key={unit.code} className="flex flex-wrap items-start gap-2 px-1 py-2 text-sm">
+              <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
+                <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "", unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : ""].filter(Boolean).join(" · ")}</span>
+                {prereqLine(unit) ?? <span className="block text-xs text-foreground-500">No prerequisites</span>}</span>
+              <span className="flex shrink-0 items-center gap-1">
+                {options.length ? <select aria-label={`Change ${unit.code}`} value="" disabled={busy} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-xs"
+                  onChange={e => {
+                    const next = e.target.value; if (!next) return;
+                    // Units that need this one leave with it (a unit and its prerequisites go together).
+                    const needing = [...chosen].filter(code => code !== unit.code && (() => { const found = lookups[code.toUpperCase()]; return !!found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === unit.code.toUpperCase()); })());
+                    toggle(unit.code, false); toggle(next, true);
+                    setNote(`Changed ${unit.code} to ${next}.${needing.length ? ` ${needing.join(", ")} also left: ${needing.length > 1 ? "they need" : "it needs"} ${unit.code}. Pick another unit if a rule is no longer met.` : ""}`);
+                  }}>
+                  <option value="">Change to…</option>
+                  {options.map(other => <option key={other.code} value={other.code}>{other.code} {other.name}</option>)}
+                </select> : null}
+                <button type="button" disabled={busy} onClick={() => toggle(unit.code, false)} className="rounded border border-background-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Remove</button>
+              </span>
+            </li>;
+          })}
+          {imported.map(unit => <li key={unit.code} className="flex flex-wrap items-start gap-2 px-1 py-2 text-sm">
+            <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.title}</span>
+              <span className="block text-xs text-foreground-500">Outside unit{unit.nominalHours !== null ? ` · ${unit.nominalHours} h` : ""}</span>
+              {unit.prerequisiteCodes.length ? <span className="block text-xs text-amber-900"><i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {unit.prerequisiteCodes.map((code, i) => <span key={code}>{i ? "; " : ""}<b>{code}</b>{selected(code) ? " ✓" : ""}</span>)}</span>
+                : <span className="block text-xs text-foreground-500">No prerequisites</span>}</span>
+            <button type="button" disabled={busy} onClick={() => setImported(list => list.filter(item => item.code !== unit.code))} className="shrink-0 rounded border border-background-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Remove</button>
+          </li>)}
+        </ul>
+      </section> : null}
 
       <section>
         <div className="mb-1 flex items-center justify-between gap-3">

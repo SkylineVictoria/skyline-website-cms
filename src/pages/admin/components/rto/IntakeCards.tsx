@@ -46,7 +46,7 @@ export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, o
         </div>
       </div>
       <div className="mt-3 flex min-h-[1.75rem] flex-wrap gap-1.5">
-        {!group || !group.days.length ? <span className="text-xs text-foreground-400">Classes not set up yet</span> : (
+        {!group || !group.days.length ? <span className="text-xs text-foreground-400">Weekly timetable not selected yet</span> : (
           <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${group.isActive ? "border-secondary-200 bg-secondary-50 text-secondary-900" : "border-background-300 text-foreground-500"}`} title="Class days">
             <i className="ri-time-line mr-1" aria-hidden="true" />{group.days.join(" ")}
           </span>

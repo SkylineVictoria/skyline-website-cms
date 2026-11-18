@@ -259,11 +259,11 @@ export default function LmsCoursesPage() {
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
         nextStep={detail?.intakes.length ? undefined : { label: "Next: intake and class timing", onClick: () => { setWizard({ courseId: wizard.courseId, step: "intake" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Step 5 of 5 · Intake" createLabel="Create and set the class timetable"
+      allowBatch={false} requireUnitSchedule title="Step 5 of 5 · Intake" createLabel="Create and select the weekly timetable"
       onClose={() => setWizard(null)}
       onCreated={d => { setWizard({ courseId: wizard.courseId, step: "classes", intakeId: d.intake.id }); setReloadKey(k => k + 1); }} /> : null}
     {/* Last step, in the wizard itself: the intake's class timetable (the same form as Timetable › Create timetable). */}
-    {wizard?.step === "classes" && wizard.intakeId && canEdit ? <ClassWeekDialog title="Step 5 of 5 · Class timetable" intakeId={wizard.intakeId} courseId={wizard.courseId} canEdit={canEdit}
+    {wizard?.step === "classes" && wizard.intakeId && canEdit ? <ClassWeekDialog title="Step 5 of 5 · Select weekly timetable" intakeId={wizard.intakeId} courseId={wizard.courseId} canEdit={canEdit}
       createLabel="Create classes and finish"
       onClose={() => { const id = wizard.intakeId; setWizard(null); navigate(`/admin/lms/intakes#${id}`); }}
       onSaved={() => { const id = wizard.intakeId; setWizard(null); setReloadKey(k => k + 1); navigate(`/admin/lms/intakes#${id}`); }} /> : null}

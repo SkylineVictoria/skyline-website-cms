@@ -66,7 +66,9 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
   const location = useLocation();
   const navigate = useNavigate();
   const openId = /^#([0-9a-f-]{36})$/i.exec(location.hash)?.[1] ?? null;
-  const [start, setStart] = useState<{ tab?: SheetTab; addBatch?: boolean }>({});
+  // ?wizard=1 (new course wizard): the intake opens on step 4, Add batch.
+  const wizard = new URLSearchParams(location.search).get("wizard") === "1";
+  const [start, setStart] = useState<{ tab?: SheetTab; addBatch?: boolean }>(() => (wizard ? { addBatch: true } : {}));
   const [creating, setCreating] = useState(false);
   const [duplicating, setDuplicating] = useState<RtoIntake | null>(null);
   const [deleting, setDeleting] = useState<RtoIntake | null>(null);
@@ -74,7 +76,11 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
   useEffect(() => { setLocal({}); }, [intakes]);
 
   const open = useCallback((id: string, opts: { tab?: SheetTab; addBatch?: boolean } = {}) => { setStart(opts); navigate({ search: location.search, hash: id }); }, [navigate, location.search]);
-  const close = useCallback(() => navigate({ search: location.search, hash: "" }, { replace: true }), [navigate, location.search]);
+  const close = useCallback(() => {
+    const params = new URLSearchParams(location.search); params.delete("wizard");
+    const search = params.toString();
+    navigate({ search: search ? `?${search}` : "", hash: "" }, { replace: true });
+  }, [navigate, location.search]);
   useShortcuts({ n: () => { if (canEdit) setCreating(true); } }, canEdit);
 
   const setStatus = (i: RtoIntake, status: IntakeStatus) => {
@@ -106,7 +112,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
         </div>
       )}
       {openId ? (
-        <IntakeSheet key={openId} intakeId={openId} canEdit={canEdit} canEnrol={canEnrol} startTab={start.tab} startAddBatch={start.addBatch}
+        <IntakeSheet key={openId} intakeId={openId} canEdit={canEdit} canEnrol={canEnrol} startTab={start.tab} startAddBatch={start.addBatch} wizard={wizard}
           onClose={close} onChanged={onReload} onDuplicate={setDuplicating} onDelete={setDeleting} />
       ) : null}
       <NewIntakeDrawer open={creating} onClose={() => setCreating(false)} courses={courses} courseId={courseId}

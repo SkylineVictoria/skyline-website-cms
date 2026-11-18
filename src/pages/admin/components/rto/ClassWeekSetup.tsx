@@ -11,10 +11,10 @@ import {
   type BatchSession, type Clash, type GenerateResult, type IntakeDetail, type LocationRooms, type RtoIntake, type SessionType, type Slot, type StaffOption,
 } from "@/pages/admin/lib/rto";
 
-type SlotRow = { start: string; end: string; type: SessionType };
+type SlotRow = { start: string; end: string; type: SessionType; roomId: string; trainerId: string };
 type Rows = Record<Slot, SlotRow>;
 const cellKey = (weekday: number, slot: Slot) => `${weekday}|${slot}`;
-const freshRows = (): Rows => Object.fromEntries(SLOTS.map((s) => [s.id, { start: s.start, end: s.end, type: "theory" as SessionType }])) as Rows;
+const freshRows = (): Rows => Object.fromEntries(SLOTS.map((s) => [s.id, { start: s.start, end: s.end, type: "theory" as SessionType, roomId: "", trainerId: "" }])) as Rows;
 const PRESETS: { label: string; days: number[]; slots: Slot[] }[] = [
   { label: "Weekday mornings", days: [1, 2, 3, 4, 5], slots: ["morning"] },
   { label: "Weekday afternoons", days: [1, 2, 3, 4, 5], slots: ["afternoon"] },
@@ -41,8 +41,6 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   const [closed, setClosed] = useState<((day: string) => boolean) | null>(null);
   const [cells, setCells] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState<Rows>(freshRows);
-  const [roomId, setRoomId] = useState("");
-  const [trainerId, setTrainerId] = useState("");
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -53,7 +51,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
     const next = freshRows(); const set = new Set<string>(); const seen = new Set<Slot>();
     for (const s of sessions) {
       const slot = slotOf(s.startTime);
-      if (!seen.has(slot)) { seen.add(slot); next[slot] = { start: s.startTime.slice(0, 5), end: s.endTime.slice(0, 5), type: s.type }; }
+      if (!seen.has(slot)) { seen.add(slot); next[slot] = { start: s.startTime.slice(0, 5), end: s.endTime.slice(0, 5), type: s.type, roomId: s.roomId ?? "", trainerId: s.trainerId ?? "" }; }
       set.add(cellKey(s.weekday, slot));
     }
     setRows(next); setCells(set);
@@ -69,8 +67,9 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         setOthers(list.filter((i) => i.id !== intakeId && (i.batchList ?? []).some((b) => b.days.length > 0)));
         const group = d.batches[0];
         applySessions(group?.sessions ?? []);
-        setRoomId(group?.sessions?.find((x) => x.roomId)?.roomId ?? group?.classroomId ?? "");
-        setTrainerId(group?.trainers[0]?.id ?? "");
+        // Older weeks had one room / trainer for the whole intake: they fill the parts of the day that have none.
+        const room = group?.classroomId ?? ""; const trainer = group?.trainers[0]?.id ?? "";
+        if (room || trainer) setRows((r) => Object.fromEntries(SLOTS.map((x) => [x.id, { ...r[x.id], roomId: r[x.id].roomId || room, trainerId: r[x.id].trainerId || trainer }])) as Rows);
         void loadClosedDays(d.intake.startDate, courseId).then((f) => { if (live) setClosed(() => f); });
       }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The intake did not load."); });
     void loadCourseNeed(courseId).then((n) => { if (live) setNeed(n); }).catch(() => undefined);
@@ -78,11 +77,16 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   }, [intakeId, courseId]);
 
   const rooms = locations.flatMap((l) => l.rooms.filter((r) => r.isActive).map((r) => ({ id: r.id, label: `${l.name} · ${r.name}${r.capacity ? ` (${r.capacity} seats)` : ""}` })));
-  // Seats come from the room (rooms keep a fixed seat count): no seat box on the form.
-  const roomSeats = locations.flatMap((l) => l.rooms).find((r) => r.id === roomId)?.capacity ?? null;
+  // Each part of the day has its own room and trainer, busy only for that class. Seats come from the rooms (fixed seat counts):
+  // the intake takes the smallest room it uses.
+  const usedSlots = SLOTS.filter((s) => [...cells].some((k) => k.endsWith(`|${s.id}`)));
+  const usedRooms = [...new Set(usedSlots.map((s) => rows[s.id].roomId).filter(Boolean))];
+  const seatOf = (id: string) => locations.flatMap((l) => l.rooms).find((r) => r.id === id)?.capacity ?? null;
+  const roomSeats = usedRooms.length && usedRooms.every((id) => seatOf(id)) ? Math.min(...usedRooms.map((id) => seatOf(id)!)) : null;
+  const noRoom = usedSlots.find((s) => !rows[s.id].roomId);
   const sessions = useMemo(() => [...cells].map((key) => { const [day, slot] = key.split("|") as [string, Slot]; const r = rows[slot];
-    return { weekday: Number(day), startTime: r.start, endTime: r.end, type: r.type, roomId: roomId || null }; })
-    .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime)), [cells, rows, roomId]);
+    return { weekday: Number(day), startTime: r.start, endTime: r.end, type: r.type, roomId: r.roomId || null, trainerId: r.trainerId || null }; })
+    .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime)), [cells, rows]);
   const badTime = SLOTS.some((s) => [...cells].some((k) => k.endsWith(`|${s.id}`)) && (!rows[s.id].start || !rows[s.id].end || rows[s.id].end <= rows[s.id].start));
   const overlap = sessions.some((a, i) => sessions.some((b, j) => j > i && a.weekday === b.weekday && a.startTime < b.endTime && b.startTime < a.endTime));
   const weekly = sessions.reduce((sum, s) => sum + hoursOf(s.startTime, s.endTime), 0);
@@ -95,7 +99,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   // Rooms already taken at these times (asked as the week changes).
   const sessionsKey = JSON.stringify(sessions);
   useEffect(() => {
-    if (!detail || !roomId || !sessions.length || badTime) { setClashes([]); return; }
+    if (!detail || !sessions.some((x) => x.roomId) || !sessions.length || badTime) { setClashes([]); return; }
     let live = true;
     const t = window.setTimeout(() => {
       rtoFlow<Clash[]>("clash_check", { batchId: detail.batches[0]?.id ?? null, intakeId, sessions })
@@ -118,7 +122,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   const create = async () => {
     setBusy(true); setError(""); setDone(null);
     try {
-      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity: roomSeats ? String(roomSeats) : "", trainerIds: trainerId ? [trainerId] : [] });
+      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity: roomSeats ? String(roomSeats) : "", trainerIds: [...new Set(sessions.map((x) => x.trainerId).filter(Boolean))] });
       const made = await generateClassSessions(out.batchId);
       setDetail(out); setDone(made);
       onSaved?.({ detail: out, generated: made });
@@ -126,9 +130,9 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
     finally { setBusy(false); }
   };
 
-  const blocked = !canEdit || busy || !detail || !sessions.length || badTime || overlap || !roomId || clashLines.length > 0 || !enough;
+  const blocked = !canEdit || busy || !detail || !sessions.length || badTime || overlap || !!noRoom || clashLines.length > 0 || !enough;
   const why = !canEdit ? "Only an RTO Manager can create a timetable." : !sessions.length ? "Choose the class days and times." : badTime ? "Each class must end after it starts."
-    : overlap ? "Two parts of the day overlap: change their times." : !roomId ? "Choose a room." : clashLines.length ? "Fix the room clash first."
+    : overlap ? "Two parts of the day overlap: change their times." : noRoom ? `Choose the ${noRoom.label.toLowerCase()} room.` : clashLines.length ? "Fix the room clash first."
     : !enough ? `This week gives ${weekly} hours; the course needs ${needed} a week to finish by ${shortDate(dates?.endDate ?? "")}.` : "";
 
   if (!detail && !error) return <p className="text-sm text-foreground-500">Loading…</p>;
@@ -157,7 +161,14 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
                 <TextInput className="!w-32" type="time" aria-label={`${s.label} ends`} value={rows[s.id].end} disabled={busy} onChange={(e) => setRow(s.id, { end: e.target.value })} />
                 <Select className="!w-auto" aria-label={`${s.label} class type`} value={rows[s.id].type} disabled={busy} onChange={(e) => setRow(s.id, { type: e.target.value as SessionType })}>
                   <option value="theory">Theory</option><option value="practical">Practical</option><option value="assessment">Assessment</option>
-                </Select></div></td>
+                </Select></div>
+                <div className="mt-1 flex flex-nowrap items-center gap-1 pl-[5.25rem]">
+                  <Select className="!w-48" aria-label={`${s.label} room`} value={rows[s.id].roomId} disabled={busy} onChange={(e) => setRow(s.id, { roomId: e.target.value })}>
+                    <option value="">Room…</option>{rooms.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                  </Select>
+                  <Select className="!w-48" aria-label={`${s.label} trainer`} value={rows[s.id].trainerId} disabled={busy} onChange={(e) => setRow(s.id, { trainerId: e.target.value })}>
+                    <option value="">Trainer…</option>{staff.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </Select></div></td>
               {DAYS.map((d, i) => { const on = cells.has(cellKey(i + 1, s.id)); return (
                 <td key={d}><button type="button" aria-pressed={on} aria-label={`${d} ${s.label}`} disabled={busy} onClick={() => toggle(i + 1, s.id)}
                   className={`h-11 w-full rounded-lg border text-xs font-semibold ${on ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-400 hover:border-primary-300"}`}>
@@ -166,18 +177,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         </table>
       </div>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <label className="text-sm font-medium">Room
-          <Select className="mt-1" value={roomId} disabled={busy} onChange={(e) => { setRoomId(e.target.value); setDone(null); }}>
-            <option value="">Choose a room</option>{rooms.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </Select></label>
-        <label className="text-sm font-medium">Trainer
-          <Select className="mt-1" value={trainerId} disabled={busy} onChange={(e) => { setTrainerId(e.target.value); setDone(null); }}>
-            <option value="">No trainer yet</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select></label>
-        <div className="text-sm"><span className="font-medium">Seats</span>
-          <p className="mt-2 text-foreground-700">{roomId ? (roomSeats ? `${roomSeats} (the room's seats)` : "The room has no seat count: set it in Locations & rooms") : "From the room"}</p></div>
-      </div>
+      <p className="mt-2 text-sm text-foreground-700">Seats: {roomSeats ? `${roomSeats} (the smallest room used)` : usedRooms.length ? "a room has no seat count: set it in Locations & rooms" : "from the rooms"}. A room and trainer are booked only for their part of the day.</p>
       {detail && !rooms.length ? <p className="mt-2 text-sm text-foreground-600">No rooms yet: add one in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/lms/timetable-settings?tab=locations">Timetable settings</Link>.</p> : null}
 
       <div className={`mt-3 rounded-lg border p-3 text-sm ${clashLines.length || overlap || badTime ? "border-red-300 bg-red-50" : !enough ? "border-amber-300 bg-amber-50" : "border-green-300 bg-green-50"}`}>

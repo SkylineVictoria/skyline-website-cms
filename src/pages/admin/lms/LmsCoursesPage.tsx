@@ -90,7 +90,7 @@ export default function LmsCoursesPage() {
   // New course wizard: 1 course (Add course / Sync), 2 units in the Add units popup (packaging rules met), 3 the units' SLIT
   // hours, 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first intake, then on
   // the intake: 6 a batch. Students are added only through the enrolment wizard.
-  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "intake"; saved?: boolean } | null>(null);
+  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "intake"; saved?: boolean; hidden?: boolean } | null>(null);
   const navigate = useNavigate();
 
   const load = useCallback(async (courseId?: string) => {
@@ -224,10 +224,11 @@ export default function LmsCoursesPage() {
     <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />
-    {wizard?.step === "units" && canEdit && selected?.id === wizard.courseId && detail?.course.id === wizard.courseId
-      ? <AddUnitsFromTga course={selected} units={detail.units} stepLabel="Step 2 of 6 · Units"
+    {wizard?.step === "units" && !wizard.hidden && canEdit && detail?.course.id === wizard.courseId
+      ? <AddUnitsFromTga course={detail.course} units={detail.units} stepLabel="Step 2 of 6 · Units"
         // The course reloads when the popup closes: reloading earlier would close it before its result and next step show.
-        onClose={() => { setWizard(null); setReloadKey(k => k + 1); }} onDone={() => undefined}
+        // Closing keeps the wizard: the bar on the Units tab opens the popup again.
+        onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onDone={() => undefined}
         nextStep={{ label: "Next: unit hours", onClick: () => { setWizard({ courseId: wizard.courseId, step: "hours" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "hours" && canEdit && selected?.id === wizard.courseId
       ? <UnitHoursEditor course={selected} stepLabel="Step 3 of 6 · Hours" onClose={() => { setWizard(null); setReloadKey(k => k + 1); }} onSaved={() => undefined}
@@ -335,6 +336,13 @@ export default function LmsCoursesPage() {
                 <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</h3>
                 <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />
               </section> : null}
+              </div> : null}
+              {tab === "units" && wizard?.step === "units" && wizard.courseId === selectedId ? <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-primary-300 bg-primary-50 p-3 text-sm text-primary-900">
+                <span className="flex-1"><b>Step 2 of 6 · Units.</b> {detail?.course.id === selectedId ? "Pick the electives for this course." : "Loading the course…"}</span>
+                <button type="button" disabled={detail?.course.id !== selectedId} onClick={() => setWizard(w => (w ? { ...w, hidden: false } : w))}
+                  className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Open Add units</button>
+                <button type="button" onClick={() => setWizard({ courseId: selectedId, step: "hours" })} className="rounded-lg border border-primary-300 px-3 py-1.5 font-semibold text-primary-800 hover:bg-primary-100">Skip to unit hours</button>
+                <button type="button" onClick={() => setWizard(null)} className="rounded-lg border border-primary-300 px-3 py-1.5 font-semibold text-primary-800 hover:bg-primary-100">Later</button>
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "master" && selected && wizard?.step === "master" && wizard.courseId === selectedId ? <div role="status" className="mb-4 rounded-lg border border-primary-300 bg-primary-50 p-3 text-sm text-primary-900">

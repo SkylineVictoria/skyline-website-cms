@@ -159,7 +159,7 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
   const blocked = busy || !master || !canEdit || !start || !order.length || order.some(o => !(o.weeks > 0)) || problems.length > 0;
   const totalWeeks = order.reduce((t, o) => t + (o.weeks || 0), 0);
 
-  return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Start date and term breaks · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
+  return <Modal open keepOpen={!!stepLabel} title={`${stepLabel ? stepLabel + " · " : ""}Start date and term breaks · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-foreground-700">{start ? <><b>Starts {shortDate(start)}</b> · one cycle of {order.length} units, {weeksLabel(totalWeeks)} classroom weeks, then the units start again · no end date</> : "Enter the start date to see the dates."}</span>
       <div className="flex gap-2">

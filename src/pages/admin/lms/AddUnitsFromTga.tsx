@@ -242,7 +242,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     </div>;
   };
 
-  return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
+  return <Modal open keepOpen={!!stepLabel} title={`${stepLabel ? stepLabel + " · " : ""}Add units · ${course.code}`} width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
     footer={result ? <div className="flex justify-end gap-2">{nextStep && result.rulesComplete !== false
         ? <Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button>
         : <Button onClick={onClose}>Close</Button>}</div>

@@ -368,10 +368,13 @@ export function Modal({
   footer,
   width = "max-w-lg",
   fill = false,
+  keepOpen = false,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
+  /** A wizard step: a click outside the dialog does not close it (only its X and buttons do). */
+  keepOpen?: boolean;
   children: ReactNode;
   footer?: ReactNode;
   width?: string;
@@ -383,7 +386,7 @@ export function Modal({
   // relative to that box instead of the screen and could open out of sight on a long page.
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-foreground-950/40" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-foreground-950/40" onClick={keepOpen ? undefined : onClose} aria-hidden="true" />
       <div className={`modal-in relative w-full ${width} rounded-card border border-background-200 bg-background-50 shadow-xl${fill ? " flex h-[92vh] flex-col" : ""}`}>
         <div className="flex shrink-0 items-center justify-between border-b border-background-200 px-5 py-3.5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">{title}</h2>

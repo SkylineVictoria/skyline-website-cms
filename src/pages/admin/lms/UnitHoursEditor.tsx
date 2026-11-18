@@ -72,7 +72,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
   };
 
   const cell = "w-20 rounded-md border border-background-300 bg-background-50 px-2 py-1 text-right text-sm";
-  return <Modal open title={`${stepLabel ? stepLabel + " · " : ""}Unit hours · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
+  return <Modal open keepOpen={!!stepLabel} title={`${stepLabel ? stepLabel + " · " : ""}Unit hours · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-foreground-700"><b>{total.toLocaleString()} SLIT hours</b> · about {weeks} weeks at {HOURS_PER_WEEK} hours a week (CoE)</span>
       <div className="flex gap-2">

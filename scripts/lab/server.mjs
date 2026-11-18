@@ -1,3 +1,5 @@
+import { refuseHosted } from './hosted-guard.mjs';
+refuseHosted('server'); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {writeFile,mkdir} from 'node:fs/promises';

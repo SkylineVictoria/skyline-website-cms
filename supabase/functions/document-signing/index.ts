@@ -41,6 +41,7 @@ Deno.serve(async (req) => {
     },
     letterhead: () => loadLetterhead(service),
     mail,
+    abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },
     isServiceCaller: sameText(authorization.replace(/^Bearer\s+/i, ""), serviceKey),
     uuid: () => crypto.randomUUID(),
     later: (work) => {

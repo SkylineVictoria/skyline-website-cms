@@ -7,6 +7,7 @@ import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplicati
 import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
+import { AGENT_ONBOARDING_FIELDS } from "../../../../supabase/functions/_shared/agent-onboarding";
 
 /**
  * Businesses > {name}: agent onboarding in stages. The application form (F04) goes to the agent; when signed, a referee check (F05) goes
@@ -100,6 +101,8 @@ const STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
   { label: "Staff review", stages: ["references_received"] }, { label: "Agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Ready to activate", stages: ["agreement_signed"] },
 ];
 function stepIndex(stage: OnboardingStage, steps = STEPS) { const i = steps.findIndex((s) => s.stages.includes(stage)); return i < 0 ? -1 : i; }
+/** A prefilled F04 field in words (the registry label), for the history. */
+const prefillLabel = (key: string) => (Object.entries(AGENT_ONBOARDING_FIELDS).find(([k]) => k.replace(/_(form|referee)$/, "").replace(/:.*$/, "") === key && AGENT_ONBOARDING_FIELDS[k].doc === "form")?.[1].label ?? key).replace(/: (Yes|No)$/, "");
 function detailWords(event: string, detail: Record<string, unknown>): string {
   const parts: string[] = [];
   if (typeof detail.request === "string") parts.push(detail.request);
@@ -110,6 +113,11 @@ function detailWords(event: string, detail: Record<string, unknown>): string {
   if (event === "references_received" || event === "references_approved") parts.push(`${String(detail.received ?? "")} of ${String(detail.total ?? "")}`);
   if (event === "activated") parts.push(detail.invitation ? "set-password email" : detail.login ? "already signs in" : "no invitation");
   if (event === "agreement_uploaded") parts.push(`${String(detail.file ?? "")} · reason: ${String(detail.reason ?? "")}`);
+  if (event === "application_prefilled" && Array.isArray(detail.fields)) parts.push(`${detail.fields.length} field${detail.fields.length === 1 ? "" : "s"}: ${(detail.fields as string[]).map(prefillLabel).join(", ")}`);
+  if (event === "prefill_reviewed") {
+    const changed = Array.isArray(detail.changed) ? detail.changed as Array<{ field: string; prefilled: string; submitted: string }> : [];
+    parts.push(changed.length ? `changed by the contact: ${changed.map((c) => `${prefillLabel(c.field)} "${c.prefilled}" → "${c.submitted}"`).join("; ")}` : "all prefilled values kept");
+  }
   if (event === "agreement_sent" && typeof detail.template === "string") parts.push(`template ${detail.template}${detail.version ? ` v${String(detail.version)}` : ""}`);
   return parts.length ? ` · ${parts.join(" · ")}` : "";
 }

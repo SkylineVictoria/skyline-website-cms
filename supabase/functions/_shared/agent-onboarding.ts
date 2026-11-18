@@ -251,7 +251,7 @@ export interface ResolvedFields { printed: PlacedField[]; recipient: PlacedField
  * Splits a template's placed fields for one send: a sender field with a value is printed; an auto-or-agent field without a value
  * becomes the agent's field (prefilled with nothing); an admin field without a value is left blank (optional ones: witness).
  */
-export function resolveFields(fields: PlacedField[], values: Record<string, string>): ResolvedFields {
+export function resolveFields(fields: PlacedField[], values: Record<string, string>, options: { editablePrefill?: boolean } = {}): ResolvedFields {
   const printed: PlacedField[] = [], recipient: PlacedField[] = [];
   for (const f of fields) {
     const spec = AGENT_ONBOARDING_FIELDS[f.key];
@@ -263,6 +263,13 @@ export function resolveFields(fields: PlacedField[], values: Record<string, stri
     }
     const group = groupOf(f.key);
     const answered = group ? (values[group.key] ?? "").trim() : "";
+    // ABN prefill (2026-11-19): every value we hold for an auto-or-agent field is the signer's field, already filled in, so the contact can
+    // correct it before signing; a tick box of a question we hold an answer for comes ticked (the other box of the pair stays empty).
+    if (options.editablePrefill && spec?.autoOrAgent) {
+      const value = group ? (answered.toUpperCase() === group.answer ? "true" : "") : printedValue(f.key, values[key] ?? "").slice(0, 500);
+      recipient.push({ ...f, role: signerRole(spec.doc).key as OnboardingRole, required: spec.required === true, value });
+      continue;
+    }
     const value = group ? (answered.toUpperCase() === group.answer ? "true" : "") : printedValue(f.key, values[key] ?? "");
     if (value) printed.push({ ...f, value });
     // The other box of an answered question stays empty; a question with no answer at all is the agent's to tick.

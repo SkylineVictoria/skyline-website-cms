@@ -11,6 +11,7 @@ import { toBase64 } from "../_shared/notification/attachment.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
+import { checkApplicationAnswers } from "../_shared/validation/abr.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
@@ -47,6 +48,8 @@ export interface SigningPorts {
   };
   letterhead(): Promise<Letterhead | null>;
   mail: { provider: EmailProvider | null; config: HrMailConfig };
+  /** ABN Lookup (ABR JSON service): the registered party's GUID (secret EF_ABR_GUID; empty = not set up). Tests inject fetch. */
+  abr?: { guid: string; fetch?: typeof fetch };
   /** True when the request carries the service-role key itself (the scheduled job). */
   isServiceCaller: boolean;
   uuid(): string;
@@ -172,6 +175,15 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const answer = String(values[f.id] ?? "").trim();
           if (answers.has(f.label) && answers.get(f.label) !== answer) throw new SigningError(`Give one answer for ${f.label}: it appears more than once in the document.`);
           answers.set(f.label, answer);
+        }
+        // Agent Application Form (2026-11-19): the title comes from the list; the two referees need different email addresses.
+        if ((record.onboarding as { kind?: string } | null)?.kind === "application") {
+          const byKey: Record<string, string> = {};
+          for (const f of (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>) {
+            if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
+          }
+          const checked = checkApplicationAnswers(byKey);
+          if (checked.error) throw new SigningError(checked.error);
         }
         const [pdf, letter] = await Promise.all([signingPdfModule(), letterPdfModule()]);
         let image: string | null = null, signatureHash: string;

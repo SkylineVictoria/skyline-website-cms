@@ -1,6 +1,8 @@
 -- Positive preservation + direct mutation boundaries, synthetic and rollback-only.
 begin;
-select plan(904);
+-- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
+do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
+select plan(930);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1747,6 +1749,45 @@ set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
 select throws_ok($$select public.agency_business_activate(pg_temp.direct())$$,'22023',null,'SLIT-DIRECT: nothing to activate');
 reset role;
+-- ABN prefill (migration 20261119103517): the ABR answer is cached by ABN (administrators), copied onto the business with what staff
+-- confirmed (a cancelled ABN needs a reason; no lookup, no copy), and the F04 prefill is recorded once and compared with the signed answers.
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.abr_lookup_save('4900402807','{"Abn":"4900402807"}','{"abn":"4900402807"}')$$,'22023',null,'ABR: a short ABN is not cached');
+select throws_ok($$select public.abr_lookup_save('49004028077','{"Abn":"49004028077"}','{"abn":"53004085616"}')$$,'22023',null,'ABR: an answer for another ABN is not cached');
+select lives_ok($$select public.abr_lookup_save('49 004 028 077','{"Abn":"49004028077","EntityName":"BHP GROUP LIMITED"}','{"abn":"49004028077","active":true,"abnStatus":"Active","entityName":"BHP GROUP LIMITED","businessNames":["BHP","BHP BILLITON"]}')$$,'ABR: an administrator caches an answer');
+select lives_ok($$select public.abr_lookup_save('53004085616','{"Abn":"53004085616","AbnStatus":"Cancelled"}','{"abn":"53004085616","active":false,"abnStatus":"Cancelled","entityName":"OLD CO PTY LTD","businessNames":[]}')$$,'ABR: a cancelled ABN is cached too');
+select is(public.admin_business_create('{"name":"BHP BILLITON","code":"ABR-1","registration_number":"49 004 028 077"}'::jsonb,'abr-poc@blackhole.postmarkapp.com','Pat Contact')->>'onboarding','true','ABR: Add business');
+select is(public.agency_abr_get(pg_temp.biz('ABR-1')),null,'ABR: nothing kept before the confirmation');
+select is((public.agency_abr_attach(pg_temp.biz('ABR-1'),'{"legalEntity":" BHP GROUP  LIMITED ","tradingName":"BHP BILLITON","gstRegistered":true,"state":"vic","postcode":"30x0","givenName":"Pat","familyName":"Contact"}'))->'confirmed'->>'legalEntity','BHP GROUP LIMITED','ABR: the confirmed values are kept, spaces tidied');
+select is(public.agency_abr_get(pg_temp.biz('ABR-1'))->'confirmed'->>'state','VIC','ABR: the state is one of the eight');
+select is(public.agency_abr_get(pg_temp.biz('ABR-1'))->'confirmed'->>'postcode','','ABR: a bad postcode is dropped');
+select is(public.agency_abr_get(pg_temp.biz('ABR-1'))->'details'->>'entityName','BHP GROUP LIMITED','ABR: the register''s answer is on the business');
+select is(public.admin_business_create('{"name":"Old Co","code":"ABR-2","registration_number":"53 004 085 616"}'::jsonb,'abr-old@blackhole.postmarkapp.com','Old Contact')->>'onboarding','true','ABR: Add business with a cancelled ABN');
+select throws_ok($$select public.agency_abr_attach(pg_temp.biz('ABR-2'),'{"legalEntity":"OLD CO PTY LTD","tradingName":"Old Co"}')$$,'22023',null,'ABR: a cancelled ABN needs a reason');
+select lives_ok($$select public.agency_abr_attach(pg_temp.biz('ABR-2'),'{"legalEntity":"OLD CO PTY LTD","tradingName":"Old Co","cancelledOverride":"Re-registering under a new ABN next month"}')$$,'ABR: added anyway with a reason');
+select throws_ok($$select public.agency_abr_attach(pg_temp.biz('FLOW-1'),'{"legalEntity":"Flow Co"}')$$,'22023',null,'ABR: no lookup for this ABN, nothing to keep');
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-0000000000f2"}';
+select throws_ok($$select public.abr_lookup_save('49004028077','{"Abn":"49004028077"}','{"abn":"49004028077"}')$$,'42501',null,'ABR: an agent cannot cache an answer');
+select throws_ok($$select public.agency_abr_get(pg_temp.biz('ABR-1'))$$,'42501',null,'ABR: an agent cannot read a business''s ABR record');
+reset role;
+select is((select abr_raw->>'EntityName' from public.agencies where id=pg_temp.biz('ABR-1')),'BHP GROUP LIMITED','ABR: the raw answer is on the business');
+select ok((select abr_fetched_at is not null from public.agencies where id=pg_temp.biz('ABR-1')),'ABR: with when it was fetched');
+select is((select count(*)::int from public.portal_audit_log where action='abr_confirmed' and agency_id=pg_temp.biz('ABR-2') and detail->>'cancelledOverride' is not null),1,'ABR: the override reason is in the business history');
+-- The F04 prefill is recorded once; the signed answers are compared with it once.
+insert into public.agency_onboarding(kind,agency_id,agent_id,stage,form_pages) select 'business',pg_temp.biz('ABR-1'),id,'application_sent',2 from public.agents where email='abr-poc@blackhole.postmarkapp.com';
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select lives_ok($$select public.agency_onboarding_prefill_record((pg_temp.bonb('ABR-1')).id,'{"agent_legal_entity":"BHP GROUP LIMITED","agent_abn":"49004028077","office_suburb":"3000","Bad Key":"x","contact_title":""}')$$,'ABR: the prefill is recorded');
+select lives_ok($$select public.agency_onboarding_prefill_record((pg_temp.bonb('ABR-1')).id,'{"agent_legal_entity":"Changed"}')$$,'ABR: a second record changes nothing');
+reset role;
+select is((pg_temp.bonb('ABR-1')).prefill,'{"agent_abn":"49004028077","office_suburb":"3000","agent_legal_entity":"BHP GROUP LIMITED"}'::jsonb,'ABR: only valid, non-empty keys, kept once');
+select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=(pg_temp.bonb('ABR-1')).id and event='application_prefilled'),1,'ABR: one history line for the prefill');
+update public.agency_onboarding set answers='{"agent_legal_entity":"BHP GROUP LIMITED","agent_abn":"49 004 028 077","office_suburb":"Melbourne 3000","ref1_email":"a@example.test"}' where id=(pg_temp.bonb('ABR-1')).id;
+select is((select detail->'changed'->0->>'field' from public.agency_onboarding_events where onboarding_id=(pg_temp.bonb('ABR-1')).id and event='prefill_reviewed'),'office_suburb','ABR: the value the contact changed is named');
+select is((select jsonb_array_length(detail->'kept') from public.agency_onboarding_events where onboarding_id=(pg_temp.bonb('ABR-1')).id and event='prefill_reviewed'),2,'ABR: the ABN as printed counts as kept');
+update public.agency_onboarding set answers=answers || '{"office_suburb":"Southbank 3006"}' where id=(pg_temp.bonb('ABR-1')).id;
+select is((select count(*)::int from public.agency_onboarding_events where onboarding_id=(pg_temp.bonb('ABR-1')).id and event='prefill_reviewed'),1,'ABR: compared once');
 -- Intake schedule preview (migration 20261117121733): staff only.
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';

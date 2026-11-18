@@ -1,4 +1,6 @@
 // Offline checks of src/lib/holidayImport.ts (Public Holidays > Import from Excel). Run: npx jiti scripts/test-holiday-import.ts
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-holiday-import"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

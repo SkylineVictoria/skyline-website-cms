@@ -1,5 +1,7 @@
 // P05-01 provider contract (REG-DOC / REG-JOBS). Deterministic mocks only: the
 // global fetch is replaced so any accidental network or credential use fails.
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-document-provider"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import assert from "node:assert/strict";
 import test from "node:test";
 import {

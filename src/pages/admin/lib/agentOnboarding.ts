@@ -57,6 +57,7 @@ export const EVENT_LABEL: Record<string, string> = {
   agreement_sent: "Agreement sent", agreement_signed: "Agreement signed", cancelled: "Cancelled", expired: "Expired",
   references_approved: "References approved", declined: "Declined", activated: "Business activated, set-password email sent",
   agent_added: "Agent added", agent_activated: "Agent activated", agreement_uploaded: "Signed agreement recorded (uploaded)", countersigner_changed: "SLIT signatory changed",
+  application_prefilled: "Application form prefilled (ABN Lookup and Add business)", prefill_reviewed: "Prefilled values checked against the signed form",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent"];

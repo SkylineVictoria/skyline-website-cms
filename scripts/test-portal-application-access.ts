@@ -1,3 +1,5 @@
+import { refuseHosted } from "./lab/hosted-guard.mjs";
+refuseHosted("test-portal-application-access"); // local stack only; --allow-hosted to override (scripts/lab/hosted-guard.mjs)
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ResponsiveTable from "../src/components/ui/ResponsiveTable.tsx";

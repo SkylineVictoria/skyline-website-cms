@@ -1019,7 +1019,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   const page = read("src/components/signing/F04Wizard.tsx");
   assert.ok(["stickyFooter", "e.key !== \"Enter\"", "AUTOSAVE_PAUSE", "Saved ✓", "I agree to all of the above", "indeterminate", "We've emailed your 2 referees", "SLIT reviews", "You'll receive the agent agreement",
     "Download signed PDF", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
-  assert.ok(read("src/index.css").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"), "the success tick respects reduced motion");
+  assert.ok(read("src/index.css").replace(/\r\n/g, "\n").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"),"the success tick respects reduced motion");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

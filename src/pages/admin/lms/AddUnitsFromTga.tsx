@@ -110,7 +110,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
       return next;
     });
     // Prerequisites are read only for the units picked, and only the missing ones are shown.
-    if (on && official.get(code.toUpperCase())?.unit.hasPrerequisites !== false) lookup(code);
+    if (on) lookup(code);
   };
   const electives = (release?.electives ?? []).filter(unit => !filter.trim() || (unit.code + " " + unit.name).toLowerCase().includes(filter.trim().toLowerCase()));
   const hours = [...(release?.core ?? []), ...(release?.electives ?? [])].filter(unit => chosen.has(unit.code)).reduce((sum, unit) => sum + (unit.nominalHours ?? 0), 0)
@@ -128,10 +128,22 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     .filter(unit => { const found = lookups[unit.code.trim().toUpperCase()]; return !!found && !("error" in found) && found.prerequisiteCodes.some(item => item.toUpperCase() === code.toUpperCase()); })
     .map(unit => unit.code.trim());
   const needsAttest = (rules?.unchecked.length ?? 0) > 0;
-  // Read the prerequisites of every listed unit Training.gov.au marks as having them, so each row can name them.
+  // Read the prerequisites of every listed unit (owner, 2026-11-19: the release's "has prerequisites" flag is often missing),
+  // four at a time, so each row names them.
   useEffect(() => {
     if (!release) return;
-    [...release.core, ...release.electives].filter(unit => unit.hasPrerequisites === true).forEach(unit => lookup(unit.code));
+    let live = true;
+    const queue = [...release.electives, ...release.core].map(unit => unit.code.toUpperCase()).filter(code => lookups[code] === undefined);
+    setLookups(all => ({ ...all, ...Object.fromEntries(queue.map(code => [code, null])) }));
+    const worker = async () => {
+      while (live && queue.length) {
+        const key = queue.shift()!;
+        try { const data = await call<UnitLookup>({ action: "unit_lookup", code: key }); if (live) setLookups(all => ({ ...all, [key]: data })); }
+        catch (e) { if (live) setLookups(all => ({ ...all, [key]: { error: e instanceof Error ? e.message : "Could not read the unit." } })); }
+      }
+    };
+    void Promise.all([worker(), worker(), worker(), worker()]);
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per release
   }, [release]);
   // A picked unit brings its prerequisites with it: those in this qualification are ticked automatically.
@@ -156,7 +168,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
 
   // Electives picked automatically so every packaging rule is met (owner, 2026-11-19): in the course wizard it runs by itself
   // once the prerequisites are read; "Pick electives for me" runs it any time. Staff can still change any tick.
-  const prereqsRead = !!release && [...release.core, ...release.electives].every(unit => unit.hasPrerequisites !== true || (lookups[unit.code.toUpperCase()] !== undefined && lookups[unit.code.toUpperCase()] !== null));
+  const prereqsRead = !!release && [...release.core, ...release.electives].every(unit => lookups[unit.code.toUpperCase()] !== undefined && lookups[unit.code.toUpperCase()] !== null);
   function pickForMe(auto = false) {
     if (!release || !rules) return;
     const current: ElectiveUnit[] = [];
@@ -171,7 +183,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     const candidates = release.electives.map(unit => {
       const found = lookups[unit.code.toUpperCase()];
       // A unit whose prerequisites could not be read is only picked when nothing else fits (its needs are unknown).
-      const prerequisites = unit.hasPrerequisites !== true ? [] : found && !("error" in found) ? found.prerequisiteCodes : ["?"];
+      const prerequisites = found && !("error" in found) ? found.prerequisiteCodes : unit.hasPrerequisites === true ? ["?"] : [];
       return { code: unit.code, groups: unit.groups, prerequisites };
     });
     const picks = autoPickElectives(rules, candidates, current, selected, streamName || undefined);
@@ -264,12 +276,10 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     return m ? m[1].trim() : "";
   };
   const prereqLine = (unit: TgaUnit) => {
-    if (unit.hasPrerequisites === false) return null;
     const found = lookups[unit.code.toUpperCase()];
-    if (found === undefined) return unit.hasPrerequisites ? <span className="block text-xs text-amber-800">Has prerequisites</span> : null;
-    if (found === null) return <span className="block text-xs text-foreground-500">Reading prerequisites…</span>;
-    if ("error" in found) return <span className="block text-xs text-amber-800">Has prerequisites (could not read them)</span>;
-    if (!found.prerequisiteCodes.length) return null;
+    if (found === undefined || found === null) return <span className="block text-xs text-foreground-500">Reading prerequisites…</span>;
+    if ("error" in found) return <span className="block text-xs text-amber-800">{unit.hasPrerequisites ? "Has prerequisites (could not read them)" : "Prerequisites could not be read"}</span>;
+    if (!found.prerequisiteCodes.length) return <span className="block text-xs text-foreground-500">No prerequisites</span>;
     return <span className="mt-0.5 block text-xs text-amber-900"><i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {found.prerequisiteCodes.map((code, i) =>
       <span key={code}>{i ? "; " : ""}<b>{code}</b>{prereqName(code, found.prerequisites) ? ` ${prereqName(code, found.prerequisites)}` : ""}{selected(code) ? " ✓" : ""}</span>)}</span>;
   };
@@ -349,7 +359,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
             return <li key={unit.code} className="flex flex-wrap items-start gap-2 px-1 py-2 text-sm">
               <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
                 <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "", unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : ""].filter(Boolean).join(" · ")}</span>
-                {prereqLine(unit) ?? <span className="block text-xs text-foreground-500">No prerequisites</span>}</span>
+                {prereqLine(unit)}</span>
               <span className="flex shrink-0 items-center gap-1">
                 {options.length ? <select aria-label={`Change ${unit.code}`} value="" disabled={busy} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-xs"
                   onChange={e => {
@@ -385,8 +395,11 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
       </section>
 
       <details>
-        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Core units ({release.core.length}, all required)</summary>
-        <div className="mt-2 rounded-lg border border-background-200 p-1">{release.core.map(row)}</div>
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground-500">Core units ({release.core.length}, all required: added automatically)</summary>
+        <ul className="mt-2 divide-y divide-background-200 rounded-lg border border-background-200">{release.core.map(unit => <li key={unit.code} className="px-3 py-1.5 text-sm">
+          <span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
+          <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "", onCourseNow(unit.code) ? "Required · on the course" : "Required · added with the units"].filter(Boolean).join(" · ")}</span>
+          {prereqLine(unit)}</li>)}</ul>
       </details>
 
       <details open={imported.length > 0 || !!manual}>

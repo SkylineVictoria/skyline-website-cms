@@ -1,5 +1,5 @@
 import type { SigningView } from "@/lib/signingApi";
-import { abrYearFounded, acnDigits, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
+import { abrYearFounded, acnDigits, acnFromAbn, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { composeRegistrationNumber, composeSuburb, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 
 /*
@@ -122,7 +122,8 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   for (const key of ["contact_phone", "ref1_phone", "ref2_phone"]) { const e164 = phoneE164(answers[key]); if (e164) answers[key] = e164; }
   // The registration box is composed from the ACN and the MARN; a value typed there earlier is not shown again. Fax is no longer asked.
   delete answers.agent_registration_number;
-  const acn = acnDigits(prefill?.agent_acn || facts?.acn || "");
+  // No ACN from the register: a company's ACN is the last nine digits of its ABN (check digit verified).
+  const acn = acnDigits(prefill?.agent_acn || facts?.acn || acnFromAbn(facts?.abn || answers.agent_abn, facts?.entityType));
   const base: F04Draft = { answers, acn: /^\d{9}$/.test(acn) ? acn : "", marn: "", declarations: {}, step: 0 };
   const merged: F04Draft = !draft ? base : {
     answers: { ...answers, ...Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k, v]) => String(v ?? "").trim() || blank(k))) },

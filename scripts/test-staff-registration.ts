@@ -876,6 +876,8 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   assert.deepEqual([at("agent_website"), at("office_street_address"), at("office_suburb"), at("contact_title")], ["https://purva.example", "1 Test St", "Altona North 3029", "Mr"], "website, address, suburb (with the postcode) and title from the business record");
   assert.deepEqual([at("contact_email"), at("contact_phone"), at("agent_legal_entity"), at("office_province")], ["kept@example.test", "+61938938943", "PURVA TECH PTY LTD", "3029"], "values already there are never overwritten by the open");
   assert.equal(fetches, 0, "the cached register answer is used: no new lookup");
+  // Follow-up (2026-11-18): the open also writes the ACN (digits) into the request's stored values and fixes their office row.
+  assert.deepEqual(rpcs.find(([name]) => name === "agency_onboarding_record_fill")?.[1], { p_request: "50000000-0000-4000-8000-000000000001", p_values: { agent_acn: "603584676" } });
   assert.ok(!rpcs.some(([name]) => name === "abr_business_cache_put"), "a cache hit is not written again");
   // Nothing blank: no fill. A cache miss: the register is asked once and the answer cached.
   rpcs.length = 0;
@@ -1020,6 +1022,28 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.ok(["stickyFooter", "e.key !== \"Enter\"", "AUTOSAVE_PAUSE", "Saved ✓", "I agree to all of the above", "indeterminate", "We've emailed your 2 referees", "SLIT reviews", "You'll receive the agent agreement",
     "Download signed PDF", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
   assert.ok(read("src/index.css").replace(/\r\n/g, "\n").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"),"the success tick respects reduced motion");
+});
+
+test("F04 follow-ups (2026-11-18): a company's ACN from its ABN when the register gives none (send, open, page), check digit verified; a postcode kept as the Province leaves the stored values of unsigned F04s", async () => {
+  const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  assert.deepEqual([abrLib.acnValid("603584676"), abrLib.acnValid("004 028 077"), abrLib.acnValid("123456789"), abrLib.acnValid("60358467")], [true, true, false, false], "ASIC's ACN check digit");
+  assert.equal(abrLib.acnFromAbn("86 603 584 676", "Australian Private Company"), "603584676", "PURVA TECH: the last nine digits of a company's ABN");
+  assert.equal(abrLib.acnFromAbn("49004028077", "Australian Public Company"), "004028077");
+  assert.equal(abrLib.acnFromAbn("86603584676", "Individual/Sole Trader"), "", "not a company: no ACN");
+  assert.equal(abrLib.acnFromAbn("12345678901", "Australian Private Company"), "", "nine digits that fail the check digit are not an ACN");
+  // Send: the register's details without an ACN.
+  const purva = { abn: "86603584676", acn: "", abnStatus: "Active", active: true, statusFrom: "2015-01-07", entityName: "PURVA TECH PTY LTD", entityType: "Australian Private Company",
+    businessNames: [] as string[], gstRegistered: true, gstFrom: "2015-01-07", state: "VIC", postcode: "3029", sourceUrl: "" };
+  assert.equal(abrLib.abrApplicationValues({ details: purva, confirmed: null, contact: { givenName: "", familyName: "", email: "", phone: "" } }).agent_acn, "603 584 676", "send: derived and printed");
+  // Open: the profile's facts without an ACN.
+  assert.equal(signingCore.f04Prefill({ details: null, confirmed: null, record: {}, facts: { ...abrLib.abrFacts(purva, "2026-11-18T08:47:08Z") } }).agent_acn, "603 584 676", "open: derived from the facts");
+  // Page: no prefill, facts without an ACN.
+  const page = logic.initialF04([] as unknown as Parameters<typeof logic.initialF04>[0], { ...abrLib.abrFacts(purva, "2026-11-18T08:47:08Z") }, null, null);
+  assert.equal(page.acn, "603584676", "page fallback");
+  const sql = read("supabase/migrations/20261119184213_f04_acn_province.sql");
+  assert.ok(["create or replace function public.acn_from_abn", "agency_onboarding_record_fill", "agency_onboarding_office_fix", "v := v - 'office_province'", "update hr.sign_fields f set value = null",
+    "r.state in ('sent', 'viewed', 'email_failed')", "grant execute on function public.agency_onboarding_record_fill(uuid, jsonb) to service_role"].every((s) => sql.includes(s)), "the migration fills the ACN and clears a Province postcode on unsigned F04s only");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

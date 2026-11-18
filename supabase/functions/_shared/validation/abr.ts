@@ -119,7 +119,7 @@ export function abrApplicationValues(input: {
   const abn = d?.abn ?? "";
   // Round 3: no postcode alone in the Suburb box (the suburb itself is the contact's; f04Prefill joins the postcode to a named suburb).
   const values: Record<string, string> = {
-    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : "",
+    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : d ? printAcn(acnFromAbn(d.abn, d.entityType)) : "",
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
     // No postcode box on the F04: the postcode is printed in the Suburb box (never Province); the suburb itself is the contact's.
     office_state: str(c?.state) || d?.state || "", office_country: "Australia",
@@ -149,6 +149,23 @@ export const YEAR_BEFORE_ABN_HINT = "Business may be older than its ABN; edit if
 
 /** "603 584 676" / "603-584-676" -> "603584676": the ACN as stored and checked (other characters left for the check to refuse). */
 export const acnDigits = (acn: string | null | undefined) => String(acn ?? "").replace(/[\s-]/g, "");
+/** ASIC's ACN check digit: weights 8..1 on the first eight digits; the ninth is (10 - sum mod 10) mod 10. */
+export function acnValid(acn: string | null | undefined): boolean {
+  const d = String(acn ?? "").replace(/\D/g, "");
+  if (d.length !== 9) return false;
+  const sum = [...d.slice(0, 8)].reduce((t, c, i) => t + Number(c) * (8 - i), 0);
+  return (10 - (sum % 10)) % 10 === Number(d[8]);
+}
+/**
+ * A company's ACN from its ABN (follow-up 2026-11-18): an ABN issued to a company is two check digits then the ACN, so when the register
+ * gives no ACN the last nine digits are used, only for an entity type that is a company and only when they pass the ACN check digit.
+ */
+export function acnFromAbn(abn: string | null | undefined, entityType: string | null | undefined): string {
+  const digits = String(abn ?? "").replace(/\D/g, "");
+  if (digits.length !== 11 || !/company/i.test(String(entityType ?? ""))) return "";
+  const acn = digits.slice(2);
+  return acnValid(acn) ? acn : "";
+}
 /** "603 584 676": an ACN in its printed groups (other text unchanged). */
 export const printAcn = (acn: string) => { const d = String(acn ?? "").replace(/\D/g, ""); return d.length === 9 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : String(acn ?? "").trim(); };
 

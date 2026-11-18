@@ -429,6 +429,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const acn = computed.agent_acn ?? ((facts as { acn?: string } | null)?.acn ?? "");
           const prefill: Record<string, string> = Object.fromEntries(F04_OPEN_PREFILL_KEYS.filter((k) => computed[k]).map((k) => [k, computed[k]]));
           if (acn) prefill.agent_acn = acn;
+          // Follow-up (2026-11-18): the request's stored values (field_values) get the ACN when they have none, and lose a postcode kept as
+          // the Province; nothing else in them changes (agency_onboarding_record_fill, unsigned F04s only).
+          await ports.serviceRpc("agency_onboarding_record_fill", { p_request: record.id, p_values: acn ? { agent_acn: acnDigits(acn) } : {} }).catch(() => undefined);
           application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill, filled: Object.keys(fill), attachments: wizard?.attachments ?? {} };
         } catch { application = { draft: null, facts: null, savedAt: null, prefill: {}, filled: [], attachments: {} }; }
       }

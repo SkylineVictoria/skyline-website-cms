@@ -86,7 +86,7 @@ export default function LmsCoursesPage() {
   const [syncNote, setSyncNote] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   // New course wizard: 1 course (Add course / Sync), 2 units in the Add units popup (packaging rules met), 3 its first intake,
-  // then on the intake: 4 a batch, 5 students (optional).
+  // then on the intake: 4 a batch. Students are added only through the enrolment wizard.
   const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "intake" } | null>(null);
   const navigate = useNavigate();
 
@@ -215,12 +215,12 @@ export default function LmsCoursesPage() {
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />
     {wizard?.step === "units" && canEdit && selected?.id === wizard.courseId && detail?.course.id === wizard.courseId
-      ? <AddUnitsFromTga course={selected} units={detail.units} stepLabel="Step 2 of 5 · Units"
+      ? <AddUnitsFromTga course={selected} units={detail.units} stepLabel="Step 2 of 4 · Units"
         // The course reloads when the popup closes: reloading earlier would close it before its result and next step show.
         onClose={() => { setWizard(null); setReloadKey(k => k + 1); }} onDone={() => undefined}
         nextStep={detail.intakes.length ? undefined : { label: "Next: create first intake", onClick: () => { setWizard({ courseId: wizard.courseId, step: "intake" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Step 3 of 5 · First intake"
+      allowBatch={false} requireUnitSchedule title="Step 3 of 4 · First intake"
       onClose={() => setWizard(null)}
       onCreated={d => { setWizard(null); navigate(`/admin/lms/intakes?wizard=1#${d.intake.id}`); }} /> : null}
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}

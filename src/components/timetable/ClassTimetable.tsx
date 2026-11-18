@@ -3,7 +3,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import TrainerAttendanceDialog from "@/components/timetable/TrainerAttendanceDialog";
 
 type Session = { id: string; date: string; start: string; end: string; type: string; status: string; batchName: string; courseName: string; courseCode: string;
-  unitCode: string | null; unitName: string | null; room: string | null; campus: string | null; trainers: string };
+  unitCode: string | null; unitName: string | null; room: string | null; campus: string | null; trainers: string; prerequisite?: boolean };
 
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const monday = (d: Date) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
@@ -20,9 +20,13 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
   useEffect(() => {
     let live = true;
     setRows(null); setError("");
-    supabase.rpc("my_class_schedule", { p_from: iso(start), p_to: iso(addDays(start, 6)) }).then(({ data, error: e }) => {
+    const range = { p_from: iso(start), p_to: iso(addDays(start, 6)) };
+    // Regular classes plus the Prerequisite class (a late joiner's prerequisite units; my_prereq_classes, ignored if not available).
+    Promise.all([supabase.rpc("my_class_schedule", range), supabase.rpc("my_prereq_classes", range)]).then(([main, pre]) => {
       if (!live) return;
-      if (e) setError(e.message); else setRows(((data as { sessions?: Session[] } | null)?.sessions ?? []));
+      if (main.error) { setError(main.error.message); return; }
+      const all = [...((main.data as { sessions?: Session[] } | null)?.sessions ?? []), ...(pre.error ? [] : ((pre.data as Session[] | null) ?? []))];
+      setRows(all.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)));
     });
     return () => { live = false; };
   }, [start]);

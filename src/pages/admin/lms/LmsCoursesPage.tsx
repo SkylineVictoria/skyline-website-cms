@@ -12,12 +12,13 @@ import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
 import MasterTimetableTab from "./MasterTimetableTab";
+import PrerequisiteClassTab from "./PrerequisiteClassTab";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
-type Tab = "overview" | "units" | "master";
+type Tab = "overview" | "units" | "master" | "prereq";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
 const icon = (name: string) => <i className={name + " text-xl text-primary-600"} aria-hidden="true" />;
 
@@ -217,7 +218,7 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "Master timetable" }] as const;
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "Master timetable" }, { id: "prereq", label: "Prerequisite class" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
@@ -364,6 +365,7 @@ export default function LmsCoursesPage() {
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
+              {tab === "prereq" && selectedId ? <PrerequisiteClassTab key={selectedId + ":" + reloadKey} courseId={selectedId} canEdit={canEdit} /> : null}
             </div>
           </>}
         </>}

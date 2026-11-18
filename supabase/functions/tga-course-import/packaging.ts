@@ -146,6 +146,79 @@ export function checkElectives(rules: ElectiveRules, electives: ElectiveUnit[]):
   return { ok, complete: ok && lines.every(line => line.state === "met"), lines };
 }
 
+/** One elective the automatic picker may choose: its groups and the units it needs first (codes). */
+export interface PickCandidate { code: string; groups: string[]; prerequisites: string[] }
+
+/** Picks electives so the course meets every packaging rule it can read (group minimums first, then the total), never
+ *  breaking a maximum. A unit comes with its prerequisites that are electives of this qualification; units that need
+ *  nothing (or only units already on the course) are preferred, then fewer extras, then the listed order. `current` are the
+ *  electives already on the course or picked; `isSelected` tells whether a code (core or elective) is already there.
+ *  Returns the codes to add, or null when the rules cannot be met from the listed electives. */
+export function autoPickElectives(rules: ElectiveRules, candidates: PickCandidate[], current: ElectiveUnit[],
+  isSelected: (code: string) => boolean): string[] | null {
+  const byCode = new Map(candidates.map(item => [item.code.toUpperCase(), item]));
+  const picked = new Map<string, PickCandidate>();
+  const taken = (code: string) => isSelected(code) || picked.has(code.toUpperCase());
+  const groupCount = (groups: string[]) => current.filter(unit => unit.groups?.some(group => groups.includes(group))).length
+    + [...picked.values()].filter(unit => unit.groups.some(group => groups.includes(group))).length;
+  const total = () => current.length + picked.size;
+  // The unit plus the electives it needs first (recursively); null when it needs a unit that is neither listed nor there.
+  const bundle = (start: PickCandidate): PickCandidate[] | null => {
+    const out: PickCandidate[] = []; const seen = new Set<string>();
+    const walk = (unit: PickCandidate): boolean => {
+      const key = unit.code.toUpperCase();
+      if (seen.has(key) || taken(key)) return true;
+      seen.add(key);
+      for (const need of unit.prerequisites) {
+        if (taken(need)) continue;
+        const listed = byCode.get(need.toUpperCase());
+        if (!listed || !walk(listed)) return false;
+      }
+      out.push(unit);
+      return true;
+    };
+    return walk(start) ? out : null;
+  };
+  const fits = (units: PickCandidate[]) => {
+    if (rules.required !== null && total() + units.length > rules.required) return false;
+    for (const rule of rules.groupMax) {
+      const extra = units.filter(unit => unit.groups.some(group => rule.groups.includes(group))).length;
+      if (extra && groupCount(rule.groups) + extra > rule.count) return false;
+    }
+    return true;
+  };
+  // Room the group minimums still need, so the total is not filled before they are met.
+  const minNeeded = () => rules.groupMin.reduce((sum, rule) => sum + Math.max(0, rule.count - groupCount(rule.groups)), 0);
+  const best = (want: (unit: PickCandidate) => boolean) => {
+    let choice: PickCandidate[] | null = null;
+    for (const unit of candidates) {
+      if (taken(unit.code) || !want(unit)) continue;
+      const units = bundle(unit);
+      if (!units || !fits(units)) continue;
+      if (!choice || units.length < choice.length) choice = units;
+      if (choice.length === 1) break;
+    }
+    return choice;
+  };
+  for (const rule of rules.groupMin) {
+    while (groupCount(rule.groups) < rule.count) {
+      const units = best(unit => unit.groups.some(group => rule.groups.includes(group)));
+      if (!units) return null;
+      units.forEach(unit => picked.set(unit.code.toUpperCase(), unit));
+    }
+  }
+  if (rules.required !== null) {
+    while (total() < rules.required) {
+      const room = rules.required - total() - minNeeded();
+      const units = best(() => true);
+      if (!units || units.length > Math.max(room, 0) + minNeeded()) return null;
+      units.forEach(unit => picked.set(unit.code.toUpperCase(), unit));
+    }
+  }
+  const check = checkElectives(rules, [...current, ...[...picked.values()].map(unit => ({ code: unit.code, groups: unit.groups }))]);
+  return check.complete ? [...picked.values()].map(unit => unit.code) : null;
+}
+
 /** Unit codes named in a prerequisite text ("BSBWHS411 Implement …", "Nil" → none). */
 export function prerequisiteCodes(text: string | null | undefined, self = ""): string[] {
   const found = (text ?? "").toUpperCase().match(/\b[A-Z]{3,}[A-Z0-9]*\d{3}[A-Z]?\b/g) ?? [];

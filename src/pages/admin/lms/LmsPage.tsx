@@ -6,7 +6,7 @@ import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
-import LmsTimetablePage from "./LmsTimetablePage";
+import LmsTimetableHub from "./timetable/LmsTimetableHub";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
 import LmsTimetableTemplatesPage from "./LmsTimetableTemplatesPage";
@@ -30,7 +30,7 @@ export default function LmsPage() {
   // Batch Allocation is now part of Batches (one screen).
   if (area === "batch-allocation") return <Navigate to="/admin/lms/batches" replace />;
   if (area === "unit-delivery") return <Navigate to="/admin/lms/batches" replace />;
-  if (area === "timetable") return <LmsTimetablePage />;
+  if (area === "timetable") return <LmsTimetableHub />;
   if (area === "term-breaks") return <LmsTermBreaksPage />;
   if (area === "locations") return <LmsLocationsPage />;
   if (area === "timetable-templates") return <LmsTimetableTemplatesPage />;

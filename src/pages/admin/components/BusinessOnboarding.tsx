@@ -11,13 +11,11 @@ const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
  * The business's agent agreement: upload a signed copy, or send it to the business admin agent through Skyline Sign.
  * While the business is inactive it is shown as the onboarding checklist, ending with Activate & invite.
  */
-export default function BusinessOnboarding({ business, onChanged, onActivate, activating, startSignal = 0 }: {
+export default function BusinessOnboarding({ business, onChanged, onActivate, activating }: {
   business: BusinessDetail;
   onChanged: () => Promise<void>;
   onActivate?: () => void;
   activating?: boolean;
-  /** Counts up when the page's "Start onboarding" is pressed: the panel opens its dialog. */
-  startSignal?: number;
 }) {
   const { push } = useToast();
   const [docs, setDocs] = useState<BusinessDocument[] | null>(null);
@@ -78,7 +76,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
         </Card>
       ) : null}
 
-      <AgentOnboardingPanel business={business} onChanged={onChanged} startSignal={startSignal} />
+      <AgentOnboardingPanel business={business} onChanged={onChanged} />
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">

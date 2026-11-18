@@ -7,7 +7,7 @@ type Area = { count: number; items: Item[] };
 type Today = Record<string, Area>;
 
 const AREAS: { key: string; label: string; icon: string; to: string; tone: string; empty: string }[] = [
-  { key: "references", label: "Agent references to review", icon: "ri-shield-check-line", to: "/admin/businesses?status=Onboarding", tone: "text-amber-700 bg-amber-50", empty: "No references waiting for a decision." },
+  { key: "references", label: "Agent applications to review", icon: "ri-shield-check-line", to: "/admin/businesses?status=Onboarding", tone: "text-amber-700 bg-amber-50", empty: "No agent application is ready for review." },
   { key: "applications", label: "Applications to review", icon: "ri-file-list-3-line", to: "/admin/applications", tone: "text-primary-700 bg-primary-50", empty: "No applications waiting." },
   { key: "documents", label: "Documents to check", icon: "ri-file-search-line", to: "/admin/applications", tone: "text-primary-700 bg-primary-50", empty: "No documents waiting." },
   { key: "unsignedOffers", label: "Offers not signed (3+ days)", icon: "ri-quill-pen-line", to: "/admin/applications", tone: "text-amber-700 bg-amber-50", empty: "No offers waiting on students." },

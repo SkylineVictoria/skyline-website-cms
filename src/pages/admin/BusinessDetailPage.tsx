@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ACTIVE_STAGES, STAGE_LABEL, type OnboardingStage } from "@/pages/admin/lib/agentOnboarding";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
-import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
+import { AgencyStatusBadge, ApplicationStatusPills, OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import StudentsTable from "@/pages/admin/components/StudentsTable";
 import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
@@ -32,8 +32,6 @@ export default function BusinessDetailPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  // Summary strip "Start onboarding": opens the onboarding panel's dialog (each press counts up).
-  const [startSignal, setStartSignal] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,6 +93,8 @@ export default function BusinessDetailPage() {
   const operational = business.operational ?? business.status === "Active";
   const stage = (business.onboarding?.stage ?? null) as OnboardingStage | null;
   const onboardingRunning = !!stage && ACTIVE_STAGES.includes(stage);
+  // 2026-11-18: approved businesses are Active before the agent agreement is signed (effective status Onboarding): the panel stays until then.
+  const onboardingOpen = business.status !== "Active" || business.effectiveStatus === "Onboarding";
   const onboardingWords = operational ? "No active business admin agent yet."
     : business.onboarding?.readyToActivate ? "Agreement signed: ready to activate."
     : onboardingRunning ? `Onboarding: ${STAGE_LABEL[stage!] ?? stage}.`
@@ -117,6 +117,7 @@ export default function BusinessDetailPage() {
         actions={
           <>
             {business.onboarding?.readyToActivate ? <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-200" data-testid="ready-to-activate">Ready to activate</span>
+              : business.onboarding?.label && onboardingOpen ? <OnboardingStatusPill label={business.onboarding.label} />
               : <AgencyStatusBadge status={business.effectiveStatus ?? business.status} />}
             {business.status === "Active" && business.operational === false && business.gateReason ? <span className="text-xs font-medium text-amber-700" data-testid="business-gate-reason">{business.gateReason}</span> : null}
             <MessagePersonButton kind="agency" refId={agency.id} name={business.name} />
@@ -128,14 +129,13 @@ export default function BusinessDetailPage() {
         }
       />
 
-      {business.status !== "Active" ? (
-        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} startSignal={startSignal} />
+      {onboardingOpen ? (
+        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} />
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
         <Summary label="Agents" value={people} note={`${c.admins} business admin agent${c.admins === 1 ? "" : "s"}, ${c.agents} other agent${c.agents === 1 ? "" : "s"}${c.inactiveAgents ? `, ${c.inactiveAgents} inactive` : ""}`}
           warnText={c.admins === 0 ? onboardingWords : undefined}
-          action={c.admins === 0 && !operational && !onboardingRunning && !business.onboarding?.readyToActivate ? <Button size="sm" icon="ri-quill-pen-line" onClick={() => { setParams({}); setStartSignal((n) => n + 1); }} data-testid="summary-start-onboarding">{stage ? "Start again" : "Send application form"}</Button> : undefined}
           onClick={() => setParams({ tab: "agents" })} />
         <Summary label="Students" value={c.students} onClick={() => setParams({ tab: "students" })} />
         <div className="bg-background-50 px-4 py-3">

@@ -119,7 +119,9 @@ export interface SigningView {
   /** F04 wizard (2026-11-19): the saved draft ("Save and continue later") and the register's facts for the Company summary. */
   application?: { draft: unknown; facts: unknown; savedAt: string | null;
     /** 2026-11-19: values with no box of their own (agent_acn), the keys the open filled, the wizard uploads (organisation chart, business profile). */
-    prefill?: Record<string, string>; filled?: string[]; attachments?: Record<string, { name: string; size: number; at: string }> } | null;
+    prefill?: Record<string, string>; filled?: string[]; attachments?: Record<string, { name: string; size: number; at: string }>;
+    /** 2026-11-18: a correction request from SLIT (only the flagged answers can change; the message shows at the top). */
+    correction?: { round: number; message: string | null; flags: Record<string, string> } | null } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
   // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
   fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;
@@ -265,6 +267,16 @@ export const lookupAbnDetails = (abn: string) => signingAction<AbnLookupResult>(
 /** Activate (administrator): the business, its point of contact and every agent added meanwhile become active; one set-password email each. */
 export interface BusinessActivateResult { businessId: string; name: string; contact: { id: string; name: string; email: string }; heldReleased: number; emailed: string[]; failed: string[]; skipped: Array<{ email: string; reason: string }> }
 export const activateBusinessOnboarding = (businessId: string) => signingAction<BusinessActivateResult>({ action: "agent_onboarding_business_activate", businessId });
+/**
+ * Staff review of a signed F04 (2026-11-18): save edits (audited per field; a new PDF revision "edited by SLIT staff"), send it back to the
+ * agency admin with the flagged fields, or approve: the business goes active and the agent agreement is sent (as Send agreement).
+ */
+export const saveApplicationReview = (onboardingId: string, changes: Record<string, string>) =>
+  signingAction<{ changed: number; changes: Array<{ field: string; old: string; new: string }>; revision?: { id: string; revision: number } | null; warning?: string }>({ action: "agent_onboarding_review_save", onboardingId, changes });
+export const sendApplicationBack = (input: { onboardingId: string; flags: Record<string, string>; message?: string }) =>
+  onboardingAction<AgentOnboardingSendResult & { round?: number; to?: string; flagged?: number }>({ action: "agent_onboarding_correction_send", ...input });
+export const approveAgency = (input: AgentAgreementSendInput) =>
+  onboardingAction<{ approved: boolean; agencyStatus: string; agreement: AgentOnboardingSendResult | null; warning?: string }>({ action: "agent_onboarding_approve", ...input });
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

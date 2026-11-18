@@ -47,12 +47,15 @@ export const REFEREE_SIGNER_ROLE = { key: "referee", label: "Referee", order: 1,
 export const signerRole = (doc: OnboardingDoc) => doc === "referee" ? REFEREE_SIGNER_ROLE : ONBOARDING_SIGNER_ROLE;
 /** The onboarding runs in stages (2026-11-17): the form, then a referee check per reference, then the agreement. */
 export const ONBOARDING_STAGES = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent", "agreement_signed"] as const;
-export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired" | "declined" | "activated";
+export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired" | "declined" | "activated" | "correction_requested" | "resubmitted";
 export const STAGE_LABEL: Record<OnboardingStage, string> = {
   legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
   references_received: "References received: review", references_approved: "References approved", agreement_sent: "Agreement sent", agreement_signed: "Agreement signed",
   cancelled: "Cancelled", expired: "Expired", declined: "Declined", activated: "Business activated",
+  correction_requested: "Correction requested", resubmitted: "Resubmitted",
 };
+/** The business status in words (2026-11-18), as agency_onboarding_label gives it. */
+export const BUSINESS_STATUS_FLOW = ["Application sent", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", "Active"] as const;
 
 const auto = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", ...extra });
 const autoOrAgent = (doc: OnboardingDoc, label: string, extra: Partial<OnboardingField> = {}): OnboardingField => ({ doc, label, type: "text", role: "sender", source: "auto", autoOrAgent: true, ...extra });
@@ -376,3 +379,15 @@ export function collectAnswers(fields: Array<{ key?: string | null; type: string
   }
   return answers;
 }
+
+/*
+ * Corrections (2026-11-18): staff flag answers of a signed F04 (key -> note) and send it back to the agency admin. A flag is an answer key
+ * (agent_trading_name, ref1_email, a Yes / No question's key), "acn" / "marn", or "office_address" for the whole office address. Only flagged
+ * answers can change in the correction; the declaration (name, role) is given again with the new signature.
+ */
+export function correctionFlagged(key: string, flags: Record<string, unknown> | null | undefined): boolean {
+  if (!flags) return false;
+  if (Object.prototype.hasOwnProperty.call(flags, key)) return true;
+  return /^office_/.test(key) && Object.prototype.hasOwnProperty.call(flags, "office_address");
+}
+export const CORRECTION_ALWAYS_EDITABLE = ["declarant_name", "declarant_role"] as const;

@@ -3,8 +3,10 @@ import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
-import { ACTIVE_STAGES, approveReferences, EVENT_LABEL, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
+import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
+import F04ReviewDialog from "@/pages/admin/components/F04ReviewDialog";
+import { OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
+import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
@@ -15,12 +17,11 @@ import { abrFactLines, type AbrFacts } from "../../../../supabase/functions/_sha
  * to each referee it names; at References received (or earlier with a typed reason) the agreement (P06). Each document's status and
  * signed copy, each referee's request (reminder, change of email, a signed form received by email), the override and the history.
  */
-export default function AgentOnboardingPanel({ business, onChanged, startSignal = 0 }: { business: BusinessDetail; onChanged: () => Promise<void>; startSignal?: number }) {
+export default function AgentOnboardingPanel({ business, onChanged }: { business: BusinessDetail; onChanged: () => Promise<void> }) {
   const { push } = useToast();
   const [rows, setRows] = useState<OnboardingRow[] | null>(null);
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"application" | "agreement" | "review" | null>(null);
-  useEffect(() => { if (startSignal) setDialog("application"); }, [startSignal]);
+  const [dialog, setDialog] = useState<"agreement" | "approve" | "review" | "decline" | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [changing, setChanging] = useState<OnboardingReferee | null>(null);
@@ -44,10 +45,19 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
   const received = latest ? latest.referees.filter((r) => r.status === "received").length : 0;
   const agreement = business.agreement ?? { status: "none" as const, commencementDate: null, expiryDate: null, onboardingId: null };
   const badge = business.onboarding?.readyToActivate ? <Badge tone="success">Ready to activate</Badge>
+    : latest?.label ? <OnboardingStatusPill label={latest.label} />
     : agreement.status === "signed" && !business.agreement?.expired ? <Badge tone="success">Agreement signed</Badge>
     : agreement.status === "signed" ? <Badge tone="warn">Agreement expired</Badge>
-    : current ? <Badge tone="warn">{stageWords(current.stage, received, current.referees.length)}</Badge>
-    : latest?.stage === "declined" ? <Badge tone="warn">Declined</Badge> : <Badge tone="muted">Not started</Badge>;
+    : <Badge tone="muted">Not started</Badge>;
+  // Resend link (2026-11-18): the application form goes by itself when the business is added; this re-sends the open link (the form or a
+  // correction), or sends a fresh form to the point of contact when there is no onboarding in progress (a failed first send, a closed one).
+  const openForm = current && openRequest(current.application) ? current.application : null;
+  const resendLink = () => act("resend-link", async () => {
+    if (openForm?.recipientId) { await signingAction({ action: "resend", id: openForm.id, recipientId: openForm.recipientId }); return `Link sent again to ${current!.agent.email}.`; }
+    const r = await sendAgentApplication({ agencyId: business.id });
+    return r.sent ? `Application form sent to ${r.agent?.email ?? "the point of contact"} (${r.reference}).` : r.warning ?? "The form was created but not emailed.";
+  });
+  const statusLine = current ? statusWords(current) : latest ? `${STAGE_LABEL_SHORT[latest.stage] ?? latest.stage}${latest.closedReason ? ` (${latest.closedReason})` : ""}.` : "No application form has been sent yet.";
   const profile = PROFILE_LABELS.filter(([key]) => (business.profile ?? {})[key]);
   // The register's facts kept when the application form was sent (or first opened): read-only.
   const abrFacts = abrFactLines(((business.profile ?? {}) as Record<string, unknown>).abr_facts as Partial<AbrFacts> | null);
@@ -55,25 +65,26 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
     <Card className="p-5" data-testid="agent-onboarding-panel">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding documents</h2>
-          <p className="text-sm text-foreground-600">Once per business, with its point of contact: the application form is emailed when the business is added; when it is signed, a referee check goes to each referee named on it; after staff approve the references the agreement follows; once it is signed an administrator activates the business. Agents added to the business never receive these documents.</p>
+          <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding</h2>
+          <p className="text-sm text-foreground-600">Automatic, once per business with its agency admin: the application form goes out when the business is added; once it is signed, both referees get a referee check; when both have replied you review the application (edit, send back for correction, or approve). Approving activates the business and sends the agent agreement; sign-in emails go out when it is signed.</p>
+          <p className="mt-1 text-sm font-medium text-foreground-900" data-testid="onboarding-status-line">{statusLine}</p>
           {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (two years, Item 5).</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {badge}
-          {!current ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={() => setDialog("application")} data-testid="start-onboarding">{rows?.length ? "Start again" : "Send application form"}</Button> : null}
+          {rows && (openForm || !current) && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
         </div>
       </div>
       {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
       {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
-      {current ? <StagedOnboarding row={current} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => setDialog("agreement")} onReview={() => setDialog("review")}
+      {current ? <StagedOnboarding row={current} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => setDialog("agreement")} onReview={() => setDialog("review")} onDecline={() => setDialog("decline")}
         onSendReferees={() => act("referees", async () => { const r = await sendRefereeChecks(current.id); return r.sent ? `Referee check${r.sent === 1 ? "" : "s"} sent (${r.sent}).` : "Nothing to send: every referee has a request or is received."; })}
         onChangeReferee={setChanging} onUpload={(referee, file) => act(`upload:${referee.id}`, async () => { const r = await uploadRefereeForm(referee.id, file); return `Reference ${referee.position} marked as received (${r.stage === "references_received" ? "both references are in" : "waiting for the other"}).`; })} /> : null}
       {rows && rows.filter((r) => r !== current).length ? <details className="mt-4" open={!current}>
         <summary className="cursor-pointer text-sm font-medium text-foreground-700">Earlier onboarding{rows.filter((r) => r !== current).length === 1 ? "" : "s"}</summary>
         <ul className="mt-2 divide-y divide-background-200 text-sm" data-testid="onboarding-rows">{rows.filter((r) => r !== current).map((row) => <li key={row.id} className="py-3">
           {row.stage === "legacy" ? <LegacyRow row={row} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} />
-            : <StagedOnboarding row={row} busy={busy} compact onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => undefined} onReview={() => undefined} onSendReferees={() => undefined} onChangeReferee={() => undefined} onUpload={() => undefined} />}
+            : <StagedOnboarding row={row} busy={busy} compact onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => undefined} onReview={() => undefined} onDecline={() => undefined} onSendReferees={() => undefined} onChangeReferee={() => undefined} onUpload={() => undefined} />}
         </li>)}</ul>
       </details> : null}
       {latest && latest.events.length ? <div className="mt-4">
@@ -96,20 +107,35 @@ export default function AgentOnboardingPanel({ business, onChanged, startSignal 
         <dl className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-3">{abrFacts.map((f) => <div key={f.label}><dt className="text-xs text-foreground-500">{f.label}</dt><dd className="text-foreground-900">{f.value}</dd></div>)}</dl>
       </div> : null}
     </Card> : null}
-    {dialog === "application" ? <SendApplicationDialog agencyId={business.id} agencyName={business.name} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
-    {dialog === "agreement" && current ? <SendAgreementDialog row={current} agencyId={business.id} agencyName={business.name} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
-    {dialog === "review" && current ? <ReviewReferencesDialog row={current} busy={busy} onDownload={download} onClose={() => setDialog(null)}
-      onApproved={async () => { await load(); await onChanged(); setDialog("agreement"); }}
-      onDeclined={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
+    {(dialog === "agreement" || dialog === "approve") && current ? <SendAgreementDialog row={current} agencyId={business.id} agencyName={business.name} approve={dialog === "approve"} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
+    {dialog === "review" && current ? <F04ReviewDialog onboardingId={current.id} agencyName={business.name} onClose={() => { setDialog(null); void refresh(); }}
+      onDone={async (m) => { setDialog(null); push(m); await refresh(); }} onApprove={() => setDialog("approve")} /> : null}
+    {dialog === "decline" && current ? <DeclineDialog row={current} onClose={() => setDialog(null)} onDeclined={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
     {changing ? <ChangeRefereeDialog referee={changing} onClose={() => setChanging(null)} onDone={async (m) => { setChanging(null); push(m); await refresh(); }} /> : null}
     {openId ? <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void refresh()} /> : null}
   </>;
 }
 
 const STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
-  { label: "Application form", stages: ["application_sent"] }, { label: "Referee checks", stages: ["application_signed", "references_pending"] },
-  { label: "Staff review", stages: ["references_received"] }, { label: "Agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Ready to activate", stages: ["agreement_signed"] },
+  { label: "Application sent", stages: ["application_sent"] }, { label: "Awaiting referees", stages: ["application_signed", "references_pending"] },
+  { label: "Review", stages: ["references_received", "correction_requested", "resubmitted"] }, { label: "Active: agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Signed in", stages: ["agreement_signed"] },
 ];
+const STAGE_LABEL_SHORT: Partial<Record<OnboardingStage, string>> = { declined: "Declined", cancelled: "Closed", expired: "Expired", agreement_signed: "Agreement signed", legacy: "Sent as one document" };
+/** The status line of the business page: where it is up to and what happens next. */
+function statusWords(row: OnboardingRow): string {
+  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || 2;
+  const open = row.corrections?.find((c) => c.status === "open");
+  switch (row.stage) {
+    case "application_sent": return `Application sent to ${row.agent.name} (${row.agent.email})${row.application?.sentAt ? ` on ${new Date(row.application.sentAt).toLocaleDateString()}` : ""}: waiting for them to sign.`;
+    case "application_signed": case "references_pending": return `Awaiting referees: ${received} of ${total} replied. You are asked to review once both have.`;
+    case "references_received": return "Ready for review: both referees have replied. Choose Review application.";
+    case "correction_requested": return `Correction requested${open ? ` (round ${open.round})` : ""}: waiting for ${row.agent.name} to correct and sign again.`;
+    case "resubmitted": return received < total ? `Resubmitted; a changed referee was contacted (${received} of ${total} replied).` : "Resubmitted: review the corrections.";
+    case "references_approved": return "Approved and active: the agent agreement is being prepared.";
+    case "agreement_sent": return `Active: agent agreement sent to ${row.agent.email}; sign-in emails go out when it is signed.`;
+    default: return row.label ?? row.stage;
+  }
+}
 function stepIndex(stage: OnboardingStage, steps = STEPS) { const i = steps.findIndex((s) => s.stages.includes(stage)); return i < 0 ? -1 : i; }
 /** A prefilled F04 field in words (the registry label), for the history. */
 const prefillLabel = (key: string) => (Object.entries(AGENT_ONBOARDING_FIELDS).find(([k]) => k.replace(/_(form|referee)$/, "").replace(/:.*$/, "") === key && AGENT_ONBOARDING_FIELDS[k].doc === "form")?.[1].label ?? key).replace(/: (Yes|No)$/, "");
@@ -144,16 +170,18 @@ function RequestLine({ request, who, busy, onOpen, onRemind, remindLabel = "Send
   </span>;
 }
 
-function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDownload, onSendAgreement, onReview, onSendReferees, onChangeReferee, onUpload }: {
+function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDownload, onSendAgreement, onReview, onDecline, onSendReferees, onChangeReferee, onUpload }: {
   row: OnboardingRow; busy: string; compact?: boolean; onOpen: (id: string) => void; onRemind: (r: RequestSummary, who: string) => void; onDownload: (row: OnboardingRow, kind: OnboardingFileKind, label: string) => void;
-  onSendAgreement: () => void; onReview: () => void; onSendReferees: () => void; onChangeReferee: (r: OnboardingReferee) => void; onUpload: (r: OnboardingReferee, file: File) => void;
+  onSendAgreement: () => void; onReview: () => void; onDecline: () => void; onSendReferees: () => void; onChangeReferee: (r: OnboardingReferee) => void; onUpload: (r: OnboardingReferee, file: File) => void;
 }) {
   const steps = STEPS;
   // Activated: every step is done (the stage stays agreement_signed; the activation is recorded on the row).
   const index = row.activation ? steps.length : stepIndex(row.stage, steps);
   const received = row.referees.filter((r) => r.status === "received").length;
   // The agreement goes after staff approve the references; before that only with a typed reason (override).
-  const canSend = row.stage === "references_approved", canOverride = row.stage === "application_signed" || row.stage === "references_pending" || row.stage === "references_received";
+  // 2026-11-18: the agreement goes with Approve; Send agreement remains only when the automatic send after Approve failed.
+  const canSend = row.stage === "references_approved";
+  const reviewable = !!row.applicationSignedAt && ["application_signed", "references_pending", "references_received", "correction_requested", "resubmitted"].includes(row.stage);
   const closed = row.stage === "cancelled" || row.stage === "expired" || row.stage === "declined";
   const pendingSend = row.referees.some((r) => r.status === "pending" && !r.request) && (row.stage === "application_signed" || row.stage === "references_pending");
   const dl = (kind: OnboardingFileKind, label: string) => <Button key={kind} size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:${kind}`} onClick={() => onDownload(row, kind, label)} data-testid={`download-${kind.replace(/:.*/, "")}`}>{label}</Button>;
@@ -162,20 +190,24 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       const state = closed ? "todo" : i < index ? "done" : i === index ? "current" : "todo";
       return <li key={step.label} data-step-state={state} className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${state === "done" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : state === "current" ? "border-primary-500 bg-primary-50 font-semibold text-primary-800" : "border-background-300 text-foreground-500"}`}>
         <i className={state === "done" ? "ri-checkbox-circle-fill" : state === "current" ? "ri-radio-button-line" : "ri-checkbox-blank-circle-line"} aria-hidden="true" />{step.label}</li>; })}</ol>
-    <p className="text-sm text-foreground-700"><strong>{row.activation ? "Activated" : row.stage === "agreement_signed" ? "Ready to activate" : stageWords(row.stage, received, row.referees.length, "business")}</strong> · to {row.agent.name} ({row.agent.email}) · started {new Date(row.createdAt).toLocaleDateString()}{row.adminName ? ` by ${row.adminName}` : ""}{closed && row.closedReason ? ` · ${row.closedReason}` : ""}</p>
+    <p className="text-sm text-foreground-700"><strong>{row.activation ? "Activated" : row.label ?? (row.stage === "agreement_signed" ? "Ready to activate" : stageWords(row.stage, received, row.referees.length, "business"))}</strong> · to {row.agent.name} ({row.agent.email}) · started {new Date(row.createdAt).toLocaleDateString()}{row.adminName ? ` by ${row.adminName}` : ""}{closed && row.closedReason ? ` · ${row.closedReason}` : ""}</p>
     <div className="space-y-1 rounded-lg border border-background-200 p-3">
       <p className="text-sm font-medium text-foreground-900">1. Agent Application Form (F04)</p>
-      <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend application" />
+      <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend link" />
       {row.applicationSignedAt ? <p className="text-xs text-foreground-600">Signed {new Date(row.applicationSignedAt).toLocaleDateString()} by {row.signerName ?? row.agent.name}.</p> : null}
       <div className="flex flex-wrap gap-1.5">{row.files.form ? dl("form", ONBOARDING_FILE_LABEL.form) : null}{row.files.application_certificate ? dl("application_certificate", ONBOARDING_FILE_LABEL.application_certificate) : null}</div>
       {compact ? null : <ApplicationAttachments onboardingId={row.id} />}
+      {!compact && reviewable ? <div className="flex flex-wrap gap-1.5 pt-1">
+        <Button size="sm" icon="ri-file-search-line" disabled={!!busy} onClick={onReview} data-testid="review-application">Review application</Button>
+        {row.stage === "references_received" || row.stage === "resubmitted" ? <Button size="sm" variant="ghost" icon="ri-close-circle-line" disabled={!!busy} onClick={onDecline} data-testid="decline-application">Decline…</Button> : null}
+      </div> : null}
+      <CorrectionHistory corrections={row.corrections ?? []} revisions={row.revisions ?? []} onOpen={onOpen} />
     </div>
     <div className="space-y-2 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium text-foreground-900">2. Referee checks (F05) · {received} of {row.referees.length || 2} received</p>
         <span className="flex flex-wrap gap-1.5">
           {!compact && pendingSend ? <Button size="sm" variant="outline" disabled={busy === "referees"} onClick={onSendReferees} data-testid="send-referees">Send referee checks</Button> : null}
-          {!compact && row.stage === "references_received" ? <Button size="sm" icon="ri-shield-check-line" disabled={!!busy} onClick={onReview} data-testid="review-references">Review references</Button> : null}
         </span>
       </div>
       {row.approval ? <p className="text-xs text-emerald-800" data-testid="approval-note">References approved{row.approval.by ? ` by ${row.approval.by}` : ""} on {new Date(row.approval.at).toLocaleDateString()}.</p> : null}
@@ -185,7 +217,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
           {ref.domainWarning ? <span className="ml-2 rounded border border-amber-300 bg-amber-50 px-1.5 text-2xs font-medium text-amber-900" title="The referee's email address shares the agency's own domain">Same domain as the agency</span> : null}</p>
         <p className="text-xs text-foreground-600">{ref.status === "received" ? `Received ${ref.receivedAt ? new Date(ref.receivedAt).toLocaleDateString() : ""} (${ref.receivedVia === "upload" ? `uploaded${ref.fileName ? `: ${ref.fileName}` : ""}` : "signed online"})`
           : ref.status === "cancelled" ? "Cancelled" : ref.status === "sent" ? "Waiting for the referee" : "Not sent yet"}</p>
-        {ref.request ? <RequestLine request={ref.request} who={ref.email} busy={busy} onOpen={onOpen} onRemind={onRemind} /> : null}
+        {ref.request ? <RequestLine request={ref.request} who={ref.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend to referee" /> : null}
         {ref.status === "received" && Object.keys(ref.answers ?? {}).length ? <dl className="mt-1 grid grid-cols-1 gap-x-4 text-xs sm:grid-cols-2">{REFEREE_LABELS.filter(([k]) => ref.answers[k]).map(([k, label]) => <div key={k} className="flex gap-1"><dt className="text-foreground-500">{label}:</dt><dd className="min-w-0 break-words">{ref.answers[k]}</dd></div>)}</dl> : null}
         <div className="mt-1 flex flex-wrap gap-1.5">
           {ref.files.form ? dl(`referee:${ref.id}`, `Referee check ${ref.position} (${ref.receivedVia === "upload" ? "uploaded" : "signed"})`) : null}
@@ -200,9 +232,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
     <div className="space-y-1 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium text-foreground-900">3. Agent Agreement (P06)</p>
-        {!compact && !row.agreement && !closed ? (canSend
-          ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="send-agreement">Send agreement</Button>
-          : <Button size="sm" variant="outline" icon="ri-alert-line" disabled={!!busy || !canOverride} title={canOverride ? "Needs a typed reason; it is kept on the record" : "Available once the application form is signed"} onClick={onSendAgreement} data-testid="send-agreement-anyway">Send agreement anyway</Button>) : null}
+        {!compact && !row.agreement && !closed && canSend ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="send-agreement">Send agreement</Button> : null}
       </div>
       <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />
       {!row.activation && row.stage === "agreement_signed" ? <p className="text-xs font-medium text-emerald-800" data-testid="ready-to-activate-note">Signed: the business is ready to activate. Press Activate at the top of the page; the point of contact and every agent added meanwhile then get their sign-in email.</p> : null}
@@ -236,44 +266,9 @@ function LegacyRow({ row, busy, onOpen, onRemind, onDownload }: { row: Onboardin
   </div>;
 }
 
-function SendApplicationDialog({ agencyId, agencyName, onClose, onSent }: { agencyId: string; agencyName: string; onClose: () => void; onSent: (message: string) => Promise<void> }) {
-  const [prepared, setPrepared] = useState<OnboardingPrepared | null>(null);
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  const [agentId, setAgentId] = useState(""); const [message, setMessage] = useState("");
-  useEffect(() => {
-    let live = true;
-    prepareOnboarding(agencyId).then((p) => { if (live) { setPrepared(p); setAgentId(p.agent?.id ?? ""); } }).catch((e: Error) => { if (live) setError(e.message); });
-    return () => { live = false; };
-  }, [agencyId]);
-  const agent = prepared?.agents.find((a) => a.id === agentId) ?? null;
-  const send = async () => {
-    if (!agent || busy) return;
-    setBusy(true); setError("");
-    try { const r = await sendAgentApplication({ agencyId, agentId: agent.id, message: message.trim() || undefined }); await onSent(r.sent ? `Application form sent to ${agent.name} (${agent.email}), reference ${r.reference}.` : r.warning ?? "The request was created but not emailed."); }
-    catch (e) { setError(e instanceof Error ? e.message : "The form could not be sent."); } finally { setBusy(false); }
-  };
-  return <Modal open title={`Start onboarding: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-xl"
-    footer={<div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button disabled={!agent || busy} onClick={() => void send()} data-testid="send-application-confirm">{busy ? "Preparing the form…" : "Send application form"}</Button></div>}>
-    <div className="space-y-4" data-testid="send-application-dialog">
-      <p className="text-sm text-foreground-600">The agent receives the Agent Application Form (F04) with a personal signing link. What we already hold is printed; the agent fills in the rest, names two referees and signs. The referee checks go out by themselves once the form is signed; the agreement is sent from here afterwards.</p>
-      {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}
-      {!prepared ? !error && <p className="text-sm">Loading…</p> : <>
-        <Field label="Send to" required hint="The business admin agent signs for the business.">
-          <Select value={agentId} onChange={(e) => setAgentId(e.target.value)} data-testid="onboarding-agent">
-            <option value="">Choose an agent</option>
-            {prepared.agents.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.email}){a.role === "agency_admin" ? " · business admin" : ""}</option>)}
-          </Select>
-          {!prepared.agents.length ? <p className="mt-1 text-xs font-medium text-amber-700">This business has no point of contact to send the form to. Add business creates one; contact SLIT IT if it is missing.</p> : null}
-        </Field>
-        <Field label="Message to the agent" hint="Optional; goes in the email."><TextArea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} /></Field>
-      </>}
-    </div>
-  </Modal>;
-}
-
 type SignatureMethod = "saved" | "drawn" | "typed";
 /** Send agreement: Items 3 to 5 and the SLIT signatory; before References received a typed reason is required and kept on the record. */
-function SendAgreementDialog({ row, agencyId, agencyName, onClose, onSent }: { row: OnboardingRow; agencyId: string; agencyName: string; onClose: () => void; onSent: (message: string) => Promise<void> }) {
+function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClose, onSent }: { row: OnboardingRow; agencyId: string; agencyName: string; approve?: boolean; onClose: () => void; onSent: (message: string) => Promise<void> }) {
   const [prepared, setPrepared] = useState<OnboardingPrepared | null>(null);
   const [error, setError] = useState(""); const [busy, setBusy] = useState("");
   const [commencement, setCommencement] = useState(todayIso());
@@ -281,7 +276,8 @@ function SendAgreementDialog({ row, agencyId, agencyName, onClose, onSent }: { r
   const [adminName, setAdminName] = useState(""); const [adminPosition, setAdminPosition] = useState(""); const [witness, setWitness] = useState("");
   const [method, setMethod] = useState<SignatureMethod>("typed"); const [png, setPng] = useState<string | null>(null); const [save, setSave] = useState(true);
   const [message, setMessage] = useState(""); const [reason, setReason] = useState("");
-  const override = row.stage !== "references_approved";
+  // Approve and activate agency (2026-11-18) sends the agreement in the same step; a plain send is only the retry after Approve.
+  const override = !approve && row.stage !== "references_approved";
   const received = row.referees.filter((r) => r.status === "received").length;
   useEffect(() => {
     let live = true;
@@ -301,16 +297,22 @@ function SendAgreementDialog({ row, agencyId, agencyName, onClose, onSent }: { r
       const input: AgentAgreementSendInput = { agencyId, onboardingId: row.id, agentId: row.agent.id, commencementDate: commencement, territory: territory.trim(), commissionPercent: commission.trim().replace("%", ""),
         adminName: adminName.trim(), adminPosition: adminPosition.trim(), adminWitnessName: witness.trim() || undefined, message: message.trim() || undefined, overrideReason: override ? reason.trim() : undefined,
         adminSignature: method === "saved" ? { kind: "saved" } : method === "drawn" ? { kind: "drawn", png: png ?? "", save } : { kind: "typed", name: adminName.trim() } };
+      if (approve) {
+        const r = await approveAgency(input);
+        await onSent(r.warning ?? (r.agreement?.sent ? `Approved: ${agencyName} is active. Agent agreement sent to ${row.agent.email} (${r.agreement.reference}); sign-in emails go out when it is signed.` : r.agreement?.warning ?? "Approved; the agreement was created but not emailed."));
+        return;
+      }
       const r = await sendAgentAgreement(input);
       await onSent(r.sent ? `Agreement sent to ${row.agent.name} (${row.agent.email}), reference ${r.reference}${r.override ? " (sent before both references were back; the reason is on the record)" : ""}.` : r.warning ?? "The request was created but not emailed.");
     } catch (e) { setError(e instanceof Error ? e.message : "The agreement could not be sent."); } finally { setBusy(""); }
   };
-  return <Modal open title={`${override ? "Send agreement anyway" : "Send agreement"}: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-2xl"
+  return <Modal open title={`${approve ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement"}: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-2xl"
     footer={<div className="flex flex-wrap items-center justify-end gap-2">
       <Button variant="outline" disabled={!!busy} onClick={onClose}>Cancel</Button>
-      <Button disabled={!ready || !!busy} onClick={() => void send()} data-testid="send-agreement-confirm">{busy || (override ? "Send agreement anyway" : "Send agreement for signature")}</Button>
+      <Button disabled={!ready || !!busy} onClick={() => void send()} data-testid={approve ? "approve-agency-confirm" : "send-agreement-confirm"}>{busy || (approve ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement for signature")}</Button>
     </div>}>
     <div className="space-y-4" data-testid="send-agreement-dialog">
+      {approve ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). The agency admin, {row.agent.name} ({row.agent.email}), receives the Agent Agreement (P06) to sign, with your signature filled in. When it is signed, the agency admin and every agent already added get their sign-in email.</p> : null}
       <p className="text-sm text-foreground-600">The agent receives the Agent Agreement (P06) with a personal signing link, prefilled with Items 1 to 4 and the signatory from the application form.</p>
       {override ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
         <p className="font-medium">{row.stage === "references_received" ? "Both references are back but not approved yet." : `Only ${received} of ${row.referees.length || 2} references ${received === 1 ? "is" : "are"} back.`} Sending now is logged on the record with your reason.</p>
@@ -347,49 +349,46 @@ function SendAgreementDialog({ row, agencyId, agencyName, onClose, onSent }: { r
   </Modal>;
 }
 
-/** Review references (2026-11-17): both signed referee checks, then Approve (the Send agreement dialog opens) or Reject with a reason kept for staff. */
-function ReviewReferencesDialog({ row, busy, onDownload, onClose, onApproved, onDeclined }: {
-  row: OnboardingRow; busy: string; onDownload: (row: OnboardingRow, kind: OnboardingFileKind, label: string) => void; onClose: () => void; onApproved: () => Promise<void>; onDeclined: (message: string) => Promise<void>;
-}) {
-  const [mode, setMode] = useState<"review" | "reject">("review");
-  const [reason, setReason] = useState(""); const [working, setWorking] = useState(""); const [error, setError] = useState("");
-  const approve = async () => {
-    if (working) return;
-    setWorking("Approving…"); setError("");
-    try { await approveReferences(row.id); await onApproved(); } catch (e) { setError(e instanceof Error ? e.message : "The references could not be approved."); setWorking(""); }
-  };
-  const reject = async () => {
+/** Decline (staff only): the onboarding closes, its open requests are voided and the agency admin gets a polite email without the reason. */
+function DeclineDialog({ row, onClose, onDeclined }: { row: OnboardingRow; onClose: () => void; onDeclined: (message: string) => Promise<void> }) {
+  const [reason, setReason] = useState(""); const [working, setWorking] = useState(false); const [error, setError] = useState("");
+  const decline = async () => {
     if (working || reason.trim().length < 5) return;
-    setWorking("Declining…"); setError("");
-    try { const r = await rejectOnboarding({ onboardingId: row.id, reason: reason.trim() }); await onDeclined(`Onboarding declined. ${r.emailed ? `${r.agent.name} was told politely (without the reason).` : "The agent could not be emailed; tell them yourself."}`); }
-    catch (e) { setError(e instanceof Error ? e.message : "The onboarding could not be declined."); setWorking(""); }
+    setWorking(true); setError("");
+    try { const r = await rejectOnboarding({ onboardingId: row.id, reason: reason.trim() }); await onDeclined(`Application declined. ${r.emailed ? `${r.agent.name} was told politely (without the reason).` : "The agency admin could not be emailed; tell them yourself."}`); }
+    catch (e) { setError(e instanceof Error ? e.message : "The application could not be declined."); setWorking(false); }
   };
-  return <Modal open title={`Review references: ${row.agent.name}`} onClose={() => { if (!working) onClose(); }} width="max-w-2xl"
-    footer={<div className="flex flex-wrap items-center justify-end gap-2">
-      <Button variant="outline" disabled={!!working} onClick={onClose}>Cancel</Button>
-      {mode === "review" ? <>
-        <Button variant="outline" icon="ri-close-circle-line" disabled={!!working} onClick={() => setMode("reject")} data-testid="reject-references">Reject…</Button>
-        <Button icon="ri-check-line" disabled={!!working} onClick={() => void approve()} data-testid="approve-references">{working || "Approve and send the agreement"}</Button>
-      </> : <Button variant="outline" icon="ri-close-circle-line" disabled={!!working || reason.trim().length < 5} onClick={() => void reject()} data-testid="reject-confirm">{working || "Decline this onboarding"}</Button>}
-    </div>}>
-    <div className="space-y-4" data-testid="review-references-dialog">
-      <p className="text-sm text-foreground-600">Both referee checks for {row.agent.name} ({row.agent.email}) are in. Read them, then approve (the Send agreement dialog opens) or reject. Your decision and the time are kept on the record.</p>
+  return <Modal open title={`Decline application: ${row.agent.name}`} onClose={() => { if (!working) onClose(); }} width="max-w-xl"
+    footer={<div className="flex justify-end gap-2"><Button variant="outline" disabled={working} onClick={onClose}>Cancel</Button>
+      <Button variant="outline" icon="ri-close-circle-line" disabled={working || reason.trim().length < 5} onClick={() => void decline()} data-testid="reject-confirm">{working ? "Declining…" : "Decline this application"}</Button></div>}>
+    <div className="space-y-3" data-testid="decline-dialog">
+      <p className="text-sm text-foreground-700">Declining closes this onboarding: its open requests are voided, the agency admin gets a polite email without your reason, and nobody from the business can sign in. You can start the onboarding again later (Resend link).</p>
       {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}
-      {row.referees.map((ref) => <div key={ref.id} className="rounded-md border border-background-200 p-3" data-testid={`review-referee-${ref.position}`}>
-        <p className="text-sm font-medium text-foreground-900">Reference {ref.position}: {ref.name || "—"}{ref.organisation ? `, ${ref.organisation}` : ""}{ref.positionTitle ? ` (${ref.positionTitle})` : ""} · {ref.email}</p>
-        <p className="text-xs text-foreground-600">{ref.status === "received" ? `Received ${ref.receivedAt ? new Date(ref.receivedAt).toLocaleDateString() : ""} (${ref.receivedVia === "upload" ? "uploaded by staff" : "signed online"})` : ref.status}{ref.domainWarning ? " · same email domain as the agency" : ""}</p>
-        {Object.keys(ref.answers ?? {}).length ? <dl className="mt-1 grid grid-cols-1 gap-x-4 text-xs sm:grid-cols-2">{REFEREE_LABELS.filter(([k]) => ref.answers[k]).map(([k, label]) => <div key={k} className="flex gap-1"><dt className="text-foreground-500">{label}:</dt><dd className="min-w-0 break-words">{ref.answers[k]}</dd></div>)}</dl> : null}
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          {ref.files.form ? <Button size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:referee:${ref.id}`} onClick={() => onDownload(row, `referee:${ref.id}`, `Referee check ${ref.position}`)}>Open signed referee check {ref.position}</Button> : null}
-          {ref.files.certificate ? <Button size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:referee_certificate:${ref.id}`} onClick={() => onDownload(row, `referee_certificate:${ref.id}`, `Referee check ${ref.position} certificate`)}>Certificate</Button> : null}
-        </div>
-      </div>)}
-      {mode === "reject" ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="reject-form">
-        <p className="font-medium">Declining closes this onboarding: its open requests are voided, the agent gets a polite email without your reason, and nobody from the business can sign in. You can start the onboarding again later.</p>
-        <Field label="Reason (kept for staff only)" required><TextArea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder="e.g. Referee 2 could not confirm the agency's work" data-testid="reject-reason" /></Field>
-      </div> : null}
+      <Field label="Reason (kept for staff only)" required><TextArea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder="e.g. Referee 2 could not confirm the agency's work" data-testid="reject-reason" /></Field>
     </div>
   </Modal>;
+}
+
+/** Earlier versions and correction notes (2026-11-18): every round sent back, what changed, and every PDF revision after the first signature. */
+function CorrectionHistory({ corrections, revisions, onOpen }: { corrections: OnboardingCorrection[]; revisions: OnboardingRevision[]; onOpen: (id: string) => void }) {
+  const [opening, setOpening] = useState(""); const [problem, setProblem] = useState("");
+  if (!corrections.length && !revisions.length) return null;
+  const open = (id: string) => { setOpening(id); setProblem(""); openRevisionFile(id).catch((e: Error) => setProblem(e.message)).finally(() => setOpening("")); };
+  return <details className="mt-2 rounded-md border border-background-200 px-3 py-2 text-xs" data-testid="correction-history" open={corrections.some((c) => c.status === "open") || undefined}>
+    <summary className="cursor-pointer font-medium text-foreground-800">Corrections and revisions ({corrections.length} round{corrections.length === 1 ? "" : "s"}, {revisions.length} revision{revisions.length === 1 ? "" : "s"})</summary>
+    {corrections.length ? <ol className="mt-2 space-y-2">{corrections.map((c) => <li key={c.id} className="rounded bg-background-100/70 p-2" data-testid={`correction-round-${c.round}`}>
+      <p className="font-medium text-foreground-900">Round {c.round}: sent back {new Date(c.requestedAt).toLocaleDateString()}{c.by ? ` by ${c.by}` : ""} · {c.status === "open" ? "waiting for the agency" : c.status === "resubmitted" ? `resubmitted ${c.resubmittedAt ? new Date(c.resubmittedAt).toLocaleDateString() : ""}` : `closed (${c.closedReason ?? "unsigned"})`}
+        {c.request ? <> · <button type="button" className="font-medium text-primary-700 underline-offset-2 hover:underline" onClick={() => onOpen(c.request!.id)}>{c.request.reference}</button></> : null}</p>
+      {c.message ? <p className="mt-0.5 whitespace-pre-line text-foreground-700">“{c.message}”</p> : null}
+      <ul className="mt-1 list-disc pl-4 text-foreground-700">{Object.entries(c.flags).map(([k, note]) => <li key={k}><span className="font-medium">{k.replaceAll("_", " ")}</span>{note ? `: ${note}` : ""}</li>)}</ul>
+      {c.changes?.length ? <p className="mt-1 text-foreground-600">Changed: {c.changes.map((ch) => `${ch.field.replaceAll("_", " ")} “${ch.old}” → “${ch.new}”`).join("; ")}</p> : null}
+    </li>)}</ol> : null}
+    {revisions.length ? <ul className="mt-2 space-y-1">{revisions.map((v) => <li key={v.id} className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={opening === v.id} onClick={() => open(v.id)} data-testid={`revision-${v.revision}`}>Revision {v.revision}</Button>
+      <span className="text-foreground-600">{v.kind === "staff_edit" ? "edited by SLIT staff" : "re-signed after a correction"}{v.by ? ` · ${v.by}` : ""} · {new Date(v.at).toLocaleDateString()}{v.changes?.length ? ` · ${v.changes.length} change${v.changes.length === 1 ? "" : "s"}` : ""}</span>
+    </li>)}</ul> : null}
+    {problem ? <p className="mt-1 text-red-700">{problem}</p> : null}
+  </details>;
 }
 
 function ChangeRefereeDialog({ referee, onClose, onDone }: { referee: OnboardingReferee; onClose: () => void; onDone: (message: string) => Promise<void> }) {

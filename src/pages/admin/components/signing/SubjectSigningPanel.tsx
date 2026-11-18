@@ -5,6 +5,10 @@ import RequestDetail from "./RequestDetail";
 import PaymentBadge from "./PaymentBadge";
 import { signedCount, signingAdmin, signingStatus, type SigningContext, type SigningRequest } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../../../supabase/functions/_shared/signing";
+import { AGENT_ONBOARDING_DOCS } from "../../../../../supabase/functions/_shared/agent-onboarding";
+
+/** 2026-11-18: the Agent Application Form goes by itself (Add business, corrections); it is never chosen here (document-signing refuses it too). */
+const withoutF04 = (templates: SigningContext["templates"]) => templates.filter((t) => (t as { system_key?: string | null }).system_key !== AGENT_ONBOARDING_DOCS.form.key);
 
 /** On a student's, an employee's or an agent's record: the documents sent to them for signature with their status, and a button to send another. */
 export default function SubjectSigningPanel({ type, id, name }: { type: "student" | "employee" | "agent"; id: string; name?: string }) {
@@ -20,7 +24,7 @@ export default function SubjectSigningPanel({ type, id, name }: { type: "student
   return <Card className="p-5" >
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3" data-testid="subject-signing-panel">
       <div><h2 className="font-heading text-base font-semibold text-foreground-950">Documents &amp; signatures</h2><p className="text-sm text-foreground-600">Documents sent for signature ({examples}).</p></div>
-      <Button size="sm" icon="ri-quill-pen-line" onClick={() => void signingAdmin<SigningContext>("list").then((c) => setTemplates(c.templates)).catch((e: Error) => setError(e.message))}>Send a document to sign</Button>
+      <Button size="sm" icon="ri-quill-pen-line" onClick={() => void signingAdmin<SigningContext>("list").then((c) => setTemplates(withoutF04(c.templates))).catch((e: Error) => setError(e.message))}>Send a document to sign</Button>
     </div>
     {error && <p role="alert" className="mb-2 text-sm text-red-700">{error}</p>}
     {!requests ? !error && <p role="status" className="text-sm">Loading…</p> : !requests.length ? <p className="text-sm text-foreground-600">Nothing has been sent for signature yet.</p>

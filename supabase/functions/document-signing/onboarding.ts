@@ -3,7 +3,7 @@
 // checks go out when the agent has signed the form; staff are told when both referees are back). Everything goes through the Sign
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
-import { AGENT_ONBOARDING_DOCS, expiryDate, F04_RECORD_KEYS, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { AGENT_ONBOARDING_DOCS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { ABR_PREFILL_KEYS, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -341,7 +341,9 @@ const AGENT_LEVEL_RETIRED = "Agents have no onboarding of their own: the busines
 const retired = (): Promise<Json> => Promise.reject(new SigningError(AGENT_LEVEL_RETIRED, 410));
 
 interface Followup {
-  id: string; kind?: "business" | "agent"; stage: string; agency: { id: string; name: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
+  id: string; kind?: "business" | "agent"; stage: string; agency: { id: string; name: string; status?: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
+  /** 2026-11-18: the business status in words, the correction rounds so far, the active CMS administrators (told at Ready for review). */
+  label?: string | null; round?: number; admins?: string[];
   values: Record<string, string>; referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; address: string; status: string; requestId: string | null }>;
   received: number; total: number; template: OnboardingTemplate | null; notified: { agentReferees: boolean; staffReferences: boolean };
 }
@@ -355,7 +357,7 @@ const SIGN_OFF = "\n\nSkyline Institute of Technology\nThis is an automated mess
 export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, onboardingId: string): Promise<{ sent: number; skipped: number }> {
   const { ports } = ctx;
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (!["application_signed", "references_pending"].includes(follow.stage)) return { sent: 0, skipped: follow.referees?.length ?? 0 };
+  if (!["application_signed", "references_pending", "resubmitted"].includes(follow.stage)) return { sent: 0, skipped: follow.referees?.length ?? 0 };
   const pending = (follow.referees ?? []).filter((r) => r.status === "pending" && !r.requestId);
   if (!pending.length) return { sent: 0, skipped: 0 };
   if (!follow.template || follow.template.status !== "active") throw new SigningError(ONBOARDING_TEMPLATES_MISSING);
@@ -399,28 +401,32 @@ export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "
 export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
   const { ports } = ctx;
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (follow.stage !== "references_received" || follow.notified.staffReferences) return { notified: false };
+  // Ready for review (both referees back), or a resubmitted application whose re-sent referee check is back (once per correction round).
+  const again = follow.stage === "resubmitted" && follow.total > 0 && follow.received >= follow.total;
+  if (!again && (follow.stage !== "references_received" || follow.notified.staffReferences)) return { notified: false };
   const { provider, config } = ports.mail;
-  const to = [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.sentBy?.email ? [] : config.adminTo)].filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
+  const to = staffRecipients(follow, config.adminTo);
   if (!provider || !config.from || !to.length) return { notified: false };
   const lines = (follow.referees ?? []).map((r) => `- ${r.name || r.email}${r.organisation ? `, ${r.organisation}` : ""}: ${r.status === "received" ? "received" : r.status}`).join("\n");
   const agent = follow.kind === "agent";
-  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}`, from: config.from, to: to.join(", "),
-    subject: agent ? `Agent references received: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `References received: ${text(follow.agency.name, 120)}`,
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}${again ? `-r${follow.round ?? 0}` : ""}`, from: config.from, to: to.join(", "),
+    subject: agent ? `Agent references received: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `Ready for review: ${text(follow.agency.name, 120)}`,
     textBody: `Both referee checks for ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) are in.\n\n${lines}\n\n`
       + (agent ? `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to read them, then send the agent their individual agent agreement or reject them. The agent can be activated once the agreement is signed.`
-        : `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) to read them and send the Agent Agreement.`) + SIGN_OFF }));
+        : `The application is ready for review. Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and choose Review application: approve it, or send it back for correction.`) + SIGN_OFF }));
   if (outcome.state !== "sent") return { notified: false };
+  if (again) return { notified: true };
   await serviceRpc(ports, "agency_onboarding_mark_notified", { p_onboarding: onboardingId, p_kind: "staff_notified_references", p_detail: { to } }).catch(() => undefined);
   return { notified: true };
 }
 
 /** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee, the "ready to activate" email after the agreement. */
 export async function afterCompletion(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, plan: { id: string; kind?: string }): Promise<void> {
-  if (plan.kind === "application") await sendRefereeChecks(ctx, plan.id);
+  if (plan.kind === "application") { await sendRefereeChecks(ctx, plan.id); await notifyResubmitted(ctx, plan.id); }
   else if (plan.kind === "referee") await notifyReferencesReceived(ctx, plan.id);
-  // The signed agreement activates nothing (2026-11-19): staff are told the business is ready; an administrator activates it.
-  else if (plan.kind === "agreement") await notifyBusinessReady(ctx, plan.id);
+  // 2026-11-18: an approved business (already Active) releases its held sign-in invitations when the agreement is signed. A business on the
+  // earlier flow (still Onboarding) is ready to activate: staff are told; an administrator activates it.
+  else if (plan.kind === "agreement") { const released = await releaseAfterAgreement(ctx, plan.id); if (!released.released) await notifyBusinessReady(ctx, plan.id); }
 }
 
 const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -503,7 +509,138 @@ export async function uploadRefereeForm(ctx: OnboardingContext): Promise<Json> {
   return { ...stored, ...notified };
 }
 
+/*
+ * Staff review and the correction loop (owner brief 2026-11-18). The application is reviewed in the F04 wizard (admin-review mode):
+ *   Save changes       -> every changed field audited (who, old, new) and a new PDF revision "edited by SLIT staff" (no re-signing)
+ *   Send back          -> a new F04 request to the business's agency admin, prefilled; only the flagged fields can change (core.ts)
+ *   Approve & activate -> the business goes Active and the P06 goes to the agency admin; the sign-in invitations follow its signature
+ */
+const reviewChanges = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SigningError("Nothing to save.");
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => /^[a-z][a-z0-9_]{0,60}$/.test(key)).map(([key, v]) => [key, text(v, 500)]));
+};
+/** The F04 field values from the onboarding's answers (text by key, a tick box "true" when it is the answer, the registration box from ACN + MARN). */
+export function valuesFromAnswers(fields: Array<{ key?: string | null; type: string; value?: string | null }>, answers: Record<string, string>): string[] {
+  return fields.map((f) => {
+    if (!f.key || (f.type !== "text" && f.type !== "checkbox")) return String(f.value ?? "");
+    const group = groupOf(f.key);
+    if (group) return String(answers[group.key] ?? "").toUpperCase() === group.answer ? "true" : "false";
+    if (answerKey(f.key) === "agent_registration_number") return composeRegistrationNumber(answers.agent_acn, answers.agent_marn);
+    return String(answers[answerKey(f.key)] ?? "");
+  });
+}
+interface RevisionSource {
+  requestId: string; reference: string; title: string; originalPath: string; originalHash: string; nextRevision: number; answers: Record<string, string>;
+  fields: Array<{ recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; key: string | null; label: string | null; value: string | null }>;
+  recipients: Array<{ id: string; name: string; email: string; role: string; state: string; signer_name: string | null; signed_at: string | null; signature_kind: string | null; signature_image: string | null }>;
+}
+async function makeRevision(ctx: OnboardingContext, onboardingId: string, changes: unknown[]): Promise<Json> {
+  const src = await ctx.rpc("agency_onboarding_revision_source", { p_onboarding: onboardingId }) as RevisionSource;
+  const original = await ctx.fileBytes(src.originalPath, src.originalHash);
+  const values = valuesFromAnswers(src.fields, src.answers ?? {});
+  const fields = src.fields.map((f, i) => ({ recipient_id: f.recipient_id, type: f.type, page: Number(f.page), x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h), label: f.label, value: values[i], done: true }));
+  const stamped = await (await signingPdfModule()).stampDocument(original, { reference: src.reference, title: src.title, fields, recipients: src.recipients });
+  const note = `Revision ${src.nextRevision}: edited by SLIT staff on ${isoToday().split("-").reverse().join("/")} - not signed again by the applicant (${src.reference})`;
+  const bytes = await (await onboardingPdfModule()).markRevision(stamped, note);
+  return await ctx.rpc("agency_onboarding_revision_add", { p_onboarding: onboardingId, p_base64: toBase64(bytes), p_note: note, p_changes: changes });
+}
+export async function reviewSave(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const saved = await ctx.rpc("agency_onboarding_review_save", { p_onboarding: onboardingId, p_changes: reviewChanges(ctx.body.changes) }) as { changed: number; changes: unknown[] };
+  if (!saved.changed) return saved;
+  try { return { ...saved, revision: await makeRevision(ctx, onboardingId, saved.changes) }; }
+  catch (error) { return { ...saved, revision: null, warning: `The changes are saved, but the edited PDF could not be made: ${(error as Error).message}` }; }
+}
+
+interface ReviewData { onboardingId: string; stage: string; agency: { id: string; name: string }; contact: { id: string; name: string; email: string; role: string }; answers: Record<string, string> }
+export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const flags = ctx.body.flags && typeof ctx.body.flags === "object" && !Array.isArray(ctx.body.flags) ? Object.fromEntries(Object.entries(ctx.body.flags as Record<string, unknown>)
+    .filter(([key]) => /^[a-z][a-z0-9_]{0,60}$/.test(key)).map(([key, note]) => [key, text(note, 500)])) : {};
+  if (!Object.keys(flags).length) throw new SigningError("Flag at least one field for correction.");
+  const message = text(ctx.body.message, 2000);
+  const review = await ctx.rpc("agency_onboarding_review_get", { p_onboarding: onboardingId }) as ReviewData;
+  if (review.contact?.role !== "agency_admin" || !review.contact.email) throw new SigningError("The correction goes only to the business's agency admin (point of contact).");
+  const template = await installedTemplate(ctx, "form");
+  const answers = review.answers ?? {};
+  const values: Record<string, string> = { ...answers, agent_registration_number: composeRegistrationNumber(answers.agent_acn, answers.agent_marn) };
+  const title = `Agent application form (correction): ${text(review.agency.name, 140)}`.slice(0, 200);
+  const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });
+  const recipients = checkRecipients([{ name: review.contact.name, email: review.contact.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
+  const id = ctx.ports.uuid();
+  await ctx.store(`${id}/original.pdf`, made.bytes);
+  const intro = "SLIT has reviewed your agent application and asks you to correct the highlighted answers, then sign again.";
+  const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: values, original_hash: await sha256Hex(made.bytes), recipients,
+    fields: recipientFields(made.recipient, signerRole("form").key), subject_type: "agent", subject_id: review.contact.id, category: "other", message: [intro, message].filter(Boolean).join("\n\n").slice(0, 2000), edited: false,
+    template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
+  let correction: Json;
+  try { correction = await ctx.rpc("agency_onboarding_correction_request", { p_onboarding: onboardingId, p_request: id, p_data: { flags, message } }); }
+  catch (error) {
+    try { await ctx.admin("void", id, { reason: "Not sent: the correction could not be recorded" }); } catch { /* left as an unsent draft */ }
+    throw error;
+  }
+  ctx.commit();
+  return await sendRequest(ctx, id, { reference: record.reference, round: correction.round, stage: correction.stage, to: review.contact.email, flagged: Object.keys(flags).length });
+}
+
+/** Approve and activate agency: the business goes Active; the P06 goes to the agency admin with the SLIT signatory filled in (as Send agreement). */
+export async function approveAndActivate(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string };
+  try { return { approved: true, agencyStatus: approved.agencyStatus, agreement: await sendAgreement(ctx) }; }
+  catch (error) { return { approved: true, agencyStatus: approved.agencyStatus, agreement: null, warning: `The business is approved and active, but the agent agreement could not be sent: ${(error as Error).message} Send it from the business page.` }; }
+}
+
+/** The agent agreement of an approved business is signed: the held sign-in invitations go out (POC and agents added meanwhile). */
+export async function releaseAfterAgreement(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ released: boolean; emailed: string[] }> {
+  const { ports } = ctx;
+  const result = await serviceRpc(ports, "agency_business_release", { p_onboarding: onboardingId }) as { released: boolean; already?: boolean; name: string; contact?: { name: string; email: string };
+    heldReleased?: number; invitations: Array<{ id: string; email: string; name: string; role: string; expiresAt: string | null; sent: boolean; contact: boolean }> };
+  if (!result.released) return { released: false, emailed: [] };
+  const emailed: string[] = [];
+  for (const inv of result.invitations ?? []) {
+    if (inv.sent) continue;
+    if (await sendSetPasswordEmail(ports, { invitationId: inv.id, email: inv.email, name: inv.name, role: inv.role, agencyName: result.name, expiresAt: inv.expiresAt, kind: inv.contact ? "business" : "member" })) emailed.push(inv.email);
+  }
+  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  const { provider, config } = ports.mail;
+  const to = staffRecipients(follow, config.adminTo);
+  if (provider && config.from && to.length) {
+    await provider.send({ deliveryId: `onboarding-released-${onboardingId}`, from: config.from, to: to.join(", "), subject: `Agreement signed: ${text(result.name, 120)} can sign in`,
+      textBody: `${text(follow.agent.name, 80)} has signed the Agent Agreement for ${text(result.name, 120)}.\n\nThe sign-in emails went out: ${emailed.length ? emailed.join(", ") : "none needed"}.` + SIGN_OFF }).catch(() => undefined);
+  }
+  return { released: true, emailed };
+}
+
+/** Staff to tell: whoever started the onboarding, the admissions contacts and every active CMS administrator (or the configured admin inbox). */
+const staffRecipients = (follow: Followup, fallback: string[]) =>
+  [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.admins ?? []), ...(follow.sentBy?.email || follow.admins?.length ? [] : fallback)]
+    .filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
+
+/** The corrected application is signed again: staff are told (once per round). */
+export async function notifyResubmitted(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
+  const { ports } = ctx;
+  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  if (follow.stage !== "resubmitted") return { notified: false };
+  const { provider, config } = ports.mail;
+  const to = staffRecipients(follow, config.adminTo);
+  if (!provider || !config.from || !to.length) return { notified: false };
+  const waiting = follow.label === "Awaiting referees";
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-resubmitted-${onboardingId}-r${follow.round ?? 0}`, from: config.from, to: to.join(", "),
+    subject: `Resubmitted: ${text(follow.agency.name, 120)}`,
+    textBody: `${text(follow.agent.name, 80)} has corrected and signed again the Agent Application Form for ${text(follow.agency.name, 120)} (correction round ${follow.round ?? 1}).\n\n`
+      + (waiting ? "A referee's details changed, so a new referee check went out. The application is ready for review once both referees have replied.\n\n" : "")
+      + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and choose Review application.` + SIGN_OFF }));
+  return { notified: outcome.state === "sent" };
+}
+
 export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Promise<Json>> = {
+  agent_onboarding_review_save: reviewSave,
+  agent_onboarding_correction_send: correctionSend,
+  agent_onboarding_approve: approveAndActivate,
   agent_onboarding_install: installBlank,
   agent_onboarding_send: sendApplication,
   agent_onboarding_send_application: sendApplication,

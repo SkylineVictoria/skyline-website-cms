@@ -13,7 +13,7 @@ import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
 import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
-import { answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, F04_ATTACHMENT_MAX, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
+import { answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
@@ -81,6 +81,21 @@ export function abrCache(ports: Pick<SigningPorts, "serviceRpc">): AbrCache | nu
     get: async (abn) => (await ports.serviceRpc!("abr_business_cache_get", { p_abn: abn })) ?? null,
     put: async (details) => { await ports.serviceRpc!("abr_business_cache_put", { p_details: details }); },
   };
+}
+
+/** The Agent Application Form's template: sent by itself (Add business, corrections), never from "Send a document to sign". */
+export const F04_SYSTEM_KEY = "agent_application_form";
+export const F04_NOT_HERE = "The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
+/** An open correction of an F04 request (agency_onboarding_correction_of): the flagged answers and the reviewed ACN / MARN. */
+export interface F04Correction { round: number; message?: string | null; flags: Record<string, string>; acn?: string; marn?: string }
+/** A correction is signed: every field staff did not flag keeps the value it was sent with (the declaration's name and role are given again). */
+export function lockUnflagged(fields: ReadonlyArray<{ id: string; type: string; key?: string | null; value?: string | null }>, values: Record<string, unknown>, flags: Record<string, string>): void {
+  for (const f of fields) {
+    if (!f.key || (f.type !== "text" && f.type !== "checkbox")) continue;
+    const key = answerKey(f.key);
+    if (key === "agent_registration_number" || (CORRECTION_ALWAYS_EDITABLE as readonly string[]).includes(key) || correctionFlagged(key, flags)) continue;
+    values[f.id] = f.type === "checkbox" ? (f.value === "true" ? "true" : "false") : String(f.value ?? "");
+  }
 }
 
 const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "");
@@ -328,11 +343,20 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             const phone = valueOf(key); const e164 = phone ? phoneE164(phone.v) : null;
             if (phone && e164) values[phone.f.id] = e164;
           }
+          // A correction request: every field staff did not flag keeps the reviewed value it was sent with (the page shows it read-only).
+          const correction = ports.serviceRpc ? await ports.serviceRpc("agency_onboarding_correction_of", { p_request: record.id }).catch(() => null) as F04Correction | null : null;
+          if (correction) lockUnflagged(fields, values, correction.flags ?? {});
           const byKey: Record<string, string> = {};
           for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
           const checked = checkApplicationAnswers(byKey);
           if (checked.error) throw new SigningError(checked.error);
           submission = checkApplicationSubmission(body.application, collectAnswers(fields.map((f) => ({ key: f.key, type: f.type, value: String(values[f.id] ?? f.value ?? "") }))));
+          // A correction (2026-11-18): only the fields staff flagged can change; the ACN and the MARN stay as reviewed unless flagged.
+          if (correction) {
+            const flagged = new Set(Object.keys(correction.flags ?? {}));
+            if (!flagged.has("acn")) submission.acn = acnDigits(correction.acn ?? "");
+            if (!flagged.has("marn")) submission.marn = String(correction.marn ?? "").trim();
+          }
           const registration = fields.find((f) => f.key === "agent_registration_number");
           if (registration) values[registration.id] = composeRegistrationNumber(submission.acn, submission.marn);
         }
@@ -399,14 +423,18 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       // Prefill that cannot come up empty (2026-11-19): the blank fields among F04_OPEN_PREFILL_KEYS are filled from the register (cached by
       // ABN) and the business record, server side, and returned filled; a value already there is never overwritten. The ACN has no box of
       // its own: it is returned as application.prefill.agent_acn.
-      let application: { draft: unknown; facts: unknown; savedAt: string | null; prefill: Record<string, string>; filled: string[]; attachments: Record<string, unknown> } | null = null;
+      let application: { draft: unknown; facts: unknown; savedAt: string | null; prefill: Record<string, string>; filled: string[]; attachments: Record<string, unknown>;
+        correction?: { round: number; message: string | null; flags: Record<string, string> } | null } | null = null;
       let fields = (record.fields ?? []) as LinkField[];
       if (isApplication(record) && !done && ports.serviceRpc) {
         try {
           const wizard = await ports.serviceRpc("agency_onboarding_wizard_get", { p_request: record.id }) as { draft: unknown; saved_at: string | null; facts: unknown; abn: string | null;
-            record?: Record<string, unknown> | null; abr?: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null } | null; attachments?: Record<string, unknown> | null } | null;
+            record?: Record<string, unknown> | null; abr?: { details: AbrDetails | null; confirmed: (AbrConfirmed & { givenName?: string; familyName?: string }) | null } | null; attachments?: Record<string, unknown> | null;
+            correction?: F04Correction | null } | null;
           let facts = wizard?.facts ?? null;
-          const blanks = f04BlankKeys(fields);
+          // A correction request (2026-11-18) is prefilled with the reviewed answers: nothing is filled on open.
+          const correction = wizard?.correction ?? null;
+          const blanks = correction ? [] : f04BlankKeys(fields);
           let details: AbrDetails | null = wizard?.abr?.details ?? null;
           if (!details && wizard?.abn && (blanks.length || !facts || !(facts as { acn?: string }).acn)) {
             const found = await lookupAbrCached(wizard.abn, ports.abr?.guid, abrCache(ports), ports.abr?.fetch ?? fetch);
@@ -431,8 +459,10 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if (acn) prefill.agent_acn = acn;
           // Follow-up (2026-11-18): the request's stored values (field_values) get the ACN when they have none, and lose a postcode kept as
           // the Province; nothing else in them changes (agency_onboarding_record_fill, unsigned F04s only).
-          await ports.serviceRpc("agency_onboarding_record_fill", { p_request: record.id, p_values: acn ? { agent_acn: acnDigits(acn) } : {} }).catch(() => undefined);
-          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill, filled: Object.keys(fill), attachments: wizard?.attachments ?? {} };
+          if (!correction) await ports.serviceRpc("agency_onboarding_record_fill", { p_request: record.id, p_values: acn ? { agent_acn: acnDigits(acn) } : {} }).catch(() => undefined);
+          if (correction) { prefill.agent_acn = correction.acn ? acnDigits(correction.acn) : ""; prefill.agent_marn = correction.marn ?? ""; }
+          application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill, filled: Object.keys(fill), attachments: wizard?.attachments ?? {},
+            correction: correction ? { round: correction.round, message: correction.message ?? null, flags: correction.flags ?? {} } : null };
         } catch { application = { draft: null, facts: null, savedAt: null, prefill: {}, filled: [], attachments: {} }; }
       }
       const path = done ? record.signed_path : record.current_path ?? record.original_path;
@@ -562,6 +592,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       } else {
         const template = context.templates.find((t: { id: string; status: string }) => t.id === body.templateId && t.status === "active");
         if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
+        // 2026-11-18: the Agent Application Form goes by itself when a business is added (and back to its agency admin for corrections).
+        if ((template as { system_key?: string | null }).system_key === F04_SYSTEM_KEY) throw new SigningError(F04_NOT_HERE);
         // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
         values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
         const made = await templateDocument(template, values, false, body.text, body.html);

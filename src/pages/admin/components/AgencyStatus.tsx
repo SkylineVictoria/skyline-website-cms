@@ -79,3 +79,20 @@ export function CompletionBar({ value }: { value: number }) {
     </span>
   );
 }
+
+/**
+ * Where a business's onboarding is up to (2026-11-18): Application sent, Awaiting referees, Ready for review, Correction requested,
+ * Resubmitted, Active (agency_onboarding_label). Amber when staff have something to do.
+ */
+export function OnboardingStatusPill({ label }: { label: string }) {
+  const action = label === "Ready for review" || label === "Resubmitted" || label === "Ready to activate";
+  const done = label === "Active";
+  const closed = label === "Declined" || label === "Cancelled" || label === "Expired";
+  const tone = action ? "bg-amber-50 text-amber-900 ring-amber-300" : done ? "bg-emerald-50 text-emerald-800 ring-emerald-200" : closed ? "bg-background-200 text-foreground-600 ring-background-300" : "bg-sky-50 text-sky-900 ring-sky-200";
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`} data-testid="onboarding-status-pill">
+      <span className={`h-1.5 w-1.5 rounded-full ${action ? "bg-amber-500" : done ? "bg-emerald-500" : closed ? "bg-foreground-400" : "bg-sky-500"}`} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}

@@ -2,7 +2,7 @@
 // plain pages (the Sign module prints and overlays its own fields), joining them into the one document the agent signs, and splitting
 // the signed document back into the two files kept on the agency. Runtime-neutral (Deno function and the offline tests); pdf-lib comes
 // from the function's import map or node_modules. Loaded lazily by the function (the PDF engine never loads at boot).
-import { PDFDocument, PDFRadioGroup, PDFRef } from "pdf-lib";
+import { PDFDocument, PDFRadioGroup, PDFRef, rgb, StandardFonts } from "pdf-lib";
 import { AGENT_ONBOARDING_DOCS, placeTemplateFields, type OnboardingDoc, type PlacedField, type WidgetBox } from "./agent-onboarding.ts";
 
 export interface BlankTemplate { fields: PlacedField[]; flattened: Uint8Array; pages: number }
@@ -66,4 +66,23 @@ export async function splitPdf(bytes: Uint8Array, firstPages: number): Promise<[
     return await out.save();
   };
   return [await part(0, cut), await part(cut, total)];
+}
+
+/**
+ * A staff-edited revision of a signed application form (2026-11-18): the same pages, with a band across the top of each page saying it was
+ * edited by SLIT staff and not signed again by the applicant. Latin-1 text only (the standard font).
+ */
+export async function markRevision(bytes: Uint8Array, note: string): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const text = note.replace(/[^\x20-\x7e]/g, "-").slice(0, 160);
+  for (const page of pdf.getPages()) {
+    const { width, height } = page.getSize();
+    let size = 8;
+    while (size > 5 && font.widthOfTextAtSize(text, size) > width - 48) size -= 0.5;
+    page.drawRectangle({ x: 18, y: height - 22, width: width - 36, height: 15, color: rgb(1, 0.95, 0.8), borderColor: rgb(0.85, 0.55, 0.1), borderWidth: 0.6 });
+    page.drawText(text, { x: 24, y: height - 17.5, size, font, color: rgb(0.5, 0.25, 0) });
+  }
+  pdf.setSubject(`${pdf.getSubject() ?? ""} | ${text}`.slice(0, 250));
+  return await pdf.save();
 }

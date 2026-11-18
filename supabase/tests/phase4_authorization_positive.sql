@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(964);
+select plan(967);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1842,6 +1842,10 @@ select throws_ok($$select public.abr_business_cache_get('86603584676')$$,'42501'
 select throws_ok($$select public.agency_onboarding_attachments_list(gen_random_uuid())$$,'42501',null,'only administrators list the uploaded files');
 -- F04 follow-ups (20261119190841): a company's ACN from its ABN; a postcode never stays in the Province of the stored values; service role only.
 select throws_ok($$select public.agency_onboarding_record_fill(gen_random_uuid(),'{}')$$,'42501',null,'a signed-in user cannot change an application''s stored values');
+-- Review loop (20261119232741): the release of held invitations and a correction's flags are for document-signing (service role) only.
+select throws_ok($$select public.agency_business_release(gen_random_uuid())$$,'42501',null,'a signed-in user cannot release a business''s invitations');
+select throws_ok($$select public.agency_onboarding_correction_of(gen_random_uuid())$$,'42501',null,'a signed-in user cannot read a correction''s flags');
+select throws_ok($$select public.agency_onboarding_resubmitted(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'\x25'::bytea,'\x25'::bytea,'{}')$$,'42501',null,'a signed-in user cannot resubmit an application directly');
 reset role;
 select is(public.acn_from_abn('86 603 584 676','Australian Private Company'),'603584676','ACN: the last nine digits of a company''s ABN (check digit passes)');
 select is(public.acn_from_abn('86603584676','Individual/Sole Trader'),null,'ACN: none for an entity that is not a company');

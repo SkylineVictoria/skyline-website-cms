@@ -584,7 +584,8 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   assert.ok(up1.stage === "references_pending" && up1.notified === false && voided.length === 2, "the first upload voids its open request; nothing to tell staff yet");
   const up2 = await call({ action: "agent_onboarding_referee_upload", refereeId: referees[1].id }, { name: "ref2.pdf", bytes: uploadBytes }) as { stage: string; notified: boolean };
   assert.ok(up2.stage === "references_received" && up2.notified === true);
-  const staffMail = mails.find((m) => /References received/.test(m.subject))!;
+  // 2026-11-18: both referees back = Ready for review (the staff email's subject).
+  const staffMail = mails.find((m) => /Ready for review/.test(m.subject))!;
   assert.ok(staffMail && staffMail.to.includes("hari@example.test") && staffMail.to.includes("admissions@example.test") && !staffMail.to.includes("admin@example.test"), "the staff member who started it and the admissions contact");
   assert.ok(state.notifiedStaff);
   await assert.rejects(call({ action: "agent_onboarding_referee_upload", refereeId: referees[0].id }, { name: "x.pdf", bytes: new TextEncoder().encode("not a pdf") }), /PDF/i);
@@ -644,6 +645,8 @@ test("onboarding per business (2026-11-19): Add business checks the blanks befor
         sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: ["admissions@example.test"], values: {}, referees: [], received: 2, total: 2, template: null, notified: { agentReferees: true, staffReferences: true } };
       if (name === "portal_invitation_link_issue") { issued.set(String(args.p_invitation), String(args.p_token_hash)); return {}; }
       if (name === "agency_onboarding_activation") throw new Error("the signed agreement must never activate the business");
+      // 2026-11-18: a business still Onboarding (not approved through the review) releases nothing; staff are told it is ready to activate.
+      if (name === "agency_business_release") return { released: false, businessId: business, name: "ZZ Test Agency", invitations: [], skipped: [] };
       throw new Error(`unexpected service ${name}`);
     },
     service: async () => false,
@@ -1045,6 +1048,61 @@ test("F04 follow-ups (2026-11-18): a company's ACN from its ABN when the registe
   const sql = read("supabase/migrations/20261119190841_f04_acn_province.sql");
   assert.ok(["create or replace function public.acn_from_abn", "agency_onboarding_record_fill", "agency_onboarding_office_fix", "v := v - 'office_province'", "update hr.sign_fields f set value = null",
     "r.state in ('sent', 'viewed', 'email_failed')", "grant execute on function public.agency_onboarding_record_fill(uuid, jsonb) to service_role"].every((s) => sql.includes(s)), "the migration fills the ACN and clears a Province postcode on unsigned F04s only");
+});
+
+test("Agency onboarding review loop (2026-11-18): one wizard in three modes, flagged answers only in a correction (locked server side), staff changes as a diff, revision values from the answers, F04 never chosen by hand, statuses", async () => {
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  type WizFields = Parameters<typeof logic.initialF04>[0];
+  const field = (key: string, value = "", type = key.includes(":") ? "checkbox" : "text") => ({ id: `f-${key}`, type, key, label: key, page: 1, x: 0, y: 0, w: 0.1, h: 0.02, required: false, value });
+  // Flags: an answer key, "acn" / "marn", or the whole office address.
+  assert.equal(onboarding.correctionFlagged("agent_trading_name", { agent_trading_name: "" }), true);
+  assert.equal(onboarding.correctionFlagged("office_suburb", { office_address: "Wrong suburb" }), true, "one flag covers the office address");
+  assert.equal(onboarding.correctionFlagged("contact_email", { office_address: "" }), false);
+  // The steps a correction shows: those with a flagged answer, then Review & sign.
+  assert.deepEqual([logic.stepOfKey("acn"), logic.stepOfKey("office_address"), logic.stepOfKey("litigation_involved"), logic.stepOfKey("ref2_phone"), logic.stepOfKey("agent_year_founded")], [0, 1, 2, 3, 0]);
+  assert.deepEqual(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" }), [0, 3, 4]);
+  assert.deepEqual(logic.visibleSteps("admin-review", { ref1_email: "x" }), [0, 1, 2, 3, 4], "staff see every step");
+  assert.deepEqual(logic.visibleSteps("agent", null), [0, 1, 2, 3, 4]);
+  assert.equal(logic.correctionEditable("declarant_name", {}), true, "the declaration is given again");
+  assert.equal(logic.correctionEditable("contact_email", { agent_trading_name: "" }), false);
+  // Server side (core.ts): a correction's unflagged fields keep the values they were sent with, whatever the page posts.
+  const fields = [field("agent_trading_name", "Old Pty Ltd"), field("contact_email", "pat@example.test"), field("litigation_involved:YES", ""), field("litigation_involved:NO", "true"),
+    field("declarant_name", "Pat"), field("agent_registration_number", "ACN 603 584 676")];
+  const posted: Record<string, unknown> = { "f-agent_trading_name": "New Pty Ltd", "f-contact_email": "hacker@example.test", "f-litigation_involved:YES": "true", "f-litigation_involved:NO": "false", "f-declarant_name": "Pat Probe", "f-agent_registration_number": "x" };
+  signingCore.lockUnflagged(fields, posted, { agent_trading_name: "Use the registered name" });
+  assert.deepEqual(posted, { "f-agent_trading_name": "New Pty Ltd", "f-contact_email": "pat@example.test", "f-litigation_involved:YES": "false", "f-litigation_involved:NO": "true", "f-declarant_name": "Pat Probe", "f-agent_registration_number": "x" },
+    "only the flagged answer and the declaration change; the registration box is composed again from ACN / MARN");
+  assert.equal(signingCore.F04_SYSTEM_KEY, onboarding.AGENT_ONBOARDING_DOCS.form.key);
+  assert.match(signingCore.F04_NOT_HERE, /sent automatically/);
+  // Staff review: the wizard reads the answers; Save sends only what changed (in the server's answer format, ACN digits).
+  const reviewed = logic.reviewFields([{ id: "a", key: "agent_trading_name", type: "text", label: "", required: false, page: 1 }, { id: "b", key: "litigation_involved:YES", type: "checkbox", label: "", required: true, page: 1 },
+    { id: "c", key: "litigation_involved:NO", type: "checkbox", label: "", required: true, page: 1 }, { id: "d", key: "office_suburb", type: "text", label: "", required: false, page: 1 }],
+    { agent_trading_name: "Old Pty Ltd", litigation_involved: "NO", office_suburb: "Melbourne 3000", agent_acn: "603584676" });
+  assert.deepEqual(reviewed.map((f) => f.value), ["Old Pty Ltd", "", "true", "Melbourne 3000"]);
+  const opened = logic.initialF04(reviewed, null, { agent_acn: "603584676", agent_marn: "1234567" }, null);
+  assert.deepEqual([opened.acn, opened.marn], ["603584676", "1234567"], "the review opens with the reviewed ACN and MARN");
+  assert.deepEqual(logic.reviewChanges(reviewed, opened, opened), {}, "opening changes nothing");
+  const edited = { ...opened, acn: "004028077", answers: { ...opened.answers, agent_trading_name: "New Pty Ltd", litigation_involved: "YES", office_postcode: "3001" } };
+  assert.deepEqual(logic.reviewChanges(reviewed, opened, edited), { agent_trading_name: "New Pty Ltd", litigation_involved: "YES", office_suburb: "Melbourne 3001", agent_acn: "004028077" });
+  // The staff-edited revision is drawn from the answers (tick boxes, the registration box).
+  const onb = await load.import<typeof import("../supabase/functions/document-signing/onboarding.ts")>("../supabase/functions/document-signing/onboarding.ts");
+  assert.deepEqual(onb.valuesFromAnswers([{ key: "agent_trading_name", type: "text" }, { key: "litigation_involved:YES", type: "checkbox" }, { key: "litigation_involved:NO", type: "checkbox" },
+    { key: "agent_registration_number", type: "text" }, { key: "agent_signature_form", type: "signature", value: "kept" }, { key: "agent_abn_form", type: "text" }],
+    { agent_trading_name: "New Pty Ltd", litigation_involved: "YES", agent_acn: "603584676", agent_marn: "123", agent_abn: "86603584676" }),
+    ["New Pty Ltd", "true", "false", "ACN 603 584 676 / MARN 123", "kept", "86603584676"]);
+  for (const action of ["agent_onboarding_review_save", "agent_onboarding_correction_send", "agent_onboarding_approve"]) assert.equal(typeof onb.ONBOARDING_ACTIONS[action], "function", action);
+  // The statuses and the database rules (lab-checked; here the migration text).
+  assert.deepEqual([...onboarding.BUSINESS_STATUS_FLOW], ["Application sent", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", "Active"]);
+  const sql = read("supabase/migrations/20261119232741_onboarding_review_loop.sql");
+  assert.ok(["'correction_requested', 'resubmitted'", "create or replace function public.agency_onboarding_label", "create or replace function public.agency_onboarding_approve", "create or replace function public.agency_business_release",
+    "grant execute on function public.agency_business_release(uuid) to service_role", "perform public.agency_onboarding_resubmitted(", "'Referee details corrected by the applicant'", "when a.status = 'Active' and public.agency_awaiting_agreement(a.id) then 'Onboarding'",
+    "'staff_edit'", "agent_application_edited", "Resubmitted: review the corrections"].every((s) => sql.includes(s)), "stages, label, approve, release after the agreement, audit, dashboard");
+  // The page pieces: three modes in one wizard, the review dialog, the panel's status line and resends, the F04 kept out of Send a document.
+  const wizard = read("src/components/signing/F04Wizard.tsx"), dialog = read("src/pages/admin/components/F04ReviewDialog.tsx"), panel = read("src/pages/admin/components/AgentOnboardingPanel.tsx");
+  assert.ok(["mode?: F04Mode", "Save changes", "Send back for correction", "Approve and activate agency", "f04-flag-", "f04-locked-", "f04-correction-banner"].every((s) => wizard.includes(s)));
+  assert.ok(dialog.includes("mode=\"admin-review\"") && dialog.includes("refereePanel"));
+  assert.ok(["resend-link", "Resend to referee", "review-application", "correction-history", "approveAgency"].every((s) => panel.includes(s)) && !panel.includes("SendApplicationDialog") && !panel.includes("send-agreement-anyway"));
+  assert.ok(read("src/pages/admin/components/signing/SubjectSigningPanel.tsx").includes("withoutF04("));
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

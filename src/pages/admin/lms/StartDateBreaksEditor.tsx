@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { BreakDateField } from "@/pages/admin/components/rto/BreakDatePicker";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { shortDate } from "@/pages/admin/lib/rto";
+import { LOAD_HOURS, intakeDefaultName, shortDate, type StudyLoad } from "@/pages/admin/lib/rto";
 
 interface Row { unitId: string; code: string; name: string; hours: number | null; weeks: number; startDate: string | null; endDate: string | null; prerequisites: string[] }
 interface Break { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
@@ -33,12 +33,25 @@ const addDays = (iso: string, n: number) => new Date(Date.parse(iso + "T00:00:00
 const overlapping = (list: Break[], from: string, to: string, except?: string) =>
   list.filter(b => b.id !== except && b.startDate <= to && from <= b.endDate);
 
-export default function StartDateBreaksEditor({ course, stepLabel, onClose, nextStep }: {
+export default function StartDateBreaksEditor({ course, stepLabel, onClose, nextStep, backStep, studyLoad = null, onStudyLoad, intakeName, onIntakeName, takenNames = [], registeredWeeks = null }: {
   course: { id: string; code: string };
   stepLabel?: string;
   onClose: () => void;
   /** The step after saving (create the first intake); without it the footer shows Done. */
   nextStep?: { label: string; onClick: () => void };
+  /** New course wizard: the step before this one. */
+  backStep?: { label: string; onClick: () => void };
+  /** New course wizard (owner, 2026-11-20): CoE (20 hrs a week) or VoE (40) is asked first, before the start date: every unit's
+   * weeks are its SLIT hours at that rate, so the master timetable is laid out for it. It is not asked again in later steps. */
+  studyLoad?: StudyLoad | null;
+  onStudyLoad?: (load: StudyLoad) => void;
+  /** New course wizard: the name of the intake made at the next step; null until typed (then the default follows CoE / VoE and the start date). */
+  intakeName?: string | null;
+  onIntakeName?: (name: string | null) => void;
+  /** Names the course's other intakes already use. */
+  takenNames?: string[];
+  /** The CRICOS registered duration in weeks: the class hours a week are raised so one cycle fits in it (owner, 2026-11-20). */
+  registeredWeeks?: number | null;
 }) {
   const [master, setMaster] = useState<Master | null>(null);
   const [start, setStart] = useState("");
@@ -58,8 +71,14 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
       if (!live) return;
       setMaster(data); setStart(data.startDate ?? "");
       setOrder(data.rows.map(r => ({ unitId: r.unitId, weeks: Number(r.weeks) })));
+      // A saved master tells its rate: about 40 hours a week of classes is VoE, else CoE.
+      if (onStudyLoad && !studyLoad && data.saved) {
+        const hrs = data.rows.reduce((t, r) => t + (r.hours ?? 0), 0), wks = data.rows.reduce((t, r) => t + Number(r.weeks || 0), 0);
+        if (hrs > 0 && wks > 0) onStudyLoad(hrs / wks > 30 ? "voe" : "coe");
+      }
     }).catch(e => { if (live) setError(e instanceof Error ? e.message : "The units could not be loaded."); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loads once per course; the CoE / VoE guess is made only then
   }, [course.id]);
 
   /** The dates for the start date on screen (nothing is saved). */
@@ -73,7 +92,11 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
     } catch (e) { if (mine === request.current) setError(e instanceof Error ? e.message : "The dates could not be calculated."); }
   }, [course.id, order]);
 
-  const changeStart = (value: string) => { setStart(value); setSaved(false); void preview(value); };
+  const changeStart = (value: string) => {
+    setStart(value); setSaved(false);
+    // The term breaks inside the registered weeks depend on the start: the rate is worked out again.
+    if (studyLoad && master) { const next = fitOrder(studyLoad, value); setOrder(next); void preview(value, next); } else void preview(value);
+  };
   const changeOrder = (next: { unitId: string; weeks: number }[]) => { setOrder(next); setSaved(false); void preview(start, next); };
   const move = (index: number, by: -1 | 1) => {
     const to = index + by;
@@ -131,10 +154,11 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
     await preview(start);
   };
 
-  const save = async () => {
+  /** Saves the dates; in the wizard, Save and next goes on to the next step at once. */
+  const save = async (next = false) => {
     if (busy || !start || !order.length) return;
     setBusy(true); setError("");
-    try { setMaster(await call("save", { courseId: course.id, startDate: start, rows: order })); setSaved(true); }
+    try { setMaster(await call("save", { courseId: course.id, startDate: start, rows: order })); setSaved(true); if (next && nextStep) nextStep.onClick(); }
     catch (e) { setError(e instanceof Error ? e.message : "The dates were not saved."); }
     finally { setBusy(false); }
   };
@@ -156,16 +180,49 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
 
   const canEdit = !!master?.canEdit;
   const problems = master?.problems ?? [];
-  const blocked = busy || !master || !canEdit || !start || !order.length || order.some(o => !(o.weeks > 0)) || problems.length > 0;
+  /** CoE / VoE chosen: every unit's weeks become its hours at that rate (to the half week), and the dates are worked out again. */
+  const asking = !!onStudyLoad;
+  /** The class hours a week: CoE 20 / VoE 40, never more (owner, 2026-11-20). Every unit's weeks are its hours at that rate (to the
+   * half week); the registered weeks less the term breaks inside them tell whether one cycle fits. */
+  const fit = (load: StudyLoad, from: string) => {
+    const hoursOf = (unitId: string) => master?.rows.find(r => r.unitId === unitId)?.hours ?? 0;
+    const weeksAt = (rate: number) => order.map(o => { const h = hoursOf(o.unitId); return h > 0 ? { ...o, weeks: Math.min(104, Math.max(0.5, Math.ceil((h / rate) * 2) / 2)) } : o; });
+    let breakWeeks = 0, teach: number | null = null;
+    if (registeredWeeks && from) {
+      const end = addDays(from, registeredWeeks * 7 - 1);
+      let off = 0;
+      for (let d = from; d <= end; d = addDays(d, 1)) if (breaks.some(b => d >= b.startDate && d <= b.endDate)) off++;
+      breakWeeks = Math.round((off / 7) * 10) / 10; teach = registeredWeeks - off / 7;
+    }
+    const rate = LOAD_HOURS[load];
+    const rows = weeksAt(rate);
+    const teachingWeeks = rows.reduce((t, o) => t + o.weeks, 0);
+    return { rate, rows, breakWeeks, teach, teachingWeeks, fits: teach === null || teachingWeeks <= teach };
+  };
+  const fitOrder = (load: StudyLoad, from: string) => fit(load, from).rows;
+  const chooseLoad = (load: StudyLoad) => {
+    onStudyLoad?.(load);
+    if (!master) return;
+    const next = fitOrder(load, start);
+    setOrder(next); setSaved(false);
+    if (start) void preview(start, next);
+  };
+  const fitted = studyLoad && master ? fit(studyLoad, start) : null;
+  const totalHours = (master?.rows ?? []).reduce((t, r) => t + (r.hours ?? 0), 0);
+  const blocked = busy || !master || !canEdit || (asking && !studyLoad) || (!!onIntakeName && intakeName !== null && intakeName !== undefined && !intakeName.trim()) || !start || !order.length || order.some(o => !(o.weeks > 0)) || problems.length > 0;
   const totalWeeks = order.reduce((t, o) => t + (o.weeks || 0), 0);
 
   return <Modal open keepOpen={!!stepLabel} title={`${stepLabel ? stepLabel + " · " : ""}Start date and term breaks · ${course.code}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-foreground-700">{start ? <><b>Starts {shortDate(start)}</b> · one cycle of {order.length} units, {weeksLabel(totalWeeks)} classroom weeks, then the units start again · no end date</> : "Enter the start date to see the dates."}</span>
       <div className="flex gap-2">
-        {saved ? <><Button variant="outline" onClick={onClose}>{nextStep ? "Later" : "Done"}</Button>{nextStep ? <Button icon="ri-calendar-event-line" onClick={nextStep.onClick}>{nextStep.label}</Button> : null}</>
-          : <><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-            <Button disabled={blocked} onClick={() => void save()}>{busy ? "Saving…" : "Save dates"}</Button></>}
+        {backStep ? <Button variant="outline" icon="ri-arrow-left-line" disabled={busy} onClick={backStep.onClick}>{backStep.label}</Button> : null}
+        {nextStep
+          ? saved ? <Button icon="ri-arrow-right-line" onClick={nextStep.onClick}>{nextStep.label}</Button>
+            : <Button icon="ri-save-line" disabled={blocked} onClick={() => void save(true)}>{busy ? "Saving…" : `Save and ${nextStep.label.toLowerCase()}`}</Button>
+          : saved ? <Button variant="outline" onClick={onClose}>Done</Button>
+            : <><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
+              <Button disabled={blocked} onClick={() => void save()}>{busy ? "Saving…" : "Save dates"}</Button></>}
       </div>
     </div>}>
     {error ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
@@ -173,21 +230,45 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
     {!master && !error ? <p className="text-sm text-foreground-500">Loading the units…</p> : master ? <div className="space-y-5">
       {problems.length ? <ul role="alert" className="list-disc rounded-lg border border-red-200 bg-red-50 py-2 pl-8 pr-3 text-sm text-red-700">{problems.map(p => <li key={p}>{p}</li>)}</ul> : null}
 
-      <section>
-        <h3 className="mb-2 text-sm font-bold text-foreground-950">1. Start date</h3>
+      {asking ? <section>
+        <h3 className="mb-2 text-sm font-bold text-foreground-950">1. Students on</h3>
+        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Students on">
+          {(["coe", "voe"] as const).map(k => <button key={k} type="button" role="radio" aria-checked={studyLoad === k} disabled={busy || !canEdit} onClick={() => chooseLoad(k)}
+            className={`min-w-[170px] rounded-lg border px-4 py-2 text-left ${studyLoad === k ? "border-2 border-primary-600 bg-primary-50 text-primary-900" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
+            <span className="block font-bold">{k === "coe" ? "CoE" : "VoE"}</span>
+            <span className="block text-xs">{LOAD_HOURS[k]} class hours a week · {k === "coe" ? "student visa" : "verification of enrolment"}</span>
+          </button>)}
+        </div>
+        {fitted ? <p className="mt-2 rounded-lg border border-background-200 bg-background-100 p-2 text-sm text-foreground-800">
+          <b>{fitted.rate} class hours a week</b> ({studyLoad === "coe" ? "CoE" : "VoE"} maximum): {totalHours} hrs take {fitted.teachingWeeks} teaching weeks
+          {start && master?.endDate ? `; with the term breaks one cycle runs ${Math.round(((Date.parse(master.endDate) - Date.parse(start)) / 86400000 + 1) / 7)} weeks, to ${shortDate(master.endDate)}.` : "."}</p> : null}
+        <p className="mt-1 text-xs text-foreground-600">{studyLoad ? `Every unit's weeks are its SLIT hours ÷ ${fitted?.rate ?? LOAD_HOURS[studyLoad]}. The rooms, trainers and weekly class times follow this; it is not asked again.` : "Choose this first: the unit weeks and the dates follow it."}</p>
+      </section> : null}
+
+      <section className={asking && !studyLoad ? "pointer-events-none opacity-50" : undefined} aria-disabled={asking && !studyLoad}>
+        <h3 className="mb-2 text-sm font-bold text-foreground-950">{asking ? "2" : "1"}. Start date</h3>
         <table className="w-full max-w-2xl overflow-hidden rounded-lg border border-background-200 text-sm">
           <thead className="bg-background-100"><tr><th className={th}>Course starts</th><th className={th}>One cycle (every unit once)</th><th className={th}>Course ends</th></tr></thead>
           <tbody><tr className="border-t border-background-100">
-            <td className="px-2 py-1.5"><BreakDateField label="Start date" className="border-2 border-primary-300 font-semibold" value={start} disabled={!canEdit || busy} onChange={changeStart}
+            <td className="px-2 py-1.5"><BreakDateField label="Start date" className="border-2 border-primary-300 font-semibold" value={start} disabled={!canEdit || busy || (asking && !studyLoad)} onChange={changeStart}
               breaks={breaks} breakNote="the course cannot start in a term break" /></td>
             <td className="px-2 py-1.5 text-foreground-800">{start && master.endDate ? <>{weeksLabel(totalWeeks)} weeks, last unit ends {shortDate(master.endDate)}</> : `${weeksLabel(totalWeeks)} weeks`}</td>
             <td className="px-2 py-1.5 font-semibold text-foreground-950">Never: the units start again</td>
           </tr></tbody>
         </table>
+        {onIntakeName ? <label className="mt-3 block max-w-md text-sm font-semibold text-foreground-800">Intake name
+          <input className={input + " mt-1 block w-full font-mono"} maxLength={80} disabled={busy || !canEdit}
+            value={intakeName ?? (studyLoad && start ? intakeDefaultName(course.code, studyLoad, start, takenNames) : "")}
+            placeholder={studyLoad && start ? "" : "Filled in from CoE / VoE and the start date"}
+            onChange={e => onIntakeName(e.target.value)} />
+          <span className="mt-0.5 block text-xs font-normal text-foreground-500">{intakeName === null || intakeName === undefined
+            ? "Made from CoE / VoE and the start date; type to change it."
+            : <>Typed by you. <button type="button" className="font-semibold text-primary-700 hover:underline" onClick={() => onIntakeName(null)}>Use the default</button></>}</span>
+        </label> : null}
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-bold text-foreground-950">2. Term breaks</h3>
+        <h3 className="mb-2 text-sm font-bold text-foreground-950">{asking ? "3" : "2"}. Term breaks</h3>
         <div className="overflow-x-auto rounded-lg border border-background-200">
           <table className="w-full min-w-[620px] text-sm">
             <thead className="bg-background-100"><tr><th className={th}>Name</th><th className={th}>First day</th><th className={th}>Last day</th><th className={th + " text-right"}>Weeks</th><th className={th}><span className="sr-only">Actions</span></th></tr></thead>
@@ -234,7 +315,7 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-bold text-foreground-950">3. Master timetable <span className="font-normal text-foreground-500">(the first cycle, then the units repeat: move units, change weeks or end dates)</span></h3>
+        <h3 className="mb-2 text-sm font-bold text-foreground-950">{asking ? "4" : "3"}. Master timetable <span className="font-normal text-foreground-500">(the first cycle, then the units repeat: move units, change weeks or end dates)</span></h3>
         {!order.length ? <p className="rounded-lg border border-background-200 p-4 text-center text-sm text-foreground-500">This course has no active units. Add units first.</p>
           : <div className="max-h-[40vh] overflow-auto rounded-lg border border-background-200">
           <table className="w-full min-w-[860px] text-sm">

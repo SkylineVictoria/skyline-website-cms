@@ -300,6 +300,11 @@ export const PDF_FORM_SECTIONS: PdfSection[] = [
     }
    },
    {
+    "name": "english_pathway",
+    "label": "How the English requirement is met",
+    "type": "select"
+   },
+   {
     "name": "english_type",
     "label": "English Assessment Type",
     "type": "select"

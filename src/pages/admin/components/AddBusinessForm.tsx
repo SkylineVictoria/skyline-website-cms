@@ -209,10 +209,10 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       });
       const id = String(data.agencyId ?? "");
       if (!id) throw new Error("The business was created but could not be opened. Find it in Businesses.");
-      const prefilled = data.application && "prefilled" in data.application && Number(data.application.prefilled) > 0 ? " It was prefilled from ABN Lookup; the contact can correct any value before signing." : "";
-      const message = data.application?.sent
-        ? `Business added. The Agent Application Form (${data.application.reference}) was emailed to ${email}.${prefilled} The referee checks and the agreement follow. Activate the business once the agreement is signed.${data.abrWarning ? ` ${data.abrWarning}` : ""}`
-        : `Business added, but the application form was not emailed: ${data.warning ?? data.application?.warning ?? "signing email is not configured"}. Use Resend application on the business page.`;
+      // 2026-11-20: nothing is emailed yet; the business page opens Prepare application (the pre-send step) to fill in and send the form.
+      const message = data.warning
+        ? `Business added. ${data.warning}`
+        : `Business added. Nothing has been emailed yet: prepare the application (details, agreement terms, witness) and send it to ${email}.${data.abrWarning ? ` ${data.abrWarning}` : ""}`;
       onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
@@ -408,7 +408,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
               </div>
             </> : input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
             <div>
-              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: the Agent Application Form goes here as soon as the business is added; the sign-in link follows after activation."} required>
+              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email. Nothing is emailed when you add the business: you prepare the application next, and it goes to this email only when you press Send. The sign-in link follows after activation."} required>
                 <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
                   onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
                   onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />

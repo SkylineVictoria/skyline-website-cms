@@ -155,7 +155,8 @@ test("signing mail: each job is sent once; a completed copy is sent only with ma
   const first = await signingCore.drainSigningMail(ports);
   assert.deepEqual(first, { sent: 2, failed: 1, requeued: 0 });
   assert.deepEqual(results, [[1, "sent"], [2, "sent"], [3, "failed"]], "a changed signed PDF is never attached");
-  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 2);
+  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 1, "the signed document only (2026-11-20: the audit record is never emailed)");
+  assert.ok(!JSON.stringify(sent).toLowerCase().includes("certificate"), "no certificate attachment, name or wording in any email");
   assert.deepEqual(await signingCore.drainSigningMail(ports), { sent: 0, failed: 0, requeued: 0 }, "nothing is sent twice");
   const off = await signingCore.drainSigningMail({ ...ports, mail: { ...ports.mail, provider: null } } as typeof ports);
   assert.deepEqual(off, { sent: 0, failed: 0, requeued: 0 }, "with sending off nothing is claimed");
@@ -461,6 +462,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
         openOnboarding.add(String(args.p_agency)); return { id: "20000000-0000-4000-8000-000000000001", reference: "SLIT-2026-001", stage: "application_sent" };
       }
       if (name === "admin_business_create") return { agencyId: "30000000-0000-4000-8000-000000000002", businessId: "30000000-0000-4000-8000-000000000002", agencyName: String((args.p_agency as Record<string, unknown>).name), contactAgentId: "10000000-0000-4000-8000-000000000002" };
+      if (name === "agency_onboarding_presend_save") return { onboardingId: "22000000-0000-4000-8000-000000000001", savedAt: "2026-11-20T00:00:00Z", contact: { id: (args.p_data as { agentId: string }).agentId, name: "Pat Contact", email: "zz-test-poc@blackhole.postmarkapp.com" } };
       if (name === "agency_onboarding_agreement_create") {
         const d = args.p_data as Record<string, unknown>;
         if (state.stage !== "references_received" && !(typeof d.override_reason === "string" && d.override_reason.length >= 5)) throw { message: "Give a reason for sending the agreement before both references are back" };
@@ -602,20 +604,303 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   assert.equal(early.override, true);
   assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_agreement_create").pop()![1].p_data as Record<string, unknown>).override_reason, "Referee 2 confirmed by phone");
 
-  // Add business (2026-11-19): the business and its point of contact are saved and the F04 goes to the contact at once, in one call.
-  const sentBefore = sent.length;
-  const added = await call({ action: "agent_onboarding_business_create", agency: { name: "ZZ Test Agency", code: "ZZ-TEST", registration_number: "11111111111" }, contactEmail: "ZZ-Test-POC@blackhole.postmarkapp.com", contactName: "Pat Contact" }) as { agencyId: string; application: { sent: boolean; stage: string } | null; warning?: string };
-  assert.ok(added.application?.sent && added.application.stage === "application_sent" && !added.warning, "the F04 is sent with the new business");
+  // Add business (2026-11-20): the business and its point of contact are saved with a DRAFT onboarding; nothing is emailed until staff
+  // send it from the pre-send step.
+  const sentBefore = sent.length, mailsBefore = mails.length;
+  const added = await call({ action: "agent_onboarding_business_create", agency: { name: "ZZ Test Agency", code: "ZZ-TEST", registration_number: "11111111111" }, contactEmail: "ZZ-Test-POC@blackhole.postmarkapp.com", contactName: "Pat Contact" }) as { agencyId: string; application: unknown; presend: boolean; onboardingId: string | null; warning?: string };
+  assert.ok(added.presend && added.application === null && added.onboardingId === "22000000-0000-4000-8000-000000000001" && !added.warning, "a draft is opened for the pre-send step");
   assert.deepEqual(rpcs.filter(([name]) => name === "admin_business_create").map(([, a]) => [a.p_contact_email, a.p_contact_name]), [["zz-test-poc@blackhole.postmarkapp.com", "Pat Contact"]]);
-  assert.equal(sent.length, sentBefore + 1, "exactly one application form");
-  assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").pop()![1].p_agent, "10000000-0000-4000-8000-000000000002", "to the point of contact");
-  // A double click / retry for the same business: refused by the database; nothing emailed; the unsent draft voided.
+  assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_presend_save").pop()![1].p_data as { agentId: string }).agentId, "10000000-0000-4000-8000-000000000002", "the draft is for the point of contact");
+  assert.equal(sent.length, sentBefore, "no application form is sent by Add business"); assert.equal(mails.length, mailsBefore, "and nothing is emailed");
+  // The earlier action (an F04 alone) still refuses a second application for a business already in progress.
   const voidedBefore = voided.length;
-  await assert.rejects(call({ action: "agent_onboarding_send_application", agencyId: added.agencyId, agentId: "10000000-0000-4000-8000-000000000002" }), /already has an onboarding in progress/);
-  assert.equal(sent.length, sentBefore + 1, "no second F04"); assert.equal(voided.length, voidedBefore + 1, "the unsent draft is voided");
+  await assert.rejects(call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001" }), /already has an onboarding in progress/);
+  assert.equal(sent.length, sentBefore, "no second F04"); assert.equal(voided.length, voidedBefore + 1, "the unsent draft is voided");
   // A bad contact is refused before anything is saved.
   await assert.rejects(call({ action: "agent_onboarding_business_create", agency: { name: "X" }, contactEmail: "not-an-email", contactName: "Pat" }), /email address/);
   assert.equal(rpcs.filter(([name]) => name === "admin_business_create").length, 1);
+});
+
+test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Send makes ONE request (F04 + P06) with every Yes / No at No and no references; the agency admin signs once with a drawn witness; the signed PDF is split; Approve without referees countersigns and issues the agreement and emails it", async () => {
+  const stored = new Map<string, Uint8Array>(); const saved: Array<Record<string, unknown>> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = [];
+  const created: Array<Record<string, unknown>> = []; const sent: string[] = []; const mails: Array<{ to: string; subject: string; textBody: string; attachments?: Array<{ name: string; contentBase64: string }> }> = []; let n = 0;
+  const agencyId = "32000000-0000-4000-8000-000000000001", onboardingId = "22000000-0000-4000-8000-000000000009";
+  const contact = { id: "12000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" };
+  const state = { stage: "draft", presend: null as Record<string, unknown> | null, notifiedAgent: false };
+  const referees = [1, 2].map((p) => ({ id: `42000000-0000-4000-8000-00000000000${p}`, position: p, name: p === 1 ? "Priya Nair" : "Sam Lee", organisation: "Harbour College", positionTitle: "", email: `ref${p}@example.test`, phone: "+61400111222", address: "", status: "pending", requestId: null as string | null }));
+  const templates = () => saved.map((t) => ({ id: t.id, systemKey: t.__key, status: "active", sourcePath: t.source_path, sourceHash: t.source_hash, sourcePages: t.source_pages, fields: t.fields, expiryDays: 30, reminderDays: 3 }));
+  const follow = () => ({ id: onboardingId, kind: "business", combined: true, stage: state.stage, agency: { id: agencyId, name: "Acme Education Pty Ltd" }, agent: contact, sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: [], admins: [],
+    values: { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St" }, referees: referees.map((r) => ({ ...r })), received: 0, total: 2, template: templates().find((t) => t.systemKey === "agent_referee_check_form") ?? null,
+    notified: { agentReferees: state.notifiedAgent, staffReferences: false } });
+  let signData: Record<string, unknown> | null = null;
+  const blankCache = new Map<string, { path: string; sha256: string }>(); const queued: string[] = [];
+  const split = { pending: true, form: "", agreement: "" }; const signedRequest = { id: "", path: "", hash: "" };
+  const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+    admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
+      if (action === "subject_search") return [];
+      if (action === "create") { created.push({ ...data, id }); return { id, reference: `SLIT-2026-10${created.length}` }; }
+      if (action === "send") { sent.push(id!); return { id, state: "sent" }; }
+      throw new Error(`unexpected ${action}`);
+    },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agency_onboarding_template_install") {
+        const key = String(args.p_key); const have = saved.find((t) => t.__key === key);
+        if (have) return { id: have.id, systemKey: key, reused: true, fields: (have.fields as unknown[]).length, pages: have.source_pages, status: "active" };
+        if (!args.p_data) return null;
+        const d = args.p_data as Record<string, unknown>; saved.push({ ...d, __key: key }); return { id: d.id, systemKey: key, reused: false, fields: (d.fields as unknown[]).length, pages: d.source_pages, status: "active" };
+      }
+      if (name === "agency_onboarding_templates") return templates();
+      if (name === "agency_onboarding_prepare") return { agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556" }, agent: contact, admin: { name: "Hari Admin", position: "CEO", signaturePng: null },
+        values: { agent_agency_name: "Acme Education Pty Ltd", contact_email: contact.email, agent_website: "acme.example.test" } };
+      if (name === "agency_abr_get") return null;
+      // The business's ACN kept by the database (2026-11-20).
+      if (name === "agency_acn_sync") return { acn: "603584676", source: "register" };
+      if (name === "agency_onboarding_presend_get") return { onboardingId: state.presend ? onboardingId : null, stage: state.presend ? "draft" : null, openStage: state.stage === "draft" ? null : state.stage,
+        agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556", status: "Onboarding" }, contact, presend: (state.presend?.presend ?? null) as Record<string, unknown> | null,
+        terms: { commencementDate: state.presend?.commencementDate ?? null, territory: state.presend?.territory ?? "", commissionPercent: state.presend?.commissionPercent ?? null }, witness: { name: null, png: null }, savedAt: null, savedBy: null };
+      if (name === "agency_onboarding_presend_save") {
+        const d = args.p_data as Record<string, unknown>;
+        state.presend = { ...d, presend: { answers: d.answers, acn: d.acn, marn: d.marn } };
+        return { onboardingId, savedAt: "2026-11-20T00:00:00Z", contact };
+      }
+      if (name === "agency_onboarding_presend_send") { state.stage = "application_sent"; return { id: onboardingId, requestId: args.p_request, reference: "SLIT-2026-101", stage: "application_sent" }; }
+      if (name === "agency_onboarding_prefill_record" || name === "agency_abr_facts_record") return null;
+      // The merged blank cache (2026-11-20): one entry per pair of template versions; a second put is told which file is the one.
+      if (name === "agency_onboarding_blank_cache_get") return blankCache.get(String(args.p_key)) ?? null;
+      if (name === "agency_onboarding_blank_cache_put") { const have = blankCache.get(String(args.p_key)); if (have) return { ...have, mine: false }; const row = { path: String(args.p_path), sha256: String(args.p_sha256) }; blankCache.set(String(args.p_key), row); return { ...row, mine: true }; }
+      if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2, slitWitness: true }; }
+      if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: split.agreement };
+      if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      services.push([name, args]);
+      if (name === "agency_onboarding_followup") return follow();
+      if (name === "agency_onboarding_referee_request_create") { const r = referees.find((x) => x.id === args.p_referee)!; r.status = "sent"; r.requestId = String((args.p_data as { id: string }).id); state.stage = "references_pending"; return { requestId: r.requestId }; }
+      if (name === "agency_onboarding_mark_notified") { state.notifiedAgent = true; return null; }
+      if (name === "agency_onboarding_application_extra" || name === "agency_onboarding_witness_record") return null;
+      if (name === "agency_business_release") return { released: true, name: "Acme Education Pty Ltd", invitations: [] };
+      // The follow-up calls (2026-11-20): queued by the database; the test runs them itself (runFollowups).
+      if (name === "agency_onboarding_followup_queue") { queued.push(String(args.p_step)); return queued.length; }
+      if (name === "agency_onboarding_split_source") return { pending: split.pending, requestId: signedRequest.id, state: "signed", path: signedRequest.path, hash: signedRequest.hash, formPages: 2 };
+      if (name === "agency_onboarding_split_store") { split.form = String(args.p_form); split.agreement = String(args.p_agreement); split.pending = false; return { stored: true }; }
+      throw new Error(`unexpected service ${name}`);
+    },
+    service: async (action: string) => { if (action === "notify_claim") return []; if (action === "path_referenced") return false; return true; },
+    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async (paths: string[]) => { for (const p of paths) stored.delete(p); }, signedUrl: async () => null },
+    mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: ["admin@example.test"], siteUrl: "https://site.example.test", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const call = (body: Record<string, unknown>) => signingCore.handleSigning({ body, upload: null, ip: null, userAgent: null }, ports);
+  for (const which of ["form", "referee", "agreement"] as const) await signingCore.handleSigning({ body: { action: "agent_onboarding_install", which }, upload: { name: `${which}.pdf`, bytes: blankBytes(which) }, ip: null, userAgent: null }, ports);
+
+  // The pre-send step: a draft keeps what staff typed; a witness name without a drawn signature is refused (never typed).
+  await assert.rejects(call({ action: "agent_onboarding_presend_save", agencyId, data: { witnessName: "Jo Witness" } }), /must draw their signature/);
+  await call({ action: "agent_onboarding_presend_save", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director", agent_website: "https://acme.example.test", ref1_email: "x@example.test" } } });
+  assert.deepEqual((state.presend!.answers as Record<string, string>), { contact_title: "Mr", contact_position: "Director", agent_website: "https://acme.example.test" }, "the references are never pre-filled by staff");
+  const opened = await call({ action: "agent_onboarding_presend_open", agencyId }) as { fields: Array<{ key: string; value: string }>; terms: { territory: string } };
+  const openedValue = (key: string) => opened.fields.find((f) => f.key === key)?.value;
+  assert.deepEqual([openedValue("litigation_involved:NO"), openedValue("litigation_involved:YES"), openedValue("works_with_sub_agents:NO"), openedValue("eatc_completed:NO")], ["true", "", "true", "true"], "every Yes / No question opens at No");
+  assert.equal(openedValue("contact_title"), "Mr", "what staff saved is shown again");
+  assert.equal((opened as unknown as { acn: string }).acn, "603584676", "Prepare application shows the business's ACN");
+  // Send needs the agreement terms.
+  await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
+  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
+  assert.ok(sentApp.sent && sentApp.combined && sentApp.slitWitness && sent.length === 1, "one request, emailed to the point of contact");
+  const original = stored.get(`${sentApp.id}/original.pdf`)!;
+  assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the F04's 2 pages followed by the P06's 13");
+  const request = created[0] as { title: string; fields: Array<{ key: string; page: number; type: string; value: string; required: boolean }> };
+  const field = (key: string) => request.fields.find((f) => f.key === key);
+  assert.ok(field("agent_signature_form")!.page <= 2 && field("agent_signature")!.page > 2 && field("agent_signature")!.type === "signature", "one signer, a signature box on each document");
+  assert.ok(field("agent_witness_name")?.required && !field("agent_witness_signature"), "the witness name is the agency admin's to give; the witness signature is never a typing field");
+  assert.ok(!request.fields.some((f) => /^ref[12]_/.test(f.key) && f.value), "the references are empty");
+  assert.deepEqual([field("litigation_involved:NO")!.value, field("litigation_involved:YES")!.value, field("eatc_completed:NO")!.value], ["true", "", "true"], "Yes / No questions arrive at No");
+  const agreementText = await pdfText(original);
+  assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && agreementText.some((t) => t.page > 2 && t.text.includes("25%")), "the agreement terms are printed on the P06 pages");
+  assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("Sue Witness")), "the SLIT witness from Prepare application is printed on the agreement");
+  assert.ok(agreementText.some((t) => t.page === 3 && t.text.includes("51 824 753 556, ACN 603 584 676")), "the agreement's (ABN ...) line carries the business's ACN");
+  const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
+  assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
+  assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
+
+  // The agency admin signs once; the witness types a name and draws.
+  const originalHash = await signingCore.sha256Hex(original);
+  const recipient = { id: "r1", name: contact.name, email: contact.email, role: "Business contact", state: "sent" };
+  const fieldRows = request.fields.map((f, i) => ({ id: `f${i}`, recipient_id: "r1", type: f.type, page: f.page, x: 0.5, y: 0.8, w: 0.3, h: 0.03, label: f.key, key: f.key, value: f.value, required: f.required }));
+  const plan = { id: onboardingId, kind: "application", formPages: 2, combined: true, witness: { preset: false, box: { ...sendData.witness_box!, x: 0.1, y: 0.1, w: 0.3, h: 0.05 } } };
+  const record = { id: sentApp.id, state: "sent", original_hash: originalHash, recipient, fields: fieldRows, signers: [], onboarding: plan };
+  const linkPorts = { ...ports, service: async (action: string, args: { data?: Record<string, unknown> }) => {
+    if (action === "rate") return true;
+    if (action === "open") return record;
+    if (action === "sign_plan") return { id: sentApp.id, reference: "SLIT-2026-101", title: request.title, revision: 1, complete: true, signed_at: "2026-11-20T01:00:00Z", original_path: `${sentApp.id}/original.pdf`, original_hash: originalHash,
+      created_at: "2026-11-20T00:00:00Z", sent_at: "2026-11-20T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: plan,
+      fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String((args.data?.values as Record<string, string>)?.[f.id] === "true") : f.type === "date" ? "20/11/2026" : ((args.data?.values as Record<string, string>)?.[f.id] ?? f.value ?? "") })),
+      recipients: [{ ...recipient, state: "signed", signer_name: contact.name, signed_at: "2026-11-20T01:00:00Z", signature_kind: "typed" }], events: [] };
+    if (action === "sign") { signData = args.data ?? null; state.stage = "application_signed"; Object.assign(signedRequest, { id: sentApp.id, path: String(args.data?.current_path), hash: String(args.data?.current_hash) }); return { state: "signed" }; }
+    if (action === "notify_claim") return [];
+    if (action === "path_referenced") return false;
+    throw new Error(`unexpected ${action}`);
+  } } as typeof ports;
+  const values: Record<string, string> = Object.fromEntries(fieldRows.filter((f) => f.type === "text").map((f) => [f.id, f.value || "x"]));
+  for (const f of fieldRows.filter((x) => x.type === "checkbox")) values[f.id] = f.value === "true" ? "true" : "false";
+  const setKey = (key: string, value: string) => { const f = fieldRows.find((x) => x.key === key); if (f) values[f.id] = value; };
+  for (const p of [1, 2]) { setKey(`ref${p}_contact_name`, referees[p - 1].name); setKey(`ref${p}_email`, referees[p - 1].email); setKey(`ref${p}_phone`, "+6140011122" + p); }
+  setKey("contact_title", "Mr"); setKey("contact_given_name", "Ravi"); setKey("contact_family_name", "Kumar"); setKey("contact_email", contact.email); setKey("contact_phone", "+61412345678");
+  setKey("declarant_name", "Ravi Kumar"); setKey("declarant_role", "Director"); setKey("office_suburb", "Footscray"); setKey("office_province", "");
+  const allTicked = Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true]));
+  const signAs = (witness: unknown) => signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values: { ...values }, documentHash: originalHash,
+    application: { acn: "", marn: "", declarations: allTicked, witness } }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts);
+  await assert.rejects(signAs(undefined), /witness's full name/);
+  await assert.rejects(signAs({ name: "Jo Witness" }), /draw their signature/);
+  const signed = await signAs({ name: "Jo Witness", png: PNG_1PX }) as { signed: boolean; complete: boolean };
+  assert.ok(signed.signed && signed.complete);
+  const d = signData as unknown as { values: Record<string, string>; form_base64: string; agreement_base64: string };
+  const signedValue = (key: string) => d.values[fieldRows.find((f) => f.key === key)!.id];
+  assert.deepEqual([signedValue("agent_signatory_name"), signedValue("agent_signatory_position"), signedValue("agent_witness_name")], ["Ravi Kumar", "Director", "Jo Witness"], "the agreement's signatory is the declarant; the witness named");
+  const pages = async (b64: string) => (await PdfLib.PDFDocument.load(new Uint8Array(Buffer.from(b64, "base64")))).getPageCount();
+  // 2026-11-20 (CPU budget): the signature commits the whole signed document; the split and the referee checks are follow-up calls.
+  assert.equal(d.form_base64, undefined, "no split inside the signing request");
+  assert.deepEqual(queued, ["split"], "the split is queued");
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 0, "nothing else runs in the signing request");
+  const audit = signData as unknown as { certificate_path: string; certificate_hash: string };
+  assert.ok(/\/certificate-[0-9a-f-]+\.pdf$/.test(String(audit.certificate_path)) && stored.has(String(audit.certificate_path)) && /^[0-9a-f]{64}$/.test(String(audit.certificate_hash)),
+    "2026-11-20: the audit record (completion certificate) is still made and stored as evidence");
+  const signedText = await pdfText(stored.get(signedRequest.path)!);
+  assert.ok(signedText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && signedText.some((t) => t.page <= 2 && t.text.includes("Ravi")), "pdf.js reads the signed copy (incremental updates on the original)");
+  const followup = (step: string) => signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step }, upload: null, ip: null, userAgent: null }, { ...ports, isServiceCaller: true } as typeof ports);
+  await assert.rejects(signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step: "split" }, upload: null, ip: null, userAgent: null }, ports), /Not available/, "only the service may run a follow-up");
+  assert.deepEqual(await followup("split"), { step: "split", split: true });
+  assert.deepEqual([await pages(split.form), await pages(split.agreement)], [2, 13], "the one signed PDF is split into the application form and the agreement");
+  assert.deepEqual(queued, ["split", "after_application"], "the split queues the rest");
+  assert.deepEqual(await followup("split"), { step: "split", split: false }, "a repeated split call does nothing");
+  await followup("after_application");
+  assert.ok(services.some(([name, a]) => name === "agency_onboarding_witness_record" && a.p_name === "Jo Witness" && a.p_png === PNG_1PX), "the drawn witness is kept on the onboarding");
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 2, "both referees get their check at once");
+  assert.ok(mails.some((m) => /^Ready for review: Acme Education Pty Ltd$/.test(m.subject) && /do not need to wait/.test(m.textBody)), "staff may review at once");
+  assert.ok(mails.some((m) => m.to === contact.email && /do not need to wait for them/.test(m.textBody)), "the agency admin is not held up by the referees");
+
+  // Approve while both referees are still pending: no second signature; the agreement is countersigned, issued and emailed; sign-ins released.
+  await assert.rejects(call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Sue Witness" } }), /must draw their signature/);
+  state.stage = "references_pending";
+  const approved = await call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Other Witness", png: PNG_1PX } }) as
+    { approved: boolean; combined: boolean; refereesPending: number; issued: { issued: boolean; emailed: boolean; released: boolean } | null; warning?: string };
+  assert.ok(approved.approved && approved.combined && approved.refereesPending === 2 && approved.issued?.issued && approved.issued.emailed && approved.issued.released && !approved.warning, JSON.stringify(approved));
+  assert.equal(sent.length, 1, "no P06 request is sent for a second signature");
+  const issue = rpcs.find(([name]) => name === "agency_onboarding_agreement_issue")![1] as { p_base64: string; p_data: { admin_name: string; admin_witness_name: string } };
+  const issuedText = await pdfText(new Uint8Array(Buffer.from(issue.p_base64, "base64")));
+  assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === null && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement; the SLIT witness set before sending is not replaced");
+  const issuedMail = mails.find((m) => m.to === contact.email && /Your agent agreement/.test(m.subject))!;
+  assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
+});
+
+test("witness signatures (2026-11-20): a drawn signature in any field is a picture, never \"data:image\" text (send, sign and approve stamps)", async () => {
+  const agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  // As the hosted template stores them (installed 2026-11-17): both witness signature boxes are "text" fields.
+  type P = { type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; key: string };
+  const asHosted = agreement.fields.map((f: P) => /witness_signature$/.test(f.key) ? { ...f, type: "text" } : f);
+  const drawing = `data:image/png;base64,${PNG_1PX}`;
+  const sent = onboarding.resolveFields(asHosted, { admin_witness_name: "Sue Witness", admin_witness_signature: drawing, agent_territory: "India" });
+  const toStamp = (fields: P[], recipient: string | null) => fields.map((f) => ({ recipient_id: recipient, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label }));
+  const afterSend = await signingPdf.stampDocument(agreement.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields: toStamp(sent.printed, null) });
+  // Signing: the agency witness's drawing arrives as the value of its (text) field, and the admin signs with a drawn signature.
+  const signerFields = sent.recipient.map((f: P) => ({ ...f, value: f.key === "agent_witness_signature" ? drawing : f.key === "agent_witness_name" ? "Raj Witness" : f.type === "signature" ? "" : "x" }));
+  const recipients = [{ id: "r1", name: "Ravi Kumar", email: "r@example.test", role: "Business contact", state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-20T00:00:00Z", signature_kind: "drawn", signature_image: PNG_1PX }];
+  const afterSign = await signingPdf.stampDocument(afterSend, { reference: "SLIT-2026-000099", title: "t", recipients, incremental: true, fields: toStamp(signerFields, "r1") });
+  const admin = onboarding.resolveFields(asHosted, { admin_name: "Hari Admin", admin_position: "CEO", admin_signature: drawing, admin_signed_date: "2026-11-20" }).printed.filter((f: P) => f.key.startsWith("admin_") && !f.key.startsWith("admin_witness"));
+  const issued = await signingPdf.stampDocument(afterSign, { reference: "", title: "t", recipients: [], incremental: true, fields: toStamp(admin, null) });
+  for (const [step, bytes] of [["send", afterSend], ["sign", afterSign], ["approve", issued]] as const) {
+    const leaked = (await pdfText(bytes)).filter((t) => /data:image|base64,/i.test(t.text));
+    assert.equal(leaked.length, 0, `after ${step}: no field prints a data URL as text (${leaked.map((t) => `p${t.page} ${t.text.slice(0, 30)}`).join("; ")})`);
+  }
+  const doc = await PdfLib.PDFDocument.load(issued);
+  const imagesOn = (n: number) => { const xo = doc.getPage(n).node.Resources()?.lookup(PdfLib.PDFName.of("XObject")); return xo instanceof PdfLib.PDFDict ? xo.keys().length : 0; };
+  const box = (key: string) => agreement.fields.find((f: P) => f.key === key)!;
+  const base = await PdfLib.PDFDocument.load(agreement.flattened);
+  const baseImages = (n: number) => { const xo = base.getPage(n).node.Resources()?.lookup(PdfLib.PDFName.of("XObject")); return xo instanceof PdfLib.PDFDict ? xo.keys().length : 0; };
+  for (const key of ["admin_witness_signature", "agent_witness_signature"]) {
+    const page = box(key).page - 1;
+    assert.ok(imagesOn(page) > baseImages(page), `${key}: the drawing is embedded as a picture on page ${page + 1}`);
+  }
+  const text = (await pdfText(issued)).map((t) => t.text).join(" ");
+  assert.ok(text.includes("Sue Witness") && text.includes("Raj Witness") && text.includes("Hari Admin"), "the witness names and the SLIT signatory still print as text");
+});
+
+test("F04 step order (2026-11-20): Business, References, Contact, Agency, Review & sign in the agency admin's form, Prepare application and the staff review; drafts and send-back follow", async () => {
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"], "the agency admin's invited view");
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", null)), ["business", "references", "contact", "agency", "review"], "the staff F04 review dialog");
+  assert.deepEqual(ids(logic.visibleSteps("admin-prefill", null)), ["business", "contact", "agency", "review"], "Prepare application: same order, the references are the agency admin's");
+  // Send back for correction: each flagged answer opens its own step, in the new order, then Review & sign.
+  const flagged = { contact_email: "wrong", ref2_phone: "missing", litigation_involved: "explain", agent_abn: "check" };
+  assert.deepEqual(ids(logic.visibleSteps("correction", flagged)), ["business", "references", "contact", "agency", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x" })), ["references", "review"], "only the references flagged");
+  assert.deepEqual(ids(logic.visibleSteps("correction", { office_address: "x", services_provided: "y" })), ["contact", "agency", "review"]);
+  for (const [key, step] of [["agent_legal_entity", "business"], ["marn", "business"], ["ref1_contact_name", "references"], ["ref2_email", "references"], ["contact_phone", "contact"],
+    ["office_suburb", "contact"], ["agent_website", "contact"], ["eatc_completed", "agency"], ["students_per_year", "agency"]] as const) {
+    assert.equal(logic.F04_STEPS[logic.stepOfKey(key)].id, step, `${key} is flagged on the ${step} step`);
+  }
+  // Each step checks its own answers at its new position.
+  const refFields = [1, 2].flatMap((n) => ["contact_name", "organisation", "email", "phone"].map((p) => ({ key: `ref${n}_${p}`, type: "text", required: true }))) as never;
+  const empty = { answers: {}, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.references };
+  assert.ok(Object.keys(logic.f04Problems(logic.F04_STEP.references, refFields, empty)).some((k) => k.startsWith("ref1_")), "the References step (second) asks for the references");
+  assert.deepEqual(logic.f04Problems(logic.F04_STEP.contact, refFields, empty), {}, "the Contact step does not ask for the references");
+  // Progress saving: a draft keeps its step by id; one saved before the change (position only, old order) reopens at the same step.
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 1 })].id, "contact", "an old draft at position 1 was on Contact");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 3 })].id, "references", "an old draft at position 3 was on References");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 0, stepId: "agency" })].id, "agency", "a new draft by its step id");
+  assert.equal(logic.draftStep(null), 0);
+});
+
+test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign once, split and approve stays under 1 s of CPU here; incremental updates keep the original bytes", async () => {
+  const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+  const timed = async <T>(name: string, work: () => Promise<T>, budget = 1000): Promise<T> => {
+    const t = cpuMs(); const out = await work(); const used = cpuMs() - t;
+    assert.ok(used < budget, `${name} used ${used.toFixed(0)} ms of CPU (budget ${budget} ms)`);
+    return out;
+  };
+  const form = await onboardingPdf.readBlankTemplate("form", blankBytes("form")), agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  const png = PNG_1PX;
+  const merged = await timed("merge the two blanks (once per template version)", () => onboardingPdf.mergePdfs([form.flattened, agreement.flattened]));
+  // The shipped blanks were 1.63 MB merged (P06 page content stored uncompressed, 250-460 dpi pictures); optimised 2026-11-20 to ~1.1 MB.
+  assert.ok(merged.length < 1_200_000, `the merged F04 + P06 blank is ${merged.length} bytes (budget 1.2 MB)`);
+  const loaded = await PdfLib.PDFDocument.load(merged);
+  const rawContent = loaded.getPages().flatMap((p) => { const c = p.node.Contents(); const refs = c instanceof PdfLib.PDFArray ? c.asArray() : [c];
+    return refs.map((r) => loaded.context.lookup(r as PdfLib.PDFRef)).filter((s) => s instanceof PdfLib.PDFRawStream && !s.dict.get(PdfLib.PDFName.of("Filter"))); });
+  assert.equal(rawContent.length, 0, "every page's content is compressed");
+  const values: Record<string, string> = { agent_legal_entity: "Acme Education Pty Ltd", agent_abn: "51824753556", contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", declarant_name: "Ravi Kumar" };
+  onboarding.yesNoDefaults(form.fields, values);
+  const formR = onboarding.resolveFields(form.fields, values, { editablePrefill: true });
+  const agrR = onboarding.resolveFields(agreement.fields, { agent_organisation_name: "Acme Education Pty Ltd", agent_abn: "51824753556", agreement_commencement_date: "2026-12-01", agent_territory: "India, Nepal",
+    agent_commission_percent: "25", admin_witness_name: "Sue Witness", admin_witness_signature: `data:image/png;base64,${png}` });
+  type P = { type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; key: string };
+  const printed = (fields: P[], offset = 0) => fields.map((f) => ({ recipient_id: null, type: f.type, page: f.page + offset, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label }));
+  const sent = await timed("send: stamp the merged blank (incremental)", () => signingPdf.stampDocument(merged, { reference: "", title: "t", recipients: [], incremental: true, fields: [...printed(formR.printed), ...printed(agrR.printed, 2)] }));
+  assert.deepEqual(sent.subarray(0, merged.length), merged, "the merged blank is kept byte for byte (incremental update)");
+  const fields = [...formR.recipient, ...agrR.recipient.map((f: P) => ({ ...f, page: f.page + 2 }))]
+    .map((f: P, i: number) => ({ recipient_id: "r1", type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, done: true, label: f.label, value: f.type === "checkbox" ? (i % 2 ? "true" : "false") : f.type === "text" ? `Answer ${i}, Course counselling, Applications and admissions` : null }));
+  const recipients = [{ id: "r1", name: "Ravi Kumar", email: "ravi@example.test", role: "Business contact", state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-20T00:00:00Z", signature_kind: "drawn", signature_image: png }];
+  const signedDoc = await timed(`sign: stamp ${fields.length} fields on 15 pages (incremental)`, () => signingPdf.stampDocument(sent, { reference: "SLIT-2026-000099", title: "t", recipients, fields, incremental: true }));
+  assert.deepEqual(signedDoc.subarray(0, sent.length), sent, "the sent document is kept byte for byte inside the signed copy");
+  await timed("sign: completion certificate", () => signingPdf.buildCertificate({ reference: "SLIT-2026-000099", title: "t", fields, recipients, id: "x", createdAt: "2026-11-20T00:00:00Z", sentAt: "2026-11-20T00:00:00Z",
+    completedAt: "2026-11-20T00:00:00Z", signingMode: "sequential", originalHash: "a".repeat(64), signedHash: "b".repeat(64), consent: "I agree.", chainOk: true, events: [] }, null));
+  const [formPart, agreementPart] = await timed("follow-up: split into F04 + P06", () => onboardingPdf.splitPdf(signedDoc, 2));
+  const admin = onboarding.resolveFields(agreement.fields, { admin_name: "Hari Admin", admin_position: "CEO", admin_signature: "Hari Admin", admin_signed_date: "2026-11-20" }).printed.filter((f: P) => f.key.startsWith("admin_"));
+  const issued = await timed("approve: stamp the SLIT signatory on the signed P06 (incremental)", () => signingPdf.stampDocument(agreementPart, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(admin) }));
+  const issuedText = (await pdfText(issued)).map((t) => t.text).join(" ");
+  assert.ok(issuedText.includes("Hari Admin") && issuedText.includes("India, Nepal"), "pdf.js reads the signatory and the terms from the issued agreement");
+  assert.equal((await PdfLib.PDFDocument.load(formPart)).getPageCount(), 2);
+  // A document that does not end with a cross-reference table (an xref stream): stamped by a full re-write instead, never broken.
+  assert.equal(signingPdf.previousXref(form.flattened), null, "the installed blank ends with an xref stream");
+  const rewritten = await signingPdf.stampDocument(form.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(formR.printed) });
+  assert.equal((await PdfLib.PDFDocument.load(rewritten)).getPageCount(), 2);
+  // Fonts: Latin-1 text prints in the built-in Helvetica (no font file, no fontkit); anything else still embeds Noto Sans.
+  const latin = Buffer.from(issued.subarray(agreementPart.length)).toString("latin1");
+  assert.ok(latin.includes("/Helvetica") && !latin.includes("/FontFile2"), "the approve stamp embeds no font file");
+  const noto = await signingPdf.stampDocument(agreementPart, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(admin).map((f) => f.label.includes("ame") || f.type === "text" ? { ...f, value: "Kaʻula Ah−Kim" } : f) });
+  const notoTail = Buffer.from(noto.subarray(agreementPart.length)).toString("latin1");
+  assert.ok(notoTail.includes("/FontFile2"), "a character only Noto Sans has (ʻ, −) embeds Noto Sans");
+  const before = new Set((await pdfText(agreementPart)).map((t) => t.text)); const notoItems = (await pdfText(noto)).map((t) => t.text).filter((t) => !before.has(t)); assert.ok(notoItems.some((t) => t.includes("Kaʻula Ah−Kim")), "pdf.js reads the name in Noto Sans");
 });
 
 test("onboarding per business (2026-11-19): Add business checks the blanks before saving; the signed agreement makes the business ready (nothing goes to it); Activate sends ONE set-password email to the contact and each held agent; per-agent actions are refused; a rejection is polite", async () => {
@@ -928,12 +1213,12 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   assert.deepEqual(["0412 345 678", "+91 98765 43210", "03 9123 4567", "12345", ""].map((p) => abrLib.phoneE164(p)), ["+61412345678", "+919876543210", "+61391234567", null, null]);
 
   // The short wizard: five steps since round 3 (Review & sign); chips with Other; an upload asked for on Yes; referee problems before signing.
-  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References", "Review & sign"]);
+  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "References", "Contact", "Agency", "Review & sign"], "2026-11-20: the references straight after the business");
   assert.equal(logic.writeChips(["Accommodation", "Course counselling"], "Visa reviews", logic.SERVICES), "Course counselling, Accommodation, Visa reviews");
   assert.deepEqual(logic.readChips("Course counselling, Accommodation, Visa reviews", logic.SERVICES), { picked: ["Course counselling", "Accommodation"], other: "Visa reviews" });
   assert.deepEqual(logic.readChips("Canada, Other", logic.COUNTRIES), { picked: ["Canada"], other: "" }); assert.equal(logic.readChips("Canada", logic.COUNTRIES).other, null);
   const qFields = [{ id: "q1", type: "checkbox", key: "org_chart_attached:YES", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }, { id: "q2", type: "text", key: "services_provided", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }] as unknown as Parameters<typeof logic.f04Problems>[1];
-  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(2, qFields, { answers, acn: "", marn: "", declarations: {}, step: 2 }, files);
+  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(logic.F04_STEP.agency, qFields, { answers, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.agency }, files);
   assert.match(agencyStep({ org_chart_attached: "YES" }).attach_org_chart, /Upload the organisational chart, or answer No/);
   assert.equal(agencyStep({ org_chart_attached: "YES" }, { org_chart: { name: "chart.pdf", size: 10 } }).attach_org_chart, undefined);
   assert.match(agencyStep({ services_provided: "Accommodation, Other" }).services_provided, /Name the other services/);
@@ -961,7 +1246,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   purvaFields.find((f) => f.key === "agent_year_founded")!.value = "2015";
   const draft = { acn: "603 584 676", answers: { agent_trading_name: "PURVA TECH PTY LTD", agent_year_founded: "", contact_position: "Test", office_suburb: "Melbourne", office_postcode: "3000" }, declarations: {}, marn: "", step: 2 };
   const purva = logic.initialF04(purvaFields, purvaFacts, { agent_acn: "603 584 676", contact_given_name: "Gourav", contact_family_name: "Gupta", agent_legal_entity: "PURVA TECH PTY LTD" }, draft, "Recipient Name");
-  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", 2]);
+  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", logic.F04_STEP.agency], "a draft saved at position 2 before 2026-11-20 was on Agency: it reopens there");
   // Page fallback with the field blank and no server fill: the card's date gives the year.
   const blankYear = logic.initialF04([field("agent_year_founded")] as unknown as WizFields, purvaFacts, null, null);
   assert.equal(blankYear.answers.agent_year_founded, "2015", "the page takes the year from the card's Active-from date when the server left it blank");
@@ -982,7 +1267,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual(logic.readChoice("Other", logic.POSITIONS), { picked: null, other: "" });
   assert.deepEqual([logic.writeChoice("CEO", null), logic.writeChoice(null, ""), logic.writeChoice(null, "Head of admissions"), logic.writeChoice(null, null)], ["CEO", "Other", "Head of admissions", ""]);
   const contactFields = [field("contact_position", "", true)] as unknown as WizFields;
-  const contactStep = (position: string) => logic.f04Problems(1, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: 1 }).contact_position;
+  const contactStep = (position: string) => logic.f04Problems(logic.F04_STEP.contact, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.contact }).contact_position;
   assert.deepEqual([contactStep(""), contactStep("Other"), contactStep("Head of admissions"), contactStep("Owner")], ["Enter the contact's position.", "Type the position.", undefined, undefined]);
   const reviewFields = [field("declarant_name", "", true), field("declarant_role", "", true)] as unknown as WizFields;
   const reviewStep = (answers: Record<string, string>, declarations: Record<string, boolean> = logic.allDeclarations(true)) => logic.f04Problems(logic.REVIEW_STEP, reviewFields, { answers, acn: "", marn: "", declarations, step: logic.REVIEW_STEP });
@@ -1002,7 +1287,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.equal(signingCore.checkApplicationSubmission({ acn: "004-028-077", marn: "", declarations: all }, {}).acn, "004028077");
   assert.throws(() => signingCore.checkApplicationSubmission({ acn: "004 028 07", marn: "", declarations: all }, {}), /The ACN has 9 digits/);
   assert.equal(abrLib.printAcn("004028077"), "004 028 077", "shown in its groups");
-  assert.equal(logic.f04Problems(0, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: 0 }).acn, undefined, "the page accepts spaces too");
+  assert.equal(logic.f04Problems(logic.F04_STEP.business, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: logic.F04_STEP.business }).acn, undefined, "the page accepts spaces too");
 
   // 6. The Suburb box never holds a postcode alone (the test F04 stored "3000").
   assert.deepEqual(onboarding.normalizeOfficeAddress({ office_suburb: "3000" }), { office_suburb: "" });
@@ -1014,7 +1299,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual([zz.answers.office_suburb, zz.answers.office_postcode], ["", ""], "a stored postcode alone opens blank for the address search");
   const suburbField = [field("office_suburb")] as unknown as WizFields;
   assert.equal(logic.f04Values(suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000" } })["f-office_suburb"], "", "never signed as a postcode alone");
-  assert.equal(logic.f04Problems(1, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
+  assert.equal(logic.f04Problems(logic.F04_STEP.contact, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
   const sql = read("supabase/migrations/20261119171538_f04_round3.sql");
   assert.ok(["if v_sub ~ '^\\d{4}$' then", "p := p - 'office_suburb';", "'office_suburb', nullif(v_sub, '')", "update hr.sign_fields f set value = null", "r.state in ('sent', 'viewed', 'email_failed')"].every((s) => sql.includes(s)),
     "the send-side SQL drops a postcode-only suburb and unsigned F04s are cleaned");
@@ -1035,6 +1320,35 @@ test("F04 follow-ups (2026-11-18): a company's ACN from its ABN when the registe
   assert.equal(abrLib.acnFromAbn("49004028077", "Australian Public Company"), "004028077");
   assert.equal(abrLib.acnFromAbn("86603584676", "Individual/Sole Trader"), "", "not a company: no ACN");
   assert.equal(abrLib.acnFromAbn("12345678901", "Australian Private Company"), "", "nine digits that fail the check digit are not an ACN");
+  // 2026-11-20 (owner): one rule for the business's ACN (resolveAcn here, public.acn_resolve in the database).
+  // Company: the register's ASIC number first, else the last nine digits of the ABN.
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49 004 028 077", acn: "004 028 077", entityType: "Australian Public Company" }), { acn: "004028077", source: "register" }, "BHP: the register's ACN");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Australian Public Company" }), { acn: "004028077", source: "derived" }, "BHP without the register's ACN: derived");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "86603584676", acn: null, entityType: "Australian Private Company" }), { acn: "603584676", source: "derived" }, "a private company: derived");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "123456789", entityType: "Australian Public Company" }), { acn: "004028077", source: "derived" }, "an invalid register value is not used");
+  // Sole trader: never derived, even when the ABN's last nine digits would pass the ACN check.
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Individual/Sole Trader" }), { acn: "", source: null }, "sole trader: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "99386710529", acn: "", entityType: "Individual/Sole Trader" }), { acn: "", source: null }, "PURVA (sole trader): blank");
+  // Trust and partnership: never derived (a trust's ABN is not its trustee company's).
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Discretionary Trading Trust" }), { acn: "", source: null }, "trust: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Trustee company of a Fixed Unit Trust" }), { acn: "", source: null }, "anything naming a trust: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Family Partnership" }), { acn: "", source: null }, "partnership: blank");
+  assert.equal(abrLib.isCompanyEntity("Australian Private Company") && abrLib.isCompanyEntity("Australian Public Company"), true);
+  // The agreement's "(ABN ...)" blank.
+  assert.equal(abrLib.abnWithAcn("49004028077", "004028077"), "49 004 028 077, ACN 004 028 077");
+  assert.equal(abrLib.abnWithAcn("99386710529", ""), "99 386 710 529", "no ACN: the ABN alone");
+  // The F04 values follow the same rule (a sole trader's or a trust's form opens with the ACN blank and editable).
+  const noContact = { givenName: "", familyName: "", email: "", phone: "" };
+  const soleTrader = { abn: "49004028077", acn: "", abnStatus: "Active", active: true, statusFrom: "", entityName: "J SMITH", entityType: "Individual/Sole Trader",
+    businessNames: [] as string[], gstRegistered: false, gstFrom: "", state: "VIC", postcode: "3000", sourceUrl: "" };
+  assert.equal(abrLib.abrApplicationValues({ details: soleTrader, confirmed: null, contact: noContact }).agent_acn ?? "", "", "sole trader: the F04 ACN stays blank");
+  assert.equal(abrLib.abrApplicationValues({ details: { ...soleTrader, entityName: "THE SMITH FAMILY TRUST", entityType: "Discretionary Trading Trust" }, confirmed: null, contact: noContact }).agent_acn ?? "", "", "trust: the F04 ACN stays blank");
+  assert.equal(abrLib.abrApplicationValues({ details: { ...soleTrader, entityName: "BHP GROUP LIMITED", entityType: "Australian Public Company", acn: "004028077" }, confirmed: null, contact: noContact }).agent_acn,
+    "004 028 077", "company: the F04 ACN from the register");
+  // The database rule is the same (migration 20261120113517).
+  const acnSql = readFileSync(new URL("../supabase/migrations/20261120113517_agency_acn.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(acnSql.includes("p_entity_type ~* 'company' and p_entity_type !~* '(trust|partnership|sole\\s*trader|individual)'"), "the same company rule in SQL");
+  assert.ok(acnSql.includes("if public.acn_valid(v_reg) then return jsonb_build_object('acn', v_reg, 'source', 'register');"), "the register's ACN first");
   // Send: the register's details without an ACN.
   const purva = { abn: "86603584676", acn: "", abnStatus: "Active", active: true, statusFrom: "2015-01-07", entityName: "PURVA TECH PTY LTD", entityType: "Australian Private Company",
     businessNames: [] as string[], gstRegistered: true, gstFrom: "2015-01-07", state: "VIC", postcode: "3029", sourceUrl: "" };
@@ -1059,10 +1373,11 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.equal(onboarding.correctionFlagged("office_suburb", { office_address: "Wrong suburb" }), true, "one flag covers the office address");
   assert.equal(onboarding.correctionFlagged("contact_email", { office_address: "" }), false);
   // The steps a correction shows: those with a flagged answer, then Review & sign.
-  assert.deepEqual([logic.stepOfKey("acn"), logic.stepOfKey("office_address"), logic.stepOfKey("litigation_involved"), logic.stepOfKey("ref2_phone"), logic.stepOfKey("agent_year_founded")], [0, 1, 2, 3, 0]);
-  assert.deepEqual(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" }), [0, 3, 4]);
-  assert.deepEqual(logic.visibleSteps("admin-review", { ref1_email: "x" }), [0, 1, 2, 3, 4], "staff see every step");
-  assert.deepEqual(logic.visibleSteps("agent", null), [0, 1, 2, 3, 4]);
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(["acn", "office_address", "litigation_involved", "ref2_phone", "agent_year_founded"].map((k) => logic.F04_STEPS[logic.stepOfKey(k)].id), ["business", "contact", "agency", "references", "business"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" })), ["business", "references", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", { ref1_email: "x" })), ["business", "references", "contact", "agency", "review"], "staff see every step");
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"]);
   assert.equal(logic.correctionEditable("declarant_name", {}), true, "the declaration is given again");
   assert.equal(logic.correctionEditable("contact_email", { agent_trading_name: "" }), false);
   // Server side (core.ts): a correction's unflagged fields keep the values they were sent with, whatever the page posts.
@@ -1400,6 +1715,26 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
   return { deps, calls, scheduled, names: () => calls.map(([n]) => n) };
 }
 const linkRequest = (action: string, fields: Record<string, unknown> = {}, file: File | null = null, token: unknown = LINK) => ({ action, token, ip: "203.0.113.5", fields, file });
+
+test("signing tick (2026-11-20): the scheduled job's service-role JWT is a service caller even when SUPABASE_SERVICE_ROLE_KEY holds an sb_secret_ key; nothing else is", async () => {
+  const serviceRole = await load.import<typeof import("../supabase/functions/_shared/service-role.ts")>("../supabase/functions/_shared/service-role.ts");
+  const url = "https://xcpydisstlvtvcsqnjob.supabase.co";
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const jwt = (claims: Record<string, unknown>) => `${b64({ alg: "HS256", typ: "JWT" })}.${b64(claims)}.c2lnbmF0dXJl`;
+  const cron = jwt({ iss: "supabase", ref: "xcpydisstlvtvcsqnjob", role: "service_role" });
+  const secret = "sb_secret_" + "x".repeat(32);
+  // The case that broke: pg_cron sends the legacy JWT, the function's own key is the newer opaque secret.
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${cron}`, secret, url), true, "the scheduled job is the service");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${secret}`, secret, url), true, "the function's own key still is");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ ref: "xcpydisstlvtvcsqnjob", role: "anon" })}`, secret, url), false, "anon key");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ sub: "user-1", role: "authenticated" })}`, secret, url), false, "a signed-in user");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ ref: "qoylrmorezlqdvufonmx", role: "service_role" })}`, secret, url), false, "another project's service key");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${secret.slice(0, -1)}y`, secret, url), false, "a near miss of the secret");
+  assert.equal(serviceRole.isServiceCaller("", secret, url), false); assert.equal(serviceRole.isServiceCaller(null, "", url), false);
+  // document-signing uses this rule (not a plain comparison with SUPABASE_SERVICE_ROLE_KEY).
+  const index = readFileSync(new URL("../supabase/functions/document-signing/index.ts", import.meta.url), "utf8");
+  assert.match(index, /isServiceCaller: isServiceCaller\(authorization, serviceKey, env\.SUPABASE_URL\)/);
+});
 
 test("onboarding: only the hash of the link reaches the database, and every bad link gets one neutral answer", async () => {
   let run = linkDeps();
@@ -1987,6 +2322,90 @@ async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
     return fonts.entries().map(([, ref]) => { const dict = doc.context.lookup(ref); return dict instanceof PdfLib.PDFDict ? String(dict.get(PdfLib.PDFName.of("BaseFont"))) : "?"; });
   });
 }
+
+test("businesses (2026-11-20): an Active business offers only Active / Inactive and never goes back to Onboarding; Delete business only for SLIT admins at Application sent, removes everything silently, the link says no longer available", async () => {
+  const del = await load.import<typeof import("../src/pages/admin/lib/businessDelete.ts")>("../src/pages/admin/lib/businessDelete.ts");
+  // 1. The dropdown: Active and Inactive only (the status catalog also has Onboarding).
+  const catalog = [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }, { value: "Onboarding", label: "Onboarding" }];
+  assert.deepEqual(del.businessDropdownStatuses(catalog).map((c) => c.value), ["Active", "Inactive"]);
+  assert.ok(read("src/pages/admin/BusinessesPage.tsx").includes("{dropdownStatuses.map((item) => ("), "the row dropdown uses the filtered list");
+  // ... and the database refuses Onboarding for a business that was ever active, by any path; direct API deletes are refused too.
+  const sql = read("supabase/migrations/20261120133517_business_status_guard_and_delete.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /if new\.status = 'Onboarding' and old\.status is distinct from 'Onboarding' and \(old\.status = 'Active' or old\.onboarding_completed_at is not null\) then/);
+  assert.match(sql, /create trigger agencies_status_guard before update of status on public\.agencies/);
+  assert.match(sql, /if current_user in \('authenticated', 'anon'\) then\n   raise exception 'Delete a business with Delete business/);
+  // 2. Who sees Delete business: a SLIT administrator, a business at Application sent, never a system business.
+  const row = (over: Record<string, unknown> = {}) => ({ status: "Onboarding", onboardingLabel: "Application sent", agencyCode: "ZZ-1", ...over });
+  assert.equal(del.canOfferBusinessDelete(row(), true), true);
+  assert.equal(del.canOfferBusinessDelete(row(), false), false, "other staff: hidden");
+  for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
+  for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
+  for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
+  // The typed confirmation: the name (case and spaces ignored) or the ABN.
+  assert.equal(del.deleteConfirmMatches("  purva  tech pty ltd ", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("86 603 584 676", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("PURVA TECH", "PURVA TECH PTY LTD", "86603584676"), false);
+  assert.equal(del.deleteConfirmMatches("", "PURVA TECH PTY LTD", ""), false);
+  // The database rules (the same ones the screens use) and the complete removal.
+  for (const rule of ["'This is a system business: it cannot be deleted.'", "o.stage <> 'application_sent'", "r.state not in ('sent', 'viewed') or r.signed_at is not null",
+    "'This business has students or applications: make it Inactive instead.'", "if not public.cms_is_admin() then raise exception 'Only a SLIT administrator can delete a business.'",
+    "raise exception 'Type the business name or its ABN exactly to confirm.'"]) assert.ok(sql.includes(rule), `rule: ${rule}`);
+  for (const table of ["hr.sign_fields", "hr.sign_tokens", "hr.sign_token_history", "hr.sign_codes", "hr.sign_notifications", "hr.sign_events", "public.agency_onboarding_drafts",
+    "public.agency_onboarding_attachments", "public.agency_onboarding_corrections", "public.agency_onboarding_revisions", "public.agency_onboarding_referees", "public.agency_onboarding_events",
+    "hr.sign_recipients", "hr.sign_requests", "public.agency_onboarding", "public.comm_messages", "public.comm_conversations", "public.notification_deliveries", "public.portal_audit_log",
+    "public.agency_invitations", "public.agency_memberships", "public.agency_tenant_agents", "public.agency_tenants", "public.agents", "public.portal_profiles", "auth.users", "public.agencies"]) {
+    assert.ok(new RegExp(`delete from ${table.replace(".", "\\.")}\\b`).test(sql), `deletes ${table}`);
+  }
+  assert.match(sql, /set local session_replication_role = replica;/, "triggers off: nothing is queued or emailed");
+  assert.match(sql, /insert into public\.business_deletions\(deleted_by, deleted_by_name, business_name, abn\)/, "one minimal audit row");
+  assert.match(sql, /raise exception 'This link is no longer available\.'/, "a deleted request's link: neutral");
+  // The function: the database deletes, then the signing files it names are removed from storage; nothing is emailed.
+  const removed: string[] = []; const rpcs: string[] = [];
+  const ctx = { body: { agencyId: "11111111-1111-4111-8111-111111111111", confirm: "ZZ Test" }, admin: async () => null,
+    rpc: async (name: string) => { rpcs.push(name); return { deleted: true, name: "ZZ Test", abn: "49004028077", files: ["r1/original.pdf", "r1/signed-x.pdf"], counts: { agents: 1 } }; },
+    ports: { storage: { remove: async (paths: string[]) => { removed.push(...paths); } } } };
+  const out = await onboardingFn.deleteBusiness(ctx as never) as { deleted: boolean; filesRemoved: number; filesLeft: number };
+  assert.deepEqual([out.deleted, out.filesRemoved, out.filesLeft, rpcs, removed], [true, 2, 0, ["admin_business_delete"], ["r1/original.pdf", "r1/signed-x.pdf"]]);
+  assert.ok(!/send|mail|notify/i.test(rpcs.join(" ")), "no email call");
+  // The signing page: a deleted link shows "This link is no longer available", with nothing to request.
+  assert.match(read("supabase/functions/document-signing/core.ts"), /if \(\/no longer available\/i\.test\(e\.message\)\) throw new SigningError\(LINK_GONE, 410\);/);
+  const page = read("src/pages/SigningPage.tsx");
+  assert.ok(page.includes(`const gone = /no longer available/i.test(message);`) && page.includes(">This link is no longer available</p>"), "neutral page");
+});
+
+test("completion certificate (2026-11-20): never emailed, downloaded or shown to anyone; only the signed documents leave; the audit record stays on the signing request for staff", async () => {
+  // Emails: every completion email (to the signer, an offer with a deposit, the administrator) mentions and attaches the signed document only.
+  const base = { id: 1, title: "Contract", reference: "SLIT-1", name: "Ann", to: "a@example.test", signed_path: "r/s.pdf", signed_hash: "a".repeat(64), certificate_path: "r/c.pdf", certificate_hash: "b".repeat(64) };
+  for (const job of [{ ...base, kind: "completed", audience: "recipient" }, { ...base, kind: "completed", audience: "admin", signers: [{ name: "Ann", role: "Student", state: "signed" }] },
+    { ...base, kind: "completed", audience: "recipient", deposit: { label: "AUD 500.00", link: "https://x.example/sign#t=1" } }]) {
+    const mail = signing.renderSigningEmail(job as never, null)!;
+    assert.ok(mail && !/certificate|IP address|user agent/i.test(`${mail.subject} ${mail.text}`), `no certificate wording: ${mail.subject}`);
+    assert.match(mail.text, /signed (document|copy) is attached/);
+  }
+  // The signer's view and every download: no certificate link or kind anywhere.
+  const core = read("supabase/functions/document-signing/core.ts");
+  assert.ok(!core.includes("certificateUrl"), "the signing link's view has no certificate link");
+  assert.match(core, /const files: Array<\[string, string, string\]> = \[\[job\.signed_path, job\.signed_hash, `\$\{safeName\(job\.title\)\}-signed\.pdf`\]\];/, "the completion email attaches the signed PDF only");
+  assert.match(core, /if \(which === "certificate"\) \{/, "staff still open the audit record from the signing request (admin_url)");
+  for (const file of ["src/pages/SigningPage.tsx", "src/pages/agency/components/AgencyAgreementCard.tsx", "src/pages/agency/components/ApplicationStatusPanels.tsx", "src/pages/admin/components/AgentOnboardingPanel.tsx"]) {
+    const text = read(file);
+    assert.ok(!/certificateUrl|"certificate"\)|application_certificate"|referee_certificate:|offer-letter-certificate|\["form", "agreement", "certificate"\]/.test(text), `${file}: no certificate download`);
+  }
+  assert.ok(!read("src/pages/admin/components/AgentOnboardingPanel.tsx").includes("· IP "), "the business page shows no IP address");
+  assert.match(read("src/pages/admin/components/signing/RequestDetail.tsx"), /View audit record/, "the signing request page (staff only) keeps the audit record");
+  // The database refuses the certificate kinds in every download and lists none (portal offer letters, agency onboarding).
+  const sql = read("supabase/migrations/20261120123517_signing_certificate_private.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /if p_kind in \('certificate', 'application_certificate'\) or p_kind like 'referee_certificate:%' then\n  raise exception 'The audit record is not downloadable/);
+  assert.match(sql, /elsif p_kind = 'certificate' then\n  raise exception 'The audit record is not downloadable/);
+  for (const changed of [`'hasCertificate', false`, `'certificate', false, 'application_certificate', false)`, `'form', f.form_content is not null, 'certificate', false)`, `'agreement', o.agreement_content is not null, 'certificate', false)`]) {
+    assert.ok(sql.includes(changed), `listed as not available: ${changed}`);
+  }
+  // Staff (HR) offers: the signed copy carries the signature, not the audit details (kept in hr_svc_offer_sign).
+  const signedOffer = await offerPdf.stampSignedOffer(await makePdf(1), { signerName: "Asha Patel", signedAt: "2026-11-20T00:00:00Z", ip: "203.0.113.5", userAgent: "Mozilla/5.0 Test",
+    consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
+  const offerText = (await pdfText(signedOffer)).map((t) => t.text).join(" ");
+  assert.ok(offerText.includes("Asha Patel") && !/203\.0\.113\.5|Mozilla|IP address|Browser|abab/.test(offerText), "no IP address, browser or hash on the staff offer's signed copy");
+});
 
 test("offer PDF: signing keeps every original page and adds one signature page on the shared styling", async () => {
   const signed = await offerPdf.stampSignedOffer(await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",

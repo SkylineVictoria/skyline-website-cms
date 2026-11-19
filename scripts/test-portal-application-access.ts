@@ -30,7 +30,8 @@ import { canManagePortalUsers, portalAccessMessage, portalLanding } from "../src
 // ---- Application statuses from the database (20261113260000): the frontend helpers read the catalogue the migration seeds ----
 import { actionsFor, canSubmitFrom, currentStatuses, isEditableStatus, parseWorkflow, statusInfo } from "../src/lib/applicationStatuses.ts";
 
-const workflowSql = readFileSync(new URL("../supabase/migrations/20261113260000_application_status_workflow.sql", import.meta.url), "utf8");
+// A Windows checkout (core.autocrlf) has CRLF line endings: the seed blocks below are matched on LF.
+const workflowSql = readFileSync(new URL("../supabase/migrations/20261113260000_application_status_workflow.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const seededWorkflow = (() => {
   const statusRows = /insert into public\.application_statuses\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";
   const actionRows = /insert into public\.application_status_actions\([^)]*\) values([\s\S]*?);\n/.exec(workflowSql)?.[1] ?? "";

@@ -778,8 +778,8 @@ export const offerLetterList = (applicationId: string) =>
   rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null;
     acceptedVia?: string | null; signedAt?: string | null; hasSigned?: boolean; hasCertificate?: boolean; prepaidMore?: "YES" | "NO" | null; payment?: OfferPayment | null;
     signing?: { status: string; expiresAt: string | null; viewedAt: string | null; reference: string } | null }>>("portal_offer_letter_list", { p_application: applicationId });
-/** The signed offer letter or its signing certificate (signed online), opened in a new tab. */
-export async function openOfferLetterFile(letterId: string, kind: "signed" | "certificate"): Promise<void> {
+/** The signed offer letter (signed online), opened in a new tab. The signing audit record is never downloadable (owner 2026-11-20). */
+export async function openOfferLetterFile(letterId: string, kind: "signed"): Promise<void> {
   const tab = window.open("", "_blank");
   try {
     const file = await rpcOrThrow<{ fileName: string; contentBase64: string }>("portal_offer_letter_file", { p_letter: letterId, p_kind: kind });

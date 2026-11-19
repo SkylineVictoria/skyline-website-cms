@@ -5,7 +5,7 @@ const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const parse = (s: string) => new Date(s + "T00:00:00Z");
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const monthKey = (s: string) => s.slice(0, 7);
-const tone: Record<string, string> = { theory: "bg-sky-50 ring-sky-200", practical: "bg-amber-50 ring-amber-200", assessment: "bg-emerald-50 ring-emerald-200" };
+const tone: Record<string, string> = { theory: "border-l-sky-500 bg-sky-50", practical: "border-l-amber-500 bg-amber-50", assessment: "border-l-emerald-500 bg-emerald-50" };
 
 /**
  * The intake's whole course, month by month from the intake start: every class with its time, unit, room and trainer.
@@ -127,10 +127,9 @@ export default function BatchCourseCalendar({ batchId, courseId, intakeStart, in
                   {brk && <span className="truncate pl-1 text-[10px] text-foreground-500" title={brk.label}>{brk.label}</span>}</div>
                 <div className="mt-1 space-y-1">{(byDate.get(d) ?? []).map(s => <button type="button" key={s.id} title={`${s.unitCode ?? ""} ${s.unitName ?? ""}${canManage ? " · click to change" : ""}`}
                   disabled={!canManage} onClick={() => { setNotice(""); setEditing(s); }}
-                  className={`block w-full rounded px-1.5 py-1 text-left ring-1 ${tone[s.type] ?? ""} ${canManage ? "cursor-pointer hover:ring-2 hover:ring-primary-500" : "cursor-default"} ${s.status === "cancelled" ? "line-through opacity-50" : ""}`}>
-                  <strong className="block">{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)} {s.unitCode ?? ""}</strong>
-                  <span className="block truncate"><i className="ri-door-open-line mr-0.5" aria-hidden="true" />{s.room ?? "No room"}</span>
-                  <span className="block truncate"><i className="ri-user-line mr-0.5" aria-hidden="true" />{s.trainers || "No trainer"}</span>
+                  className={`block w-full rounded border-l-4 px-1.5 py-1 text-left text-[11px] leading-tight ${tone[s.type] ?? ""} ${canManage ? "cursor-pointer hover:brightness-95" : "cursor-default"} ${s.status === "cancelled" ? "line-through opacity-50" : ""}`}>
+                  <span className="flex items-baseline justify-between gap-1"><strong className="text-foreground-950">{s.unitCode ?? ""}</strong><span className="shrink-0 text-foreground-600">{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}</span></span>
+                  <span className="block truncate text-foreground-700">{s.room ?? "No room"} · <span className={s.trainers ? "" : "font-semibold text-red-700"}>{s.trainers || "No trainer"}</span></span>
                   {s.manual && <span className="block text-[10px] font-semibold text-primary-700">Changed</span>}
                 </button>)}</div>
               </div>;

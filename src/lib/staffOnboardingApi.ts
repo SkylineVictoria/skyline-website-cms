@@ -1,5 +1,5 @@
 import { isRejectedDocumentStatus, RejectedDocumentError } from "@/lib/validatedDocumentUpload";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { reportFunctionFailure, supabase } from "@/pages/admin/lib/supabase";
 import type { StaffDocCategory, StaffStatus } from "@/lib/staffStatus";
 import type { StaffDocSummary, StaffDocument } from "@/lib/staffApi";
 import { documentFileProblem } from "../../supabase/functions/_shared/validation/person";
@@ -95,6 +95,7 @@ function uploadWithProgress(body: FormData, onProgress?: (fraction: number) => v
     request.onload = () => {
       let parsed: { error?: string; code?: string; field?: string } & Record<string, unknown> = {};
       try { parsed = JSON.parse(request.responseText) as typeof parsed; } catch { /* not JSON */ }
+      reportFunctionFailure("staff-onboarding", request.status, String(request.responseText ?? "").slice(0, 2000));
       if (request.status >= 200 && request.status < 300) { resolve(parsed); return; }
       if (parsed.code === "link_invalid") reject(new LinkInvalidError(parsed.error ?? "This link is not valid any more."));
       else if (isRejectedDocumentStatus(request.status) || (request.status === 400 && parsed.field === "file")) {
@@ -124,6 +125,7 @@ export const onboarding = {
     const response = await fetch(`${url}/functions/v1/staff-onboarding`, {
       method: "POST", signal, headers: { apikey: anon, Authorization: `Bearer ${anon}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "address_search", t, q }),
     });
+    if (response.status >= 500) reportFunctionFailure("staff-onboarding", response.status, await response.clone().text().catch(() => ""));
     const body = (await response.json().catch(() => null)) as { ok?: boolean; suggestions?: AddressPick[] } | null;
     if (!response.ok || !body?.ok || !Array.isArray(body.suggestions)) return { kind: "unavailable" };
     return { kind: "ok", suggestions: body.suggestions };

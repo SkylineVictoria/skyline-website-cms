@@ -244,6 +244,16 @@ export async function openBusinessDocument(path: string) {
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");
 
+export { businessDropdownStatuses, canOfferBusinessDelete, deleteConfirmMatches, SYSTEM_BUSINESS_CODES } from "@/pages/admin/lib/businessDelete";
+/** Whether this administrator can delete the business now, and if not why (public.admin_business_delete_check). */
+export const businessDeleteCheck = (id: string) =>
+  call<{ deletable: boolean; reason: string | null; name: string; abn: string | null }>("admin_business_delete_check", { p_business: id }, "We could not check this business.");
+/** Delete business (document-signing agent_onboarding_business_delete): every row and file of the business, nobody emailed. */
+export async function deleteBusiness(id: string, confirm: string): Promise<{ deleted: boolean; name: string; abn: string | null; filesRemoved: number; filesLeft: number }> {
+  const { signingAction } = await import("@/lib/signingApi");
+  return await signingAction({ action: "agent_onboarding_business_delete", agencyId: id, confirm });
+}
+
 export const setBusinessStatus = (id: string, status: BusinessStatus) =>
   call<{ businessId: string; status: BusinessStatus; agencyId: string; workspaceCreated: boolean; reviewed?: boolean; pendingInvitation?: { id: string; email: string; name: string } | null }>(
     "admin_business_set_status", { p_business: id, p_status: status }, "We could not change this business’s status.");

@@ -9,7 +9,7 @@ import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
 import {
-  addDays, listBreaks, mondayOf, rto, setIntakeLoad, LOAD_HOURS, type StudyLoad, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
+  addDays, intakeDefaultName, listBreaks, mondayOf, rto, setIntakeLoad, LOAD_HOURS, type StudyLoad, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
 } from "@/pages/admin/lib/rto";
 
 /** The first term start (the Monday after a break) at least a week away that the course has no intake on; else next Monday. */
@@ -79,8 +79,8 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
 
   useEffect(() => { if (!open) { setName(""); setNamed(false); } }, [open]);
   useEffect(() => {
-    if (master && course && !named) setName(`Intake ${(course.intakes ?? []).filter((i) => i.status !== "closed").length + 1}`);
-  }, [master, course, named]);
+    if (master && course && !named && start) setName(intakeDefaultName(course.course.code, load || "coe", start, (course.intakes ?? []).map((i) => i.customName || i.name)));
+  }, [master, course, named, load, start]);
   const units = (course?.units ?? []).filter((u) => u.isActive);
   const weeks = units.reduce((s, u) => s + (u.defaultWeeks || 0), 0);
   // With a master the dates are the master's: several intakes share them, and term breaks are already in the master.

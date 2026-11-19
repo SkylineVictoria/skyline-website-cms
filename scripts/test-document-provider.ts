@@ -368,12 +368,14 @@ test('OAuth requires server configuration and fixed HTTPS callback path',async()
  const url=new URL(authorizeUrl(config,'nonce'));assert.equal(url.hostname,'login.microsoftonline.com');assert.equal(url.searchParams.get('state'),'nonce');assert.equal(url.toString().includes('synthetic-secret'),false);
  assert.equal((await stateHash('nonce')).length,64);
 });
-test('integration navigation preserves eight distinct permitted destinations and active hierarchy',async()=>{
+// 40f7f72 (2026-11-11) folded the eight integration pages into one Connections page: one menu entry, its old sub-routes stay active under it.
+test('integration navigation is one Connections entry that stays active on every integration page',async()=>{
  const { menuTree,menuActive,menuIcon }=await import('../src/pages/admin/lib/adminMenu.ts');
  const routes=['overview','applications','add','credentials','webhooks','sync-history','logs','settings'];
  const group={id:'external_integrations',parent_id:null,label:'External Integrations',route:null,icon_key:'plug',sort_order:86,is_enabled:true,open_in_new_tab:false};
  const tree=menuTree([group,...routes.map((route,i)=>({...group,id:`integration_${i}`,parent_id:group.id,route:`/admin/integrations/${route}`,sort_order:i}))]);
- assert.equal(tree.length,1);assert.equal(tree[0].children.length,8);assert.equal(new Set(tree[0].children.map(x=>x.route)).size,8);assert.equal(menuIcon('plug'),'ri-plug-line');
+ assert.equal(tree.length,1);assert.equal(tree[0].route,'/admin/integrations');assert.equal(tree[0].children.length,0,'the old sub-pages are not separate menu entries');assert.equal(menuIcon('plug'),'ri-plug-line');
+ assert.equal(menuActive(tree[0],'/admin/integrations'),true);
  for(const path of routes)assert.equal(menuActive(tree[0],`/admin/integrations/${path}`),true);
  assert.equal(menuActive(tree[0],'/admin/staff'),false);
 });
@@ -391,8 +393,9 @@ test('OAuth refresh rotates provider credentials without exposing secrets or rac
   return new Response(JSON.stringify({access_token:'new-access',refresh_token:'new-refresh',expires_in:1800}),{status:200});
  }) as typeof fetch;
  const config=(name:string)=>name.endsWith('CLIENT_ID')?'synthetic-id':name.endsWith('CLIENT_SECRET')?'synthetic-secret':'https://crm.example/admin/integrations/credentials';
- assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z'});
- assert.equal(saved,1);assert.equal(JSON.parse(stored).refresh_token,'new-refresh');
- assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'2026-11-11T12:00:00Z'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z'});
+ assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'old-version'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z',docusignProduction:false});
+ // Since 6e3108a (live integrations code) the refreshed credential is stored versioned: {version:1,token:{...}}; a flat old one is still read.
+ assert.equal(saved,1);assert.equal(JSON.parse(stored).version,1);assert.equal(JSON.parse(stored).token.refresh_token,'new-refresh');
+ assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'2026-11-11T12:00:00Z'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z',docusignProduction:false});
  assert.equal(acquired,1,'fresh access tokens do not start a second refresh');
 });

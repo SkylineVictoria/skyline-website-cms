@@ -228,7 +228,7 @@ function ClassDetails({ c, clash, onClose }: { c: CalClass; clash?: string; onCl
   return (
     <Modal open title={`${c.courseCode} ${c.batch} · ${shortDate(c.date)}`} onClose={onClose} width="max-w-2xl"
       footer={<div className="flex flex-wrap justify-end gap-2">
-        {c.prerequisite ? <Link to="/admin/lms/courses" className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open course › Prerequisite class</Link> : <>
+        {c.prerequisite ? <Link to="/admin/lms/courses" className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open course › Weekly TimeTable › Late joiners' class</Link> : <>
         <Link to={`/admin/lms/intakes#${c.intakeId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open intake</Link></>}
       </div>}>
       {clash ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">Clash: {clash}</p> : null}

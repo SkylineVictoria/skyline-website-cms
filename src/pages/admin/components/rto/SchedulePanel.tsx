@@ -203,12 +203,6 @@ export default function SchedulePanel({ detail, courseDuration, unitWeeks = {}, 
             <i className="ri-error-warning-line mr-1" aria-hidden="true" />A unit is taught before its prerequisite: {early.join("; ")}. Students would have to take them in this order; move the prerequisite up.
           </div>
         ) : null}
-        {registered && weeks && registered !== weeks ? (
-          <div role="status" className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            <span><i className="ri-error-warning-line mr-1" aria-hidden="true" />Schedule is {weeks} weeks; course duration is {registered} weeks. CoE dates should match the registered duration.</span>
-            {readOnly ? null : <Button size="sm" variant="outline" disabled={busy} onClick={() => regenerate(addDays(first, registered * 7 - 1))}>Fit to {registered} weeks</Button>}
-          </div>
-        ) : null}
       </div>
 
       {/* Units | timeline */}

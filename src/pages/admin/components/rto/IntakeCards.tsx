@@ -2,15 +2,16 @@
 // opens the intake in a sheet whose address ends in #<intake id>. N = new intake.
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Button, ConfirmDialog, Field, TextInput } from "@/pages/admin/components/ui";
+import { Button, DangerDialog, Field, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import IntakeSheet, { type SheetTab } from "@/pages/admin/components/rto/IntakeSheet";
 import { Empty, MoreMenu, SkeletonCards, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import { useShortcuts } from "@/pages/admin/lib/useShortcuts";
+import { supabase } from "@/pages/admin/lib/supabase";
 import {
-  monthYear, phase, rto, rtoFlow, shortDate, weeksOf, type IntakeDetail, type IntakeStatus, type RtoIntake,
+  monthYear, phase, rto, rtoFlow, shortDate, weeksOf, type CourseDetail, type IntakeDetail, type IntakeStatus, type RtoIntake,
 } from "@/pages/admin/lib/rto";
 
 export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, onDuplicate, onDelete }: {
@@ -24,7 +25,9 @@ export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, o
       className="group flex min-w-0 cursor-pointer flex-col rounded-card border border-background-200 bg-background-50 p-4 text-left outline-none transition-shadow duration-150 ease-out hover:border-primary-300 hover:shadow-md focus-visible:ring-2 focus-visible:ring-primary-400">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <p className="font-heading text-2xl font-bold leading-tight text-foreground-950">{monthYear(i.startDate)}</p>
+          {/* The intake's name (CPC30326_01-Dec-2026_Intake_Batch_COE), the start month under it. */}
+          <p className="break-all font-heading text-base font-bold leading-snug text-foreground-950" title={i.customName || i.name}>{i.customName || i.name || monthYear(i.startDate)}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{monthYear(i.startDate)}</p>
           {showCourse ? <p className="truncate text-sm font-medium text-foreground-700" title={i.courseName}>{i.courseName}</p> : null}
         </div>
         <StatusPicker status={i.status} canEdit={canEdit} onChange={onStatus} />
@@ -88,12 +91,24 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
     setLocal((m) => ({ ...m, [i.id]: status }));
     rto("intake_save", { id: i.id, status }).then(() => {
       onReload();
-      push(`${monthYear(i.startDate)} intake is now ${status[0].toUpperCase()}${status.slice(1)}.`, "success", { label: "Undo", onClick: () => setStatus({ ...i, status }, before) });
+      push(`${i.customName || i.name || monthYear(i.startDate)} is now ${status[0].toUpperCase()}${status.slice(1)}.`, "success", { label: "Undo", onClick: () => setStatus({ ...i, status }, before) });
     }).catch((e) => { setLocal((m) => ({ ...m, [i.id]: before })); push(e instanceof Error ? e.message : "Not saved.", "error"); });
   };
+  // A course runs only with an intake (owner, 2026-11-20): deleting its last intake deletes the course and its units too.
+  const lastOfCourse = (i: RtoIntake | null) => !!i && intakes.filter((x) => x.courseId === i.courseId).length === 1;
   const remove = async (i: RtoIntake) => {
-    try { const r = await rto<{ deleted: boolean; freed?: number }>("intake_delete", { intakeId: i.id }); push(r?.freed ? `${i.name} deleted. ${r.freed} student${r.freed === 1 ? " needs" : "s need"} a new intake.` : `${i.name} deleted.`); if (openId === i.id) close(); onReload(); }
-    catch (e) { push(e instanceof Error ? e.message : "Not deleted.", "error"); }
+    try {
+      const r = await rto<{ deleted: boolean; freed?: number }>("intake_delete", { intakeId: i.id });
+      push(r?.freed ? `${i.name} deleted. ${r.freed} student${r.freed === 1 ? " needs" : "s need"} a new intake.` : `${i.name} deleted.`);
+      if (openId === i.id) close();
+      const course = await rto<CourseDetail>("course_get", { courseId: i.courseId }).catch(() => null);
+      if (course && !course.intakes.length) {
+        const { error } = await supabase.rpc("rto_course_delete", { p_course_id: i.courseId, p_force: true });
+        if (error) push(`${i.courseCode} has no intake now but was not deleted: ${error.message}`, "error");
+        else push(`${i.courseCode} had no other intake, so the course and its units were deleted too.`);
+      }
+      onReload();
+    } catch (e) { push(e instanceof Error ? e.message : "Not deleted.", "error"); }
   };
 
   return (
@@ -117,8 +132,13 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
       <NewIntakeDrawer open={creating} onClose={() => setCreating(false)} courses={courses} courseId={courseId}
         onCreated={(d: IntakeDetail, addBatch) => { setCreating(false); onReload(); push(`${d.intake.name} created.`); open(d.intake.id, addBatch ? { addBatch: true } : { tab: "timeline" }); }} />
       {duplicating ? <DuplicateDrawer intake={duplicating} onClose={() => setDuplicating(null)} onDone={(d) => { setDuplicating(null); onReload(); push(`${d.intake.name} created as a draft.`); open(d.intake.id); }} /> : null}
-      <ConfirmDialog open={deleting !== null} title={`Delete ${deleting?.name ?? "this intake"}?`} confirmLabel="Delete intake"
-        message="Its timeline and class setup go too. Students in it are taken out and wait for you to place them in a new intake (Override: place a student). An intake with issued certificates, set assessments or recorded attendance cannot be deleted; close it instead."
+      <DangerDialog open={deleting !== null} title={`Delete ${deleting?.name ?? "this intake"}?`} intro={deleting ? `${deleting.courseCode} · ${shortDate(deleting.startDate)}` : undefined}
+        items={[
+          "Its timeline, weekly timetable and classes",
+          "Students in it are taken out and wait to be placed in a new intake (Override: place a student)",
+          ...(lastOfCourse(deleting) ? [`It is the last intake of ${deleting?.courseCode}: a course runs only with an intake, so the course, its units and its master timetable are deleted too`] : []),
+        ]}
+        confirmLabel="Yes, delete"
         onCancel={() => setDeleting(null)} onConfirm={() => { const i = deleting; setDeleting(null); if (i) void remove(i); }} />
     </>
   );

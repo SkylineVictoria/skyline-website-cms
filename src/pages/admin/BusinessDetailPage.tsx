@@ -1,8 +1,8 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ACTIVE_STAGES, STAGE_LABEL, type OnboardingStage } from "@/pages/admin/lib/agentOnboarding";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
 import { AgencyStatusBadge, ApplicationStatusPills, OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
@@ -17,6 +17,9 @@ import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
 import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
 import { activateBusinessOnboarding } from "@/lib/signingApi";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
+import { businessDeleteCheck } from "@/pages/admin/lib/businessData";
 
 type Tab = "details" | "agents" | "students" | "applications";
 const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
@@ -24,6 +27,12 @@ const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
 /** Agencies > Businesses > {name}: the business, its agents, their students and the students' applications. The tab lives in the URL. */
 export default function BusinessDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  // Delete business (2026-11-20): offered only when the database says this administrator may delete it now (Application sent).
+  const { user } = useAuth();
+  const isAdmin = user?.role === "Admin";
+  const [deletable, setDeletable] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [params, setParams] = useSearchParams();
   const requested = params.get("tab") as Tab | null;
   const { push } = useToast();
@@ -33,21 +42,33 @@ export default function BusinessDetailPage() {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
 
+  // Reloads can overlap (opening the page, closing Prepare application, Send): only the latest one's answer is shown, so an older,
+  // slower answer never puts the header back to an earlier status ("Not sent yet" after Send, 2026-11-20).
+  const latestLoad = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++latestLoad.current;
     setLoading(true);
     setError("");
     try {
       const found = await getBusiness(id);
+      if (mine !== latestLoad.current) return;
       setBusiness(found);
       if (!found) setError("This business could not be found.");
     } catch (e) {
+      if (mine !== latestLoad.current) return;
       setBusiness(null);
       setError(e instanceof Error ? e.message : "We could not load this business.");
     } finally {
-      setLoading(false);
+      if (mine === latestLoad.current) setLoading(false);
     }
   }, [id]);
   useEffect(() => { setBusiness(null); void load(); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isAdmin || !business || business.status !== "Onboarding") { setDeletable(false); return; }
+    businessDeleteCheck(business.id).then((r) => { if (!cancelled) setDeletable(r.deletable); }, () => { if (!cancelled) setDeletable(false); });
+    return () => { cancelled = true; };
+  }, [isAdmin, business]);
 
   const change = async (next: BusinessStatus) => {
     if (!business) return;
@@ -121,6 +142,7 @@ export default function BusinessDetailPage() {
               : <AgencyStatusBadge status={business.effectiveStatus ?? business.status} />}
             {business.status === "Active" && business.operational === false && business.gateReason ? <span className="text-xs font-medium text-amber-700" data-testid="business-gate-reason">{business.gateReason}</span> : null}
             <MessagePersonButton kind="agency" refId={agency.id} name={business.name} />
+            {deletable ? <Button variant="outline" icon="ri-delete-bin-line" onClick={() => setDeleting(true)} data-testid="delete-business">Delete business</Button> : null}
             {business.status === "Active"
               ? <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate business</Button>
               : <Button disabled={busy || !business.onboarding?.agreementReady} title={business.onboarding?.agreementReady ? undefined : "Needs the signed agent agreement"}
@@ -171,6 +193,8 @@ export default function BusinessDetailPage() {
         onConfirm={() => { if (!busy) void change("Inactive"); }}
         onCancel={() => { if (!busy) setConfirm(false); }}
       />
+      {deleting && business ? <DeleteBusinessDialog business={{ id: business.id, name: business.name, abn: String(agency?.registrationNumber ?? "") }}
+        onClose={() => setDeleting(false)} onDeleted={(message) => { setDeleting(false); push(message); navigate("/admin/businesses"); }} /> : null}
     </div>
   );
 }

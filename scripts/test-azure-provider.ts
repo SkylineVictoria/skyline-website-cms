@@ -1057,7 +1057,7 @@ function smsPort(queue: ClaimedSms[], storeOk = true) {
   };
   return { port, recorded };
 }
-const claimedSms = (id: string, attempt = 1): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt });
+const claimedSms = (id: string, attempt = 1, createdAt: string | null = new Date(Date.now() - 60_000).toISOString()): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt, createdAt });
 
 test("sms dispatch: each outcome is recorded once with the right retry decision", async () => {
   const { port, recorded } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c", 3), claimedSms("d"), claimedSms("e")]);
@@ -1066,11 +1066,111 @@ test("sms dispatch: each outcome is recorded once with the right retry decision"
     { kind: "failed", code: "invalid_recipient" }, { kind: "unknown", code: "timeout" },
   ]);
   const summary = await dispatchSmsBatch(port, provider, 10);
-  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, stale: 0 });
+  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, expired: 0, stale: 0 });
   assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}:${r.delay}`), [
     "a:accepted:null:false:0", "b:failed:rate_limit:true:60", "c:failed:provider:true:240", "d:failed:invalid_recipient:false:0", "e:unknown:timeout:false:0",
   ]);
   assert.deepEqual(provider.sent.map((m) => [m.deliveryId, m.to]), [["a", "+61412345678"], ["b", "+61412345678"], ["c", "+61412345678"], ["d", "+61412345678"], ["e", "+61412345678"]]);
+});
+
+test("sms dispatch: a text queued more than 24 hours ago is never sent; it is recorded as expired with its reason", async () => {
+  const now = Date.parse("2026-11-20T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(now - h * 3_600_000).toISOString();
+  const { port, recorded } = smsPort([claimedSms("old", 1, hoursAgo(25)), claimedSms("fresh", 1, hoursAgo(23)), claimedSms("edge", 1, hoursAgo(24.001)), claimedSms("undated", 1, null)]);
+  const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);
+  const summary = await dispatchSmsBatch(port, provider, 10, () => now);
+  assert.deepEqual(summary, { accepted: 1, retried: 0, failed: 0, unknown: 0, expired: 3, stale: 0 });
+  assert.deepEqual(provider.sent.map((m) => m.deliveryId), ["fresh"], "only the text queued within 24 hours reaches ClickSend");
+  assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}`), ["old:expired:older_than_24h:false", "fresh:accepted:null:false", "edge:expired:older_than_24h:false", "undated:expired:older_than_24h:false"]);
+  // A fenced record (lease lost) of an expired text counts as stale, and still nothing is sent.
+  const fenced = smsPort([claimedSms("old", 1, hoursAgo(30))], false);
+  const quiet = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000002" }]);
+  assert.deepEqual(await dispatchSmsBatch(fenced.port, quiet, 10, () => now), { accepted: 0, retried: 0, failed: 0, unknown: 0, expired: 0, stale: 1 });
+  assert.equal(quiet.sent.length, 0);
+});
+
+test("sms: the 24-hour SQL expiry and the consent text without a STOP promise are in the migration", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120052817_sms_expiry_and_consent.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(sql, /x\.state = 'pending' and x\.created_at < now\(\) - interval '24 hours'/);
+  assert.match(sql, /state = 'expired', state_reason = 'older_than_24h'/);
+  const consent = /values \(auth\.uid\(\), v_phone, '([^']+)'\)/.exec(sql)?.[1] ?? "";
+  assert.ok(consent.includes("Notifications page") && !/stop/i.test(consent), consent);
+  assert.match(sql, /TODO\(sms-stop\)/);
+});
+
+test("scheduled jobs: every HTTP dispatcher posts through cron_http_post, a daily check flags 3+ failed calls, the dashboard shows them", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120063419_cron_http_health.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const patched = [...sql.matchAll(/select pg_temp\.patch\('public\.([a-z_]+)\(\)', 'net\.http_post\(', 'public\.cron_http_post\(''([a-z-]+)'', '\);/g)].map((m) => `${m[1]}:${m[2]}`);
+  assert.deepEqual(patched, ["hr_holiday_sync_dispatch:hr-holiday-sync", "hr_retention_dispatch:hr-retention-purge", "integration_refresh_dispatch:integration-token-refresh",
+    "notification_dispatch_worker:notification-delivery-worker", "portal_dispatch_document_extraction_worker:portal-document-extraction-worker",
+    "public_assistant_dispatch_index_worker:public-assistant-index-worker", "signing_dispatch:signing-notifications", "support_mail_dispatch:support-ticket-mail"]);
+  assert.match(sql, /r\.status_code not between 200 and 299/, "anything but a 2xx answer is a failed call");
+  assert.match(sql, /'no response within an hour'/);
+  assert.match(sql, /cron_http_health_check\(p_hours integer default 24, p_min_failures integer default 3\)/);
+  assert.match(sql, /cron\.schedule\('cron-http-health', '30 21 \* \* \*'/);
+  const board = readFileSync(new URL("../src/pages/admin/components/NeedsActionBoard.tsx", import.meta.url), "utf8");
+  assert.match(board, /key: "scheduledJobs", label: "Scheduled jobs or Edge Functions failing"/);
+});
+
+test("Edge Function errors (2026-11-20): browser reports are locked down, queued calls name their function, the daily check flags both in the same item", async () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120101733_edge_function_errors.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  // The allowlist is every function folder.
+  const dirs = readdirSync(new URL("../supabase/functions/", import.meta.url), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(new URL(`../supabase/functions/${d.name}/index.ts`, import.meta.url))).map((d) => d.name).sort();
+  const listed = [...(/select array\[([\s\S]*?)\]::text\[\]/.exec(sql)?.[1] ?? "").matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(listed, dirs, "edge_function_names() lists exactly the functions in supabase/functions");
+  // The report table: no direct access; one validated, capped, rate-limited way in.
+  assert.match(sql, /revoke all on public\.edge_function_errors from public, anon, authenticated;/);
+  assert.match(sql, /status integer not null check \(status between 500 and 599\)/);
+  assert.match(sql, /error text not null default '' check \(char_length\(error\) <= 200\)/);
+  assert.match(sql, /not \(p_function = any\(public\.edge_function_names\(\)\)\) or p_status is null or p_status not between 500 and 599 then return;/);
+  assert.match(sql, /e\.last_at > now\(\) - interval '1 hour'\) >= 30 then return;/, "30 an hour per reporter");
+  assert.match(sql, /e\.first_at > now\(\) - interval '1 day'\) >= 300 then return;/, "300 a day per function");
+  assert.match(sql, /extensions\.hmac\(convert_to\(coalesce\(v_ip, 'unknown'\), 'UTF8'\)/, "addresses kept only as an HMAC");
+  assert.match(sql, /grant execute on function public\.edge_function_error_report\(text, integer, text\) to anon, authenticated;/);
+  assert.match(sql, /revoke all on function public\.edge_function_error_clean\(text\) from public, anon, authenticated;/);
+  // A lone anonymous reporter cannot raise an alert: staff, a queued call or two different reporters can.
+  assert.match(sql, /\) s where s\.trusted or s\.reporters >= 2/);
+  assert.match(sql, /'queued:' \|\| c\.job, true, c\.status_code/);
+  // Queued calls name the function they called.
+  assert.match(sql, /substring\(url from '\/functions\/v1\/\(\[a-z0-9-\]\+\)'\)/);
+  assert.match(sql, /when 'onboarding-followup' then 'document-signing'/);
+  // Same dashboard item and the same once-a-day email.
+  assert.match(sql, /'title', case when f\.kind = 'function' then 'Edge Function ' \|\| f\.job else f\.job end, 'detail', coalesce\(f\.summary,/);
+  assert.match(sql, /'ops_cron_health'/);
+  assert.ok(!/cron\.schedule/.test(sql), "no new cron job");
+
+  const report = await import("../src/lib/functionErrorReport.ts");
+  assert.equal(report.functionNameOf("https://x.supabase.co/functions/v1/document-signing"), "document-signing");
+  assert.equal(report.functionNameOf("https://x.supabase.co/functions/v1/payments?x=1"), "payments");
+  assert.equal(report.functionNameOf("https://x.supabase.co/rest/v1/rpc/edge_function_error_report"), null, "its own report is never reported");
+  assert.equal(report.cleanErrorText("WORKER_LIMIT for a@b.example.com 0412 345 678 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\n" + "x".repeat(300)).length <= 200, true);
+  assert.equal(report.cleanErrorText("Failed for a@b.example.com, 0412 345 678"), "Failed for [email], [redacted]");
+  const sent: Array<{ url: string; body: Record<string, unknown>; auth: string }> = [];
+  let now = 1_000_000;
+  const target = { supabaseUrl: "https://x.supabase.co", apikey: "anon", authorization: "Bearer user-token", now: () => now,
+    fetchImpl: (async (url: string, init: RequestInit) => { sent.push({ url, body: JSON.parse(String(init.body)), auth: (init.headers as Record<string, string>).Authorization }); return new Response("null"); }) as unknown as typeof fetch };
+  report.resetFunctionErrorReports();
+  assert.equal(report.reportFunctionError("document-signing", 546, "WORKER_LIMIT", target), true);
+  assert.equal(report.reportFunctionError("document-signing", 546, "again", target), false, "once a minute per function and status");
+  assert.equal(report.reportFunctionError("document-signing", 404, "not found", target), false, "4xx is not reported");
+  now += 61_000;
+  assert.equal(report.reportFunctionError("document-signing", 546, "WORKER_LIMIT", target), true);
+  assert.deepEqual(sent[0], { url: "https://x.supabase.co/rest/v1/rpc/edge_function_error_report", body: { p_function: "document-signing", p_status: 546, p_error: "WORKER_LIMIT" }, auth: "Bearer user-token" });
+  report.reportIfFunctionFailed("https://x.supabase.co/functions/v1/payments", new Response("boom", { status: 503 }), target);
+  report.reportIfFunctionFailed("https://x.supabase.co/functions/v1/payments", new Response("fine", { status: 200 }), target);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sent.length, 3);
+  assert.deepEqual(sent[2].body, { p_function: "payments", p_status: 503, p_error: "boom" });
+});
+
+test("scheduled jobs: flags are emailed to the ops address through the notification queue, at most once a day", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120071533_cron_health_email.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(sql, /select 'gourav\.gupta@slit\.edu\.au'::text/);
+  assert.match(sql, /insert into public\.cron_health_mails\(day, jobs\) values \(current_date, v_n\) on conflict \(day\) do nothing;\n  if found then/, "the day is claimed before anything is queued");
+  assert.match(sql, /insert into public\.notification_deliveries\(recipient_email, event, template_source, subject, body\)/, "the existing queue, no new cron");
+  assert.ok(!/cron\.schedule/.test(sql), "no new cron job");
+  assert.match(sql, /event like 'ops\\_%'/, "the queue's subject rule admits ops events");
 });
 
 test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {
@@ -1081,7 +1181,7 @@ test("sms dispatch: stops at the batch limit and counts fenced (stale) records",
 });
 
 // ---- Communication Hub templates: one template, three channels (src/lib/communicationTemplates.ts + migration 20261116200000) ----
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { TEMPLATE_VARIABLES, channelText, renderTemplate, smsInfo, templateKeyFrom, templateVariables } from "../src/lib/communicationTemplates.ts";
 
 test("templates: variables are filled; a missing value stays visible instead of going blank", () => {
@@ -1107,7 +1207,8 @@ test("templates: SMS size counts GSM-7 and Unicode parts", () => {
 });
 
 test("templates: every built-in template uses only known details, has a subject, and has a unique key", () => {
-  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8");
+  // A Windows checkout (core.autocrlf) has CRLF line endings: the seed markers below are matched on LF.
+  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const seeds = sql.slice(sql.indexOf(") values\n"));
   const known = new Set(TEMPLATE_VARIABLES.map((v) => v.name));
   const used = templateVariables(seeds).filter((n) => !known.has(n));

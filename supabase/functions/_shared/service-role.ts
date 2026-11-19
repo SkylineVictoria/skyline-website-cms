@@ -29,6 +29,20 @@ function projectRefOf(supabaseUrl: string): string | null {
   }
 }
 
+/**
+ * A scheduled or service caller (2026-11-20: document-signing's 15-minute signing tick was refused with 403 for days because it compared
+ * the pg_cron JWT with SUPABASE_SERVICE_ROLE_KEY, which no longer holds that JWT): the project's service-role JWT (serviceRoleStatus,
+ * behind verify_jwt = true), or exactly the function's own service key (an sb_secret_ caller). Constant-time comparison for the latter.
+ */
+export function isServiceCaller(authorization: string | null, serviceKey: string, supabaseUrl: string): boolean {
+  if (serviceRoleStatus(authorization, supabaseUrl) === 200) return true;
+  const token = (authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!token || !serviceKey || token.length !== serviceKey.length) return false;
+  let diff = 0;
+  for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ serviceKey.charCodeAt(i);
+  return diff === 0;
+}
+
 /** 200 = the project's service-role token (role service_role and, hosted, this project's ref); 401 = no bearer token; 403 = any other token. */
 export function serviceRoleStatus(authorization: string | null, supabaseUrl: string): 200 | 401 | 403 {
   const token = /^Bearer (.+)$/.exec((authorization ?? "").trim())?.[1] ?? "";

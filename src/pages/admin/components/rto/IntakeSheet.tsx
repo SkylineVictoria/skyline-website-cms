@@ -90,7 +90,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             {i ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="font-heading text-2xl font-bold text-foreground-950">{monthYear(i.startDate)}</h2>
+                  <h2 className="font-heading text-2xl font-bold text-foreground-950">{i.customName || i.name || monthYear(i.startDate)}</h2>
                   <StatusPicker status={i.status} canEdit={canEdit} onChange={setStatus} />
                 </div>
                 <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p>
@@ -119,7 +119,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
 
       {wizStep && canEdit ? <div className="shrink-0 border-b border-primary-200 bg-primary-50 px-4 py-2.5 sm:px-6" role="status">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1"><b>Step 5 of 5 · Select weekly timetable.</b> Choose this intake's days and times, room and trainer. Students join through the enrolment wizard.</span>
+          <span className="min-w-0 flex-1"><b>Steps 5–7 · Rooms, trainers and weekly class times.</b> The week fills itself from the rooms, trainers and CoE or VoE hours. Students join through the enrolment wizard.</span>
           <Button size="sm" icon="ri-time-line" onClick={() => { setTab("classes"); setSetup(true); }}>{setupLabel}</Button>
         </div>
       </div> : null}
@@ -196,12 +196,6 @@ function Overview({ detail, canEdit, busy, run, undoable, openTab }: {
 
   return (
     <div className="space-y-4">
-      {registered && weeks && registered !== weeks ? (
-        <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <span><i className="ri-error-warning-line mr-1" aria-hidden="true" />This intake runs {weeks} weeks; the course is registered for {registered} weeks. CoE dates should match.</span>
-          {canEdit && detail.schedule.length ? <Button size="sm" variant="outline" disabled={busy} onClick={() => setFit(true)}>Fit to {registered} weeks</Button> : null}
-        </div>
-      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Fact label="Dates" value={`${shortDate(first)} – ${shortDate(last)}`} />
         <Fact label="Length" value={weeks ? `${weeks} weeks` : "—"} note={registered ? `Course: ${registered} weeks` : undefined} />

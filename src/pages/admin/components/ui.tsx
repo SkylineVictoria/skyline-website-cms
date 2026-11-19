@@ -445,6 +445,50 @@ export function ConfirmDialog({
   );
 }
 
+/** A warning before something is deleted for good: what goes with it, and (for the biggest deletes) a word to type. */
+export function DangerDialog({ open, title, intro, items, confirmLabel = "Delete", confirmWord, busy = false, error, onConfirm, onCancel }: {
+  open: boolean; title: string; intro?: string;
+  /** What is deleted or changed, one line each. */
+  items: string[];
+  confirmLabel?: string;
+  /** When given, the button works only after this is typed exactly. */
+  confirmWord?: string;
+  busy?: boolean; error?: string;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  useEffect(() => { if (open) setTyped(""); }, [open, confirmWord]);
+  // Owner (2026-11-20): case and extra spaces do not matter ("delete cpc33020" works).
+  const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
+  const ready = !confirmWord || norm(typed) === norm(confirmWord);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-foreground-950/50 p-4" role="alertdialog" aria-modal="true" aria-labelledby="danger-title">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-background-50 shadow-2xl">
+        <div className="flex items-start gap-3 p-5">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600"><i className="ri-error-warning-line text-2xl" aria-hidden="true" /></span>
+          <div className="min-w-0">
+            <h2 id="danger-title" className="font-heading text-lg font-bold text-foreground-950">{title}</h2>
+            {intro ? <p className="mt-1 text-sm text-foreground-600">{intro}</p> : null}
+          </div>
+        </div>
+        <ul className="mx-5 space-y-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+          {items.map((line) => <li key={line} className="flex gap-2"><i className="ri-close-circle-line mt-0.5 text-red-500" aria-hidden="true" /><span>{line}</span></li>)}
+        </ul>
+        <p className="mx-5 mt-3 text-xs font-semibold text-red-700">This cannot be undone.</p>
+        {confirmWord ? <label className="mx-5 mt-3 block text-sm text-foreground-700">Type <b className="font-mono">{confirmWord}</b> to confirm
+          <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} disabled={busy} spellCheck={false}
+            className="mt-1 block w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-sm focus:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-200" /></label> : null}
+        {error ? <p role="alert" className="mx-5 mt-3 rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-2 border-t border-background-200 bg-background-100 px-5 py-3">
+          <Button variant="outline" disabled={busy} onClick={onCancel}>{confirmWord ? "Cancel" : "No"}</Button>
+          <Button variant="danger" icon="ri-delete-bin-line" disabled={busy || !ready} onClick={onConfirm}>{busy ? "Deleting…" : confirmLabel}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 

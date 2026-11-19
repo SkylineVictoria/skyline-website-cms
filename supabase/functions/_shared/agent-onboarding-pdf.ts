@@ -50,7 +50,7 @@ export async function mergePdfs(parts: Uint8Array[]): Promise<Uint8Array> {
     const source = await PDFDocument.load(bytes, { updateMetadata: false });
     for (const page of await out.copyPages(source, source.getPageIndices())) out.addPage(page);
   }
-  return await out.save();
+  return await out.save({ useObjectStreams: false });
 }
 
 /** The first `firstPages` pages and the rest, as two documents (the signed application form and the signed agreement). */
@@ -63,7 +63,7 @@ export async function splitPdf(bytes: Uint8Array, firstPages: number): Promise<[
     const indices = []; for (let i = from; i < to; i++) indices.push(i);
     for (const page of await out.copyPages(source, indices)) out.addPage(page);
     out.setSubject(source.getSubject() ?? "");
-    return await out.save();
+    return await out.save({ useObjectStreams: false });
   };
   return [await part(0, cut), await part(cut, total)];
 }

@@ -93,6 +93,9 @@ export function parseElectiveRules(packagingRules: string, required: number | nu
     if (stop.test(line)) break;
     if (!line || unitLine.test(line)) continue;
     if (/^for the remaining\b/i.test(line)) { remaining = true; continue; }
+    // "To achieve the occupational outcome of Builder electives must include" (the heading read as one sentence).
+    const outcome = /^to achieve the occupation(?:al)? outcome of (?:a |an |the )?(.+?),?\s+(?:the )?electives?(?: units?)? must include$/i.exec(line);
+    if (outcome) { pending = outcome[1].trim(); continue; }
     if (streamHeader.test(line) && !/\d/.test(line) && !notStream.test(line) && line.split(" ").length <= 4) { pending = line; continue; }
     const max = upTo.exec(line), min = atLeast.exec(line), only = exact.exec(line), from = mustFrom.exec(line), range = between.exec(line);
     if (outside.test(line) && !min) {

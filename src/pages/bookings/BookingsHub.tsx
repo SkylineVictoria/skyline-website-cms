@@ -8,6 +8,8 @@ import {
 import SlotPicker from "./SlotPicker";
 import ResourceAvailability, { type ResourceKind } from "./ResourceAvailability";
 import { HoursCard, TimeOffCard } from "./AvailabilityCards";
+import StudentsWeek from "@/pages/admin/lms/timetable/StudentsWeek";
+import { loadPeople, type CalPeople } from "@/pages/admin/lms/timetable/calendarData";
 
 type Tab = "bookings" | "types" | "availability" | "people";
 const KIND_LABEL: Record<string, string> = { staff: "Staff", agent: "Agent", student: "Student", other: "" };
@@ -15,7 +17,7 @@ const NEW_TYPE: MeetingType = { name: "", description: "", duration: 30, locatio
 const DEFAULT_HOURS: AvailabilityRow[] = [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: "09:00", end: "17:00" }));
 const ROOM: ResourceKind = { noun: "room", load: roomAvailability, save: saveRoomAvailability, empty: "No rooms yet. Add rooms in LMS › Timetable › Settings › Locations & rooms." };
 const TRAINER: ResourceKind = { noun: "trainer", load: trainerAvailability, save: saveTrainerAvailability, empty: "No active staff yet." };
-type Who = "me" | "rooms" | "trainers";
+type Who = "me" | "rooms" | "trainers" | "students";
 const ALERT = "rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800";
 const NOTICE = "rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800";
 
@@ -40,9 +42,12 @@ export default function BookingsHub() {
   const tabParam = params.get("tab");
   useEffect(() => { if (tabParam === "availability") setTab("availability"); }, [tabParam, params]);
   const whoParam = params.get("who");
-  const who: Who = rooms && whoParam === "rooms" ? "rooms" : trainers && whoParam === "trainers" ? "trainers" : "me";
+  const who: Who = rooms && whoParam === "rooms" ? "rooms" : trainers && whoParam === "trainers" ? "trainers" : trainers && whoParam === "students" ? "students" : "me";
+  // Students (owner, 2026-11-20): each placed student's classes this week, as on LMS › Timetable › Student availability.
+  const [people, setPeople] = useState<CalPeople | null>(null);
+  useEffect(() => { if (who === "students" && !people) loadPeople().then(setPeople).catch(fail); }, [who, people, fail]);
   const setWho = (w: Who) => { setNotice(""); setError(""); setParams(w === "me" ? { tab: "availability" } : { tab: "availability", who: w }, { replace: true }); };
-  const whoOptions: Who[] = ["me", ...(rooms ? ["rooms" as Who] : []), ...(trainers ? ["trainers" as Who] : [])];
+  const whoOptions: Who[] = ["me", ...(rooms ? ["rooms" as Who] : []), ...(trainers ? ["trainers" as Who, "students" as Who] : [])];
 
   if (!me) return error ? <p role="alert" className={ALERT}>{error}</p> : <p role="status" className="text-sm text-foreground-600">Loading bookings…</p>;
   const canHost = me.identity.kind !== "other";
@@ -91,7 +96,7 @@ export default function BookingsHub() {
             <div role="group" aria-label="Whose availability" className="inline-flex overflow-hidden rounded-md border border-background-300">
               {whoOptions.map((w) => (
                 <button key={w} type="button" aria-pressed={who === w} onClick={() => setWho(w)}
-                  className={`px-4 py-1.5 text-sm font-medium ${who === w ? "bg-primary-500 text-background-50" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{w === "me" ? "Me" : w === "rooms" ? "Rooms" : "Trainers"}</button>
+                  className={`px-4 py-1.5 text-sm font-medium ${who === w ? "bg-primary-500 text-background-50" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{w === "me" ? "Me" : w === "rooms" ? "Rooms" : w === "trainers" ? "Trainers" : "Students"}</button>
               ))}
             </div>
           </div>
@@ -100,6 +105,7 @@ export default function BookingsHub() {
             options={rooms.rooms.map((r) => ({ id: r.id, name: r.name, group: r.location, detail: [r.capacity ? `${r.capacity} seats` : "", r.openDays ? "" : "no hours set"].filter(Boolean).join(" · ") }))} />
           : who === "trainers" && trainers ? <ResourceAvailability key="trainers" kind={TRAINER} canEdit={trainers.canEdit} initial={params.get("trainer")} onSaved={roomSaved} onError={fail}
             options={trainers.trainers.map((t) => ({ id: t.id, name: t.name, group: "Trainers", detail: t.openDays ? "" : "no hours set" }))} />
+          : who === "students" ? <StudentsWeek people={people} />
           : me.host ? <AvailabilityTab me={me} onDone={done} onError={fail} />
           : <p className="text-sm text-foreground-600">{canHost ? "Set up your booking page first." : "You have no booking page."}</p>}
       </> : null}

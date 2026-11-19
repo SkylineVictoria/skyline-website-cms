@@ -2,7 +2,7 @@
 // the same Noto Sans text, letterhead header, primary colour, margins and "Page x of y" footer as the submitted application PDF). Runtime-neutral
 // (Deno Edge Function and the offline tests run the same code; pdf-lib comes from the function's import map or node_modules). Real, selectable
 // text; the signature page is added to this file later by stampSignedOffer.
-import { PdfWriter, type Para, type Span } from "./notification/pdf-layout.ts";
+import { fitsStandardFont, PdfWriter, type Para, type Span } from "./notification/pdf-layout.ts";
 import { formatDateOnly, resolvePrimary } from "./notification/submission-pdf.ts";
 import { templateBlocks, type TemplateBlock } from "./hr-template.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
@@ -44,6 +44,9 @@ function paraOf(block: TemplateBlock): Para {
  */
 let checker: Promise<PdfWriter> | null = null;
 export async function unsupportedText(texts: string[]): Promise<string | null> {
+  // Every character in the built-in Helvetica (and no control character but a line break): the document prints it in Helvetica, as
+  // typed, and no font has to be embedded just to answer (CPU budget, 2026-11-20: fontkit + Noto Sans cost a signature ~0.2 s cold).
+  if (!texts.some((t) => /[\u0000-\u0009\u000b-\u001f\u007f]/.test(t)) && await fitsStandardFont(texts.join("\n"))) return null;
   // One writer per isolate: only its character sets are read (a signature used to embed both fonts once more just for this check).
   checker ??= PdfWriter.create("check", paletteOf(null));
   const writer = await checker.catch((error) => { checker = null; throw error; });

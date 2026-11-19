@@ -99,10 +99,18 @@ type Method = "typed" | "drawn" | "uploaded";
 function LinkProblem({ token, message }: { token: string; message: string }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const invalid = /invalid or expired/i.test(message);
+  // A link whose request no longer exists (e.g. the business was deleted before signing, 2026-11-20): a neutral page, nothing to request.
+  const gone = /no longer available/i.test(message);
   const request = async () => {
     setState("busy");
     try { await signingAction({ action: "link_request", token }); setState("done"); } catch { setState("error"); }
   };
+  if (gone) return <div className="rounded-xl border border-background-200 bg-white p-4 sm:p-5" data-testid="signing-link-gone">
+    <div className="flex items-start gap-3">
+      <i className="ri-link-unlink-m mt-0.5 text-xl text-foreground-500" aria-hidden="true" />
+      <p className="font-semibold text-foreground-900">This link is no longer available</p>
+    </div>
+  </div>;
   return <div className="space-y-4 rounded-xl border border-background-200 bg-white p-4 sm:p-5" data-testid="signing-link-problem">
     <div className="flex items-start gap-3">
       <i className="ri-link-unlink-m mt-0.5 text-xl text-foreground-500" aria-hidden="true" />
@@ -343,7 +351,6 @@ export default function SigningPage() {
   const hasBottomBar = !!view && !f04 && !declined && !declining && (canSign || (showPay && !paid) || paymentPage);
   const downloads = view && (complete || paymentPage) ? <div className="flex flex-wrap gap-3">
     <a className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-sm font-medium text-background-50 hover:bg-primary-600" href={view.url} download data-testid="download-signed"><i className="ri-download-line" aria-hidden="true" />Download signed copy</a>
-    {view.certificateUrl && <a className="inline-flex items-center gap-2 rounded-md border border-background-300 bg-white px-4 py-2 text-sm font-medium" href={view.certificateUrl} download><i className="ri-shield-check-line" aria-hidden="true" />Completion certificate</a>}
   </div> : null;
   return <main className={`min-h-screen bg-background-100 font-body text-foreground-900 ${hasBottomBar ? "pb-28" : "pb-10"} sm:pb-12`}>
     <header className="border-b border-background-200 bg-white">
@@ -385,7 +392,6 @@ export default function SigningPage() {
                   {hasPayment && !paid ? ` Your initial deposit of ${depositLabel} is still to be paid; you can pay it below.` : ""}</p>
                 <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
                   <a className="inline-flex items-center gap-1 font-medium text-emerald-900 underline underline-offset-2" href={view.url} download data-testid="download-signed"><i className="ri-download-line" aria-hidden="true" />Download signed copy</a>
-                  {view.certificateUrl && <a className="inline-flex items-center gap-1 font-medium text-emerald-900 underline underline-offset-2" href={view.certificateUrl} download><i className="ri-shield-check-line" aria-hidden="true" />Completion certificate</a>}
                 </p>
               </div>
             </div>

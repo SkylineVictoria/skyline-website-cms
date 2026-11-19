@@ -4,9 +4,45 @@
 // (HRMS > Templates) and the signature page added to a signed offer. Recovered from the live notification-delivery function (2 Nov 2026) and
 // extended for letters: flowing paragraphs with alignment, list markers, quotes, underline / strike, a header with free meta lines, and
 // opening an existing PDF to add pages to it.
-import { PDFDocument, PDFFont, PDFPage, PDFString, rgb, type PDFImage } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, PDFFont, PDFPage, PDFString, rgb, StandardFonts, type PDFImage } from "pdf-lib";
 import { NOTO_SANS_BOLD, NOTO_SANS_REGULAR } from "./pdf-fonts.ts";
+
+/**
+ * Every string inside a value (objects, arrays), data: URLs and byte arrays left out: what a document built from that value can print.
+ * PdfWriter.create / open take it as `text` and then use the built-in Helvetica when all of it fits (CPU budget, 2026-11-20).
+ */
+export function textOf(value: unknown, out: string[] = []): string {
+  if (typeof value === "string") { if (!value.startsWith("data:")) out.push(value); }
+  else if (Array.isArray(value)) for (const item of value) textOf(item, out);
+  else if (value && typeof value === "object" && !ArrayBuffer.isView(value)) for (const item of Object.values(value)) textOf(item, out);
+  return out.join("\n");
+}
+
+let winAnsi: Promise<Set<number>> | null = null;
+/** True when every character prints in the built-in Helvetica (WinAnsi: Latin-1 plus the usual dashes, quotes and the euro); line breaks and tabs ignored. */
+export async function fitsStandardFont(text: string): Promise<boolean> {
+  const known = await (winAnsi ??= PDFDocument.create().then(async (doc) => new Set((await doc.embedFont(StandardFonts.Helvetica)).getCharacterSet())));
+  for (const ch of text) { const cp = ch.codePointAt(0)!; if (cp >= 0x20 && !known.has(cp)) return false; }
+  return true;
+}
+
+/**
+ * Text width with a per-font cache (CPU budget, 2026-11-20): an embedded font's width is linear in the size, so each string is measured once
+ * (at size 1, through fontkit's layout, about 0.3 ms) and scaled. Fitting loops that try a size per half point then cost nothing extra.
+ * Same result as font.widthOfTextAtSize(text, size) to floating-point rounding.
+ */
+const widthCache = new WeakMap<PDFFont, Map<string, number>>();
+export function textWidth(font: PDFFont, text: string, size: number): number {
+  let cache = widthCache.get(font);
+  if (!cache) { cache = new Map(); widthCache.set(font, cache); }
+  let unit = cache.get(text);
+  if (unit === undefined) {
+    unit = font.widthOfTextAtSize(text, 1);
+    if (cache.size >= 20000) cache.clear();
+    cache.set(text, unit);
+  }
+  return unit * size;
+}
 
 export const MAX_PDF_PAGES = 40;
 export const PAGE_W = 595.28;
@@ -62,6 +98,8 @@ export class PdfWriter {
   readonly regular: PDFFont;
   readonly bold: PDFFont;
   readonly palette: Palette;
+  /** The largest object number of the opened file(s), before anything was added (0 for a new document). */
+  loadedObjects = 0;
 
   private constructor(pdf: PDFDocument, regular: PDFFont, bold: PDFFont, palette: Palette, existing: number) {
     this.pdf = pdf; this.regular = regular; this.bold = bold; this.palette = palette; this.existing = existing;
@@ -69,30 +107,53 @@ export class PdfWriter {
     this.boldKnown = new Set(bold.getCharacterSet());
   }
 
-  private static async fonts(pdf: PDFDocument): Promise<[PDFFont, PDFFont]> {
+  /**
+   * Noto Sans, subset and embedded through fontkit, unless `text` (everything the caller will print) fits the built-in Helvetica: then no
+   * font file, no fontkit (its import alone is about 0.2 s of CPU on a cold worker) and cheap widths. Characters outside the chosen font
+   * still go through clean() (folded or "?"), so a wrong guess never breaks a document.
+   */
+  private static async fonts(pdf: PDFDocument, text?: string): Promise<[PDFFont, PDFFont]> {
+    if (text !== undefined && await fitsStandardFont(text)) {
+      return [await pdf.embedFont(StandardFonts.Helvetica), await pdf.embedFont(StandardFonts.HelveticaBold)];
+    }
+    const fontkit = (await import("@pdf-lib/fontkit")).default;
     pdf.registerFontkit(fontkit);
     // The base64 is decoded once per isolate: each PDF of a signature (signed copy, certificate) reuses the bytes (CPU budget).
     fontBytes ??= [fromBase64(NOTO_SANS_REGULAR), fromBase64(NOTO_SANS_BOLD)];
     return [await pdf.embedFont(fontBytes[0], { subset: true }), await pdf.embedFont(fontBytes[1], { subset: true })];
   }
 
-  static async create(title: string, palette: Palette): Promise<PdfWriter> {
+  static async create(title: string, palette: Palette, options: { text?: string } = {}): Promise<PdfWriter> {
     const pdf = await PDFDocument.create();
     pdf.setTitle(title);
     pdf.setProducer("Skyline ERP");
     pdf.setCreator("Skyline ERP");
-    const [regular, bold] = await PdfWriter.fonts(pdf);
+    const [regular, bold] = await PdfWriter.fonts(pdf, options.text === undefined ? undefined : `${title}\n${options.text}`);
     const writer = new PdfWriter(pdf, regular, bold, palette, 0);
     writer.newPage();
     return writer;
   }
 
   /** Opens an existing PDF to add pages after its own (every original page is kept unchanged). The first added page starts the cursor. */
-  static async open(bytes: Uint8Array, palette: Palette): Promise<PdfWriter> {
-    const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
-    const [regular, bold] = await PdfWriter.fonts(pdf);
+  static async open(bytes: Uint8Array | readonly Uint8Array[], palette: Palette, options: { addPage?: boolean; text?: string } = {}): Promise<PdfWriter> {
+    // Several PDFs (the application form and the agreement, 2026-11-20): their pages joined in memory, so the document is saved once.
+    const parts = bytes instanceof Uint8Array ? [bytes] : bytes;
+    let pdf: PDFDocument;
+    if (parts.length === 1) pdf = await PDFDocument.load(parts[0], { updateMetadata: false });
+    else {
+      pdf = await PDFDocument.load(parts[0], { updateMetadata: false });
+      for (const part of parts.slice(1)) {
+        const source = await PDFDocument.load(part, { updateMetadata: false });
+        for (const page of await pdf.copyPages(source, source.getPageIndices())) pdf.addPage(page);
+      }
+    }
+    // The objects the file already held (an incremental update writes only what comes after them, and the pages it changed).
+    const loadedObjects = pdf.context.largestObjectNumber;
+    const [regular, bold] = await PdfWriter.fonts(pdf, options.text);
     const writer = new PdfWriter(pdf, regular, bold, palette, pdf.getPageCount());
-    writer.newPage();
+    writer.loadedObjects = loadedObjects;
+    // addPage false: nothing is added to the page tree (an incremental update must leave it unchanged).
+    if (options.addPage !== false) writer.newPage();
     return writer;
   }
 
@@ -102,7 +163,8 @@ export class PdfWriter {
     let out = "";
     for (const ch of String(text ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")) {
       const cp = ch.codePointAt(0)!;
-      if (ch === "\n" || ch === "\t" || known.has(cp)) { out += ch; continue; }
+      if (ch === "\n" || known.has(cp)) { out += ch; continue; }
+      if (ch === "\t") { out += known.has(0x09) ? ch : " "; continue; }
       const folded = ch.normalize("NFKD").replace(/[̀-ͯ]/g, "");
       out += folded && [...folded].every((c) => known.has(c.codePointAt(0)!)) ? folded : "?";
     }
@@ -124,7 +186,7 @@ export class PdfWriter {
   }
 
   private font(bold: boolean) { return bold ? this.bold : this.regular; }
-  private widthOf(text: string, bold: boolean, size: number) { return this.font(bold).widthOfTextAtSize(text, size); }
+  private widthOf(text: string, bold: boolean, size: number) { return textWidth(this.font(bold), text, size); }
 
   /** Splits one character run so no piece is wider than max. */
   private breakLong(word: string, bold: boolean, size: number, max: number): string[] {
@@ -449,9 +511,13 @@ export class PdfWriter {
       const left = this.clean(`${institution}  |  ${reference}`);
       const right = `Page ${this.existing + i + 1} of ${total}`;
       page.drawText(left, { x: MARGIN, y: MARGIN + 6, size: 8, font: this.regular, color: col(GREY) });
-      page.drawText(right, { x: PAGE_W - MARGIN - this.regular.widthOfTextAtSize(right, 8), y: MARGIN + 6, size: 8, font: this.regular, color: col(GREY) });
+      page.drawText(right, { x: PAGE_W - MARGIN - textWidth(this.regular, right, 8), y: MARGIN + 6, size: 8, font: this.regular, color: col(GREY) });
     });
   }
 
-  async save(): Promise<Uint8Array> { return await this.pdf.save({ useObjectStreams: true }); }
+  /**
+   * objectStreams false (CPU budget, 2026-11-20): saving a large existing PDF (the 15-page application form + agreement) without object
+   * streams costs about a third of the CPU, for a somewhat larger file. New documents (letters, certificates) keep object streams.
+   */
+  async save(options: { objectStreams?: boolean } = {}): Promise<Uint8Array> { return await this.pdf.save({ useObjectStreams: options.objectStreams ?? true }); }
 }

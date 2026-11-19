@@ -3,8 +3,9 @@
 // checks go out when the agent has signed the form; staff are told when both referees are back). Everything goes through the Sign
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
-import { AGENT_ONBOARDING_DOCS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { ABR_PREFILL_KEYS, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
+import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
+  WITNESS_SIGNATURE_KEY, yesNoDefaults, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
@@ -94,11 +95,17 @@ async function buildDocument(ctx: OnboardingContext, template: OnboardingTemplat
   const { printed, recipient } = resolveFields(numbered(template.fields), values, options);
   let bytes = source;
   if (printed.length) {
-    bytes = await (await signingPdfModule()).stampDocument(source, { reference: "", title, recipients: [],
+    const started = performance.now();
+    // incremental: the prefilled values are appended to the installed blank (CPU budget, 2026-11-20); a full re-write when that is not possible.
+    bytes = await (await signingPdfModule()).stampDocument(source, { reference: "", title, recipients: [], incremental: true,
       fields: printed.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) });
+    pdfWorkMs += performance.now() - started;
   }
   return { bytes, printed, recipient };
 }
+/** PDF time spent in buildDocument since the last call (the cpu_steps log of a call that builds documents deep inside, e.g. the referee checks). */
+let pdfWorkMs = 0;
+export function takePdfWorkMs(): number { const ms = Math.round(pdfWorkMs); pdfWorkMs = 0; return ms; }
 const recipientFields = (fields: PlacedField[], role: string) => fields.map((f) => ({ type: f.type, role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, key: f.key, value: f.value }));
 
 interface Prepared {
@@ -145,6 +152,15 @@ interface BusinessAbr { details: AbrDetails | null; confirmed: (AbrConfirmed & {
  * call to the register), every prefilled value editable by the contact; everything else is blank. A business without one keeps the earlier values.
  */
 async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
+  const found = await applicationValuesFromRegister(ctx, prepared);
+  // The business's ACN (2026-11-20) wins: the register's or a company's derived one kept on the business, or the one it typed before.
+  // None kept: the register's answer computed above by the same rule (blank for a sole trader, partnership or trust: editable on the form).
+  const acn = await businessAcn(ctx, prepared.agency.id);
+  const values = { ...found.values }, prefill = found.prefill ? { ...found.prefill } : null;
+  if (acn) { values.agent_acn = printAcn(acn); if (prefill) prefill.agent_acn = printAcn(acn); }
+  return { values, prefill, facts: found.facts };
+}
+async function applicationValuesFromRegister(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
   let abr: BusinessAbr | null = null;
   try { abr = await ctx.rpc("agency_abr_get", { p_agency: prepared.agency.id }) as BusinessAbr | null; } catch { abr = null; }
   if (!abr?.confirmed) {
@@ -184,6 +200,8 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const { values, prefill, facts } = await applicationValues(ctx, prepared);
   // The ACN is kept as digits in the request's stored values (no box on the form; printed "603 584 676" on the page and in the registration box).
   if (values.agent_acn) values.agent_acn = acnDigits(values.agent_acn);
+  // Every Yes / No question starts at No (2026-11-20), for any tick-box pair of the template.
+  yesNoDefaults(template.fields, values);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
   // F04 wizard (2026-11-19): every value we hold is the contact's to correct (the Company summary's Edit), whatever its source.
   const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });
@@ -217,6 +235,44 @@ async function sendRequest(ctx: OnboardingContext, id: string, result: Record<st
   return { id, ...result, sent: true, state: sent.state, mail };
 }
 
+/** The SLIT signatory of an agreement: name, position and signature (saved, drawn or typed). */
+async function signatoryOf(ctx: OnboardingContext, prepared: Prepared): Promise<{ adminName: string; adminPosition: string; adminSignature: string }> {
+  const adminName = text(ctx.body.adminName ?? prepared.admin?.name, 150);
+  const adminPosition = text(ctx.body.adminPosition ?? prepared.admin?.position, 150);
+  if (!adminName) throw new SigningError("Enter the name of the SLIT signatory.");
+  if (!adminPosition) throw new SigningError("Enter the position of the SLIT signatory.");
+  const signature = ctx.body.adminSignature && typeof ctx.body.adminSignature === "object" ? ctx.body.adminSignature as { kind?: string; png?: string; name?: string; save?: boolean } : {};
+  if (signature.kind === "saved") {
+    if (!prepared.admin?.signaturePng) throw new SigningError("You have no saved signature yet. Draw one, or type your name.");
+    return { adminName, adminPosition, adminSignature: `data:image/png;base64,${prepared.admin.signaturePng}` };
+  }
+  if (signature.kind === "drawn") {
+    const bytes = (await signingPdfModule()).signatureImageBytes(signature.png);
+    if (signature.save === true) await ctx.rpc("cms_user_signature_save", { p_png: toBase64(bytes) });
+    return { adminName, adminPosition, adminSignature: `data:image/png;base64,${toBase64(bytes)}` };
+  }
+  const typed = text(signature.name ?? adminName, 150);
+  if (!signingNameValid(typed)) throw new SigningError("Type the signatory's name as the signature, or draw one.");
+  return { adminName, adminPosition, adminSignature: typed };
+}
+
+/**
+ * A witness: a typed name and a DRAWN signature (owner brief 2026-11-20: never typed). Both or neither; a name alone (the earlier dialog's
+ * "SLIT witness name") is refused, because the signature line would otherwise be empty or typed.
+ */
+async function drawnWitness(raw: unknown, legacyName?: unknown): Promise<{ name: string; png: string } | null> {
+  const w = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as { name?: unknown; png?: unknown } : {};
+  const name = text(w.name ?? legacyName, 150);
+  const drawn = typeof w.png === "string" && w.png.trim() ? w.png : null;
+  if (!name && !drawn) return null;
+  if (!drawn) throw new SigningError("The witness must draw their signature (it cannot be typed). Draw it, or leave the witness empty.");
+  if (name.length < 2) throw new SigningError("Enter the witness's full name.");
+  let bytes: Uint8Array;
+  try { bytes = (await signingPdfModule()).signatureImageBytes(drawn); } catch { throw new SigningError("The witness signature could not be read. Draw it again."); }
+  return { name, png: toBase64(bytes) };
+}
+const witnessValues = (w: { name: string; png: string } | null): Record<string, string> => w ? { admin_witness_name: w.name, admin_witness_signature: `data:image/png;base64,${w.png}` } : {};
+
 /** Stage 3: the agreement (P06) to the agent, at References received or earlier with a typed reason. */
 export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
@@ -229,29 +285,15 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   if (!territory) throw new SigningError("Enter the territory (Item 3).");
   const commission = text(ctx.body.commissionPercent, 10).replace(/%/g, "");
   if (!/^\d{1,3}(\.\d{1,2})?$/.test(commission) || Number(commission) > 100) throw new SigningError("Enter the commission as a percentage, for example 25.");
-  const adminName = text(ctx.body.adminName ?? prepared.admin?.name, 150);
-  const adminPosition = text(ctx.body.adminPosition ?? prepared.admin?.position, 150);
-  if (!adminName) throw new SigningError("Enter the name of the SLIT signatory.");
-  if (!adminPosition) throw new SigningError("Enter the position of the SLIT signatory.");
-  const signature = ctx.body.adminSignature && typeof ctx.body.adminSignature === "object" ? ctx.body.adminSignature as { kind?: string; png?: string; name?: string; save?: boolean } : {};
-  const pdf = await signingPdfModule();
-  let adminSignature = "";
-  if (signature.kind === "saved") {
-    if (!prepared.admin?.signaturePng) throw new SigningError("You have no saved signature yet. Draw one, or type your name.");
-    adminSignature = `data:image/png;base64,${prepared.admin.signaturePng}`;
-  } else if (signature.kind === "drawn") {
-    const bytes = pdf.signatureImageBytes(signature.png);
-    adminSignature = `data:image/png;base64,${toBase64(bytes)}`;
-    if (signature.save === true) await ctx.rpc("cms_user_signature_save", { p_png: toBase64(bytes) });
-  } else {
-    adminSignature = text(signature.name ?? adminName, 150);
-    if (!signingNameValid(adminSignature)) throw new SigningError("Type the signatory's name as the signature, or draw one.");
-  }
+  const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
+  const witness = await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
   const values = await recordValues(ctx, prepared);
   Object.assign(values, { agreement_commencement_date: commencement, agent_territory: territory, agent_commission_percent: commission, admin_name: adminName, admin_position: adminPosition,
-    admin_signed_date: isoToday(), admin_witness_name: text(ctx.body.adminWitnessName, 150), admin_witness_signature: text(ctx.body.adminWitnessName, 150), admin_signature: adminSignature });
+    admin_signed_date: isoToday(), admin_signature: adminSignature, ...witnessValues(witness) });
   const title = `Agent agreement: ${text(prepared.agency.name, 150)}`.slice(0, 200);
-  const made = await buildDocument(ctx, template, values, title);
+  const built = await buildDocument(ctx, template, values, title);
+  // The agent's witness signature is drawn, never typed (2026-11-20): no typing box for it on this (earlier-flow) agreement.
+  const made = { ...built, recipient: built.recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY) };
   const sentValues = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "admin_signature"));
   const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("agreement").key, label: signerRole("agreement").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
@@ -271,6 +313,44 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
  * missing one and call again without a second business. Only this call sends the first F04: an existing business never gets one by itself
  * (staff use Resend application / Start again). The database allows one open onboarding per business, so a retry cannot send a second F04.
  */
+/**
+ * The business's ACN (agencies.acn): its ABN looked up first when given (the cached answer fills the ACN in the database), then read back.
+ * Never fails a send or a save: "" when there is none (sole traders, partnerships, trusts) or the register is not answering.
+ */
+export async function businessAcn(ctx: OnboardingContext, agencyId: string, abn?: string | null): Promise<string> {
+  try {
+    if (abn && String(abn).replace(/\D/g, "").length === 11) {
+      await lookupAbrCached(String(abn), ctx.ports.abr?.guid, abrCache(ctx.ports), ctx.ports.abr?.fetch ?? fetch).catch(() => null);
+    }
+    const kept = await ctx.rpc("agency_acn_sync", { p_agency: agencyId }) as { acn?: string | null } | null;
+    return String(kept?.acn ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Delete business (owner 2026-11-20): only at "Application sent", only by a SLIT administrator, never a system business, never with
+ * students or applications; the database decides (public.admin_business_delete, with the typed name or ABN) and removes every row in one
+ * transaction with triggers off (nothing emailed). The signing files it names are then removed from storage. Silent: no email to anyone.
+ */
+export async function deleteBusiness(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const agencyId = agencyIdOf(ctx.body);
+  const result = await ctx.rpc("admin_business_delete", { p_business: agencyId, p_confirm: text(ctx.body.confirm, 300) }) as
+    { deleted: boolean; name: string; abn: string | null; files: string[] | null; counts: Record<string, number> };
+  const files = (result.files ?? []).filter((path) => typeof path === "string" && path.length > 0);
+  let filesLeft = 0;
+  if (files.length) {
+    try { await ctx.ports.storage.remove(files); }
+    catch (error) {
+      filesLeft = files.length;
+      console.warn(JSON.stringify({ event: "business_delete_files_left", count: files.length, error: String((error as Error)?.message ?? error).slice(0, 200) }));
+    }
+  }
+  return { deleted: true, name: result.name, abn: result.abn, counts: result.counts, filesRemoved: files.length - filesLeft, filesLeft };
+}
+
 export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
   await ctx.admin("subject_search", null, { type: "none" });
   await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
@@ -288,13 +368,291 @@ export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
     try { await ctx.rpc("agency_abr_attach", { p_agency: created.agencyId, p_confirmed: abr }); }
     catch (error) { abrWarning = `The ABN details could not be kept on the business (${(error as Error).message}); the application form goes without the ABN prefill.`; }
   }
+  // The ACN (2026-11-20, owner): the ABN's register entry is looked up and cached (abr_businesses, the public ABN Lookup page when the ABR
+  // service is not set up); the database keeps the business's ACN from it by the rule (register ACN, or derived for a company only).
+  await businessAcn(ctx, created.agencyId, String(agency.registration_number ?? ""));
+  // 2026-11-20 (owner): nothing is emailed yet. A draft onboarding is opened for the pre-send step, where staff fill in and check the F04
+  // and the agreement terms (and may add the witness) before Send to point of contact.
   try {
-    const application = await sendApplication({ ...ctx, body: { agencyId: created.agencyId, agentId: created.contactAgentId, message: ctx.body.message } });
-    return { ...created, application, ...(abrWarning ? { abrWarning } : {}) };
+    const draft = await ctx.rpc("agency_onboarding_presend_save", { p_agency: created.agencyId, p_data: { agentId: created.contactAgentId, message: text(ctx.body.message, 2000) || null } }) as { onboardingId: string };
+    return { ...created, application: null, presend: true, onboardingId: draft.onboardingId, ...(abrWarning ? { abrWarning } : {}) };
   } catch (error) {
-    // The business is saved; the form can be sent again from its page (Resend application).
-    return { ...created, application: null, warning: `The business was saved, but the application form could not be sent: ${(error as Error).message}` };
+    return { ...created, application: null, presend: true, onboardingId: null, warning: `The business was saved, but its application draft could not be started: ${(error as Error).message} Open Prepare application on its page.` };
   }
+}
+
+/* ------------------------------------------------------------------ pre-send step and one signature (owner brief 2026-11-20)
+ * Add business opens a draft; staff fill in the F04 (the references stay empty), the agreement terms and optionally the SLIT witness
+ * (typed name + drawn signature), then Save draft or Send to point of contact. Send makes ONE request: the F04 pages followed by the P06
+ * pages, signed once by the agency admin (the one signature fills the signature box of both documents). Approve countersigns and issues
+ * the signed agreement; no second signature is asked for.
+ */
+interface PresendSaved {
+  onboardingId: string | null; stage: string | null; openStage: string | null;
+  agency: { id: string; name: string; abn: string | null; status: string }; contact: { id: string; name: string; email: string } | null;
+  presend: { answers?: Record<string, string>; acn?: string; marn?: string; message?: string } | null;
+  terms: { commencementDate: string | null; territory: string | null; commissionPercent: number | string | null } | null;
+  witness: { name: string | null; png: string | null } | null; savedAt: string | null; savedBy: string | null;
+}
+interface PresendInput { answers: Record<string, string>; acn: string; marn: string; message: string; commencementDate: string; territory: string; commissionPercent: string; witness: { name: string; png: string } | null }
+const REFERENCE_KEY = /^ref[12]_/;
+
+/** The pre-send form as sent by the CMS; sending needs the agreement terms, a draft keeps whatever is there. */
+async function presendInput(body: Record<string, unknown>, sending: boolean): Promise<PresendInput> {
+  const raw = body.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data as Record<string, unknown> : {};
+  const answers: Record<string, string> = {};
+  if (raw.answers && typeof raw.answers === "object" && !Array.isArray(raw.answers)) {
+    for (const [key, value] of Object.entries(raw.answers as Record<string, unknown>)) if (/^[a-z][a-z0-9_]{0,60}$/.test(key) && !REFERENCE_KEY.test(key)) answers[key] = text(value, 500);
+  }
+  const commencementDate = text(raw.commencementDate, 10), territory = text(raw.territory, 200), commissionPercent = text(raw.commissionPercent, 10).replace(/%/g, "");
+  if ((sending || commencementDate) && (!isPdfDate(commencementDate) || Number.isNaN(Date.parse(commencementDate)))) throw new SigningError("Enter the agreement's commencement date (Item 5).");
+  if (sending && !territory) throw new SigningError("Enter the territory (Item 3).");
+  if ((sending || commissionPercent) && (!/^\d{1,3}(\.\d{1,2})?$/.test(commissionPercent) || Number(commissionPercent) > 100)) throw new SigningError("Enter the commission as a percentage, for example 25.");
+  const acn = acnDigits(text(raw.acn, 20)), marn = text(raw.marn, 20).replace(/\s/g, "");
+  if (acn && !/^\d{9}$/.test(acn)) throw new SigningError("The ACN has 9 digits.");
+  if (marn && !/^\d{1,10}$/.test(marn)) throw new SigningError("The MARN is a number: digits only.");
+  const witness = await drawnWitness({ name: raw.witnessName, png: raw.witnessPng });
+  return { answers, acn, marn, message: text(raw.message, 2000), commencementDate, territory, commissionPercent, witness };
+}
+async function savePresend(ctx: OnboardingContext, agencyId: string, input: PresendInput, agentId: string | null): Promise<{ onboardingId: string; savedAt: string; contact: { id: string; name: string; email: string } }> {
+  return await ctx.rpc("agency_onboarding_presend_save", { p_agency: agencyId, p_data: { agentId, answers: input.answers, acn: input.acn || null, marn: input.marn || null, message: input.message || null,
+    commencementDate: input.commencementDate || null, expiryDate: input.commencementDate ? expiryDate(input.commencementDate) : null, territory: input.territory, commissionPercent: input.commissionPercent || null,
+    witnessName: input.witness?.name ?? null, witnessPng: input.witness?.png ?? null } });
+}
+const agencyIdOf = (body: Record<string, unknown>) => { const id = String(body.agencyId ?? ""); if (!UUID.test(id)) throw new SigningError("Choose a business."); return id; };
+
+/** Opens the pre-send step: the F04 as the wizard reads it (our records and the register, then what staff saved), the terms and the witness. */
+export async function presendOpen(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const agencyId = agencyIdOf(ctx.body);
+  const form = await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
+  const saved = await ctx.rpc("agency_onboarding_presend_get", { p_agency: agencyId }) as PresendSaved;
+  if (saved.openStage) throw new SigningError("This business's application has already been sent. Follow it on the business page.");
+  const prepared = await prepare(ctx, agencyId, saved.contact?.id ?? ctx.body.agentId);
+  const { values, facts } = await applicationValues(ctx, prepared);
+  const answers: Record<string, string> = { ...values, ...(saved.presend?.answers ?? {}) };
+  for (const key of Object.keys(answers)) if (REFERENCE_KEY.test(key)) delete answers[key];
+  yesNoDefaults(form.fields, answers);
+  const fields = form.fields.filter((f) => f.key && (f.type === "text" || f.type === "checkbox")).map((f) => {
+    const group = groupOf(f.key); const spec = AGENT_ONBOARDING_FIELDS[f.key];
+    return { id: f.key, key: f.key, type: f.type, label: spec?.label ?? f.label, required: spec?.required === true, page: Number(f.page), x: 0, y: 0, w: 0, h: 0, recipient_id: null,
+      value: group ? (String(answers[group.key] ?? "").toUpperCase() === group.answer ? "true" : "") : String(answers[answerKey(f.key)] ?? "") };
+  });
+  const record = prepared.values ?? {};
+  return { onboardingId: saved.onboardingId, agency: prepared.agency, contact: prepared.agent, fields, facts,
+    acn: saved.presend?.acn ?? acnDigits(String(answers.agent_acn ?? "")), marn: saved.presend?.marn ?? "", message: saved.presend?.message ?? "",
+    terms: { commencementDate: saved.terms?.commencementDate ?? "", territory: saved.terms?.territory || String(record.agent_territory ?? ""),
+      commissionPercent: saved.terms?.commissionPercent != null ? String(saved.terms.commissionPercent) : String(record.agent_commission_percent ?? "") },
+    witness: { name: saved.witness?.name ?? "", png: saved.witness?.png ? `data:image/png;base64,${saved.witness.png}` : null }, savedAt: saved.savedAt, savedBy: saved.savedBy };
+}
+
+/** Save draft: nothing is emailed. */
+export async function presendSave(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const agencyId = agencyIdOf(ctx.body);
+  const input = await presendInput(ctx.body, false);
+  const before = await ctx.rpc("agency_onboarding_presend_get", { p_agency: agencyId }) as PresendSaved;
+  return await savePresend(ctx, agencyId, input, before.contact?.id ?? null);
+}
+
+/** Throws an unsent draft away (the business stays; Prepare application starts again). */
+export async function presendDiscard(ctx: OnboardingContext): Promise<Json> {
+  const onboardingId = String(ctx.body.onboardingId ?? "");
+  if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+  await ctx.rpc("agency_onboarding_presend_discard", { p_onboarding: onboardingId });
+  return { discarded: true };
+}
+
+/**
+ * Wall-clock time of each step of a heavy action, logged once as JSON (no names, no values). In these CPU-bound steps the wall time is
+ * close to the CPU time the platform counts (2 s per request), so the function logs show how much of the budget each step takes.
+ */
+/**
+ * Step timings of one call, logged as {"event":"cpu_steps"}. Wall time: a lap named io_* waits on storage, the database or email; every
+ * other lap is synchronous work, so its time is CPU time, and computeMs (their sum) is the call's CPU apart from start-up and JSON.
+ */
+export function stepTimer(action: string) {
+  const start = performance.now(); let last = start; const steps: Record<string, number> = {};
+  return {
+    lap(name: string) { const now = performance.now(); steps[name] = (steps[name] ?? 0) + Math.round(now - last); last = now; },
+    done(extra: Record<string, unknown> = {}) {
+      const computeMs = Object.entries(steps).filter(([name]) => !name.startsWith("io_")).reduce((sum, [, ms]) => sum + ms, 0);
+      console.log(JSON.stringify({ event: "cpu_steps", action, computeMs, totalMs: Math.round(performance.now() - start), steps, ...extra }));
+    },
+  };
+}
+
+/**
+ * The application form and the agreement blanks merged into one PDF, once per pair of template versions (2026-11-20, CPU budget): kept in
+ * storage and recorded in agency_onboarding_blank_cache with its hash; every send appends its marks to it. Built here when missing (the
+ * Prepare application dialog asks for it when it opens, agent_onboarding_presend_warm, so a send rarely builds it).
+ */
+export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTemplate, agreement: OnboardingTemplate): Promise<Uint8Array> {
+  const key = `combined:${form.id}:${form.sourceHash.slice(0, 16)}:${agreement.id}:${agreement.sourceHash.slice(0, 16)}`;
+  const cached = await ctx.rpc("agency_onboarding_blank_cache_get", { p_key: key }) as { path: string; sha256: string } | null;
+  if (cached?.path) {
+    try { return await ctx.fileBytes(cached.path, cached.sha256); } catch { /* a missing or changed file: built again below */ }
+  }
+  const timer = stepTimer("onboarding_merge_blanks");
+  const [formSource, agreementSource] = await Promise.all([ctx.fileBytes(form.sourcePath, form.sourceHash), ctx.fileBytes(agreement.sourcePath, agreement.sourceHash)]);
+  timer.lap("io_download");
+  const merged = await (await onboardingPdfModule()).mergePdfs([formSource, agreementSource]);
+  timer.lap("merge");
+  const sha = await sha256Hex(merged);
+  const path = `templates/${form.id}/combined-${agreement.id}-${ctx.ports.uuid()}.pdf`;
+  await ctx.store(path, merged);
+  const saved = await ctx.rpc("agency_onboarding_blank_cache_put", { p_key: key, p_path: path, p_sha256: sha, p_pages: Number(form.sourcePages) + Number(agreement.sourcePages) }) as { path: string; mine: boolean };
+  if (saved?.mine === false) { try { await ctx.ports.storage.remove([path]); } catch { /* left for a later clean-up */ } }
+  ctx.commit();
+  timer.lap("io_store"); timer.done({ bytes: merged.length, built: true });
+  return merged;
+}
+
+/** Prepare application opened: the merged blank is made ready in its own call, so Send to point of contact only stamps. */
+export async function presendWarm(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const form = await installedTemplate(ctx, "form"), agreement = await installedTemplate(ctx, "agreement");
+  await mergedBlank(ctx, form, agreement);
+  return { ready: true };
+}
+
+/**
+ * The combined document: the F04 (staff's values printed or prefilled, editable by the contact) followed by the P06 (the agency, ABN and
+ * Items 3 to 5 printed; the SLIT witness printed when staff gave one in Prepare application). The agency admin's fields of both, on one
+ * request, for one signature; the agency admin always gives their own witness (typed name, drawn on the signing page), except on a
+ * correction, where the witness given with the first signature is printed again (agentWitness).
+ * The SLIT signatory is left blank: it is filled when SLIT approves (issueAgreement).
+ */
+async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTemplate; agreement: OnboardingTemplate; values: Record<string, string>; agency: { name: string; abn: string | null };
+  terms: { commencementDate: string; territory: string; commissionPercent: string }; slitWitness: { name: string; png: string } | null; agentWitness: { name: string; png: string } | null; title: string }) {
+  // CPU budget (2026-11-20, 546 in production): the two blanks merged once and cached; the marks of this send are appended to that copy.
+  const merged = await mergedBlank(ctx, input.form, input.agreement);
+  const formResolved = resolveFields(numbered(input.form.fields), input.values, { editablePrefill: true });
+  const formPart = { printed: formResolved.printed, recipient: formResolved.recipient };
+  const formPages = Number(input.form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
+  // The SLIT witness (2026-11-20, owner): the agreement's SLIT witness line, name and drawn signature (admin_witness_signature prints a picture).
+  const agreementValues: Record<string, string> = { agent_organisation_name: input.values.agent_legal_entity || input.values.agent_organisation_name || input.agency.name,
+    agent_abn: abnWithAcn(String(input.agency.abn ?? input.values.agent_abn ?? ""), input.values.agent_acn), agreement_commencement_date: input.terms.commencementDate, agent_territory: input.terms.territory,
+    agent_commission_percent: input.terms.commissionPercent, ...witnessValues(input.slitWitness) };
+  const placed = numbered(input.agreement.fields);
+  const { printed, recipient } = resolveFields(placed, agreementValues);
+  const nameBox = placed.find((f) => f.key === WITNESS_NAME_KEY) ?? null, signatureBox = placed.find((f) => f.key === WITNESS_SIGNATURE_KEY) ?? null;
+  const print: PlacedField[] = [...printed];
+  if (input.agentWitness) {
+    if (nameBox) print.push({ ...nameBox, value: input.agentWitness.name });
+    if (signatureBox) print.push({ ...signatureBox, type: "signature", value: `data:image/png;base64,${input.agentWitness.png}` });
+  }
+  // The agent's witness signature is never a field to type into; its name is the agency admin's to give (required).
+  const theirs = recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY && !(input.agentWitness && f.key === WITNESS_NAME_KEY))
+    .map((f) => f.key === WITNESS_NAME_KEY ? { ...f, required: true } : f);
+  const stamped = [...formPart.printed, ...print.map((f) => ({ ...f, page: f.page + formPages }))];
+  const timer = stepTimer("onboarding_build_combined");
+  const pdf = await signingPdfModule(); timer.lap("pdf_modules");
+  const bytes = stamped.length ? await pdf.stampDocument(merged, { reference: "", title: input.title, recipients: [], incremental: true,
+    fields: stamped.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) }) : merged;
+  timer.lap("stamp"); timer.done({ fields: stamped.length, bytes: bytes.length });
+  const role = signerRole("form").key;
+  return { bytes, formPages, agreementValues, printed: formPart.printed.length + print.length,
+    fields: [...recipientFields(formPart.recipient, role), ...recipientFields(theirs.map((f) => ({ ...f, page: f.page + formPages })), role)],
+    witnessBox: !input.agentWitness && signatureBox ? { page: signatureBox.page + formPages, x: signatureBox.x, y: signatureBox.y, w: signatureBox.w, h: signatureBox.h } : null };
+}
+
+/** Send to point of contact: the draft is saved, the combined request made and emailed. */
+export async function presendSend(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const agencyId = agencyIdOf(ctx.body);
+  const input = await presendInput(ctx.body, true);
+  const form = await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); const agreement = await installedTemplate(ctx, "agreement");
+  const before = await ctx.rpc("agency_onboarding_presend_get", { p_agency: agencyId }) as PresendSaved;
+  if (before.openStage) throw new SigningError("This business's application has already been sent. Follow it on the business page.");
+  const draft = await savePresend(ctx, agencyId, input, before.contact?.id ?? null);
+  const prepared = await prepare(ctx, agencyId, draft.contact.id);
+  const { values: base, prefill, facts } = await applicationValues(ctx, prepared);
+  // What staff entered wins over our records and the register; the references stay for the agency admin.
+  const values: Record<string, string> = { ...base, ...input.answers };
+  for (const key of Object.keys(values)) if (REFERENCE_KEY.test(key)) delete values[key];
+  const acn = input.acn || acnDigits(values.agent_acn ?? "");
+  if (acn) values.agent_acn = acn; else delete values.agent_acn;
+  if (input.marn) values.agent_marn = input.marn;
+  yesNoDefaults(form.fields, values);
+  const title = `Agent application and agreement: ${text(prepared.agency.name, 150)}`.slice(0, 200);
+  const made = await buildCombined(ctx, { form, agreement, values, agency: prepared.agency, terms: input, slitWitness: input.witness, agentWitness: null, title });
+  const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
+  const id = ctx.ports.uuid();
+  await ctx.store(`${id}/original.pdf`, made.bytes);
+  const record = await ctx.admin("create", id, { title, template_id: form.id, rendered_text: null, field_values: { ...values, ...made.agreementValues }, original_hash: await sha256Hex(made.bytes), recipients,
+    fields: made.fields, subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: input.message || null, edited: false,
+    template_text: null, signing_mode: "sequential", expiry_days: form.expiryDays ?? 30, reminder_days: form.reminderDays ?? 3 });
+  let onboarding: Json;
+  try {
+    onboarding = await ctx.rpc("agency_onboarding_presend_send", { p_onboarding: draft.onboardingId, p_request: id,
+      p_data: { form_pages: made.formPages, values, message: input.message || null, admin_name: text(prepared.admin?.name, 150), witness_box: made.witnessBox } });
+  } catch (error) {
+    try { await ctx.admin("void", id, { reason: "Not sent: the application could not be recorded" }); } catch { /* left as an unsent draft */ }
+    throw error;
+  }
+  ctx.commit();
+  if (prefill) { try { await ctx.rpc("agency_onboarding_prefill_record", { p_onboarding: onboarding.id, p_prefill: { ...prefill, ...input.answers } }); } catch { /* history line only */ } }
+  if (facts) { try { await ctx.rpc("agency_abr_facts_record", { p_agency: agencyId, p_facts: facts }); } catch { /* the wizard looks them up itself */ } }
+  return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, combined: true, agent: { name: prepared.agent!.name, email: prepared.agent!.email },
+    printed: made.printed, fields: made.fields.length, slitWitness: !!input.witness });
+}
+
+/**
+ * Approve on a combined onboarding: the agreement the agency admin already signed gets the SLIT signatory (name, position, signature, date)
+ * and, when given, SLIT's witness (typed name + drawn signature); it is stored as the issued agreement, emailed to the agency admin, and the
+ * held sign-in invitations are released. No second signature from the agency.
+ */
+async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prepared: Prepared, slitWitnessPrinted = false): Promise<Json> {
+  const timer = stepTimer("onboarding_issue_agreement");
+  const template = await installedTemplate(ctx, "agreement");
+  const file = await ctx.rpc("agency_onboarding_file", { p_id: onboardingId, p_kind: "agreement" }) as { name: string; base64: string };
+  const signed = Uint8Array.from(atob(String(file?.base64 ?? "")), (c) => c.charCodeAt(0));
+  timer.lap("io_read_agreement");
+  const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
+  // The SLIT witness given in Prepare application is already on the agreement: it is not asked for (or printed) again.
+  const witness = slitWitnessPrinted ? null : await drawnWitness(ctx.body.adminWitness);
+  const values: Record<string, string> = { admin_name: adminName, admin_position: adminPosition, admin_signature: adminSignature, admin_signed_date: isoToday(), ...witnessValues(witness) };
+  const mine = resolveFields(numbered(template.fields), values).printed.filter((f) => f.key.startsWith("admin_"));
+  const pdf = await signingPdfModule(); timer.lap("pdf_modules");
+  // Appended to the signed agreement (incremental update): its bytes, and the agency admin's signature in them, stay as signed.
+  const bytes = await pdf.stampDocument(signed, { reference: "", title: `Agent agreement: ${text(prepared.agency.name, 150)}`, recipients: [], incremental: true,
+    fields: mine.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) });
+  timer.lap("stamp");
+  const base64 = toBase64(bytes); timer.lap("base64");
+  const issued = await ctx.rpc("agency_onboarding_agreement_issue", { p_onboarding: onboardingId, p_base64: base64,
+    p_data: { admin_name: adminName, admin_position: adminPosition, admin_witness_name: witness?.name ?? null } }) as
+    { stage: string; already?: boolean; name: string; commencementDate?: string; expiryDate?: string; contact: { name: string; email: string } };
+  let emailed = false;
+  const { provider, config } = ctx.ports.mail;
+  if (!issued.already && provider && config.from && issued.contact?.email) {
+    const words = (iso?: string) => iso ? iso.slice(0, 10).split("-").reverse().join("/") : "";
+    const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-agreement-issued-${onboardingId}`, from: config.from, to: issued.contact.email,
+      subject: `Your agent agreement with Skyline Institute of Technology: ${text(issued.name, 100)}`,
+      textBody: `Hello ${text(issued.contact.name, 80) || "there"},\n\nSkyline Institute of Technology has approved the application of ${text(issued.name, 120)} and countersigned the Education Agent Agreement you signed with it. `
+        + `The completed agreement is attached.${issued.commencementDate ? ` It runs from ${words(issued.commencementDate)} to ${words(issued.expiryDate)}.` : ""}\n\nYou will receive a separate email to set your password for the agent portal.` + SIGN_OFF,
+      attachments: [{ name: `${text(issued.name, 80).replace(/[^\w .()-]/g, "_")} - Agent Agreement.pdf`, contentType: "application/pdf", contentBase64: base64 }] }));
+    emailed = outcome.state === "sent";
+  }
+  timer.lap("io_store_and_email");
+  const released = await releaseAfterAgreement(ctx, onboardingId);
+  timer.lap("io_release"); timer.done({ bytes: bytes.length });
+  return { issued: true, stage: issued.stage, to: issued.contact?.email ?? null, emailed, released: released.released, invitations: released.emailed };
+}
+
+/** A combined application is signed: staff are told it is ready for review at once (the referees no longer hold it up). */
+export async function notifyApplicationSigned(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
+  const { ports } = ctx;
+  const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
+  if (!follow.combined || !["application_signed", "references_pending", "references_received"].includes(follow.stage)) return { notified: false };
+  const { provider, config } = ports.mail;
+  const to = staffRecipients(follow, config.adminTo);
+  if (!provider || !config.from || !to.length) return { notified: false };
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-signed-${onboardingId}`, from: config.from, to: to.join(", "), subject: `Ready for review: ${text(follow.agency.name, 120)}`,
+    textBody: `${text(follow.agent.name, 80)} has signed the Agent Application Form and the Education Agent Agreement for ${text(follow.agency.name, 120)} (one signature on both).\n\n`
+      + "Both referees have been sent a referee check. You do not need to wait for them: the review shows each referee's status.\n\n"
+      + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and choose Review application: approve it (the agreement is countersigned and issued), or send it back for correction.` + SIGN_OFF }));
+  return { notified: outcome.state === "sent" };
 }
 
 /**
@@ -341,7 +699,7 @@ const AGENT_LEVEL_RETIRED = "Agents have no onboarding of their own: the busines
 const retired = (): Promise<Json> => Promise.reject(new SigningError(AGENT_LEVEL_RETIRED, 410));
 
 interface Followup {
-  id: string; kind?: "business" | "agent"; stage: string; agency: { id: string; name: string; status?: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
+  id: string; kind?: "business" | "agent"; combined?: boolean; stage: string; agency: { id: string; name: string; status?: string }; agent: { id: string; name: string; email: string }; sentBy: { email: string | null; name: string | null }; contacts: string[];
   /** 2026-11-18: the business status in words, the correction rounds so far, the active CMS administrators (told at Ready for review). */
   label?: string | null; round?: number; admins?: string[];
   values: Record<string, string>; referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; address: string; status: string; requestId: string | null }>;
@@ -357,7 +715,7 @@ const SIGN_OFF = "\n\nSkyline Institute of Technology\nThis is an automated mess
 export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, onboardingId: string): Promise<{ sent: number; skipped: number }> {
   const { ports } = ctx;
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
-  if (!["application_signed", "references_pending", "resubmitted"].includes(follow.stage)) return { sent: 0, skipped: follow.referees?.length ?? 0 };
+  if (!["application_signed", "references_pending", "references_received", "resubmitted", "references_approved", "agreement_sent", "agreement_signed"].includes(follow.stage)) return { sent: 0, skipped: follow.referees?.length ?? 0 };
   const pending = (follow.referees ?? []).filter((r) => r.status === "pending" && !r.requestId);
   if (!pending.length) return { sent: 0, skipped: 0 };
   if (!follow.template || follow.template.status !== "active") throw new SigningError(ONBOARDING_TEMPLATES_MISSING);
@@ -391,6 +749,7 @@ export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "
     const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-referees-${onboardingId}`, from: config.from, to: follow.agent.email, subject: "Your referees have been contacted",
       textBody: `Hello ${text(follow.agent.name, 80) || "there"},\n\nThank you for signing the Agent Application Form for ${text(follow.agency.name, 120)}. We have emailed a referee check form to ${names}. `
         + (follow.kind === "agent" ? "Once both referees have completed it, our team will review your application and let you know by email."
+          : follow.combined ? "You do not need to wait for them: our team is now reviewing your application and the agreement you signed. Once it is approved you will receive the countersigned agreement and your sign-in email."
           : "Once both referees have completed it, our team will send you the Agent Agreement. You can see where things are up to on your agency dashboard.") + SIGN_OFF }));
     if (outcome.state === "sent") await serviceRpc(ports, "agency_onboarding_mark_notified", { p_onboarding: onboardingId, p_kind: "agent_notified_referees", p_detail: { to: follow.agent.email, referees: sent } }).catch(() => undefined);
   }
@@ -410,7 +769,7 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   const lines = (follow.referees ?? []).map((r) => `- ${r.name || r.email}${r.organisation ? `, ${r.organisation}` : ""}: ${r.status === "received" ? "received" : r.status}`).join("\n");
   const agent = follow.kind === "agent";
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-references-${onboardingId}${again ? `-r${follow.round ?? 0}` : ""}`, from: config.from, to: to.join(", "),
-    subject: agent ? `Agent references received: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : `Ready for review: ${text(follow.agency.name, 120)}`,
+    subject: agent ? `Agent references received: ${text(follow.agent.name, 80)} (${text(follow.agency.name, 100)})` : follow.combined ? `Both referees replied: ${text(follow.agency.name, 120)}` : `Ready for review: ${text(follow.agency.name, 120)}`,
     textBody: `Both referee checks for ${text(follow.agent.name, 80)} (${text(follow.agency.name, 120)}) are in.\n\n${lines}\n\n`
       + (agent ? `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)} > Agents) to read them, then send the agent their individual agent agreement or reject them. The agent can be activated once the agreement is signed.`
         : `The application is ready for review. Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and choose Review application: approve it, or send it back for correction.`) + SIGN_OFF }));
@@ -422,7 +781,7 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
 
 /** After a link holder's signature completed a request of an onboarding: the referee checks after the form, the staff email after the second referee, the "ready to activate" email after the agreement. */
 export async function afterCompletion(ctx: Pick<OnboardingContext, "ports" | "store" | "fileBytes" | "commit">, plan: { id: string; kind?: string }): Promise<void> {
-  if (plan.kind === "application") { await sendRefereeChecks(ctx, plan.id); await notifyResubmitted(ctx, plan.id); }
+  if (plan.kind === "application") { await sendRefereeChecks(ctx, plan.id); await notifyApplicationSigned(ctx, plan.id); await notifyResubmitted(ctx, plan.id); }
   else if (plan.kind === "referee") await notifyReferencesReceived(ctx, plan.id);
   // 2026-11-18: an approved business (already Active) releases its held sign-in invitations when the agreement is signed. A business on the
   // earlier flow (still Onboarding) is ready to activate: staff are told; an administrator activates it.
@@ -553,7 +912,10 @@ export async function reviewSave(ctx: OnboardingContext): Promise<Json> {
   catch (error) { return { ...saved, revision: null, warning: `The changes are saved, but the edited PDF could not be made: ${(error as Error).message}` }; }
 }
 
-interface ReviewData { onboardingId: string; stage: string; agency: { id: string; name: string }; contact: { id: string; name: string; email: string; role: string }; answers: Record<string, string> }
+interface ReviewData {
+  onboardingId: string; stage: string; agency: { id: string; name: string; abn?: string | null }; contact: { id: string; name: string; email: string; role: string }; answers: Record<string, string>;
+  combined?: boolean; terms?: { commencementDate: string | null; territory: string | null; commissionPercent: number | string | null } | null; witness?: { name: string; by: string; png?: string | null } | null; slitWitness?: { name: string; png: string | null } | null;
+}
 export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
@@ -566,14 +928,24 @@ export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
   const template = await installedTemplate(ctx, "form");
   const answers = review.answers ?? {};
   const values: Record<string, string> = { ...answers, agent_registration_number: composeRegistrationNumber(answers.agent_acn, answers.agent_marn) };
-  const title = `Agent application form (correction): ${text(review.agency.name, 140)}`.slice(0, 200);
-  const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });
+  const title = `Agent application ${review.combined ? "and agreement " : "form "}(correction): ${text(review.agency.name, 140)}`.slice(0, 200);
+  // A combined application goes back with its agreement: the corrected answers and the agreement are signed again with one signature.
+  // The witnesses already given (SLIT's before sending, the agency's with the first signature) are printed and stay as they are.
+  const made = review.combined && review.terms
+    ? await (async () => {
+      const combined = await buildCombined(ctx, { form: template, agreement: await installedTemplate(ctx, "agreement"), values, agency: { name: review.agency.name, abn: review.agency.abn ?? null },
+        terms: { commencementDate: String(review.terms!.commencementDate ?? ""), territory: String(review.terms!.territory ?? ""), commissionPercent: String(review.terms!.commissionPercent ?? "") },
+        slitWitness: review.slitWitness?.png && review.slitWitness.name ? { name: review.slitWitness.name, png: review.slitWitness.png } : null,
+        agentWitness: review.witness?.png && review.witness.name ? { name: review.witness.name, png: review.witness.png } : null, title });
+      return { bytes: combined.bytes, fields: combined.fields };
+    })()
+    : await (async () => { const single = await buildDocument(ctx, template, values, title, { editablePrefill: true }); return { bytes: single.bytes, fields: recipientFields(single.recipient, signerRole("form").key) }; })();
   const recipients = checkRecipients([{ name: review.contact.name, email: review.contact.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
   const intro = "SLIT has reviewed your agent application and asks you to correct the highlighted answers, then sign again.";
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: values, original_hash: await sha256Hex(made.bytes), recipients,
-    fields: recipientFields(made.recipient, signerRole("form").key), subject_type: "agent", subject_id: review.contact.id, category: "other", message: [intro, message].filter(Boolean).join("\n\n").slice(0, 2000), edited: false,
+    fields: made.fields, subject_type: "agent", subject_id: review.contact.id, category: "other", message: [intro, message].filter(Boolean).join("\n\n").slice(0, 2000), edited: false,
     template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
   let correction: Json;
   try { correction = await ctx.rpc("agency_onboarding_correction_request", { p_onboarding: onboardingId, p_request: id, p_data: { flags, message } }); }
@@ -589,7 +961,27 @@ export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
 export async function approveAndActivate(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string };
+  // A witness named without a drawn signature is refused before anything is approved.
+  await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
+  // The signed documents not split yet (the follow-up call failed or is still running): it is asked for again, nothing is approved yet.
+  if (ctx.ports.serviceRpc) {
+    const split = await ctx.ports.serviceRpc("agency_onboarding_split_source", { p_onboarding: onboardingId }).catch(() => null) as { pending?: boolean; state?: string } | null;
+    if (split?.pending && split.state === "signed") {
+      await ctx.ports.serviceRpc("agency_onboarding_followup_queue", { p_onboarding: onboardingId, p_step: "split" }).catch(() => undefined);
+      throw new SigningError("The signed application and agreement are still being prepared. Try Approve again in a minute.", 409);
+    }
+  }
+  const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string; combined?: boolean; refereesPending?: number; slitWitness?: boolean };
+  // 2026-11-20: the agreement was signed with the application; it is countersigned and issued now (no P06 to sign again).
+  if (approved.combined) {
+    try {
+      const prepared = await prepare(ctx, String(ctx.body.agencyId ?? ""), ctx.body.agentId);
+      return { approved: true, combined: true, agencyStatus: approved.agencyStatus, refereesPending: approved.refereesPending ?? 0, agreement: null, issued: await issueAgreement(ctx, onboardingId, prepared, approved.slitWitness === true) };
+    } catch (error) {
+      return { approved: true, combined: true, agencyStatus: approved.agencyStatus, agreement: null, issued: null,
+        warning: `The application is approved, but the agreement could not be issued: ${(error as Error).message} Choose Approve again on the business page to issue it.` };
+    }
+  }
   try { return { approved: true, agencyStatus: approved.agencyStatus, agreement: await sendAgreement(ctx) }; }
   catch (error) { return { approved: true, agencyStatus: approved.agencyStatus, agreement: null, warning: `The business is approved and active, but the agent agreement could not be sent: ${(error as Error).message} Send it from the business page.` }; }
 }
@@ -639,6 +1031,11 @@ export async function notifyResubmitted(ctx: Pick<OnboardingContext, "ports">, o
 
 export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Promise<Json>> = {
   agent_onboarding_review_save: reviewSave,
+  agent_onboarding_presend_open: presendOpen,
+  agent_onboarding_presend_save: presendSave,
+  agent_onboarding_presend_send: presendSend,
+  agent_onboarding_presend_discard: presendDiscard,
+  agent_onboarding_presend_warm: presendWarm,
   agent_onboarding_correction_send: correctionSend,
   agent_onboarding_approve: approveAndActivate,
   agent_onboarding_install: installBlank,
@@ -650,6 +1047,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_referee_change: changeReferee,
   agent_onboarding_referee_upload: uploadRefereeForm,
   agent_onboarding_business_create: createBusiness,
+  agent_onboarding_business_delete: deleteBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
   // Retired (2026-11-19): agents have no onboarding of their own.

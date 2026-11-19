@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
+import { reportFunctionError, reportIfFunctionFailed } from "@/lib/functionErrorReport";
 
 /**
  * Single shared Supabase client for the whole app (singleton).
@@ -13,16 +14,25 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error("Supabase environment variables are missing. Please reconnect the backend.");
 }
 
+/** Reports an Edge Function 5xx seen outside the shared client (raw fetch / XHR callers), as an anonymous or signed-in reporter. */
+export function reportFunctionFailure(name: string, status: number, errorText: string, authorization?: string | null): void {
+  reportFunctionError(name, status, errorText, { supabaseUrl, apikey: supabaseAnonKey, authorization });
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   global: {
-    fetch: (input, init) => {
+    fetch: async (input, init) => {
       const headers = new Headers(init?.headers);
       const domain = requestWebsiteDomain();
       // Derive the selector from location, never query strings, localStorage or
       // caller-supplied IDs. RLS separately verifies tenant membership on writes.
       headers.delete("x-tenant-domain");
       if (domain) headers.set("x-tenant-domain", domain);
-      return fetch(input, { ...init, headers });
+      const response = await fetch(input, { ...init, headers });
+      // An Edge Function that answered 5xx / 546 is reported for the daily health check (2026-11-20), as the same signed-in person.
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      reportIfFunctionFailed(url, response, { supabaseUrl, apikey: supabaseAnonKey, authorization: headers.get("Authorization") });
+      return response;
     },
   },
   auth: {

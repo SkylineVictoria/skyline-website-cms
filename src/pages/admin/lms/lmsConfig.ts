@@ -27,6 +27,8 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   // Room hours live in Bookings (one availability module for people and rooms); this is a shortcut to it.
   { id: "room-availability", label: "Room availability", route: "/admin/bookings?tab=availability&who=rooms", icon: "ri-door-open-line", dependencies: [], parent: "timetable" },
   { id: "trainer-availability", label: "Trainer availability", route: "/admin/bookings?tab=availability&who=trainers", icon: "ri-user-star-line", dependencies: [], parent: "timetable" },
+  // Students' weeks, like the trainers': the Timetable's Students view.
+  { id: "tt-students", label: "Student availability", route: "/admin/lms/timetable?view=students", icon: "ri-group-line", dependencies: [], parent: "timetable" },
   { id: "timetable-settings", label: "Settings", route: "/admin/lms/timetable-settings", icon: "ri-settings-3-line", dependencies: [], parent: "timetable" },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "session"], primaryAction: "Mark Attendance" },
   { id: "completion", label: "Completion", route: "/admin/lms/completion", icon: "ri-award-line", dependencies: ["course", "intake"] },

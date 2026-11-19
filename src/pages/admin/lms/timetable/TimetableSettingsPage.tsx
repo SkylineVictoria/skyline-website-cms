@@ -1,12 +1,14 @@
 // Timetable settings (LMS › Timetable › Settings): the rarely changed lists in one place, as tabs
-// (?tab=): term breaks, and locations and rooms.
+// (?tab=): term breaks, locations and rooms, and the class rescheduling rules.
 import { useSearchParams } from "react-router-dom";
 import LmsTermBreaksPage from "../LmsTermBreaksPage";
 import LmsLocationsPage from "../LmsLocationsPage";
+import ReschedulingRules from "./ReschedulingRules";
 
 const TABS = [
   { id: "breaks", label: "Term breaks" },
   { id: "locations", label: "Locations & rooms" },
+  { id: "rescheduling", label: "Rescheduling rules" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -21,7 +23,7 @@ export default function TimetableSettingsPage() {
             className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${tab === t.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>{t.label}</button>
         ))}
       </div>
-      {tab === "breaks" ? <LmsTermBreaksPage /> : <LmsLocationsPage />}
+      {tab === "breaks" ? <LmsTermBreaksPage /> : tab === "locations" ? <LmsLocationsPage /> : <ReschedulingRules />}
     </div>
   );
 }

@@ -3,6 +3,10 @@ import { LMS_MENU } from "@/pages/admin/lms/lmsConfig";
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 
 export const rulesRoute = "/admin/business-rules";
+export const timetableRulesScope = "lms/timetable-settings";
+export const reschedulingEditor = "rescheduling";
+export const timetableRulesRoute = `${rulesRoute}?${new URLSearchParams({ menu: timetableRulesScope })}`;
+export const reschedulingRulesRoute = `${timetableRulesRoute}&${new URLSearchParams({ editor: reschedulingEditor })}`;
 export const valueTypes = ["number", "percentage", "text", "boolean", "date", "time", "days", "hours", "weeks", "currency", "dropdown", "multiple selection", "list", "json"] as const;
 export const operators = ["equals", "not equals", "greater than", "less than", "contains", "does not contain", "between", "is empty", "is not empty", "before", "after"] as const;
 export type Condition = { field: string; operator: string; operand: unknown };

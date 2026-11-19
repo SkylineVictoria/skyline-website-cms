@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { AdminLoading, Badge, Button, Card, Field, PageHeader, SectionTabs, TextInput } from "@/pages/admin/components/ui";
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
+import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
-import { appliesTo, locationLabel, newDefinition, ruleLocations, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
+import { appliesTo, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
 
 const tabs = [
   { id: "rules", label: "Rules", icon: "ri-list-check" },
@@ -16,9 +17,21 @@ const tabs = [
 const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
 const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
+const reschedulingTitle = "Class rescheduling rules";
 const registrationError = "The Business Rules service is unavailable. Retry or contact your administrator.";
 
 export default function BusinessRulesPage() {
+  const [params] = useSearchParams();
+  // rule-policy: technical editor-navigation This branch selects the existing editor in the Administration layout.
+  if (params.get("editor") === reschedulingEditor) return <>
+    <PageHeader title="Business Rules & Policies" breadcrumb="Administration / Learning Management / Timetable"
+      actions={<Link to={timetableRulesRoute} className="text-sm font-medium text-primary-700 hover:underline">Back to timetable rules</Link>} />
+    <ReschedulingRules />
+  </>;
+  return <RuleWorkspace />;
+}
+
+function RuleWorkspace() {
   const [params, setParams] = useSearchParams();
   const scope = params.get("menu") ?? "";
   const [snapshot, setSnapshot] = useState<Snapshot>(empty);
@@ -81,6 +94,8 @@ export default function BusinessRulesPage() {
     const d = rule.versions[0].definition;
     return (!category || d.category_id === category) && `${d.name} ${d.identifier} ${d.description}`.toLowerCase().includes(search.trim().toLowerCase());
   });
+  const showRescheduling = (!scope || appliesTo(locations, timetableRulesScope, scope)) && !category
+    && `${reschedulingTitle} timetable`.toLowerCase().includes(search.trim().toLowerCase());
   const history = snapshot.history.filter(event => historyId ? event.rule_id === historyId : scoped.some(rule => rule.id === event.rule_id));
   const historyRule = snapshot.rules.find(rule => rule.id === historyId);
   const showHistory = (id: string) => { setHistoryId(id); setReason(""); setTab("history"); };
@@ -90,7 +105,8 @@ export default function BusinessRulesPage() {
   const matchingLocations = locations.filter(item => !menuSearch.trim() || locationLabel(locations, item.id).toLowerCase().includes(menuSearch.trim().toLowerCase()));
   const renderLocation = (loc: RuleLocation, depth: number) => {
     const children = matchingLocations.filter(item => item.parent === loc.id);
-    const count = snapshot.rules.filter(rule => appliesTo(locations, rule.versions[0].definition.scope, loc.id)).length;
+    const count = snapshot.rules.filter(rule => appliesTo(locations, rule.versions[0].definition.scope, loc.id)).length
+      + Number(appliesTo(locations, timetableRulesScope, loc.id));
     return <li key={loc.id}>
       <button type="button" onClick={() => filterMenu(loc.id)} aria-current={scope === loc.id ? "true" : undefined}
         className={`flex w-full items-center justify-between gap-1 rounded px-2 py-1.5 text-left text-xs ${scope === loc.id ? "bg-primary-100 font-semibold" : "hover:bg-background-100"}`}
@@ -129,11 +145,25 @@ export default function BusinessRulesPage() {
       </Card>
       <Card className="min-w-0 p-4">
         {tab === "rules" && <>
-          <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="mr-auto font-bold">{scope ? locationLabel(locations, scope) : "All Rules"} ({filtered.length})</h2>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="mr-auto font-bold">{scope ? locationLabel(locations, scope) : "All Rules"} ({filtered.length + Number(showRescheduling)})</h2>
             <TextInput className="!w-44" type="search" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} /><Button size="sm" icon="ri-add-line" onClick={add}>Add Rule</Button></div>
           <div className="overflow-x-auto"><table className="w-full text-left text-xs">
             <thead className="bg-background-100"><tr>{["Rule", "Category", "Type", "Current value", "Status", "Effective date", "Last modified", "Actions"].map(label => <th key={label} scope="col" className="p-2">{label}</th>)}</tr></thead>
-            <tbody>{filtered.map(rule => {
+            <tbody>
+              {showRescheduling && <tr className="border-b border-background-200 align-top">
+                <th scope="row" className="p-2 font-medium">
+                  <Link to={reschedulingRulesRoute} className="text-primary-700 hover:underline">{reschedulingTitle}</Link>
+                  <div className="mt-1 text-foreground-500">{locationLabel(locations, timetableRulesScope)}</div>
+                </th>
+                <td className="p-2">Timetable</td>
+                <td className="p-2">Rule set</td>
+                <td className="p-2">All courses and per-course overrides</td>
+                <td className="p-2">Existing settings</td>
+                <td className="p-2">—</td>
+                <td className="p-2">—</td>
+                <td className="p-2"><Link to={reschedulingRulesRoute} className="text-primary-700 hover:underline">Edit</Link></td>
+              </tr>}
+              {filtered.map(rule => {
               const latest = rule.versions[0], live = effective(rule), next = published(rule).find(v => v.definition.starts_on > today);
               const active = live?.definition.enabled;
               return <tr key={rule.id} className="border-b border-background-200 align-top">
@@ -145,7 +175,7 @@ export default function BusinessRulesPage() {
                 <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>Edit</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
               </tr>;
             })}</tbody>
-          </table>{!filtered.length && <p className="p-4 text-foreground-500">No rules match this view.</p>}</div>
+          </table>{!filtered.length && !showRescheduling && <p className="p-4 text-foreground-500">No rules match this view.</p>}</div>
         </>}
         {tab === "history" && <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule?.versions[0].definition.name ?? "Rule history"}</h2>{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All history</Button>}</div>

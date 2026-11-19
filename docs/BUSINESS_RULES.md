@@ -24,3 +24,7 @@ The LMS learning attachment rule `lms.unit_upload_max_bytes` lives under Learnin
 Versions use inclusive Melbourne calendar dates. The latest effective start date takes precedence, followed by higher priority and version. Two future versions for the same identifier cannot share a start date and priority. Publishing an inactive version disables the selected rule during its window. An earlier eligible version can become effective again when a temporary version ends. Rollback creates a fresh draft and goes through the same publishing and approval steps. Previously effective second-administrator requirements apply to later changes, including a change to that requirement itself.
 
 See the [source audit](BUSINESS_RULES_AUDIT.md) for follow-on migrations.
+
+## Timetable rescheduling
+
+Open **Administration → Business Rules & Policies → Learning Management → Timetable → Settings → Class rescheduling rules**. The editor keeps the existing default and per-course rule sets, ordered actions, notification messages, and class preview. It uses the existing timetable RPC and applies saves immediately. Versioning these settings and moving their storage into the shared engine are separate from this editor move. Old Timetable Settings links open the same editor.

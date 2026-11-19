@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
   const bucket = service.storage.from("staff-documents");
   const asError = (e: { code?: string; message?: string } | null) => (e ? { code: e.code, message: e.message } : null);
   // Business Rules (HR), read only by the actions that use them.
-  const rules = body.action === "purge" || body.action === "candidate_file"
+  const rules: Record<string, unknown> = body.action === "purge" || body.action === "candidate_file"
     ? await loadRules(service, ["hrms.onboarding_file_retention_fallback", "hrms.job_attachment_limit_mib"]) : {};
 
   const result = await handleAdmin(body, {

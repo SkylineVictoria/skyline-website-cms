@@ -42,6 +42,17 @@ export const SCREEN_RULES = [
   "assessment.short_response_default_word_cap",
   "assessment.repeat_group_entry_limits",
   "assessment.evidence_question_defaults",
+  "hrms.applicant_document_checklist",
+  "hrms.staff_document_expiry_rules",
+  "hrms.staff_multiple_academic_documents",
+  "hrms.staff_onboarding_workflow",
+  "hrms.staff_pay_start_date_range",
+  "hrms.staff_pay_validation_bounds",
+  "hrms.staff_weekly_hours_cap",
+  "hrms.staff_weekly_hours_required",
+  "hrms.cover_letter_limit_chars",
+  "hrms.job_attachment_limit_mib",
+  "hrms.employee_document_max_bytes",
 ] as const;
 
 let values: Record<string, unknown> = {};

@@ -1420,6 +1420,34 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.ok(read("src/pages/admin/components/signing/SubjectSigningPanel.tsx").includes("withoutF04("));
 });
 
+const softBreakMod = await load.import<typeof import("../src/components/signing/softBreak.ts")>("../src/components/signing/softBreak.ts");
+test("review application dialog (2026-11-20): opens on Review and decide, actions on every step, staff subtitle, one reference per row, ACN, agreement card, referee status", () => {
+  const wizard = read("src/components/signing/F04Wizard.tsx").replace(/\r\n/g, "\n"), dialog = read("src/pages/admin/components/F04ReviewDialog.tsx").replace(/\r\n/g, "\n");
+  // 1. Staff start on the summary; the tabs and the Edit links still move between steps.
+  assert.ok(wizard.includes(`const firstStep = mode === "admin-review" ? REVIEW_STEP :`), "opens on Review and decide");
+  assert.ok(wizard.includes(`onSelect={(n) => goTo(order[n])}`) && wizard.includes("data-testid={`f04-review-edit-${STEPS[index].id}`}") && wizard.includes(`data-testid="f04-review-back-summary"`), "tabs, Edit links, back to the summary");
+  // 2. The three actions sit in the footer on every step (no "last step only" branch); Save only with unsaved edits.
+  const buttons = wizard.slice(wizard.indexOf("const adminButtons = admin && review ?"), wizard.indexOf("// The pre-send step: Save draft"));
+  assert.ok(buttons.includes("f04-review-send-back") && buttons.includes("f04-review-approve") && !buttons.includes("last ?") && !buttons.includes("f04-next"), "Send back and Approve on every step");
+  assert.ok(wizard.includes("disabled={!dirty || !!reviewBusy}") && wizard.includes("footerStart={admin ? adminSave :"), "Save changes in the footer, enabled only with unsaved edits");
+  // 3. The staff subtitle.
+  assert.ok(wizard.includes("· Review the application, then approve or send it back.</> :"), "staff subtitle");
+  // 4. One reference per row, the email and phone on their own lines, wrapped at sensible points.
+  assert.ok(wizard.includes("section(F04_STEP.references, [[\"Reference 1\", ref(1)], [\"Reference 2\", ref(2)]], true)") && wizard.includes("f04-review-ref-${n}-email"), "one reference per row");
+  assert.ok(wizard.includes("softBreak(a.contact_email)") && wizard.includes("softBreak(a.agent_website)") && !/break-all/.test(wizard), "emails and web addresses never split mid-word");
+  const pieces = (node: unknown) => (Array.isArray(node) ? node : [node]).map((n) => (n as { props?: { children?: unknown[] } })?.props?.children ?? n);
+  const broken = pieces(softBreakMod.softBreak("ravi.kumar@globaledu.com.au")) as unknown[][];
+  assert.deepEqual(broken.map((c) => [c[0], c[1] !== null]), [["ravi", false], [".", true], ["kumar", false], ["@", true], ["globaledu", false], [".", true], ["com", false], [".", true], ["au", false]], "breaks only after . and @");
+  assert.equal(softBreakMod.softBreak(""), "");
+  // 5. ACN on the Business card, the agreement card with pictures, the referee status with Resend.
+  assert.ok(wizard.includes(`["ACN", state.acn ? printAcn(state.acn) : admin ? "—" : ""]`) && dialog.includes("agent_acn: review.answers.agent_acn || review.acn ||"), "ACN from the answers or the business");
+  for (const id of ["f04-review-agreement", "f04-review-agreement-signature", "f04-review-agreement-agency-witness", "f04-review-agreement-slit-witness", "Signed {formatSignedAt(sig.signedAt)}"]) assert.ok(wizard.includes(id), id);
+  assert.ok(dialog.includes("data:image/png;base64,") && dialog.includes("agencySignature:") && dialog.includes("slitWitness:"), "witness pictures stored as bare base64 become images");
+  assert.ok(dialog.includes("f04-referee-status-") && dialog.includes("\"Sent, not completed\"") && dialog.includes("\"Not sent yet\"") && dialog.includes("resendReferee(ref)"), "referee status with Resend");
+  const sql = read("supabase/migrations/20261120153517_onboarding_review_summary.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("'acn', a.acn, 'acnSource', a.acn_source") && sql.includes("'image', r.signature_image, 'signedAt', r.signed_at") && sql.includes("public.agency_onboarding_review_get(uuid)"), "review data: ACN and the agency admin's signature");
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [

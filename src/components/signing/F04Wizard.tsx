@@ -6,6 +6,8 @@ import AddressAutocomplete, { type AddressPick } from "@/components/shared/appli
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import SignaturePad from "@/components/signing/SignaturePad";
 import SigningDone, { type NextStep } from "@/components/signing/SigningDone";
+import { softBreak } from "@/components/signing/softBreak";
+import { formatSignedAt } from "@/lib/signedTime";
 import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type SigningView } from "@/lib/signingApi";
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
@@ -118,7 +120,7 @@ function Upload({ token, kind, file, error, onChange }: { token: string; kind: F
     <div data-testid={`f04-attach-${kind}`}>
       {file ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <i className="ri-attachment-2 text-primary-600" aria-hidden="true" /><span className="min-w-0 break-all font-medium text-foreground-900">{file.name}</span>
+          <i className="ri-attachment-2 text-primary-600" aria-hidden="true" /><span className="min-w-0 break-words font-medium text-foreground-900">{softBreak(file.name)}</span>
           <span className="text-xs text-foreground-500">{Math.max(1, Math.round(file.size / 1024))} KB</span>
           <button type="button" disabled={busy} onClick={() => void remove()} className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50">Remove</button>
         </div>
@@ -166,6 +168,18 @@ export interface F04ReviewControls {
   onSendBack: () => void;
   onApprove: () => void;
   onClose: () => void;
+  /** 2026-11-20: one line per referee in the summary (sent / completed / not completed) with Resend. */
+  refereeStatus?: (position: 1 | 2) => ReactNode;
+  /** 2026-11-20: the agreement signed with the form, shown as a card in the summary. */
+  agreement?: F04ReviewAgreement | null;
+}
+
+/** A signature shown in the review: a drawn picture (PNG data URL), or the typed name in the signing script. */
+export interface F04ReviewSignature { name: string; image: string | null; signedAt?: string | null }
+/** The agreement (P06) signed with the form: terms, the SLIT witness, the agency's witness, the agency admin's signature. */
+export interface F04ReviewAgreement {
+  commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | string | null;
+  slitWitness: F04ReviewSignature | null; agencyWitness: F04ReviewSignature | null; agencySignature: F04ReviewSignature | null;
 }
 
 /** The pre-send step (2026-11-20): staff fill the F04 before it goes; the agreement terms, the witness and the buttons live with the dialog. */
@@ -207,7 +221,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const [state, setState] = useState<F04Draft>(opening);
   // What the review opened with: staff changes are the difference from it.
   const [reviewBase, setReviewBase] = useState<F04Draft>(opening);
-  const firstStep = order.includes(opening.step) ? opening.step : order[0];
+  const firstStep = mode === "admin-review" ? REVIEW_STEP : order.includes(opening.step) ? opening.step : order[0];
   const [step, setStep] = useState(firstStep);
   const [furthest, setFurthest] = useState(firstStep);
   const [returnTo, setReturnTo] = useState<number | null>(null);
@@ -393,28 +407,69 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const officeLine = [a.office_street_address, [a.office_suburb, australian ? a.office_state : a.office_province, a.office_postcode].filter(Boolean).join(" "), a.office_country].filter((s) => (s ?? "").trim()).join(", ");
   const contactName = [a.contact_title, a.contact_given_name, a.contact_family_name].filter(Boolean).join(" ");
 
+  /** Long values (emails, the office address, web addresses) take the card's full width, so they wrap at "@", "." or "/" rather than mid-word. */
+  const WIDE_ROWS = new Set(["Email", "Office", "Website"]);
   const reviewSummary = () => {
-    const section = (index: number, rows: Array<[string, ReactNode]>) => !order.includes(index) ? null : (
-      <section key={index} className="rounded-lg border border-background-200 p-4" data-testid={`f04-review-${STEPS[index].id}`}>
+    const section = (index: number, rows: Array<[string, ReactNode]>, oneColumn = false) => !order.includes(index) ? null : (
+      <section key={index} className="min-w-0 rounded-lg border border-background-200 p-4" data-testid={`f04-review-${STEPS[index].id}`}>
         <div className="mb-2 flex items-center justify-between gap-3">
           <h4 className="text-sm font-semibold text-foreground-900">{STEPS[index].short}</h4>
           <button type="button" onClick={() => editStep(index)} className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid={`f04-review-edit-${STEPS[index].id}`}>Edit</button>
         </div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
-          {rows.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([label, v]) => <div key={label} className="min-w-0"><dt className="text-xs text-foreground-500">{label}</dt><dd className="break-words text-foreground-900">{v}</dd></div>)}
+        <dl className={`grid grid-cols-1 gap-x-6 text-sm ${oneColumn ? "gap-y-3" : "gap-y-1.5 sm:grid-cols-2"}`}>
+          {rows.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([label, v]) => <div key={label} className={`min-w-0 ${WIDE_ROWS.has(label) ? "sm:col-span-2" : ""}`}><dt className="text-xs text-foreground-500">{label}</dt><dd className="break-words text-foreground-900">{v}</dd></div>)}
         </dl>
       </section>);
     const yn = (k: string) => (yesNo(a[k]) === "YES" ? "Yes" : yesNo(a[k]) === "NO" ? "No" : "");
-    const ref = (n: number) => [a[`ref${n}_contact_name`], a[`ref${n}_position`], a[`ref${n}_organisation`]].filter((s) => (s ?? "").trim()).join(", ") + ((a[`ref${n}_email`] ?? "").trim() ? ` · ${a[`ref${n}_email`]}` : "") + ((a[`ref${n}_phone`] ?? "").trim() ? ` · ${formatPhone(a[`ref${n}_phone`])}` : "");
+    // One reference per row: name (position, organisation), then the email and the phone on lines of their own; staff see the referee's status.
+    const ref = (n: number): ReactNode => {
+      const v = (part: string) => (a[`ref${n}_${part}`] ?? "").trim();
+      if (!v("contact_name") && !v("email") && !v("phone")) return "";
+      const role = [v("position"), v("organisation")].filter(Boolean).join(", ");
+      return <div className="space-y-0.5" data-testid={`f04-review-ref-${n}`}>
+        <p className="font-medium">{v("contact_name") || "—"}{role ? <span className="font-normal text-foreground-600"> · {role}</span> : null}</p>
+        {v("email") ? <p className="text-foreground-800" data-testid={`f04-review-ref-${n}-email`}>{softBreak(v("email"))}</p> : null}
+        {v("phone") ? <p className="text-foreground-800">{formatPhone(v("phone"))}</p> : null}
+        {admin && review?.refereeStatus ? <div className="pt-1" data-testid={`f04-review-ref-${n}-status`}>{review.refereeStatus(n as 1 | 2)}</div> : null}
+      </div>;
+    };
+    const signatureCell = (label: string, sig: F04ReviewSignature | null, testId: string) => (
+      <div className="min-w-0 rounded-md border border-background-200 bg-background-50 p-3" data-testid={testId}>
+        <p className="text-xs text-foreground-500">{label}</p>
+        {sig ? <>
+          <p className="font-medium text-foreground-900">{sig.name || "—"}</p>
+          {sig.image ? <img src={sig.image} alt={`${label}: ${sig.name}`} className="mt-1 max-h-16 max-w-full rounded border border-background-300 bg-white p-1" data-testid={`${testId}-image`} />
+            : <p className={`mt-1 text-2xl leading-tight text-[#0d1a4d] ${SCRIPT_FONT}`} data-testid={`${testId}-typed`}>{sig.name}</p>}
+          {sig.signedAt ? <p className="mt-1 text-xs text-foreground-600" data-testid={`${testId}-date`}>Signed {formatSignedAt(sig.signedAt)}</p> : null}
+        </> : <p className="text-sm text-foreground-500">Not given</p>}
+      </div>);
+    const ag = admin ? review?.agreement ?? null : null;
+    const auDay = (iso: string | null | undefined) => iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "—";
+    const agreementCard = ag ? (
+      <section className="min-w-0 rounded-lg border border-background-200 p-4 lg:col-span-2" data-testid="f04-review-agreement">
+        <h4 className="mb-2 text-sm font-semibold text-foreground-900">Agreement (P06)</h4>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-4">
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commencement</dt><dd className="text-foreground-900" data-testid="f04-review-agreement-commencement">{auDay(ag.commencementDate)}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Ends</dt><dd className="text-foreground-900">{auDay(ag.expiryDate)}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Territory</dt><dd className="break-words text-foreground-900">{ag.territory || "—"}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commission</dt><dd className="text-foreground-900">{ag.commissionPercent != null && ag.commissionPercent !== "" ? `${ag.commissionPercent}%` : "—"}</dd></div>
+        </dl>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {signatureCell("Agency admin's signature", ag.agencySignature, "f04-review-agreement-signature")}
+          {signatureCell("Agency's witness", ag.agencyWitness, "f04-review-agreement-agency-witness")}
+          {signatureCell("SLIT witness", ag.slitWitness, "f04-review-agreement-slit-witness")}
+        </div>
+      </section>) : null;
     return (
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" data-testid="f04-review">
-        {section(F04_STEP.business, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : ""],
+        {section(F04_STEP.business, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : admin ? "—" : ""],
           ["Year founded", a.agent_year_founded], ["MARN", state.marn]])}
-        {section(F04_STEP.references, [["Reference 1", ref(1)], ["Reference 2", ref(2)]])}
-        {section(F04_STEP.contact, [["Contact", contactName], ["Position", a.contact_position], ["Email", a.contact_email], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", a.agent_website]])}
+        {section(F04_STEP.references, [["Reference 1", ref(1)], ["Reference 2", ref(2)]], true)}
+        {section(F04_STEP.contact, [["Contact", contactName], ["Position", a.contact_position], ["Email", softBreak(a.contact_email)], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", softBreak(a.agent_website)]])}
         {section(F04_STEP.agency, [...QUESTIONS.filter((q) => asks(q.key)).map((q): [string, ReactNode] => [q.short, yn(q.key) + (yesNo(a[q.key]) === "YES" && q.attach && attachments[q.attach] ? ` · ${attachments[q.attach]!.name}` : "")]),
           ["Services", a.services_provided], ["Other countries", a.other_countries_recruited],
           ["Numbers", NUMBERS.filter(([k]) => (a[k] ?? "").trim()).map(([k, label]) => `${label}: ${a[k]}`).join(" · ")]])}
+        {agreementCard}
       </div>
     );
   };
@@ -728,16 +783,20 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const last = step === REVIEW_STEP;
   const stepNumber = order.indexOf(step) + 1;
   const reviewBusy = review?.busy ?? "";
+  const changeCount = Object.keys(changes).length;
+  const adminSave = admin && review ? (
+    <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={!dirty || !!reviewBusy} title={dirty ? `${changeCount} unsaved change${changeCount === 1 ? "" : "s"}` : "No unsaved changes"} onClick={() => void saveReview()} data-testid="f04-review-save">
+      <i className="ri-save-line" aria-hidden="true" />{reviewBusy === "save" ? "Saving…" : "Save changes"}
+      {dirty && reviewBusy !== "save" ? <span className="rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-900" data-testid="f04-review-dirty">{changeCount}</span> : null}</button>) : null;
   const adminButtons = admin && review ? (
     <span className="flex flex-wrap items-center justify-end gap-2">
-      <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={!dirty || !!reviewBusy} onClick={() => void saveReview()} data-testid="f04-review-save"><i className="ri-save-line" aria-hidden="true" />{reviewBusy === "save" ? "Saving…" : "Save changes"}</button>
-      {last ? <>
+      <>
         <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} onClick={review.onSendBack} data-testid="f04-review-send-back"><i className="ri-arrow-go-back-line" aria-hidden="true" />{reviewBusy === "back" ? "Sending…" : "Send back for correction"}</button>
         <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} title={Object.keys(flags).length ? "Remove the flags, or send the application back" : undefined}
           onClick={review.onApprove} data-testid="f04-review-approve">{reviewBusy === "approve" ? "Approving…" : "Approve and activate agency"}<i className="ri-check-double-line" aria-hidden="true" /></button>
-      </> : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!reviewBusy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}
+      </>
     </span>) : null;
   // The pre-send step: Save draft at any step; Send to point of contact on the last one (the dialog checks the terms and the witness).
   const prefillBusy = prefill?.busy ?? "";
@@ -760,11 +819,11 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     <div ref={top} className="scroll-mt-4" onKeyDown={onKey}>
       <WizardShell variant={staff ? "modal" : "page"} stickyFooter={!staff} icon="ri-file-user-line" title={admin ? "Review application" : prefilling ? "Prepare the application" : correcting ? "Correct your application" : combined ? "Agent application and agreement" : "Agent application form"}
         onClose={admin ? review?.onClose : prefilling ? prefill?.onClose : undefined}
-        subtitle={<>{admin ? "Agent application of" : prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
+        subtitle={admin ? <>Agent application of <strong>{view.onboarding?.agencyName ?? "the agency"}</strong> · Review the application, then approve or send it back.</> : <>{prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
         stepper={<div data-testid="f04-stepper"><WizardStepper items={order.map((i) => ({ id: STEPS[i].id, short: STEPS[i].short, icon: STEPS[i].icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={order.indexOf(step)} onSelect={(n) => goTo(order[n])} /></div>}
-        footerStart={<>
+        footerStart={admin ? adminSave : <>
           {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
-          {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : admin ? (dirty ? <span className="text-xs text-amber-800" data-testid="f04-review-dirty">{Object.keys(changes).length} unsaved change{Object.keys(changes).length === 1 ? "" : "s"}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
+          {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
         footerEnd={adminButtons ?? prefillButtons ?? (last
           ? <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!canSubmit || !!busy} onClick={() => void submit()} data-testid="f04-submit">{busy === "sign" ? "Submitting…" : "Sign and submit"}<i className="ri-check-line" aria-hidden="true" /></button>
@@ -777,6 +836,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           <p className="font-semibold"><i className="ri-flag-2-fill mr-1" aria-hidden="true" />SLIT has asked you to correct {Object.keys(flags).length} answer{Object.keys(flags).length === 1 ? "" : "s"} (highlighted). Everything else stays as you signed it.</p>
           {correction.message ? <p className="mt-1 whitespace-pre-line" data-testid="f04-correction-message">{correction.message}</p> : null}
         </div> : null}
+        {admin && step !== REVIEW_STEP ? <button type="button" onClick={() => { setReturnTo(null); show(REVIEW_STEP); }} className="mb-3 inline-flex cursor-pointer items-center gap-1 text-sm font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid="f04-review-back-summary">
+          <i className="ri-arrow-left-line" aria-hidden="true" />Back to Review and decide</button> : null}
         <h3 className="mb-4 font-heading text-base font-semibold text-foreground-950">{admin && step === REVIEW_STEP ? "Review and decide" : prefilling && step === REVIEW_STEP ? "Check and send" : STEPS[step].title}</h3>
         {body}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-500">

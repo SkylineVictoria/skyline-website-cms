@@ -78,7 +78,10 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
     const [path, query = ""] = route.split("?");
     // A route without ?view= (the calendar) is current for every view of its page: the views are tabs inside it.
     if (!query) return pathname === path;
-    return pathname === path && (new URLSearchParams(search).get("view") ?? "") === (new URLSearchParams(query).get("view") ?? "");
+    const want = new URLSearchParams(query), have = new URLSearchParams(search);
+    // Room / trainer availability (Bookings ?who=): current only for its own who.
+    if (want.has("who")) return pathname === path && have.get("who") === want.get("who");
+    return pathname === path && (have.get("view") ?? "") === (want.get("view") ?? "");
   };
   const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));
   useEffect(() => { if (pathname.startsWith("/admin/lms")) setExpanded(true); }, [pathname]);

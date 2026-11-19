@@ -19,7 +19,7 @@ export type Definition = {
 };
 export type Version = { id: string; rule_id: string; version: number; state: "draft" | "published" | "superseded"; definition: Definition; created_at: string; origin: string; approved_by: string | null };
 export type Category = { id: string; name: string };
-export type Rule = { id: string; identifier: string; registration: { scope: string; entity: string; value_type: string } | null; versions: Version[] };
+export type Rule = { id: string; identifier: string; registration: { scope: string; entity: string; value_type: string; handler?: string } | null; versions: Version[] };
 export type RegistryField = { key: string; label: string; value_type: string; scope: string };
 export type Audit = { id: string; rule_id: string; action: string; actor: string; reason: string; created_at: string; before_data: Definition | null; after_data: Definition | null };
 export type Snapshot = { categories: Category[]; rules: Rule[]; fields: RegistryField[]; history: Audit[] };
@@ -77,4 +77,14 @@ export function valueSummary(value: unknown) {
   if (value === null || value === undefined) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+export const awaitingIntegration = (rule?: Rule) => rule?.registration?.handler === "inventory_only";
+
+export function definitionSummary(definition: Definition) {
+  const value = valueSummary(definition.value);
+  if (definition.value_type === "percentage") return value + "%";
+  // rule-policy: technical display-units Formats the stored type for display without changing the value.
+  if (["days", "hours", "weeks"].includes(definition.value_type)) return `${value} ${definition.value_type}`;
+  return value;
 }

@@ -42,7 +42,8 @@ try {
     insert into storage.objects values ('unit-content','unit-a/a.pdf','{"size":5000}'),
       ('unit-content','unit-a/b.docx','{"size":5000}'),('unit-content','unit-a/small.pdf','{"size":900}');
   `);
-  for (const file of ["20261120220000_business_rules.sql", "20261120221000_business_rule_lms_upload.sql"]) {
+  const inventoryFile = "20261120222000_business_rules_inventory.sql";
+  for (const file of ["20261120220000_business_rules.sql", "20261120221000_business_rule_lms_upload.sql", inventoryFile, inventoryFile]) {
     await db.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   const setActor = id => db.query("select set_config('app.actor',$1,false)", [id]);
@@ -75,6 +76,13 @@ try {
   const seed = rule.versions[0];
   assert(seed.state === "draft" && seed.origin === "migration", "Existing value registered as unapproved draft");
   const reference = await request("list");
+  const inventory = reference.rules.filter(item => item.registration?.handler === "inventory_only");
+  assert(inventory.length === 12 && inventory.every(item => item.versions.length === 1 && item.versions[0].state === "draft"),
+    "Legacy inventory is visible, stays in draft, and can be imported twice without duplication");
+  const attendance = inventory.find(item => item.identifier === "lms.attendance_alert_threshold");
+  assert(attendance?.versions[0].definition.value === 80, "Inventory retains the observed source value");
+  await rejects(() => request("publish", params(attendance)), "22023", "Unknown registered workflow handler",
+    "Review-only inventory cannot be published through the Admin API");
   const other = { ...seed.definition, identifier: "crm.example_policy", scope: "admissions", name: "Sample policy", entity: "application", value_type: "boolean", value: false };
   await request("save", { definition: other, reason: "New sample" });
   assert((await request("list")).rules.some(r => r.identifier === other.identifier), "Administrator can create a rule");

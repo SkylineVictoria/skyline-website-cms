@@ -10,6 +10,7 @@ import { hadSession, loginUrl } from "@/lib/loginRouting";
 import { useUiPrefs, type Density } from "@/pages/admin/lib/uiPrefs";
 import { VIEW_LABELS, type ViewKind } from "@/lib/viewAs";
 import ViewAsPicker from "@/components/base/ViewAsPicker";
+import ManageRulesLink from "@/pages/admin/businessRules/ManageRulesLink";
 import CommPopup from "@/pages/admin/components/CommPopup";
 
 /** Form and text pages read better at a set width; tables, timelines and boards use the full width. */
@@ -133,7 +134,7 @@ export default function AdminLayout() {
             </div>
 
             <div className="relative flex items-center gap-2">
-              {user.role === "Admin" ? <CommPopup /> : null}
+              {user.role === "Admin" ? <><ManageRulesLink /><CommPopup /></> : null}
               <button
                 type="button"
                 onClick={() => setUserMenu((v) => !v)}

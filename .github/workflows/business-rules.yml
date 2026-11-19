@@ -1,0 +1,32 @@
+name: SLIT Business Rules
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  policy:
+    name: Registry and enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Review new policy candidates and validate registrations
+        env:
+          RULES_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="${RULES_BASE:-HEAD^}"
+          if ! git cat-file -e "$base^{commit}"; then base=HEAD^; fi
+          if [ "${{ github.event_name }}" = pull_request ]; then base="$(git merge-base "$base" HEAD)"; fi
+          node scripts/check-business-rules.mjs "$base"
+      - name: Run server-side policy tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/slit-rules" --no-save --ignore-scripts @electric-sql/pglite@0.5.17
+          SLIT_RULES_TEST_PGLITE="$RUNNER_TEMP/slit-rules/node_modules/@electric-sql/pglite/dist/index.js" node scripts/test-business-rules.mjs

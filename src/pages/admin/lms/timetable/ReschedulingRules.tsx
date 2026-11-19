@@ -1,4 +1,4 @@
-// LMS › Timetable settings › Rescheduling rules (CLASS-RESCHEDULE): what the system tries when a class can't run.
+// Administration › Business Rules & Policies › Timetable: what the system tries when a class can't run.
 // Admins / RTO Managers set reasons, the steps for each reason in order with their limits, the general rules and the message.
 // One default set for every course; a course can have its own set.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -111,7 +111,7 @@ export default function ReschedulingRules() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="font-heading text-lg font-semibold text-foreground-950">Class rescheduling rules</h2>
-          <p className="text-sm text-foreground-600">What the system does when a class can't run. No class is dropped: every class gets a new time.</p>
+          <p className="text-sm text-foreground-600">Choose what the timetable tries when a class cannot run. Saving applies your changes immediately.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setTryOpen(true)}>Try on a class…</Button>

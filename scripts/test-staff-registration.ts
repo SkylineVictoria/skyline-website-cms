@@ -653,6 +653,8 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       if (name === "agency_onboarding_prepare") return { agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556" }, agent: contact, admin: { name: "Hari Admin", position: "CEO", signaturePng: null },
         values: { agent_agency_name: "Acme Education Pty Ltd", contact_email: contact.email, agent_website: "acme.example.test" } };
       if (name === "agency_abr_get") return null;
+      // The business's ACN kept by the database (2026-11-20).
+      if (name === "agency_acn_sync") return { acn: "603584676", source: "register" };
       if (name === "agency_onboarding_presend_get") return { onboardingId: state.presend ? onboardingId : null, stage: state.presend ? "draft" : null, openStage: state.stage === "draft" ? null : state.stage,
         agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556", status: "Onboarding" }, contact, presend: (state.presend?.presend ?? null) as Record<string, unknown> | null,
         terms: { commencementDate: state.presend?.commencementDate ?? null, territory: state.presend?.territory ?? "", commissionPercent: state.presend?.commissionPercent ?? null }, witness: { name: null, png: null }, savedAt: null, savedBy: null };
@@ -699,6 +701,7 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   const openedValue = (key: string) => opened.fields.find((f) => f.key === key)?.value;
   assert.deepEqual([openedValue("litigation_involved:NO"), openedValue("litigation_involved:YES"), openedValue("works_with_sub_agents:NO"), openedValue("eatc_completed:NO")], ["true", "", "true", "true"], "every Yes / No question opens at No");
   assert.equal(openedValue("contact_title"), "Mr", "what staff saved is shown again");
+  assert.equal((opened as unknown as { acn: string }).acn, "603584676", "Prepare application shows the business's ACN");
   // Send needs the agreement terms.
   await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
   const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
@@ -714,6 +717,7 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   const agreementText = await pdfText(original);
   assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && agreementText.some((t) => t.page > 2 && t.text.includes("25%")), "the agreement terms are printed on the P06 pages");
   assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("Sue Witness")), "the SLIT witness from Prepare application is printed on the agreement");
+  assert.ok(agreementText.some((t) => t.page === 3 && t.text.includes("51 824 753 556, ACN 603 584 676")), "the agreement's (ABN ...) line carries the business's ACN");
   const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
   assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
   assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
@@ -1285,6 +1289,35 @@ test("F04 follow-ups (2026-11-18): a company's ACN from its ABN when the registe
   assert.equal(abrLib.acnFromAbn("49004028077", "Australian Public Company"), "004028077");
   assert.equal(abrLib.acnFromAbn("86603584676", "Individual/Sole Trader"), "", "not a company: no ACN");
   assert.equal(abrLib.acnFromAbn("12345678901", "Australian Private Company"), "", "nine digits that fail the check digit are not an ACN");
+  // 2026-11-20 (owner): one rule for the business's ACN (resolveAcn here, public.acn_resolve in the database).
+  // Company: the register's ASIC number first, else the last nine digits of the ABN.
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49 004 028 077", acn: "004 028 077", entityType: "Australian Public Company" }), { acn: "004028077", source: "register" }, "BHP: the register's ACN");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Australian Public Company" }), { acn: "004028077", source: "derived" }, "BHP without the register's ACN: derived");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "86603584676", acn: null, entityType: "Australian Private Company" }), { acn: "603584676", source: "derived" }, "a private company: derived");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "123456789", entityType: "Australian Public Company" }), { acn: "004028077", source: "derived" }, "an invalid register value is not used");
+  // Sole trader: never derived, even when the ABN's last nine digits would pass the ACN check.
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Individual/Sole Trader" }), { acn: "", source: null }, "sole trader: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "99386710529", acn: "", entityType: "Individual/Sole Trader" }), { acn: "", source: null }, "PURVA (sole trader): blank");
+  // Trust and partnership: never derived (a trust's ABN is not its trustee company's).
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Discretionary Trading Trust" }), { acn: "", source: null }, "trust: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Trustee company of a Fixed Unit Trust" }), { acn: "", source: null }, "anything naming a trust: blank");
+  assert.deepEqual(abrLib.resolveAcn({ abn: "49004028077", acn: "", entityType: "Family Partnership" }), { acn: "", source: null }, "partnership: blank");
+  assert.equal(abrLib.isCompanyEntity("Australian Private Company") && abrLib.isCompanyEntity("Australian Public Company"), true);
+  // The agreement's "(ABN ...)" blank.
+  assert.equal(abrLib.abnWithAcn("49004028077", "004028077"), "49 004 028 077, ACN 004 028 077");
+  assert.equal(abrLib.abnWithAcn("99386710529", ""), "99 386 710 529", "no ACN: the ABN alone");
+  // The F04 values follow the same rule (a sole trader's or a trust's form opens with the ACN blank and editable).
+  const noContact = { givenName: "", familyName: "", email: "", phone: "" };
+  const soleTrader = { abn: "49004028077", acn: "", abnStatus: "Active", active: true, statusFrom: "", entityName: "J SMITH", entityType: "Individual/Sole Trader",
+    businessNames: [] as string[], gstRegistered: false, gstFrom: "", state: "VIC", postcode: "3000", sourceUrl: "" };
+  assert.equal(abrLib.abrApplicationValues({ details: soleTrader, confirmed: null, contact: noContact }).agent_acn ?? "", "", "sole trader: the F04 ACN stays blank");
+  assert.equal(abrLib.abrApplicationValues({ details: { ...soleTrader, entityName: "THE SMITH FAMILY TRUST", entityType: "Discretionary Trading Trust" }, confirmed: null, contact: noContact }).agent_acn ?? "", "", "trust: the F04 ACN stays blank");
+  assert.equal(abrLib.abrApplicationValues({ details: { ...soleTrader, entityName: "BHP GROUP LIMITED", entityType: "Australian Public Company", acn: "004028077" }, confirmed: null, contact: noContact }).agent_acn,
+    "004 028 077", "company: the F04 ACN from the register");
+  // The database rule is the same (migration 20261120113517).
+  const acnSql = readFileSync(new URL("../supabase/migrations/20261120113517_agency_acn.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(acnSql.includes("p_entity_type ~* 'company' and p_entity_type !~* '(trust|partnership|sole\\s*trader|individual)'"), "the same company rule in SQL");
+  assert.ok(acnSql.includes("if public.acn_valid(v_reg) then return jsonb_build_object('acn', v_reg, 'source', 'register');"), "the register's ACN first");
   // Send: the register's details without an ACN.
   const purva = { abn: "86603584676", acn: "", abnStatus: "Active", active: true, statusFrom: "2015-01-07", entityName: "PURVA TECH PTY LTD", entityType: "Australian Private Company",
     businessNames: [] as string[], gstRegistered: true, gstFrom: "2015-01-07", state: "VIC", postcode: "3029", sourceUrl: "" };

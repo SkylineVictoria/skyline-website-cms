@@ -448,6 +448,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             if (submission && ports.serviceRpc) {
               await ports.serviceRpc("agency_onboarding_application_extra", { p_request: record.id, p_data: { agent_acn: submission.acn, agent_marn: submission.marn,
                 declarations: submission.declarations, declared_at: plan.signed_at } }).catch(() => undefined);
+              // The ACN the business typed is kept on the business when we had none (2026-11-20; a valid ACN only, never over the register's).
+              if (submission.acn) await ports.serviceRpc("agency_acn_from_application", { p_request: record.id, p_acn: submission.acn }).catch(() => undefined);
             }
             // The witness the agency admin added on this page is kept on the onboarding (staff see it; a correction prints it again).
             if (witness && witnessPng && ports.serviceRpc) {

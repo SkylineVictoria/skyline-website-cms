@@ -119,7 +119,7 @@ export function abrApplicationValues(input: {
   const abn = d?.abn ?? "";
   // Round 3: no postcode alone in the Suburb box (the suburb itself is the contact's; f04Prefill joins the postcode to a named suburb).
   const values: Record<string, string> = {
-    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d?.acn && d.acn.length === 9 ? printAcn(d.acn) : d ? printAcn(acnFromAbn(d.abn, d.entityType)) : "",
+    agent_legal_entity: legal, agent_trading_name: trading, agent_agency_name: trading, agent_abn: abn, agent_acn: d ? printAcn(resolveAcn({ abn: d.abn, acn: d.acn, entityType: d.entityType }).acn) : "",
     agent_gst_registered: gst === null ? "" : gst ? "YES" : "NO",
     // No postcode box on the F04: the postcode is printed in the Suburb box (never Province); the suburb itself is the contact's.
     office_state: str(c?.state) || d?.state || "", office_country: "Australia",
@@ -162,9 +162,34 @@ export function acnValid(acn: string | null | undefined): boolean {
  */
 export function acnFromAbn(abn: string | null | undefined, entityType: string | null | undefined): string {
   const digits = String(abn ?? "").replace(/\D/g, "");
-  if (digits.length !== 11 || !/company/i.test(String(entityType ?? ""))) return "";
+  if (digits.length !== 11 || !isCompanyEntity(entityType)) return "";
   const acn = digits.slice(2);
   return acnValid(acn) ? acn : "";
+}
+/**
+ * A company in the register's words (Australian Private / Public Company and other "... Company" types), never a trust, partnership,
+ * sole trader or individual. The same rule as public.acn_company_entity (migration 20261120113517).
+ */
+export function isCompanyEntity(entityType: string | null | undefined): boolean {
+  const type = String(entityType ?? "");
+  return /company/i.test(type) && !/(trust|partnership|sole\s*trader|individual)/i.test(type);
+}
+/**
+ * The business's ACN (2026-11-20, owner): the ASIC number ABN Lookup gives ("register"); else, for a company only, the last nine digits of
+ * its ABN when they pass the ACN check ("derived"); else none, so sole traders, partnerships and trusts stay blank (and editable), never
+ * derived. The same rule as public.acn_resolve.
+ */
+export function resolveAcn(input: { abn?: string | null; acn?: string | null; entityType?: string | null }): { acn: string; source: "register" | "derived" | null } {
+  const register = String(input.acn ?? "").replace(/\D/g, "");
+  if (acnValid(register)) return { acn: register, source: "register" };
+  const derived = acnFromAbn(input.abn, input.entityType);
+  return derived ? { acn: derived, source: "derived" } : { acn: "", source: null };
+}
+/** The agreement's "(ABN ...)" blank: "49 004 028 077, ACN 004 028 077" when the business has an ACN, else the ABN alone. */
+export function abnWithAcn(abn: string | null | undefined, acn: string | null | undefined): string {
+  const a = String(abn ?? "").replace(/\D/g, ""), c = String(acn ?? "").replace(/\D/g, "");
+  const abnText = a.length === 11 ? `${a.slice(0, 2)} ${a.slice(2, 5)} ${a.slice(5, 8)} ${a.slice(8)}` : String(abn ?? "").trim();
+  return acnValid(c) ? `${abnText}, ACN ${printAcn(c)}` : abnText;
 }
 /** "603 584 676": an ACN in its printed groups (other text unchanged). */
 export const printAcn = (acn: string) => { const d = String(acn ?? "").replace(/\D/g, ""); return d.length === 9 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : String(acn ?? "").trim(); };

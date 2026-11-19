@@ -5,7 +5,7 @@
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
   WITNESS_SIGNATURE_KEY, yesNoDefaults, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { ABR_PREFILL_KEYS, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
+import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
@@ -152,6 +152,15 @@ interface BusinessAbr { details: AbrDetails | null; confirmed: (AbrConfirmed & {
  * call to the register), every prefilled value editable by the contact; everything else is blank. A business without one keeps the earlier values.
  */
 async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
+  const found = await applicationValuesFromRegister(ctx, prepared);
+  // The business's ACN (2026-11-20) wins: the register's or a company's derived one kept on the business, or the one it typed before.
+  // None kept: the register's answer computed above by the same rule (blank for a sole trader, partnership or trust: editable on the form).
+  const acn = await businessAcn(ctx, prepared.agency.id);
+  const values = { ...found.values }, prefill = found.prefill ? { ...found.prefill } : null;
+  if (acn) { values.agent_acn = printAcn(acn); if (prefill) prefill.agent_acn = printAcn(acn); }
+  return { values, prefill, facts: found.facts };
+}
+async function applicationValuesFromRegister(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
   let abr: BusinessAbr | null = null;
   try { abr = await ctx.rpc("agency_abr_get", { p_agency: prepared.agency.id }) as BusinessAbr | null; } catch { abr = null; }
   if (!abr?.confirmed) {
@@ -304,6 +313,22 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
  * missing one and call again without a second business. Only this call sends the first F04: an existing business never gets one by itself
  * (staff use Resend application / Start again). The database allows one open onboarding per business, so a retry cannot send a second F04.
  */
+/**
+ * The business's ACN (agencies.acn): its ABN looked up first when given (the cached answer fills the ACN in the database), then read back.
+ * Never fails a send or a save: "" when there is none (sole traders, partnerships, trusts) or the register is not answering.
+ */
+export async function businessAcn(ctx: OnboardingContext, agencyId: string, abn?: string | null): Promise<string> {
+  try {
+    if (abn && String(abn).replace(/\D/g, "").length === 11) {
+      await lookupAbrCached(String(abn), ctx.ports.abr?.guid, abrCache(ctx.ports), ctx.ports.abr?.fetch ?? fetch).catch(() => null);
+    }
+    const kept = await ctx.rpc("agency_acn_sync", { p_agency: agencyId }) as { acn?: string | null } | null;
+    return String(kept?.acn ?? "");
+  } catch {
+    return "";
+  }
+}
+
 export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
   await ctx.admin("subject_search", null, { type: "none" });
   await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
@@ -321,6 +346,9 @@ export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
     try { await ctx.rpc("agency_abr_attach", { p_agency: created.agencyId, p_confirmed: abr }); }
     catch (error) { abrWarning = `The ABN details could not be kept on the business (${(error as Error).message}); the application form goes without the ABN prefill.`; }
   }
+  // The ACN (2026-11-20, owner): the ABN's register entry is looked up and cached (abr_businesses, the public ABN Lookup page when the ABR
+  // service is not set up); the database keeps the business's ACN from it by the rule (register ACN, or derived for a company only).
+  await businessAcn(ctx, created.agencyId, String(agency.registration_number ?? ""));
   // 2026-11-20 (owner): nothing is emailed yet. A draft onboarding is opened for the pre-send step, where staff fill in and check the F04
   // and the agreement terms (and may add the witness) before Send to point of contact.
   try {
@@ -482,7 +510,7 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
   const formPages = Number(input.form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
   // The SLIT witness (2026-11-20, owner): the agreement's SLIT witness line, name and drawn signature (admin_witness_signature prints a picture).
   const agreementValues: Record<string, string> = { agent_organisation_name: input.values.agent_legal_entity || input.values.agent_organisation_name || input.agency.name,
-    agent_abn: String(input.agency.abn ?? input.values.agent_abn ?? ""), agreement_commencement_date: input.terms.commencementDate, agent_territory: input.terms.territory,
+    agent_abn: abnWithAcn(String(input.agency.abn ?? input.values.agent_abn ?? ""), input.values.agent_acn), agreement_commencement_date: input.terms.commencementDate, agent_territory: input.terms.territory,
     agent_commission_percent: input.terms.commissionPercent, ...witnessValues(input.slitWitness) };
   const placed = numbered(input.agreement.fields);
   const { printed, recipient } = resolveFields(placed, agreementValues);

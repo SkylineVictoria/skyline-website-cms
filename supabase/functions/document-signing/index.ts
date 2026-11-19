@@ -7,6 +7,7 @@ import { HR_MAIL_ENV } from "../_shared/hr-mail-drain.ts";
 import { handleSigning, readSigningRequest, SigningError, type SigningPorts } from "./core.ts";
 import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
 import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
+import { isServiceCaller } from "../_shared/service-role.ts";
 
 const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Type": "application/json" };
@@ -22,7 +23,8 @@ const ADDRESS_MOCK = (Deno.env.get("EF_ADDRESS_SEARCH_API_URL") ?? "").trim().re
 const addressFetch: typeof fetch = ADDRESS_MOCK && isLocalSupabaseUrl(env.SUPABASE_URL)
   ? ((input: string | URL | Request, init?: RequestInit) => fetch(String(input) === GEOSCAPE_URL ? `${ADDRESS_MOCK}/v1/verify/autocomplete/AU` : input, init)) as typeof fetch
   : fetch;
-const sameText = (a: string, b: string) => { if (!a || a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; };
+// The scheduled signing tick (pg_cron, vault signing_service_role_key) is the project's service-role JWT; SUPABASE_SERVICE_ROLE_KEY may hold
+// a newer sb_secret_ key that no JWT equals (2026-11-20: every tick was refused with 403). One rule with the other workers: _shared/service-role.ts.
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers });
@@ -52,7 +54,7 @@ Deno.serve(async (req) => {
     mail,
     abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },
     address: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
-    isServiceCaller: sameText(authorization.replace(/^Bearer\s+/i, ""), serviceKey),
+    isServiceCaller: isServiceCaller(authorization, serviceKey, env.SUPABASE_URL),
     uuid: () => crypto.randomUUID(),
     later: (work) => {
       // deno-lint-ignore no-explicit-any

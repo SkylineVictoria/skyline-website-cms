@@ -1547,6 +1547,26 @@ function linkDeps(options: { limit?: (b: string) => boolean; db?: Record<string,
 }
 const linkRequest = (action: string, fields: Record<string, unknown> = {}, file: File | null = null, token: unknown = LINK) => ({ action, token, ip: "203.0.113.5", fields, file });
 
+test("signing tick (2026-11-20): the scheduled job's service-role JWT is a service caller even when SUPABASE_SERVICE_ROLE_KEY holds an sb_secret_ key; nothing else is", async () => {
+  const serviceRole = await load.import<typeof import("../supabase/functions/_shared/service-role.ts")>("../supabase/functions/_shared/service-role.ts");
+  const url = "https://xcpydisstlvtvcsqnjob.supabase.co";
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const jwt = (claims: Record<string, unknown>) => `${b64({ alg: "HS256", typ: "JWT" })}.${b64(claims)}.c2lnbmF0dXJl`;
+  const cron = jwt({ iss: "supabase", ref: "xcpydisstlvtvcsqnjob", role: "service_role" });
+  const secret = "sb_secret_" + "x".repeat(32);
+  // The case that broke: pg_cron sends the legacy JWT, the function's own key is the newer opaque secret.
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${cron}`, secret, url), true, "the scheduled job is the service");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${secret}`, secret, url), true, "the function's own key still is");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ ref: "xcpydisstlvtvcsqnjob", role: "anon" })}`, secret, url), false, "anon key");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ sub: "user-1", role: "authenticated" })}`, secret, url), false, "a signed-in user");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${jwt({ ref: "qoylrmorezlqdvufonmx", role: "service_role" })}`, secret, url), false, "another project's service key");
+  assert.equal(serviceRole.isServiceCaller(`Bearer ${secret.slice(0, -1)}y`, secret, url), false, "a near miss of the secret");
+  assert.equal(serviceRole.isServiceCaller("", secret, url), false); assert.equal(serviceRole.isServiceCaller(null, "", url), false);
+  // document-signing uses this rule (not a plain comparison with SUPABASE_SERVICE_ROLE_KEY).
+  const index = readFileSync(new URL("../supabase/functions/document-signing/index.ts", import.meta.url), "utf8");
+  assert.match(index, /isServiceCaller: isServiceCaller\(authorization, serviceKey, env\.SUPABASE_URL\)/);
+});
+
 test("onboarding: only the hash of the link reaches the database, and every bad link gets one neutral answer", async () => {
   let run = linkDeps();
   const ok = await onboard.handleOnboarding(linkRequest("open"), run.deps);

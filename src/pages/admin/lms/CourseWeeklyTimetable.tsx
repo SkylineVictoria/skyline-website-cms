@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { DAYS, rto, shortDate, type BatchSession, type IntakeDetail, type RtoIntake, type StaffOption } from "@/pages/admin/lib/rto";
 import PrerequisiteClassTab from "./PrerequisiteClassTab";
+import BatchCourseCalendar from "./BatchCourseCalendar";
 
 const LOOK: Record<string, string> = {
   theory: "border-l-sky-500 bg-sky-50",
@@ -18,6 +19,9 @@ const hours = (list: BatchSession[]) => list.reduce((sum, s) => { const [a, b] =
 export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { courseId: string; intakes: RtoIntake[]; canEdit: boolean }) {
   const open = intakes.filter((i) => i.status !== "closed");
   const [weeks, setWeeks] = useState<Record<string, BatchSession[]> | null>(null);
+  const [groups, setGroups] = useState<Record<string, string>>({});
+  /** Each intake shows its whole calendar (as on the intake's Weekly timetable tab) or its week; the calendar first. */
+  const [view, setView] = useState<Record<string, "calendar" | "week">>({});
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [error, setError] = useState("");
   const ids = open.map((i) => i.id).join(",");
@@ -30,6 +34,7 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
         if (!live) return;
         setStaff(s);
         setWeeks(Object.fromEntries(details.map((d) => [d.intake.id, d.batches[0]?.sessions ?? []])));
+        setGroups(Object.fromEntries(details.filter((d) => d.batches[0]).map((d) => [d.intake.id, d.batches[0].id])));
       }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The timetables did not load."); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the intakes
@@ -50,10 +55,18 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
               <h3 className="truncate font-heading text-base font-bold text-foreground-950">{i.customName || i.name}</h3>
               <p className="text-xs text-foreground-600">{shortDate(i.startDate)}{i.endDate ? ` – ${shortDate(i.endDate)}` : ""} · {list.length ? `${list.length} class time${list.length === 1 ? "" : "s"} · ${Math.round(hours(list) * 10) / 10} hrs a week` : "no weekly timetable yet"}</p>
             </div>
+            <span className="flex flex-wrap items-center gap-2">
+            {list.length && groups[i.id] ? <span className="inline-flex overflow-hidden rounded-lg border border-background-300 text-xs font-semibold" role="group" aria-label="View">
+              {(["calendar", "week"] as const).map((v) => <button key={v} type="button" aria-pressed={(view[i.id] ?? "calendar") === v} onClick={() => setView((m) => ({ ...m, [i.id]: v }))}
+                className={`px-3 py-1.5 ${(view[i.id] ?? "calendar") === v ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{v === "calendar" ? "Calendar" : "Week"}</button>)}
+            </span> : null}
             {canEdit ? <Link to={`/admin/lms/intakes#${i.id}`} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-200">
               <i className="ri-edit-line mr-1" aria-hidden="true" />{list.length ? "Change" : "Make it"}</Link> : null}
+            </span>
           </header>
-          {list.length ? <div className="overflow-x-auto">
+          {list.length && groups[i.id] && (view[i.id] ?? "calendar") === "calendar" ? <div className="p-3">
+            <BatchCourseCalendar batchId={groups[i.id]} courseId={courseId} intakeStart={i.startDate} intakeEnd={i.endDate} hasSlots canManage={canEdit} reloadKey={0} />
+          </div> : list.length ? <div className="overflow-x-auto">
             <div className="grid min-w-[840px] grid-cols-7 divide-x divide-background-200">
               {DAYS.map((d, n) => {
                 const today = list.filter((s) => s.weekday === n + 1);

@@ -458,7 +458,9 @@ export function DangerDialog({ open, title, intro, items, confirmLabel = "Delete
 }) {
   const [typed, setTyped] = useState("");
   useEffect(() => { if (open) setTyped(""); }, [open, confirmWord]);
-  const ready = !confirmWord || typed.trim() === confirmWord;
+  // Owner (2026-11-20): case and extra spaces do not matter ("delete cpc33020" works).
+  const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
+  const ready = !confirmWord || norm(typed) === norm(confirmWord);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-foreground-950/50 p-4" role="alertdialog" aria-modal="true" aria-labelledby="danger-title">
@@ -479,7 +481,7 @@ export function DangerDialog({ open, title, intro, items, confirmLabel = "Delete
             className="mt-1 block w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-sm focus:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-200" /></label> : null}
         {error ? <p role="alert" className="mx-5 mt-3 rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2 border-t border-background-200 bg-background-100 px-5 py-3">
-          <Button variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button variant="outline" disabled={busy} onClick={onCancel}>{confirmWord ? "Cancel" : "No"}</Button>
           <Button variant="danger" icon="ri-delete-bin-line" disabled={busy || !ready} onClick={onConfirm}>{busy ? "Deleting…" : confirmLabel}</Button>
         </div>
       </div>

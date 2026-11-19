@@ -7,6 +7,7 @@ import { rto, todayIso } from "@/pages/admin/lib/rto";
 import ClassCalendar from "./ClassCalendar";
 import TrainersWeek from "./TrainersWeek";
 import StudentsView from "./StudentsView";
+import StudentsWeek from "./StudentsWeek";
 import IntakesTimeline from "./IntakesTimeline";
 import { loadCalendar, loadPeople, type CalClass, type CalPeople } from "./calendarData";
 
@@ -72,9 +73,21 @@ export default function LmsTimetableHub() {
           : tab === "calendar" ? <ClassCalendar people={people} />
           : tab === "trainers" ? <TrainersWeek people={people} />
           : tab === "rooms" ? <RoomsBoard canEdit={me.rtoManager} />
-          : tab === "students" ? <StudentsView people={people} />
+          : tab === "students" ? <StudentsTab people={people} />
           : <IntakesTimeline />}
       </div>
     </div>
   );
+}
+
+/** Students: every student's week (availability, like the trainers') or one student's study and classes. */
+function StudentsTab({ people }: { people: Parameters<typeof StudentsView>[0]["people"] }) {
+  const [one, setOne] = useState(false);
+  return <div className="space-y-3">
+    <div className="inline-flex overflow-hidden rounded-lg border border-background-300 text-sm font-semibold" role="group" aria-label="Students view">
+      {([false, true] as const).map((v) => <button key={String(v)} type="button" aria-pressed={one === v} onClick={() => setOne(v)}
+        className={`px-3 py-1.5 ${one === v ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{v ? "One student" : "All students this week"}</button>)}
+    </div>
+    {one ? <StudentsView people={people} /> : <StudentsWeek people={people} />}
+  </div>;
 }

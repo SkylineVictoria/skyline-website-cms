@@ -226,7 +226,9 @@ export default function LmsCoursesPage() {
     const course = courses.find(c => c.id === selectedId);
     if (!course) return;
     setSaving(true); setDeleteError("");
-    const { error: failed } = await supabase.rpc("rto_course_delete", { p_course_id: course.id, p_force: true });
+    let { error: failed } = await supabase.rpc("rto_course_delete", { p_course_id: course.id, p_force: true });
+    // Until COURSE-FORCE-DELETE is applied, a course without intakes still deletes with the older one-argument function.
+    if (failed && /schema cache|does not exist/i.test(failed.message)) ({ error: failed } = await supabase.rpc("rto_course_delete", { p_course_id: course.id }));
     setSaving(false);
     if (failed) {
       setDeleteError(/schema cache|does not exist/i.test(failed.message)
@@ -296,7 +298,7 @@ export default function LmsCoursesPage() {
   const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "Weekly Calendar" }, { id: "prereq", label: "Weekly TimeTable" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
-  const pane: Pane = tab === "master" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
+  const pane: Pane = tab === "master" || tab === "prereq" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -361,7 +363,7 @@ export default function LmsCoursesPage() {
         detail?.intakes.length ? `${detail.intakes.length} intake${detail.intakes.length === 1 ? "" : "s"} with their class timetables; students in them wait to be placed in a new intake` : "No intakes",
         "Applications that chose this course lose it, including submitted ones and accepted offers (recorded in the audit log)",
       ]}
-      confirmWord={`DELETE ${selected.code}`} confirmLabel="Delete course and intakes"
+      confirmLabel="Yes, delete"
       onCancel={() => setDeleteOpen(false)} onConfirm={() => void confirmRemove()} /> : null}
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}

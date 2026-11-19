@@ -4,10 +4,10 @@
 // VoE (saved on the intake: CoE at least 20 class hours a week, VoE 40; the unit dates are laid out again when it changes), 4 a Monday-to-Sunday week filled by itself from the units' theory / practical / assessment
 // split, where any hour can be clicked and class times added by hand. Create classes saves the week (rto_course_flow batch_setup)
 // and creates the dated classes inside the intake's unit dates (rto_class_sessions_generate).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Modal, Select } from "@/pages/admin/components/ui";
-import { roomAvailability, saveTrainerAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
+import { roomAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
 import { loadClosedDays, loadCourseNeed, planCourse, weeklyHoursNeeded, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
   DAYS, LOAD_HOURS, clashText, generateClassSessions, loadIntakeLoads, rto, rtoFlow, setIntakeLoad, shortDate,
@@ -18,14 +18,11 @@ import {
 type Block = { weekday: number; start: number; end: number; type: SessionType; roomId: string; trainerId: string; manual: boolean };
 /** The days and times a room or trainer is booked for this course (owner, 2026-11-20: not only whole days). */
 type Window = { days: number[]; from: string; to: string };
-/** A room or trainer booked for this course. A room can be booked more than once (say theory Mon–Thu, practical Fri), never twice
- * at the same time: `key` tells its bookings apart. */
+/** A room or trainer chosen for this course (once each). Its days and times are not set by hand (owner, 2026-11-20): Bookings
+ * › Availability and other intakes' classes decide when it can take a class. */
 type Pick = { key: string; id: string; theory: boolean; practical: boolean; /** Sized by the system, not changed by hand yet. */ fresh?: boolean; /** A trainer booking: the room booking it was made from. */ room?: string } & Window;
 let pickSeq = 0;
 const newKey = (id: string) => `${id}:${++pickSeq}`;
-/** Two bookings of the same room overlap when they share a day and their times cross. */
-const overlaps = (a: Window, b: Window) => a.days.some((d) => b.days.includes(d)) && toMin(a.from) < toMin(b.to) && toMin(b.from) < toMin(a.to);
-const windowText = (w: Window) => `${w.days.length === 7 ? "Mon–Sun" : w.days.map((d) => DAYS[d - 1]).join(", ") || "no days"} ${clock(toMin(w.from))} – ${clock(toMin(w.to))}`;
 const WINDOW: Window = { days: [1, 2, 3, 4, 5, 6, 7], from: "09:00", to: "22:00" };
 type Hours = { avail: AvailabilityRow[]; uses: RoomUse[] };
 
@@ -44,60 +41,8 @@ const TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map((weekday) =
 const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
 const toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const clock = (m: number) => { const h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}${mm ? `:${String(mm).padStart(2, "0")}` : ""} ${h >= 12 ? "pm" : "am"}`; };
-/** Times to pick from, 6 am to 11 pm in quarter hours. */
-/** A booking of exactly `hours` a week from `firstDay` on: the fewest days of at most 8 hours that split into quarter hours, 9 am on. */
-function fitWindow(hours: number, firstDay: number): Window {
-  if (hours <= 0) return { days: [], from: "09:00", to: "17:00" };
-  let n = Math.min(7, Math.max(1, Math.ceil(hours / 8)));
-  while (n < 7 && (hours * 4) % n !== 0) n += 1;
-  const minutes = Math.ceil((hours * 60) / n / 15) * 15;
-  const days = Array.from({ length: n }, (_, i) => ((firstDay - 1 + i) % 7) + 1).sort((a, b) => a - b);
-  return { days, from: "09:00", to: toTime(9 * 60 + Math.min(minutes, 13 * 60)) };
-}
-const TIME_OPTIONS = Array.from({ length: (23 - 6) * 4 + 1 }, (_, i) => toTime(6 * 60 + i * 15));
 const covers = (rows: AvailabilityRow[], weekday: number, s: number, e: number) => rows.some((r) => r.weekday === weekday % 7 && toMin(r.start) <= s && toMin(r.end) >= e);
 const inWindow = (w: Window, weekday: number, s: number, e: number) => w.days.includes(weekday) && toMin(w.from) <= s && toMin(w.to) >= e;
-/** The booked days and times of the classes in a saved week (for the rooms and trainers it uses). */
-const windowOf = (list: Block[]): Window => list.length
-  ? { days: [...new Set(list.map((b) => b.weekday))].sort((a, b) => a - b), from: toTime(Math.min(...list.map((b) => b.start))), to: toTime(Math.max(...list.map((b) => b.end))) }
-  : WINDOW;
-/** Days (Mo–Su) and a from–to time: when a room or trainer is booked for this course. */
-function WindowEditor({ value, onChange, disabled, label, taken = [], limit }: {
-  value: Window; onChange: (w: Window) => void; disabled?: boolean; label: string; taken?: Window[];
-  /** The weekly hours allowed (CoE 20 / VoE 40), what the other bookings already take, and its name for the warning. */
-  limit?: { max: number; others: number; name: string };
-}) {
-  const hours = (w: Window) => w.days.length * Math.max(0, (toMin(w.to) - toMin(w.from)) / 60);
-  const round = (n: number) => Math.round(n * 100) / 100;
-  const total = limit ? limit.others + hours(value) : 0;
-  const over = !!limit && total > limit.max;
-  const timeSelect = (which: "from" | "to") => <select aria-label={`${label}: ${which}`} value={value[which]} disabled={disabled}
-    onChange={(e) => onChange({ ...value, [which]: e.target.value })}
-    className={`h-8 rounded-md border bg-background-50 px-2 text-sm font-medium text-foreground-900 ${over ? "border-red-400" : "border-background-300"}`}>
-    {(TIME_OPTIONS.includes(value[which]) ? TIME_OPTIONS : [value[which], ...TIME_OPTIONS]).map((t) => {
-      // Times that would take the week over the limit are marked in the list.
-      const past = !!limit && t !== value[which] && limit.others + hours({ ...value, [which]: t }) > limit.max;
-      return <option key={t} value={t} disabled={past}>{clock(toMin(t))}{past ? " · over " + limit!.name : ""}</option>;
-    })}
-  </select>;
-  return <div className="space-y-1.5">
-    <div className="flex flex-wrap gap-1">
-      {DAYS.map((d, i) => {
-        const on = value.days.includes(i + 1);
-        // A day another booking of this room already holds at these times cannot be ticked.
-        const held = !on && taken.some((w) => overlaps(w, { ...value, days: [i + 1] }));
-        const tooMany = !on && !held && !!limit && limit.others + hours({ ...value, days: [...value.days, i + 1] }) > limit.max;
-        return <button key={d} type="button" aria-pressed={on} aria-label={`${label}: ${d}${held ? " (already booked)" : ""}`} disabled={disabled || held || tooMany} title={held ? "Already booked for this course at these times" : tooMany ? `More than ${limit?.max} hrs a week (${limit?.name})` : undefined}
-          onClick={() => onChange({ ...value, days: on ? value.days.filter((x) => x !== i + 1) : [...value.days, i + 1].sort((a, b) => a - b) })}
-          className={`h-8 w-8 rounded border text-xs font-semibold ${on ? "border-primary-600 bg-primary-600 text-white" : held || tooMany ? "cursor-not-allowed border-background-200 bg-background-200 text-foreground-400 line-through" : "border-background-300 bg-background-50 text-foreground-500"}`}>{d.slice(0, 2)}</button>;
-      })}
-    </div>
-    <div className="flex items-center gap-1.5 whitespace-nowrap text-xs text-foreground-600">{timeSelect("from")}<span>to</span>{timeSelect("to")}</div>
-    {value.days.length ? <p className={`text-xs ${over ? "font-semibold text-red-700" : "text-foreground-600"}`} role={over ? "alert" : undefined}>
-      {value.days.length} day{value.days.length === 1 ? "" : "s"} × {round((toMin(value.to) - toMin(value.from)) / 60)} hrs = {round(hours(value))} hrs a week
-      {limit ? over ? ` · over ${limit.name}: ${round(total)} of ${limit.max} hrs with the other rooms. Shorten the times or untick a day.` : ` · ${round(total)} of ${limit.max} hrs used` : ""}</p> : null}
-  </div>;
-}
 const same = (a: Block, b: Block) => a.type === b.type && a.roomId === b.roomId && a.trainerId === b.trainerId && a.manual === b.manual;
 /** Sorted, with touching class times of the same kind joined into one. */
 function normalize(list: Block[]): Block[] {
@@ -193,13 +138,12 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
       const types = list.filter((b) => b.roomId === id).map((b) => b.type);
       const k = roomList.find((r) => r.id === id)?.kind;
       const practical = types.length ? types.every((t) => t === "practical") : k === "practical";
-      return { key: newKey(id), id, theory: !practical, practical, ...windowOf(list.filter((b) => b.roomId === id)) };
+      return { key: newKey(id), id, theory: !practical, practical, ...WINDOW };
     }));
     const tIds = [...new Set(list.map((b) => b.trainerId).filter(Boolean))];
     if (tIds.length) setTrainerPicks(tIds.map((id) => {
       const mine = list.filter((b) => b.trainerId === id);
-      const practical = mine.every((b) => b.type === "practical");
-      return { key: newKey(id), id, theory: !practical, practical, ...windowOf(mine) };
+      return { key: newKey(id), id, theory: mine.some((b) => b.type !== "practical"), practical: mine.some((b) => b.type === "practical"), ...WINDOW };
     }));
   };
 
@@ -218,19 +162,22 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         const savedTrainers = (d.batches[0]?.trainers ?? []).map((t) => t.id).filter((id) => !saved.some((x) => x.trainerId === id));
         if (saved.length) {
           applySessions(saved, roomList); setPage("week");
-          if (savedTrainers.length) setTrainerPicks((l) => [...l, ...savedTrainers.map((id) => ({ key: newKey(id), id, theory: true, practical: false, fresh: true, ...WINDOW }))]);
+          if (savedTrainers.length) setTrainerPicks((l) => [...l, ...savedTrainers.map((id) => ({ key: newKey(id), id, theory: true, practical: true, ...WINDOW }))]);
         } else {
           // A new week starts with the first theory room and the first practical room; the trainers are added by hand.
           const firstOf = (k: "theory" | "practical") => roomList.find((r) => r.kind === k);
           const t = firstOf("theory"), p = firstOf("practical");
           const start = [t, p].filter((x): x is NonNullable<typeof x> => !!x);
-          setRoomPicks((start.length ? start : roomList.slice(0, 1)).map((r) => ({ key: newKey(r.id), id: r.id, theory: r.kind !== "practical", practical: r.kind === "practical", fresh: true, ...WINDOW })));
-          if (savedTrainers.length) setTrainerPicks(savedTrainers.map((id) => ({ key: newKey(id), id, theory: true, practical: false, fresh: true, ...WINDOW })));
+          setRoomPicks((start.length ? start : roomList.slice(0, 1)).map((r) => ({ key: newKey(r.id), id: r.id, theory: r.kind !== "practical", practical: r.kind === "practical", ...WINDOW })));
+          if (savedTrainers.length) setTrainerPicks(savedTrainers.map((id) => ({ key: newKey(id), id, theory: true, practical: true, ...WINDOW })));
         }
         // Rooms and trainers chosen on this computer and not yet saved with Create classes (the wizard closed in between).
         try {
           const draft = JSON.parse(window.localStorage.getItem(DRAFT + intakeId) ?? "null") as { rooms: Pick[]; trainers: Pick[]; page: Page } | null;
-          if (draft?.rooms?.length) { setRoomPicks(draft.rooms.map((x) => ({ ...x, fresh: false }))); setTrainerPicks((draft.trainers ?? []).map((x) => ({ ...x, fresh: false }))); if (!saved.length) setPage(draft.page ?? "rooms"); }
+          if (draft?.rooms?.length) {
+            const once = (l: Pick[]) => l.filter((x, i) => l.findIndex((y) => y.id === x.id) === i).map((x) => ({ ...x, ...WINDOW, fresh: false }));
+            setRoomPicks(once(draft.rooms)); setTrainerPicks(once(draft.trainers ?? [])); if (!saved.length) setPage(draft.page ?? "rooms");
+          }
         } catch { /* no draft */ }
         void loadClosedDays(d.intake.startDate, courseId).then((f) => { if (live) setClosed(() => f); });
       }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The intake did not load."); });
@@ -317,26 +264,22 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   };
   const split = splitHours(target, need);
 
-  /** The default week (owner, 2026-11-20): each type's hours placed inside the times its rooms are booked for (step 5), day by day
-   * from the first booked hour, wherever a booked trainer is free too. Theory first, then practical, then assessment in the theory
-   * rooms' hours that are left. */
+  /** The default week (owner, 2026-11-20), from availability: theory, then practical, then assessment, Monday first, in one block a
+   * day of up to 8 hours from the first hour a room of that type is open and free (no other intake) and, when the course has
+   * trainers, one of them is open and free too. */
   const autoWeek = () => {
     const out: Block[] = [];
-    const slots = (w: Window) => w.days.flatMap((weekday) => {
-      const list: { weekday: number; s: number }[] = [];
-      for (let m = toMin(w.from); m + 60 <= toMin(w.to); m += 60) list.push({ weekday, s: m });
-      return list;
-    });
+    const dayHours = (d: number) => out.filter((b) => b.weekday === d).reduce((t, b) => t + (b.end - b.start) / 60, 0);
     for (const t of TYPES) {
       let left = split[t];
-      for (const w of roomsFor(t)) {
-        for (const { weekday, s } of slots(w)) {
-          if (left <= 0) break;
-          if (taken(out, weekday, s, s + 60)) continue;
-          const p = pickFor(t, weekday, s, s + 60);
-          if (!p) continue;
-          out.push({ weekday, start: s, end: s + 60, type: t, roomId: p.roomId, trainerId: p.trainerId, manual: false });
-          left--;
+      for (let weekday = 1; weekday <= 7 && left > 0; weekday++) {
+        let started = false;
+        for (let h = FIRST_HOUR; h < LAST_HOUR && left > 0 && dayHours(weekday) < 8; h++) {
+          const s0 = h * 60;
+          const p = taken(out, weekday, s0, s0 + 60) ? null : pickFor(t, weekday, s0, s0 + 60);
+          if (!p || (trainerPicks.length && !p.trainerId)) { if (started) break; continue; }
+          out.push({ weekday, start: s0, end: s0 + 60, type: t, roomId: p.roomId, trainerId: p.trainerId, manual: false });
+          left--; started = true;
         }
       }
     }
@@ -368,17 +311,9 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   }, [autoKey, touched, detail?.intake.id]);
   const draftKey = `${roomPicks.map((x) => x.key + pickKey(x)).join(",")}|${trainerPicks.map((x) => x.key + pickKey(x)).join(",")}|${page}`;
   useEffect(() => {
-    if (!detail || !roomPicks.length || roomPicks.some((x) => x.fresh) || trainerPicks.some((x) => x.fresh)) return;
+    if (!detail || !roomPicks.length) return;
     try { window.localStorage.setItem(DRAFT + intakeId, JSON.stringify({ rooms: roomPicks, trainers: trainerPicks, page })); } catch { /* storage off */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- saved whenever the choices change
-  }, [draftKey]);
-  useEffect(() => {
-    if (!trainerPicks.some((t) => t.fresh) || !roomPicks.length || roomPicks.some((r) => r.fresh)) return;
-    setTrainerPicks((l) => {
-      const kept = l.filter((t) => !t.fresh);
-      return [...new Set(l.filter((t) => t.fresh).map((t) => t.id))].reduce((acc, id) => [...acc, ...roomCopies(id, acc)], kept);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once the rooms are known
   }, [draftKey]);
   // A class time without a trainer (a saved week, or one changed by hand) gets a booked trainer free for all of it, as soon as one is.
   const trainerWindowsKey = `${trainerKey}|${trainerPicks.map(pickKey).join(",")}|${hoursReady}`;
@@ -478,54 +413,21 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
   const why = !canEdit ? "Only an RTO Manager can create a timetable." : !sessions.length ? "Add class times to the week." : noRoom ? "Every class needs a room." : noTrainer ? `${noTrainer} class time${noTrainer === 1 ? " has" : "s have"} no trainer: book a trainer for ${noTrainer === 1 ? "it" : "them"} on step ${steps ? steps.first + 1 : 2}, or change the week.`
     : clashLines.length ? "Fix the clash first." : over ? `${weekly} hours is more than the ${target} a week ${kind === "coe" ? "CoE" : "VoE"} allows.`
     : short ? `The week has ${weekly} of the ${target} hours a week: add ${target - weekly} more.` : "";
-  const freeRooms = rooms;
+  // Each room and each trainer is chosen once (owner, 2026-11-20): the lists offer only those not chosen yet.
+  const freeRooms = rooms.filter((r) => !roomPicks.some((p) => p.id === r.id));
   /** Bookings of the same room that cross this one (same day, times overlap). */
-  const clashOf = (p: Pick) => roomPicks.filter((x) => x.key !== p.key && x.id === p.id && overlaps(x, p));
-  const roomsBad = roomPicks.some((p) => !p.days.length || toMin(p.to) <= toMin(p.from) || clashOf(p).length > 0);
-  /** A room added again starts on the days its other bookings leave free. */
+  /** Other intakes' weekly classes during this intake's dates (they keep the room or trainer busy then). */
+  const busyText = (uses: RoomUse[]) => { const mine = uses.filter((u) => u.intakeId !== intakeId && (!dates || ((!u.endDate || u.endDate >= dates.startDate) && (!dates.endDate || u.startDate <= dates.endDate))));
+    return mine.length ? [...new Set(mine.map((u) => `${u.courseCode} ${DAYS[(u.weekday === 0 ? 7 : u.weekday) - 1]} ${clock(toMin(u.startTime))}–${clock(toMin(u.endTime))}`))].join(", ") : "None"; };
   const addRoom = (id: string) => {
     const r = rooms.find((x) => x.id === id);
-    if (!r) return;
-    const used = new Set(roomPicks.filter((x) => x.id === id).flatMap((x) => x.days));
-    const again = used.size > 0;
-    const practical = again ? !roomPicks.find((x) => x.id === id)?.practical : r.kind === "practical";
-    const missing = Math.max(0, Math.min(target - roomTotal, (practical ? needPractical : needTheory) - bookedHours(roomPicks, practical)));
-    const allUsed = new Set(roomPicks.flatMap((x) => x.days));
-    const firstFree = WINDOW.days.find((d) => !allUsed.has(d)) ?? 1;
-    const w = fitWindow(missing, firstFree);
-    setRoomPicks((l) => [...l, { key: newKey(id), id, theory: !practical, practical, ...w }]);
+    if (r) setRoomPicks((l) => [...l, { key: newKey(id), id, theory: r.kind !== "practical", practical: r.kind === "practical", ...WINDOW }]);
   };
-  const freeStaff = staff;
-  const trainerClashOf = (p: Pick) => trainerPicks.filter((x) => x.key !== p.key && x.id === p.id && overlaps(x, p));
-  const trainersBad = trainerPicks.some((p) => !p.days.length || toMin(p.to) <= toMin(p.from) || trainerClashOf(p).length > 0);
-  /** The room bookings no trainer covers yet, as bookings for this trainer (never two of its own at once). */
-  const roomCopies = (id: string, list: Pick[], rooms = roomPicks) => {
-    const out: Pick[] = [];
-    for (const r of rooms) {
-      if (!r.days.length || list.some((t) => t.practical === r.practical && overlaps(t, r))) continue;
-      if ([...list, ...out].some((t) => t.id === id && overlaps(t, r))) continue;
-      out.push({ key: newKey(id), id, theory: r.theory, practical: r.practical, days: [...r.days], from: r.from, to: r.to, room: r.key });
-    }
-    return out;
-  };
+  const freeStaff = staff.filter((x) => !trainerPicks.some((p) => p.id === x.id));
   const addTrainer = (id: string) => {
     if (!id) return;
-    const copies = roomCopies(id, trainerPicks);
-    setTrainerPicks((l) => [...l, ...(copies.length ? copies : [{ key: newKey(id), id, theory: true, practical: false, days: [], from: "09:00", to: "17:00" }])]);
+    setTrainerPicks((l) => [...l, { key: newKey(id), id, theory: true, practical: true, ...WINDOW }]);
   };
-  /** Adds this booking's days and times to the trainer's own hours in Bookings › Availability (the server only lets a trainer teach
-   * inside them). */
-  const addTrainerHours = async (p: Pick, days: number[]) => {
-    setBusy(true); setError("");
-    try {
-      const cur = await trainerAvailability(p.id);
-      const rows = [...cur.availability, ...days.map((d) => ({ weekday: d % 7, start: p.from, end: p.to }))];
-      const out = await saveTrainerAvailability(p.id, rows, cur.timeOff);
-      setTrainerHours((m) => ({ ...m, [p.id]: { avail: out.availability, uses: out.bookings } }));
-    } catch (e) { setError(e instanceof Error ? e.message : "The trainer's hours were not saved."); }
-    finally { setBusy(false); }
-  };
-  const setTrainerType = (key: string, practical: boolean) => setTrainerPicks((l) => l.map((x) => (x.key === key ? { ...x, theory: !practical, practical } : x)));
 
   const at = PAGES.findIndex((x) => x.id === page);
   const stepName = (i: number) => (steps ? `Step ${steps.first + i} of ${steps.total} · ${PAGES[i].label}` : `${i + 1}. ${PAGES[i].label}`);
@@ -534,89 +436,13 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
 
   // What the units need each week at this CoE / VoE rate, against what the rooms and trainers are booked for (owner, 2026-11-20):
   // theory rooms take theory and assessment classes, practical rooms practical ones.
-  const windowHours = (w: Window) => w.days.length * Math.max(0, (toMin(w.to) - toMin(w.from)) / 60);
   const needTheory = split.theory + split.assessment, needPractical = split.practical;
-  const bookedHours = (list: Pick[], practical: boolean) => list.filter((x) => (practical ? x.practical : x.theory)).reduce((sum, x) => sum + windowHours(x), 0);
-  const roomCheck = [
-    { label: "Theory and assessment", need: needTheory, got: bookedHours(roomPicks, false) },
-    { label: "Practical", need: needPractical, got: bookedHours(roomPicks, true) },
-  ].filter((x) => x.need > 0);
-  const trainerCheck = [
-    { label: "Theory and assessment", need: needTheory, got: bookedHours(trainerPicks, false) },
-    { label: "Practical", need: needPractical, got: bookedHours(trainerPicks, true) },
-  ].filter((x) => x.need > 0);
-  const roomsShort = roomCheck.some((x) => x.got < x.need);
-  const trainersShort = trainerPicks.length > 0 && trainerCheck.some((x) => x.got < x.need);
-  const trainerTotal = trainerPicks.reduce((sum, x) => sum + windowHours(x), 0);
-  const trainersOver = trainerTotal > target;
-  const needKey = `${needTheory}|${needPractical}|${roomPicks.map((x) => `${x.key}${x.fresh ? "f" : ""}${+x.practical}`).join(",")}`;
-  useEffect(() => {
-    if (!need || !roomPicks.some((x) => x.fresh) || !roomPicks.every((r) => roomHours[r.id])) return;
-    // Each booking goes on days and times its room is open and no other intake uses it, and never at the same time as another
-    // booking of this course (the students cannot be in two rooms at once).
-    const sized = new Map<string, Window>();
-    const placed: Window[] = roomPicks.filter((x) => !x.fresh && x.days.length);
-    const free = (id: string, w: Window) => w.days.every((d) => {
-      const h = roomHours[id];
-      return (!h?.avail.length || covers(h.avail, d, toMin(w.from), toMin(w.to))) && !busyElsewhere(h?.uses ?? [], d, toMin(w.from), toMin(w.to));
-    }) && !placed.some((x) => overlaps(x, w));
-    for (const practical of [false, true]) {
-      const mine = roomPicks.filter((x) => x.fresh && x.practical === practical);
-      const total = practical ? needPractical : needTheory;
-      mine.forEach((x, i) => {
-        const share = Math.floor(total / mine.length) + (i < total % mine.length ? 1 : 0);
-        const shape = fitWindow(share, 1);
-        let best: Window | null = null;
-        // The same length each day, from 9 am on: the first start time with enough free days.
-        for (let startMin = 9 * 60; !best && startMin + (toMin(shape.to) - toMin(shape.from)) <= 22 * 60; startMin += 60) {
-          const w0 = { from: toTime(startMin), to: toTime(startMin + toMin(shape.to) - toMin(shape.from)) };
-          const days = [1, 2, 3, 4, 5, 6, 7].filter((d) => free(x.id, { days: [d], ...w0 }));
-          if (days.length >= shape.days.length) best = { days: days.slice(0, shape.days.length), ...w0 };
-        }
-        const w = best ?? shape;
-        sized.set(x.key, w); placed.push(w);
-      });
-    }
-    setRoomPicks((l) => l.map((x) => (sized.has(x.key) ? { ...x, ...sized.get(x.key)!, fresh: false } : x)));
-    // A trainer the system added gets the rooms' bookings.
-    const sizedRooms = roomPicks.map((x) => (sized.has(x.key) ? { ...x, ...sized.get(x.key)! } : x));
-    setTrainerPicks((l) => {
-      const kept = l.filter((t) => !t.fresh);
-      const ids = [...new Set(l.filter((t) => t.fresh).map((t) => t.id))];
-      return ids.reduce((acc, id) => [...acc, ...roomCopies(id, acc, sizedRooms)], kept);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sizes the system's own bookings once the hours are known
-  }, [needKey, !!need, roomPicks.every((r) => roomHours[r.id])]);
-  // Bookings kept from before (a draft) that another intake now uses are placed again on free times, with the trainers following,
-  // once per opening and only while the intake has no saved classes.
-  const reclaimed = useRef("");
-  const roomsLoaded = roomPicks.length > 0 && roomPicks.every((r) => roomHours[r.id]);
-  useEffect(() => {
-    if (!detail || !roomsLoaded || reclaimed.current === intakeId || detail.batches[0]?.sessions?.length) return;
-    reclaimed.current = intakeId;
-    const bad = roomPicks.filter((x) => !x.fresh && usedBy(x).length);
-    if (!bad.length) return;
-    setRoomPicks((l) => l.map((x) => (bad.some((b) => b.key === x.key) ? { ...x, fresh: true } : x)));
-    setTrainerPicks((l) => l.map((t) => ({ ...t, fresh: true })));
-    setTouched(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once the rooms' bookings are known
-  }, [roomsLoaded, detail?.intake.id]);
+  const roomsMissing = [needTheory > 0 && !roomPicks.some((r) => r.theory) ? "a theory room" : "", needPractical > 0 && !roomPicks.some((r) => r.practical) ? "a practical room" : ""].filter(Boolean);
+  const trainersMissing = [needTheory > 0 && !trainerPicks.some((r) => r.theory) ? "a theory trainer" : "", needPractical > 0 && !trainerPicks.some((r) => r.practical) ? "a practical trainer" : ""].filter(Boolean);
   /** Other intakes' classes in this room during this booking (they cannot share it). */
-  const usedBy = (p: Pick) => (roomHours[p.id]?.uses ?? []).filter((u) => u.intakeId !== intakeId && p.days.includes(u.weekday === 0 ? 7 : u.weekday)
+  const usesIn = (uses: RoomUse[], p: Pick) => uses.filter((u) => u.intakeId !== intakeId && p.days.includes(u.weekday === 0 ? 7 : u.weekday)
     && toMin(u.startTime) < toMin(p.to) && toMin(u.endTime) > toMin(p.from) && (!dates || ((!u.endDate || u.endDate >= dates.startDate) && (!dates.endDate || u.startDate <= dates.endDate))));
-  const roomTotal = roomPicks.reduce((sum, x) => sum + windowHours(x), 0);
-  const roomsOver = roomTotal > target;
-  const hoursBox = (rows: { label: string; need: number; got: number }[], what: string, total?: number) => (
-    <div className={`rounded-lg border p-3 text-sm ${total !== undefined && total > target ? "border-red-300 bg-red-50" : rows.some((x) => x.got < x.need) ? "border-amber-300 bg-amber-50" : "border-green-300 bg-green-50"}`}>
-      <p className="font-semibold text-foreground-950">Each week the units need ({kind === "coe" ? "CoE" : "VoE"}, {target} hrs):</p>
-      <ul className="mt-1 space-y-0.5">{rows.map((x) => <li key={x.label} className={x.got < x.need ? "text-amber-900" : "text-green-800"}>
-        <i className={`${x.got < x.need ? "ri-error-warning-line" : "ri-checkbox-circle-line"} mr-1`} aria-hidden="true" />
-        {x.label}: {x.need} hrs · {what} booked {Math.round(x.got * 10) / 10} hrs{x.got < x.need ? `, ${Math.round((x.need - x.got) * 10) / 10} more needed` : ""}</li>)}</ul>
-      {total !== undefined ? <p role={total > target ? "alert" : undefined} className={`mt-1 font-semibold ${total > target ? "text-red-700" : "text-foreground-800"}`}>
-        <i className={`${total > target ? "ri-close-circle-line" : "ri-time-line"} mr-1`} aria-hidden="true" />
-        All {what} together: {Math.round(total * 10) / 10} of {target} hrs a week{total > target ? `: ${Math.round((total - target) * 10) / 10} hrs too many for ${kind === "coe" ? "CoE" : "VoE"}. Shorten the days or times.` : ""}</p> : null}
-    </div>
-  );
+  const usedBy = (p: Pick) => usesIn(roomHours[p.id]?.uses ?? [], p);
   // CoE / VoE is chosen on the Rooms step (owner, 2026-11-20): the rooms are sized to it, so later steps cannot change it.
   const kindLocked = !!steps || page !== "rooms";
   const loadPanel = (
@@ -650,78 +476,54 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
       {loadPanel}
 
       {page === "rooms" ? <section className="space-y-3">
-        <p className="text-sm text-foreground-600">Which rooms will this course use? Each room is for theory or for practical. Open hours come from <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=rooms">Bookings › Availability</Link>.</p>
+        <p className="text-sm text-foreground-600">Which rooms will this course use? Each room is for theory or for practical. A class can go in a room when it is open in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=rooms">Bookings › Availability</Link> and no other intake has a class in it then.</p>
         {roomPicks.length ? <div className="overflow-x-auto rounded-lg border border-background-200">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Room</th><th className="px-3 py-2">Used for</th><th className="px-3 py-2">Booked for this course</th><th className="px-3 py-2">Open (Bookings)</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
-            <tbody>{roomPicks.map((p) => { const r = rooms.find((x) => x.id === p.id); const h = roomHours[p.id]; const clash = clashOf(p); return (
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Room</th><th className="px-3 py-2">Used for</th><th className="px-3 py-2">Open (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
+            <tbody>{roomPicks.map((p) => { const r = rooms.find((x) => x.id === p.id); const h = roomHours[p.id]; return (
               <tr key={p.key} className="border-t border-background-200 align-top">
-                <td className="px-3 py-2 font-medium text-foreground-950">{r?.label ?? "Room"}
-                  {usedBy(p).length ? <span role="alert" className="mt-1 block text-xs font-semibold text-amber-800">Already used then by {[...new Set(usedBy(p).map((u) => `${u.courseCode} ${u.intake}`))].join(", ")} ({[...new Set(usedBy(p).map((u) => `${DAYS[(u.weekday === 0 ? 7 : u.weekday) - 1]} ${clock(toMin(u.startTime))}–${clock(toMin(u.endTime))}`))].join(", ")}): pick other days or times.</span> : null}
-                  {clash.length ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">Overlaps its other booking ({windowText(clash[0])}): change the days or times.</span>
-                    : !p.days.length ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">Pick at least one day.</span>
-                    : toMin(p.to) <= toMin(p.from) ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">The end time must be after the start.</span> : null}</td>
+                <td className="px-3 py-2 font-medium text-foreground-950">{r?.label ?? "Room"}</td>
                 <td className="px-3 py-2"><div className="flex gap-1.5" role="radiogroup" aria-label={`${r?.name ?? "Room"} is used for`}>
                   <button type="button" role="radio" aria-checked={p.theory} disabled={busy} className={chip(p.theory, "theory")} onClick={() => setRoomType(p.key, false)}>Theory</button>
                   <button type="button" role="radio" aria-checked={p.practical} disabled={busy} className={chip(p.practical, "practical")} onClick={() => setRoomType(p.key, true)}>Practical</button>
                 </div></td>
-                <td className="px-3 py-2"><WindowEditor label={`${r?.name ?? "Room"} booked`} value={p} disabled={busy} taken={roomPicks.filter((x) => x.key !== p.key && x.id === p.id)}
-                  limit={{ max: target, others: roomTotal - windowHours(p), name: kind === "coe" ? "CoE" : "VoE" }} onChange={(w) => setRoomPicks((l) => l.map((x) => (x.key === p.key ? { ...x, ...w, fresh: false } : x)))} /></td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : h.avail.length ? hoursText(h.avail) : "Any time (no hours set)"}</td>
+                <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : busyText(h.uses)}</td>
                 <td className="px-3 py-2 text-right"><button type="button" disabled={busy} aria-label={`Remove ${r?.name ?? "room"}`} className="rounded p-2 text-red-700 hover:bg-red-50"
                   onClick={() => setRoomPicks((l) => l.filter((x) => x.key !== p.key))}><i className="ri-delete-bin-line" aria-hidden="true" /></button></td>
               </tr>); })}</tbody>
           </table>
         </div> : <p className="text-sm text-foreground-500">No room yet.</p>}
         {freeRooms.length ? <Select className="!w-auto" aria-label="Add a room" value="" disabled={busy} onChange={(e) => addRoom(e.target.value)}>
-          <option value="">+ Add another room…</option>{freeRooms.map((r) => <option key={r.id} value={r.id}>{r.label}{roomPicks.some((x) => x.id === r.id) ? " (book again, other times)" : ""}</option>)}
+          <option value="">+ Add a room…</option>{freeRooms.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
         </Select> : null}
-        {roomPicks.length ? hoursBox(roomCheck, "rooms", roomTotal) : null}
+        {roomsMissing.length ? <p role="alert" className="text-sm font-semibold text-amber-800">Add {roomsMissing.join(" and ")}: the units have {roomsMissing.join(" and ").replace(/a (\w+) room/g, "$1")} hours.</p> : null}
         {detail && !rooms.length ? <p className="text-sm text-foreground-600">No rooms yet: add one in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/lms/timetable-settings?tab=locations">Timetable settings</Link>.</p> : null}
       </section> : null}
 
       {page === "trainers" ? <section className="space-y-3">
-        <p className="text-sm text-foreground-600">Who teaches this course? Like the rooms, each booking of a trainer is for theory or for practical, and a trainer is never booked twice at the same time. A trainer you add is booked for the rooms' times that no trainer has yet; change them if you need to. Every trainer is free Mon–Sun 9 am – 10 pm unless <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=trainers">Bookings › Availability</Link> says otherwise.</p>
+        <p className="text-sm text-foreground-600">Who teaches this course? A trainer can take a class when they are free in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=trainers">Bookings › Availability</Link> (Mon–Sun 9 am – 10 pm when they have no hours there) and are not teaching another intake then.</p>
         {trainerPicks.length ? <div className="overflow-x-auto rounded-lg border border-background-200">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Trainer</th><th className="px-3 py-2">Teaches</th><th className="px-3 py-2">Booked for this course</th><th className="px-3 py-2">Free (Bookings)</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
-            <tbody>{trainerPicks.map((p) => { const h = trainerHours[p.id]; const clash = trainerClashOf(p); return (
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Trainer</th><th className="px-3 py-2">Teaches</th><th className="px-3 py-2">Free (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
+            <tbody>{trainerPicks.map((p) => { const h = trainerHours[p.id]; return (
               <tr key={p.key} className="border-t border-background-200 align-top">
-                <td className="px-3 py-2 font-medium text-foreground-950">{trainerName(p.id)}
-                  {clash.length ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">Overlaps their other booking ({windowText(clash[0])}): change the days or times.</span>
-                    : !p.days.length ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">Pick at least one day.</span>
-                    : toMin(p.to) <= toMin(p.from) ? <span role="alert" className="mt-1 block text-xs font-semibold text-red-700">The end time must be after the start.</span> : null}</td>
-                <td className="px-3 py-2"><div className="flex gap-1.5" role="radiogroup" aria-label={`${trainerName(p.id)} teaches`}>
-                  <button type="button" role="radio" aria-checked={p.theory} disabled={busy} className={chip(p.theory, "theory")} onClick={() => setTrainerType(p.key, false)}>Theory</button>
-                  <button type="button" role="radio" aria-checked={p.practical} disabled={busy} className={chip(p.practical, "practical")} onClick={() => setTrainerType(p.key, true)}>Practical</button>
+                <td className="px-3 py-2 font-medium text-foreground-950">{trainerName(p.id)}</td>
+                <td className="px-3 py-2"><div className="flex gap-1.5">
+                  <button type="button" aria-pressed={p.theory} disabled={busy} className={chip(p.theory, "theory")} onClick={() => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, theory: !x.theory } : x)))}>Theory</button>
+                  <button type="button" aria-pressed={p.practical} disabled={busy} className={chip(p.practical, "practical")} onClick={() => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, practical: !x.practical } : x)))}>Practical</button>
                 </div></td>
-                <td className="px-3 py-2">
-                  <WindowEditor label={`${trainerName(p.id)} booked`} value={p} disabled={busy} taken={trainerPicks.filter((x) => x.key !== p.key && x.id === p.id)}
-                    limit={{ max: target, others: trainerTotal - windowHours(p), name: kind === "coe" ? "CoE" : "VoE" }}
-                    onChange={(w) => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, ...w, fresh: false } : x)))} />
-                  {/* The room booking this trainer booking came from (made by the system when the trainer was added). */}
-                  {(() => {
-                    // Days and times of this booking outside the trainer's own Bookings hours (allowed, shown so staff know).
-                    const avail = trainerHours[p.id]?.avail ?? [];
-                    const outside = avail.length ? p.days.filter((d) => !covers(avail, d, toMin(p.from), toMin(p.to))) : [];
-                    return outside.length ? <div className="mt-1 rounded border border-red-200 bg-red-50 p-1.5 text-xs text-red-800">
-                      <p className="font-semibold"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{trainerName(p.id)} is not available on {outside.map((d) => DAYS[d - 1]).join(", ")} in Bookings (only {hoursText(avail)}), so no class can have them then.</p>
-                      {canEdit ? <button type="button" disabled={busy} onClick={() => void addTrainerHours(p, outside)} className="mt-1 rounded border border-red-300 bg-background-50 px-2 py-1 font-semibold text-red-800 hover:bg-red-100">
-                        Add {outside.map((d) => DAYS[d - 1]).join(", ")} {clock(toMin(p.from))} – {clock(toMin(p.to))} to {trainerName(p.id)}'s Bookings hours</button> : null}
-                    </div> : null;
-                  })()}
-                  {(() => { const r = roomPicks.find((x) => x.key === p.room); return r ? <p className="mt-1 text-xs text-foreground-600"><i className="ri-door-open-line mr-1" aria-hidden="true" />With {roomName(r.id)}{r.days.join() === p.days.join() && r.from === p.from && r.to === p.to ? "" : " (times changed)"}</p> : null; })()}</td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : h.avail.length ? hoursText(h.avail) : "Mon–Sun 9 am – 10 pm"}</td>
-                <td className="px-3 py-2 text-right"><button type="button" disabled={busy} aria-label={`Remove this booking of ${trainerName(p.id)}`} className="rounded p-2 text-red-700 hover:bg-red-50"
+                <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : busyText(h.uses)}</td>
+                <td className="px-3 py-2 text-right"><button type="button" disabled={busy} aria-label={`Remove ${trainerName(p.id)}`} className="rounded p-2 text-red-700 hover:bg-red-50"
                   onClick={() => setTrainerPicks((l) => l.filter((x) => x.key !== p.key))}><i className="ri-delete-bin-line" aria-hidden="true" /></button></td>
               </tr>); })}</tbody>
           </table>
         </div> : <p className="text-sm font-semibold text-amber-800">Add a trainer: every class needs one.</p>}
-        {trainerTotal >= target ? <p className="text-sm text-foreground-600"><i className="ri-information-line mr-1" aria-hidden="true" />All {target} hrs a week have a trainer. To add another, shorten or remove a booking first.</p>
-          : freeStaff.length ? <Select className="!w-auto" aria-label="Add a trainer" value="" disabled={busy} onChange={(e) => addTrainer(e.target.value)}>
-          <option value="">+ Add a trainer…</option>{freeStaff.map((x) => <option key={x.id} value={x.id}>{x.name}{trainerPicks.some((t) => t.id === x.id) ? " (book again, other times)" : ""}</option>)}
+        {freeStaff.length ? <Select className="!w-auto" aria-label="Add a trainer" value="" disabled={busy} onChange={(e) => addTrainer(e.target.value)}>
+          <option value="">+ Add a trainer…</option>{freeStaff.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </Select> : null}
-        {trainerPicks.length ? hoursBox(trainerCheck, "trainers", trainerTotal) : null}
+        {trainerPicks.length && trainersMissing.length ? <p role="alert" className="text-sm font-semibold text-amber-800">Add {trainersMissing.join(" and ")}, or tick it on a trainer.</p> : null}
       </section> : null}
 
       {page === "week" ? <section className="space-y-3">
@@ -793,7 +595,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
                   if (!changing) return <td key={d}><span className="block h-11 w-full rounded border border-background-100 bg-background-50" /></td>;
                   const free = !!pickFor(brush, weekday, s, e);
                   // Hours the rooms are booked for (step 5) show with the room's name even before a class is put there.
-                  const booked = roomPicks.find((r) => inWindow(r, weekday, s, e));
+                  const booked = null as Pick | null;
                   const why = free ? "" : whyNot(brush, weekday, s, e);
                   return <td key={d}><button type="button" disabled={busy || !free} onClick={() => clickHour(weekday, h)}
                     aria-label={free ? `${d} ${clock(s)}: ${booked ? `${roomName(booked.id)} booked, ` : ""}click to add ${brush}` : `${d} ${clock(s)}: ${why}`}
@@ -809,7 +611,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         </div>
         {!blocks.length ? <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
           No class could be placed: {roomPicks.some((p) => usedBy(p).length) ? "the rooms' booked times are used by other intakes." : "the rooms and trainers have no booked times that are free."} Go back to step {steps ? steps.first : 1} and pick other days or times.</p> : null}
-        {changing ? <p className="text-xs text-foreground-600">Dashed blue / orange: hours a theory / practical room is booked for (step {steps ? steps.first : 1}). Striped: {brush} cannot go there (hover to see why: not booked on step {steps ? steps.first : 1} or {steps ? steps.first + 1 : 2}, closed, or used by another intake).{blocks.some((b) => b.start < FIRST_HOUR * 60 || b.end > LAST_HOUR * 60) ? " Some class times are outside 9 am – 10 pm: see the list below." : ""}</p> : null}
+        {changing ? <p className="text-xs text-foreground-600">Striped: {brush} cannot go there (hover to see why: not booked on step {steps ? steps.first : 1} or {steps ? steps.first + 1 : 2}, closed, or used by another intake).{blocks.some((b) => b.start < FIRST_HOUR * 60 || b.end > LAST_HOUR * 60) ? " Some class times are outside 9 am – 10 pm: see the list below." : ""}</p> : null}
 
         {blocks.length ? <details className="rounded-lg border border-background-200">
           <summary className="cursor-pointer px-3 py-2 text-sm font-bold text-foreground-950">Class times this week ({blocks.length})</summary>
@@ -837,7 +639,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         <Button variant="outline" icon="ri-arrow-left-line" disabled={busy || (at === 0 && !onBack)} onClick={() => (at === 0 ? onBack?.() : setPage(PAGES[at - 1].id))}>
           {at === 0 && onBack && steps ? `Back: step ${steps.first - 1}` : "Back"}</Button>
         {page !== "week"
-          ? <Button disabled={busy || (page === "rooms" && (!roomPicks.length || roomsBad || roomsShort || roomsOver)) || (page === "trainers" && (!trainerPicks.length || trainersShort || trainersBad || trainersOver))} icon="ri-arrow-right-line" onClick={() => setPage(PAGES[at + 1].id)}>Next: {PAGES[at + 1].label.toLowerCase()}</Button>
+          ? <Button disabled={busy || (page === "rooms" && roomsMissing.length > 0) || (page === "trainers" && trainersMissing.length > 0)} icon="ri-arrow-right-line" onClick={() => setPage(PAGES[at + 1].id)}>Next: {PAGES[at + 1].label.toLowerCase()}</Button>
           : <span className="flex flex-wrap items-center justify-end gap-3">
             {why && !busy ? <span className="text-sm text-foreground-600">{why}</span> : null}
             <Button icon="ri-calendar-check-line" disabled={blocked} onClick={() => void create()}>{busy ? "Creating classes…" : hasClasses ? "Update classes" : createLabel ?? "Create classes"}</Button>

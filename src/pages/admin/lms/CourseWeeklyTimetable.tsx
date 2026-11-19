@@ -67,17 +67,17 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
           {list.length && groups[i.id] && (view[i.id] ?? "calendar") === "calendar" ? <div className="p-3">
             <BatchCourseCalendar batchId={groups[i.id]} courseId={courseId} intakeStart={i.startDate} intakeEnd={i.endDate} hasSlots canManage={canEdit} reloadKey={0} />
           </div> : list.length ? <div className="overflow-x-auto">
-            <div className="grid min-w-[840px] grid-cols-7 divide-x divide-background-200">
+            <div className="grid min-w-[700px] grid-cols-7 divide-x divide-background-200">
               {DAYS.map((d, n) => {
                 const today = list.filter((s) => s.weekday === n + 1);
                 return <div key={d} className="min-h-28">
                   <p className="border-b border-background-200 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-foreground-600">{d}</p>
                   <div className="space-y-1.5 p-1.5">{today.length ? today.map((s, k) => (
-                    <div key={k} className={`rounded border-l-4 px-2 py-1.5 text-xs leading-snug ${LOOK[s.type] ?? "border-l-background-400 bg-background-100"}`}>
+                    <div key={k} className={`rounded border-l-4 px-1.5 py-1.5 text-[11px] leading-snug ${LOOK[s.type] ?? "border-l-background-400 bg-background-100"}`}>
                       <p className="font-semibold text-foreground-950">{clock(s.startTime.slice(0, 5))} – {clock(s.endTime.slice(0, 5))}</p>
                       <p className="text-foreground-700">{TYPE[s.type] ?? s.type}</p>
-                      <p className="truncate text-foreground-700" title={s.room ?? ""}><i className="ri-door-open-line mr-1" aria-hidden="true" />{s.room ?? "No room"}</p>
-                      <p className={`truncate ${s.trainerId ? "text-foreground-700" : "font-semibold text-red-700"}`}><i className="ri-user-line mr-1" aria-hidden="true" />{trainer(s.trainerId) || "No trainer"}</p>
+                      <p className="break-words text-foreground-700"><i className="ri-door-open-line mr-1" aria-hidden="true" />{s.room ?? "No room"}</p>
+                      <p className={`break-words ${s.trainerId ? "text-foreground-700" : "font-semibold text-red-700"}`}><i className="ri-user-line mr-1" aria-hidden="true" />{trainer(s.trainerId) || "No trainer"}</p>
                     </div>)) : <p className="py-4 text-center text-xs text-foreground-400">No class</p>}</div>
                 </div>;
               })}

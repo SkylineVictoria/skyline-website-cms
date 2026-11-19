@@ -138,8 +138,7 @@ export function IntakesView({ intakes, loading, courseId, courses = [], canEdit,
           "Students in it are taken out and wait to be placed in a new intake (Override: place a student)",
           ...(lastOfCourse(deleting) ? [`It is the last intake of ${deleting?.courseCode}: a course runs only with an intake, so the course, its units and its master timetable are deleted too`] : []),
         ]}
-        confirmWord={lastOfCourse(deleting) ? `DELETE ${deleting?.courseCode}` : undefined}
-        confirmLabel={lastOfCourse(deleting) ? "Delete intake and course" : "Delete intake"}
+        confirmLabel="Yes, delete"
         onCancel={() => setDeleting(null)} onConfirm={() => { const i = deleting; setDeleting(null); if (i) void remove(i); }} />
     </>
   );

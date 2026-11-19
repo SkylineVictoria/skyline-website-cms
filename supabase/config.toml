@@ -100,3 +100,8 @@ verify_jwt = true
 # Switch view: signs an administrator in to the shared test account of the Student / Agent / Staff workspace. The gateway
 # verifies the JWT; the function requires cms_is_admin and can only ever use the three fixed test accounts.
 verify_jwt = true
+
+[functions.intake-groups]
+# INTAKE-GROUPS: an Admin / RTO Manager (intake_group_can_manage) syncs one intake's Microsoft 365 group, or the scheduled job
+# (service role) syncs every group with work. App-only Microsoft Graph with the EF_MICROSOFT365_* secrets.
+verify_jwt = true

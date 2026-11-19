@@ -189,31 +189,37 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
     </div> : null}
 
     {!order.length ? <p className="py-10 text-center text-sm text-foreground-500">This course has no active units. Add units first.</p> : <div className="overflow-x-auto rounded-lg border border-background-200">
-      <table className="w-full min-w-[860px] text-sm [&_td]:py-1.5">
+      <table className="w-full min-w-[700px] text-sm">
         <thead className="sticky top-0 z-[1] border-b border-background-200 bg-background-100"><tr>
-          <th className={th}>Sr. No.</th><th className={th}>Unit code</th><th className={th}>Unit name</th><th className={th} title="Core or elective">C/E</th>
-          <th className={th + " text-right"}>Classroom hours</th><th className={th + " text-right"}>Classroom weeks</th><th className={th + " text-right"} title="Classroom hours divided by classroom weeks: every intake's class times must give at least this many hours a week">Hours a week</th><th className={th}>Pre-requisite</th>
-          <th className={th}>Start date</th><th className={th}>End date</th>{canEdit ? <th className={th}><span className="sr-only">Move</span></th> : null}
+          <th className={th + " w-10"}>#</th><th className={th}>Unit</th>
+          <th className={th + " text-right"} title="Classroom hours">Hours</th><th className={th + " text-right"} title="Classroom weeks">Weeks</th>
+          <th className={th + " text-right"} title="Classroom hours divided by classroom weeks: every intake's class times must give at least this many hours a week">Hrs / wk</th>
+          <th className={th}>Starts</th><th className={th}>Ends</th>{canEdit ? <th className={th + " w-16"}><span className="sr-only">Move</span></th> : null}
         </tr></thead>
-        <tbody>{lines.map(line => line.kind === "break" ? <tr key={"break:" + line.item.id} className="border-b border-background-200 bg-amber-100 text-amber-950">
-          <td className="px-2 py-2" /><td className="px-2 py-2 font-semibold" colSpan={3}>{line.item.label}{line.item.courseId ? "" : " (all courses)"}</td>
-          <td className="px-2 py-2" /><td className="px-2 py-2 text-right">{weeksLabel(days(line.item.startDate, line.item.endDate) / 7)}</td><td className="px-2 py-2" /><td className="px-2 py-2" />
+        <tbody>{lines.map(line => line.kind === "break" ? <tr key={"break:" + line.item.id} className="border-b border-amber-200 bg-amber-50 text-amber-950">
+          <td className="px-2 py-2 text-center"><i className="ri-calendar-close-line" aria-hidden="true" /></td>
+          <td className="px-2 py-2 font-semibold" colSpan={2}>{line.item.label}<span className="ml-2 text-xs font-normal">Term break{line.item.courseId ? "" : " · all courses"}</span></td>
+          <td className="px-2 py-2 text-right tabular-nums">{weeksLabel(days(line.item.startDate, line.item.endDate) / 7)}</td><td className="px-2 py-2" />
           <td className="whitespace-nowrap px-2 py-2">{shortDate(line.item.startDate)}</td><td className="whitespace-nowrap px-2 py-2">{shortDate(line.item.endDate)}</td>
           {canEdit ? <td className="px-2 py-2 text-right">{line.item.courseId ? <button type="button" disabled={busy} onClick={() => void removeBreak(line.item)} aria-label={`Remove ${line.item.label}`}
             className="rounded p-1 text-red-700 hover:bg-amber-200 disabled:opacity-50"><i className="ri-delete-bin-line" aria-hidden="true" /></button> : null}</td> : null}
-        </tr> : <tr key={line.row.unitId} className={"border-b border-background-100 " + (line.row.inMaster || !master.saved ? "" : "bg-amber-50")}>
-          <td className="px-2 py-2 text-foreground-500">{line.index + 1}</td>
-          <td className="whitespace-nowrap px-2 py-2 font-semibold text-foreground-950">{line.row.code}{line.row.prerequisites.length ? <span title="Has prerequisites" aria-hidden="true">*</span> : null}</td>
-          <td className="px-2 py-2 text-foreground-800">{line.row.name}</td>
-          <td className="px-2 py-2">{line.row.unitType === "core" ? "C" : "E"}</td>
-          <td className="px-2 py-2 text-right">{line.row.hours ?? "—"}</td>
+        </tr> : <tr key={line.row.unitId} className={"border-b border-background-100 align-top hover:bg-background-100/60 " + (line.row.inMaster || !master.saved ? "" : "bg-amber-50")}>
+          <td className="px-2 py-2.5 text-foreground-500 tabular-nums">{line.index + 1}</td>
+          <td className="px-2 py-2.5">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="font-semibold text-foreground-950">{line.row.code}</span>
+              <span className={"rounded-full px-1.5 py-px text-2xs font-semibold " + (line.row.unitType === "core" ? "bg-primary-100 text-primary-800" : "bg-background-200 text-foreground-700")}>{line.row.unitType === "core" ? "Core" : "Elective"}</span>
+            </span>
+            <span className="block text-foreground-700">{line.row.name}</span>
+            {line.row.prerequisites.length ? <span className="mt-0.5 block text-xs text-foreground-500"><i className="ri-git-merge-line mr-1" aria-hidden="true" />After {line.row.prerequisites.join(", ")}</span> : null}
+          </td>
+          <td className="px-2 py-2.5 text-right tabular-nums">{line.row.hours ?? "—"}</td>
           <td className="px-2 py-2 text-right">{canEdit ? <input type="number" min={0.5} max={104} step={0.5} aria-label={`Classroom weeks for ${line.row.code}`} disabled={busy}
-            className={input + " w-20 text-right " + (order[line.index]?.weeks > 0 ? "" : "border-red-400")} value={order[line.index]?.weeks || ""} onChange={e => setWeeks(line.index, e.target.value)} />
+            className={input + " w-16 py-1 text-right " + (order[line.index]?.weeks > 0 ? "" : "border-red-400")} value={order[line.index]?.weeks || ""} onChange={e => setWeeks(line.index, e.target.value)} />
             : weeksLabel(Number(line.row.weeks))}</td>
-          <td className={"px-2 py-2 text-right " + ((perWeek(line.row, line.index) ?? 0) > 40 ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
-          <td className="px-2 py-2 text-xs text-foreground-700">{line.row.prerequisites.join(", ")}</td>
-          <td className="whitespace-nowrap px-2 py-2">{line.row.startDate ? shortDate(line.row.startDate) : "—"}</td>
-          <td className="whitespace-nowrap px-2 py-2">{line.row.endDate ? shortDate(line.row.endDate) : "—"}</td>
+          <td className={"px-2 py-2.5 text-right tabular-nums " + ((perWeek(line.row, line.index) ?? 0) > 40 ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
+          <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.startDate ? shortDate(line.row.startDate) : "—"}</td>
+          <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.endDate ? shortDate(line.row.endDate) : "—"}</td>
           {canEdit ? <td className="whitespace-nowrap px-2 py-2 text-right">
             <button type="button" disabled={busy || line.index === 0} onClick={() => move(line.index, -1)} aria-label={`Move ${line.row.code} up`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-up-line" aria-hidden="true" /></button>
             <button type="button" disabled={busy || line.index === order.length - 1} onClick={() => move(line.index, 1)} aria-label={`Move ${line.row.code} down`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-down-line" aria-hidden="true" /></button>

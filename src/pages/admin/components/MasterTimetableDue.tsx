@@ -45,7 +45,7 @@ export default function MasterTimetableDue() {
             <span className={"block text-xs " + (item.daysLeft < 0 ? "font-semibold text-red-700" : "text-foreground-600")}>
               {item.daysLeft < 0 ? `Ended ${day(item.endDate)}: no classes are planned after that day` : `Ends ${day(item.endDate)} (${item.daysLeft} day${item.daysLeft === 1 ? "" : "s"} left)`}</span></span>
           <Link to={`/admin/lms/courses?course=${encodeURIComponent(item.courseId)}&tab=master`} onClick={() => setOpen(false)}
-            className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Open master timetable</Link>
+            className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Open Weekly Calendar</Link>
         </li>)}
       </ul>
     </Modal>

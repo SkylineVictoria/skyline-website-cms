@@ -346,6 +346,17 @@ export async function loadClassSessions(batchId: string | null, from: string, to
 export type StudyLoad = "coe" | "voe";
 export const LOAD_HOURS: Record<StudyLoad, number> = { coe: 20, voe: 40 };
 export const LOAD_LABEL: Record<StudyLoad, string> = { coe: "CoE · 20 hours a week", voe: "VoE · 40 hours a week" };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** An intake's default name (owner, 2026-11-20): course code, start date, Intake_Batch_COE or Intake_Batch_VOE,
+ * "CPC30326_01-Dec-2026_Intake_Batch_COE"; "_2", "_3" ... when the course already has an intake of that name. */
+export function intakeDefaultName(courseCode: string, load: StudyLoad, startDate: string, taken: string[] = []) {
+  const base = `${courseCode}_${startDate.slice(8, 10)}-${MONTHS[Number(startDate.slice(5, 7)) - 1]}-${startDate.slice(0, 4)}_Intake_Batch_${load.toUpperCase()}`;
+  let name = base, n = 1;
+  while (taken.includes(name)) name = `${base}_${++n}`;
+  return name;
+}
+/** Whether a name is one the system gave (so it may follow a CoE / VoE change). */
+export const isDefaultIntakeName = (name: string) => /Intake_Batch_(COE|VOE)(_\d+)?$/.test(name) || /^Intake_Batch_(COE|VOE)_/.test(name) || /^Intake \d+$/.test(name);
 /** Minimum class hours a week for a course timing template. */
 export const TEMPLATE_MIN_HOURS = 20;
 const missingLoad = (m: string) => /rto_intake_load|study_load|schema cache|does not exist/i.test(m);

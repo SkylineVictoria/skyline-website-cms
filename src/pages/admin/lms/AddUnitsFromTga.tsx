@@ -33,7 +33,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
   /** Shown once the units are added and every packaging rule is met (a new course: "Create first intake"). */
   nextStep?: { label: string; onClick: () => void };
-  /** New course wizard: "Step 2 of 5 · Units" in the title. */
+  /** New course wizard: "Step 2 of 7 · Units" in the title. */
   stepLabel?: string;
 }) {
   const [release, setRelease] = useState<Release | null>(null);
@@ -250,6 +250,8 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
         <span className="text-sm text-foreground-600">{count} selected{hours ? ` · ${hours} nominal hours` : ""}
           {addBlockedWhy ? <span className="ml-2 font-semibold text-amber-800">{addBlockedWhy}</span> : null}</span>
         <div className="flex gap-2"><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
+          {/* Back here from a later step with the units already added: go on without changes. */}
+          {nextStep && units.length && !count && !removing.size ? <Button variant="outline" disabled={busy} onClick={nextStep.onClick}>{nextStep.label} (no changes)</Button> : null}
           <Button disabled={busy || blocked || prereqBlocked} title={prereqBlocked ? "Add the prerequisites of the units you picked first" : undefined} onClick={() => void add()}>{busy ? "Adding… (fetching unit content)" : removing.size ? `Save changes (${count ? `add ${count}, ` : ""}remove ${removing.size})` : `Add ${count} unit${count === 1 ? "" : "s"}${nextStep ? " and continue" : ""}`}</Button></div>
       </div>}>
     {error ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
@@ -286,32 +288,30 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
 
       {pickedElectives.length || imported.length ? <section aria-label="Your selected units" className="rounded-lg border border-background-200 p-2">
         <h4 className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Your selected units ({pickedElectives.length + imported.length})</h4>
-        <ul className="divide-y divide-background-200">
+        {/* One short line per unit, in a box that scrolls: the list of units to pick stays in view. */}
+        <ul className="grid max-h-48 gap-x-4 overflow-y-auto sm:grid-cols-2">
           {pickedElectives.map(unit => {
-            const options = release.electives.filter(other => !selected(other.code) && (!unit.groups.length || other.groups.some(group => unit.groups.includes(group))));
-            return <li key={unit.code} className="flex flex-wrap items-start gap-2 px-1 py-2 text-sm">
-              <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.name}</span>
-                <span className="block text-xs text-foreground-500">{[unit.nominalHours !== null ? `${unit.nominalHours} h` : "", unit.groups.length ? unit.groups.map(group => `Group ${group}`).join(", ") : ""].filter(Boolean).join(" · ")}</span>
-                {prereqLine(unit)}</span>
-              <span className="flex shrink-0 items-center gap-1">
-                {options.length ? <select aria-label={`Change ${unit.code}`} value="" disabled={busy} className="rounded-lg border border-background-300 bg-background-50 px-2 py-1 text-xs"
-                  onChange={e => {
-                    const next = e.target.value; if (!next) return;
-                    toggle(unit.code, false); toggle(next, true); setNote(`Changed ${unit.code} to ${next}.`);
-                  }}>
-                  <option value="">Change to…</option>
-                  {options.map(other => <option key={other.code} value={other.code}>{other.code} {other.name}</option>)}
-                </select> : null}
-                <button type="button" disabled={busy} onClick={() => toggle(unit.code, false)} className="rounded border border-background-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Remove</button>
-              </span>
+            const found = lookups[unit.code.toUpperCase()];
+            const needs = found && !("error" in found) ? found.prerequisiteCodes : [];
+            const meta = [unit.nominalHours !== null ? `${unit.nominalHours} h` : "", unit.groups.length ? `Group ${unit.groups.join(", ")}` : ""].filter(Boolean).join(" · ");
+            return <li key={unit.code} className="flex min-w-0 items-center gap-2 border-b border-background-100 px-1 py-1 text-sm"
+              title={`${unit.code} ${unit.name}${meta ? ` · ${meta}` : ""}${needs.length ? ` · needs first: ${needs.join(", ")}` : ""}`}>
+              <span className="shrink-0 font-semibold text-foreground-950">{unit.code}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground-800">{unit.name}</span>
+              {needs.length ? <span className="shrink-0 text-xs text-amber-900"><i className="ri-git-merge-line" aria-hidden="true" /> {needs.map(code => `${code}${selected(code) ? " ✓" : ""}`).join(", ")}</span> : null}
+              {meta ? <span className="shrink-0 text-xs text-foreground-500">{meta}</span> : null}
+              <button type="button" disabled={busy} onClick={() => toggle(unit.code, false)} aria-label={`Remove ${unit.code}`}
+                className="shrink-0 rounded p-1 text-red-700 hover:bg-red-50"><i className="ri-close-line" aria-hidden="true" /></button>
             </li>;
           })}
-          {imported.map(unit => <li key={unit.code} className="flex flex-wrap items-start gap-2 px-1 py-2 text-sm">
-            <span className="min-w-0 flex-1"><span className="font-semibold text-foreground-950">{unit.code}</span> <span className="text-foreground-800">{unit.title}</span>
-              <span className="block text-xs text-foreground-500">Outside unit{unit.nominalHours !== null ? ` · ${unit.nominalHours} h` : ""}</span>
-              {unit.prerequisiteCodes.length ? <span className="block text-xs text-amber-900"><i className="ri-git-merge-line mr-1" aria-hidden="true" />Needs first: {unit.prerequisiteCodes.map((code, i) => <span key={code}>{i ? "; " : ""}<b>{code}</b>{selected(code) ? " ✓" : ""}</span>)}</span>
-                : <span className="block text-xs text-foreground-500">No prerequisites</span>}</span>
-            <button type="button" disabled={busy} onClick={() => setImported(list => list.filter(item => item.code !== unit.code))} className="shrink-0 rounded border border-background-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Remove</button>
+          {imported.map(unit => <li key={unit.code} className="flex min-w-0 items-center gap-2 border-b border-background-100 px-1 py-1 text-sm"
+            title={`${unit.code} ${unit.title} · outside unit${unit.prerequisiteCodes.length ? ` · needs first: ${unit.prerequisiteCodes.join(", ")}` : ""}`}>
+            <span className="shrink-0 font-semibold text-foreground-950">{unit.code}</span>
+            <span className="min-w-0 flex-1 truncate text-foreground-800">{unit.title}</span>
+            {unit.prerequisiteCodes.length ? <span className="shrink-0 text-xs text-amber-900"><i className="ri-git-merge-line" aria-hidden="true" /> {unit.prerequisiteCodes.map(code => `${code}${selected(code) ? " ✓" : ""}`).join(", ")}</span> : null}
+            <span className="shrink-0 text-xs text-foreground-500">Outside{unit.nominalHours !== null ? ` · ${unit.nominalHours} h` : ""}</span>
+            <button type="button" disabled={busy} onClick={() => setImported(list => list.filter(item => item.code !== unit.code))} aria-label={`Remove ${unit.code}`}
+              className="shrink-0 rounded p-1 text-red-700 hover:bg-red-50"><i className="ri-close-line" aria-hidden="true" /></button>
           </li>)}
         </ul>
       </section> : null}

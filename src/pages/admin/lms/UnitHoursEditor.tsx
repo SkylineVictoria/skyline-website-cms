@@ -9,14 +9,16 @@ type Row = HoursSplit & { unit: RtoUnit; accepted: boolean; touched: boolean };
 const PARTS = [["theoryHours", "Theory"], ["practicalHours", "Practical"], ["assessmentHours", "Assessment"]] as const;
 const num = (v: string) => (v.trim() === "" ? 0 : Math.max(0, Math.round(Number(v) || 0)));
 
-export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, nextStep }: {
+export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, nextStep, backStep }: {
   course: Pick<RtoCourse, "id" | "code" | "name">;
   onClose: () => void;
   onSaved: () => void;
-  /** New course wizard: "Step 3 of 5 · Hours" in the title. */
+  /** New course wizard: "Step 3 of 7 · Hours" in the title. */
   stepLabel?: string;
   /** New course wizard: hours are required, and the one button saves them and goes to this step. */
   nextStep?: { label: string; onClick: () => void };
+  /** New course wizard: the step before this one. */
+  backStep?: { label: string; onClick: () => void };
 }) {
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
@@ -76,6 +78,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
     footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-foreground-700"><b>{total.toLocaleString()} SLIT hours</b> · about {weeks} weeks at {HOURS_PER_WEEK} hours a week (CoE)</span>
       <div className="flex gap-2">
+        {backStep ? <Button variant="outline" icon="ri-arrow-left-line" disabled={busy} onClick={backStep.onClick}>{backStep.label}</Button> : null}
         {nextStep ? <Button icon="ri-calendar-event-line" disabled={busy || !detail || !!bad.length || !rows.length} onClick={() => void save()}>{busy ? "Saving…" : nextStep.label}</Button>
           : <><Button variant="outline" disabled={busy} onClick={onClose}>{saved ? "Close" : "Cancel"}</Button>
             <Button disabled={busy || !detail || !!bad.length || (!toAccept && !nextStep)} onClick={() => void save()}>{busy ? "Saving…" : `Save hours${toAccept ? ` (${toAccept})` : ""}`}</Button></>}

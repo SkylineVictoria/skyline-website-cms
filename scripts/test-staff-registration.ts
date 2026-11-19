@@ -2344,7 +2344,7 @@ test("completion certificate (2026-11-20): never emailed, downloaded or shown to
   assert.ok(!read("src/pages/admin/components/AgentOnboardingPanel.tsx").includes("· IP "), "the business page shows no IP address");
   assert.match(read("src/pages/admin/components/signing/RequestDetail.tsx"), /View audit record/, "the signing request page (staff only) keeps the audit record");
   // The database refuses the certificate kinds in every download and lists none (portal offer letters, agency onboarding).
-  const sql = read("supabase/migrations/20261120123517_signing_certificate_private.sql");
+  const sql = read("supabase/migrations/20261120123517_signing_certificate_private.sql").replace(/\r\n/g, "\n");
   assert.match(sql, /if p_kind in \('certificate', 'application_certificate'\) or p_kind like 'referee_certificate:%' then\n  raise exception 'The audit record is not downloadable/);
   assert.match(sql, /elsif p_kind = 'certificate' then\n  raise exception 'The audit record is not downloadable/);
   for (const changed of [`'hasCertificate', false`, `'certificate', false, 'application_certificate', false)`, `'form', f.form_content is not null, 'certificate', false)`, `'agreement', o.agreement_content is not null, 'certificate', false)`]) {

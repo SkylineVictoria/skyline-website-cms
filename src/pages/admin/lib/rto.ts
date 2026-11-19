@@ -1,7 +1,7 @@
 // Courses, units, fees, intakes (the master timetable; an intake is its class group) and classrooms. Every read and write goes through
 // public.rto_admin, which checks the role (RTO Manager edits; Admin enrols; any CMS user reads and edits website settings).
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleKey, ruleList, ruleNumber, ruleObject } from "@/lib/businessRules";
+import { onRules, ruleKey, ruleList, ruleNumber, ruleObject, ruleText } from "@/lib/businessRules";
 
 /** The database refuses duplicate LMS rows (migration 20261119184213_no_duplicate_lms_rows); say which one in plain words. */
 const DUPLICATES: Array<[RegExp, string]> = [

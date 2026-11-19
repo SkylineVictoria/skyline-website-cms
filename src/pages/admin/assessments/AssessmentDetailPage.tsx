@@ -8,7 +8,7 @@ import { fmtDateTime } from "@/lib/assessment/api";
 import { countQuestions } from "@/lib/assessment/definition";
 import { validateDefinition } from "@/lib/assessment/validate";
 import type { Definition, QuestionKey, UnitMapping } from "@/lib/assessment/types";
-import { asmAdmin, downloadJson, type AssessmentDetail } from "@/pages/admin/lib/assessments";
+import { asmAdmin, attemptsRange, downloadJson, type AssessmentDetail } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail } from "@/pages/admin/lib/rto";
 import Builder from "./builder/Builder";
 import AssignmentsPanel from "./panels/AssignmentsPanel";
@@ -168,7 +168,7 @@ function SettingsPanel({ detail, units, onChanged }: { detail: AssessmentDetail;
       <div className="rounded-md border border-background-200 p-3">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Overrides of the institution's rules (blank = institution default)</p>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label={`Maximum attempts (default ${String(eff.max_attempts)})`}><TextInput type="number" min={1} max={10} value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} /></Field>
+          <Field label={`Maximum attempts (default ${String(eff.max_attempts)})`}><TextInput type="number" min={attemptsRange().minimum} max={attemptsRange().maximum} value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} /></Field>
           <Field label={`Reassessment window, days (default ${String(eff.reassessment_days)})`}><TextInput type="number" min={1} max={90} value={days} onChange={(e) => setDays(e.target.value)} /></Field>
           <Field label={`Late submissions (default ${String(eff.late_submission)})`}><Select value={late} onChange={(e) => setLate(e.target.value)}><option value="">(default)</option><option value="allow">Allow (flagged late)</option><option value="block">Block after the late date</option></Select></Field>
         </div>

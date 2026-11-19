@@ -3,13 +3,35 @@ import { Badge, Button, Modal, Select, TextArea, TextInput } from "@/pages/admin
 import { Empty } from "@/pages/admin/components/rto/overlay";
 import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
 import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
-import { GROUP_LABEL, isAnswerable, newQuestion, QUESTION_TYPES, questionType, withSchema, type TypeGroup } from "@/lib/assessment/registry";
+import { GROUP_LABEL, isAnswerable, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
+import { onRules, ruleNumber, ruleObject } from "@/lib/businessRules";
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
 import { asmAdmin, type BankRow } from "@/pages/admin/lib/assessments";
 import ConditionEditor from "./ConditionEditor";
 import QuestionEditor from "./QuestionEditor";
 import { DragHandle, UpDown } from "./Sortable";
 import { useSortable } from "./useSortable";
+
+/** Evidence types named in Business Rules (assessment.evidence_question_defaults) as the file types they allow. */
+const EVIDENCE_TYPE: Record<string, string> = {
+  PDF: "application/pdf", JPEG: "image/jpeg", JPG: "image/jpeg", PNG: "image/png", WEBP: "image/webp", MP4: "video/mp4",
+  MP3: "audio/mpeg", M4A: "audio/mp4", DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", PPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  TXT: "text/plain", ZIP: "application/zip",
+};
+// New questions start from the Business Rules values (today's values until they load).
+onRules(() => {
+  setQuestionDefaults("short_answer", { maxWords: ruleNumber("assessment.short_response_default_word_cap", 100) });
+  const group = ruleObject("assessment.repeat_group_entry_limits", { minEntries: 1, maxEntries: 10 });
+  setQuestionDefaults("repeating_group", { minEntries: Number(group.minEntries) || 1, maxEntries: Number(group.maxEntries) || 10 });
+  const ev = ruleObject<{ minFiles: unknown; maxFiles: unknown; maxMiB: unknown; accepted: unknown }>("assessment.evidence_question_defaults",
+    { minFiles: 1, maxFiles: 5, maxMiB: 25, accepted: ["PDF", "JPEG", "PNG", "MP4"] });
+  const accept = (Array.isArray(ev.accepted) ? ev.accepted : []).map((x) => EVIDENCE_TYPE[String(x).trim().toUpperCase()]).filter((x): x is string => Boolean(x));
+  setQuestionDefaults("file_upload", {
+    minFiles: Number(ev.minFiles) || 1, maxFiles: Number(ev.maxFiles) || 5, maxMb: Number(ev.maxMiB) || 25,
+    accept: accept.length ? [...new Set(accept)] : ["application/pdf", "image/jpeg", "image/png", "video/mp4"],
+  });
+});
 
 export interface BuilderProps {
   definition: Definition;

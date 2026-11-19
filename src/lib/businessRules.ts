@@ -36,6 +36,12 @@ export const SCREEN_RULES = [
   "cms.navigation_child_cap",
   "cms.navigation_label_char_cap",
   "cms.navigation_top_level_cap",
+  "assessment.attempts_allowed_range",
+  "assessment.attempts_default",
+  "assessment.reassessment_window_default",
+  "assessment.short_response_default_word_cap",
+  "assessment.repeat_group_entry_limits",
+  "assessment.evidence_question_defaults",
 ] as const;
 
 let values: Record<string, unknown> = {};

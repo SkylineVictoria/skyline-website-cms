@@ -1,0 +1,8 @@
+{
+  "lms.unit_upload_max_bytes": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261120221000_business_rule_lms_upload.sql",
+    "enforcement": "supabase/migrations/20261120221000_business_rule_lms_upload.sql",
+    "test": "scripts/test-business-rules.mjs"
+  }
+}

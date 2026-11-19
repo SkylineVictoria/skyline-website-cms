@@ -14,7 +14,7 @@ export interface Microsoft365Status {
   checks: { connection: CheckState; consent: CheckState; domain: CheckState; licence: CheckState };
   consent: { granted: string[]; missing: string[]; welcomeEmail: boolean };
   domains: Array<{ name: string; verified: boolean; found: boolean }>;
-  licences: Array<{ sku: string; available: number; total: number; student: boolean }>;
+  licences: Array<{ sku: string; available: number; total: number; student: boolean; staff?: boolean }>;
   problems: string[]; checkedAt: string;
 }
 export type PersonType = "student" | "employee" | "trainer" | "agent";
@@ -31,6 +31,34 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 export const fetchMicrosoft365Status = () => call<Microsoft365Status>({ action: "m365_status" });
+/** Create Email (2026-11-20): Student, Employee or Trainer (agents get no mailbox). */
+export type MailboxKind = "student" | "employee" | "trainer";
+export interface Office365Existing { id: string; upn: string; mail: string | null; displayName: string; enabled: boolean; match: "linked" | "email" | "username" | "name" }
+export interface Office365Lookup {
+  person: { name: string; email: string | null }; plan: { domain: string; sku: string; licenceName: string };
+  licence: { total: number; available: number } | null; account: null | { email: string; status: string; linked?: boolean };
+  existing: Office365Existing[]; address: string | null; blocked: string | null;
+}
+export type Office365CreateReply = { ok?: true; email?: string; welcomeSent?: boolean; warning?: string; dryRun?: true; sku?: string; welcomeTo?: string };
+/** A refusal that carries the matches (already has / possible match), so the screen can offer to link. */
+export class Office365Refusal extends Error {
+  readonly code: string | null; readonly existing: Office365Existing[];
+  constructor(message: string, code: string | null, existing: Office365Existing[]) { super(message); this.code = code; this.existing = existing; }
+}
+async function callWithBody<T>(body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke("student-office365", { body });
+  if (error) {
+    let parsed: { error?: string; code?: string; existing?: Office365Existing[] } = {};
+    const context = (error as { context?: unknown }).context;
+    if (context instanceof Response) { try { parsed = (await context.clone().json()) as typeof parsed; } catch { /* generic */ } }
+    throw new Office365Refusal(parsed.error || error.message || "That could not be done.", parsed.code ?? null, parsed.existing ?? []);
+  }
+  return data as T;
+}
+export const lookupOffice365 = (personType: MailboxKind, personId: string) => callWithBody<Office365Lookup>({ action: "lookup", personType, personId });
+export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean } = {}) =>
+  callWithBody<Office365CreateReply>({ action: "create", personType, personId, ...opts });
+export const linkOffice365 = (personType: MailboxKind, personId: string, msUserId: string) => callWithBody<{ ok: true; email: string }>({ action: "link", personType, personId, msUserId });
 export const fetchEmailPeople = (personType: PersonType, q = "") => call<{ people: EmailPerson[] }>({ action: "people", personType, q }).then((r) => r.people ?? []);
 
 /** The checklist both screens show, in the order to fix things. */

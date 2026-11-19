@@ -29,6 +29,13 @@ export const SCREEN_RULES = [
   "lms.reschedule_new_day_weekdays",
   "lms.reschedule_join_extra_seats",
   "lms.reschedule_spread_limits",
+  "cms.cms_document_limit_mib",
+  "cms.footer_label_char_cap",
+  "cms.footer_links_per_column",
+  "cms.homepage_course_cap",
+  "cms.navigation_child_cap",
+  "cms.navigation_label_char_cap",
+  "cms.navigation_top_level_cap",
 ] as const;
 
 let values: Record<string, unknown> = {};

@@ -1,8 +1,10 @@
 // One place for every CMS layout limit. The editors show counters and disable "add" at these limits, and the same validators run again
 // on save (store commit), so a limit cannot be bypassed by a stale tab, an import or a restored revision.
 
-export const FOOTER_LIMITS = { maxLinksPerColumn: 8, maxLabelLength: 30 } as const;
-export const NAV_LIMITS = { maxTopLevel: 7, maxChildren: 6, maxLabelLength: 22 } as const;
+// The numbers are Business Rules (cms.*): applyCmsLimitRules sets them from the live values (it is called with ruleNumber by the admin
+// store and the homepage; this file imports nothing so the node tests can load it). Until the values load, today's numbers apply.
+export const FOOTER_LIMITS: { maxLinksPerColumn: number; maxLabelLength: number } = { maxLinksPerColumn: 8, maxLabelLength: 30 };
+export const NAV_LIMITS: { maxTopLevel: number; maxChildren: number; maxLabelLength: number } = { maxTopLevel: 7, maxChildren: 6, maxLabelLength: 22 };
 export const LOADER_STYLES = ["ring", "bar", "dots"] as const;
 export type LoaderStyle = (typeof LOADER_STYLES)[number];
 
@@ -37,4 +39,15 @@ export function validateNavigation(items: NavLike[]): string[] {
 }
 
 /** Most courses the homepage carousel shows; also the most that can be featured. */
-export const HOME_COURSE_LIMIT = 20;
+export let HOME_COURSE_LIMIT = 20;
+
+/** Business Rules behind the limits above; pass ruleNumber from src/lib/businessRules.ts (inside onRules). */
+export function applyCmsLimitRules(num: (id: string, fallback: number) => number): void {
+  const whole = (id: string, fallback: number) => { const v = Math.round(num(id, fallback)); return v >= 1 ? v : fallback; };
+  FOOTER_LIMITS.maxLinksPerColumn = whole("cms.footer_links_per_column", 8);
+  FOOTER_LIMITS.maxLabelLength = whole("cms.footer_label_char_cap", 30);
+  NAV_LIMITS.maxTopLevel = whole("cms.navigation_top_level_cap", 7);
+  NAV_LIMITS.maxChildren = whole("cms.navigation_child_cap", 6);
+  NAV_LIMITS.maxLabelLength = whole("cms.navigation_label_char_cap", 22);
+  HOME_COURSE_LIMIT = whole("cms.homepage_course_cap", 20);
+}

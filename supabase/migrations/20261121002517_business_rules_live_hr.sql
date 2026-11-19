@@ -230,6 +230,65 @@ select public.business_rule_patch_function('public.hr_svc_retention_due(integer,
 select public.business_rule_patch_function('public.hr_svc_retention_mark(uuid, integer)'::regprocedure,
   $o$p.status = 'rejected' and a.files_purged_at is null$o$, $n$p.status = 'rejected' and a.files_purged_at is null and hr.staff_retention_purge_on()$n$);
 
+-- 9. HRMS › Settings follows Business Rules: the four values above are written to hr.settings when a version is published
+-- and again at the start of the daily pay-period top-up (so a version with a later start date takes effect). A value that
+-- the table refuses is skipped with a warning; publishing never fails because of it. Today the row already holds these
+-- values (38, 14, false, Monday-Friday), so nothing changes.
+create or replace function hr.settings_rules_sync() returns void
+language plpgsql security definer set search_path = '' as $$
+declare v jsonb; t text; d smallint[];
+begin
+  for v, t in select public.business_rule_evaluate('', x.id, '{}'::jsonb), x.id from unnest(array['hrms.default_ordinary_hours',
+      'hrms.open_shift_flag_hours', 'hrms.breaks_paid_default', 'hrms.usual_workdays']) x(id) loop
+    begin
+      if v is null or v = 'null'::jsonb then continue; end if;   -- switched off: leave the row as it is
+      if t = 'hrms.default_ordinary_hours' and jsonb_typeof(v) = 'number' and (v #>> '{}')::numeric > 0 and (v #>> '{}')::numeric <= 80 then
+        update hr.settings set ordinary_hours_week = (v #>> '{}')::numeric, updated_at = now() where ordinary_hours_week is distinct from (v #>> '{}')::numeric;
+      elsif t = 'hrms.open_shift_flag_hours' and jsonb_typeof(v) = 'number' and round((v #>> '{}')::numeric) between 1 and 48 then
+        update hr.settings set open_shift_flag_hours = round((v #>> '{}')::numeric)::integer, updated_at = now()
+         where open_shift_flag_hours is distinct from round((v #>> '{}')::numeric)::integer;
+      elsif t = 'hrms.breaks_paid_default' and jsonb_typeof(v) = 'boolean' then
+        update hr.settings set breaks_paid = (v #>> '{}')::boolean, updated_at = now() where breaks_paid is distinct from (v #>> '{}')::boolean;
+      elsif t = 'hrms.usual_workdays' and jsonb_typeof(v) = 'array' then
+        d := hr.rule_usual_work_days();
+        update hr.settings set usual_work_days = d, updated_at = now() where usual_work_days is distinct from d;
+      elsif t <> 'hrms.usual_workdays' then
+        raise warning 'Business rule % has a value HRMS settings cannot use; the setting was left unchanged.', t;
+      end if;
+    exception when others then
+      raise warning 'Business rule % could not be written to the HRMS settings: %', t, sqlerrm;
+    end;
+  end loop;
+exception when others then
+  raise warning 'HRMS settings could not be synced from Business Rules: %', sqlerrm;
+end $$;
+revoke all on function hr.settings_rules_sync() from public, anon, authenticated, service_role;
+
+create or replace function hr.business_rule_versions_settings_sync() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if exists (select 1 from public.business_rules r where r.id = new.rule_id and r.scope_key = ''
+             and r.identifier in ('hrms.default_ordinary_hours', 'hrms.open_shift_flag_hours', 'hrms.breaks_paid_default', 'hrms.usual_workdays')) then
+    perform hr.settings_rules_sync();
+  end if;
+  return null;
+exception when others then
+  raise warning 'HRMS settings could not be synced from Business Rules: %', sqlerrm;
+  return null;
+end $$;
+revoke all on function hr.business_rule_versions_settings_sync() from public, anon, authenticated, service_role;
+drop trigger if exists business_rule_versions_hr_settings_sync on public.business_rule_versions;
+create trigger business_rule_versions_hr_settings_sync after insert or update of state, definition on public.business_rule_versions
+  for each row when (new.state = 'published') execute function hr.business_rule_versions_settings_sync();
+
+-- The daily job: runs after the top-up schedule sync that 20261121000517 put at the start of hr_pay_periods_topup.
+select public.business_rule_patch_function('public.hr_pay_periods_topup()'::regprocedure,
+  $o$ perform public.business_rule_cron_daily_sync('hrms.pay_period_topup_schedule', 'hr-pay-periods-topup', '02:30 UTC');
+$o$, $n$ perform public.business_rule_cron_daily_sync('hrms.pay_period_topup_schedule', 'hr-pay-periods-topup', '02:30 UTC');
+ perform hr.settings_rules_sync();
+$n$);
+select hr.settings_rules_sync();
+
 -- Nothing must be left behind in HR (the pay-period top-up schedule is made live separately).
 do $$ begin
   if exists (select 1 from public.business_rules where scope_key = '' and identifier like 'hrms.%' and identifier <> 'hrms.pay_period_topup_schedule'

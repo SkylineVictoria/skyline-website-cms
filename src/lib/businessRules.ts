@@ -53,6 +53,16 @@ export const SCREEN_RULES = [
   "hrms.cover_letter_limit_chars",
   "hrms.job_attachment_limit_mib",
   "hrms.employee_document_max_bytes",
+  "admissions.application_document_limit_mib",
+  "admissions.application_document_types",
+  "admissions.australian_address_required_fields",
+  "admissions.overseas_address_required_fields",
+  "admissions.emergency_contact_required_details",
+  "admissions.registration_verification_prerequisites",
+  "admissions.registration_stale_lodgement_days",
+  "admissions.registration_coe_voe_pdf_mib",
+  "agents.agent_application_yes_no_fallback",
+  "agents.agent_application_attachment_cap_mib",
 ] as const;
 
 let values: Record<string, unknown> = {};

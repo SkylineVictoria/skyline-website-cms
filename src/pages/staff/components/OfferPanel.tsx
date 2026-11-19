@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
+import { formatSignedAt } from "@/lib/signedTime";
 import { LinkInvalidError, NoOfferError, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
@@ -60,12 +61,12 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
         <h1 className="font-heading text-2xl font-bold text-foreground-950">{signed ? "Your signed offer" : "Your offer letter"}</h1>
         <p className="mt-1 text-sm text-foreground-600">
           {signed
-            ? `Thank you, ${view.offer.signerName ?? view.name}. You signed on ${new Date(view.offer.signedAt!).toLocaleString()}. We will email you a copy of the signed letter.`
+            ? `Thank you, ${view.offer.signerName ?? view.name}. You signed on ${formatSignedAt(view.offer.signedAt)}. We will email you a copy of the signed letter.`
             : `Hello ${view.name}. Please read the offer letter below. This private link works until ${new Date(view.expiresAt).toLocaleDateString()}.`}
         </p>
       </> : (
         <p className="text-sm text-foreground-700" data-testid="offer-status-line">
-          {signed ? `You signed this offer on ${new Date(view.offer.signedAt!).toLocaleString()}. A copy was emailed to you.` : "Please read the letter, then sign it below."}
+          {signed ? `You signed this offer on ${formatSignedAt(view.offer.signedAt)}. A copy was emailed to you.` : "Please read the letter, then sign it below."}
         </p>
       )}
       {error ? <p role="alert" className={`mt-4 ${ALERT}`}>{error}</p> : null}

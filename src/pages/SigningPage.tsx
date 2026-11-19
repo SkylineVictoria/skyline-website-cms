@@ -7,7 +7,9 @@ import SignaturePad from "@/components/signing/SignaturePad";
 import { pictureToPng } from "@/components/signing/signatureImage";
 import LegacySignPage from "@/components/signing/LegacySignPage";
 import F04Wizard, { F04Done } from "@/components/signing/F04Wizard";
-import { fieldGroup, formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signWithRetry, type OfferSigningState, type PaymentView, type SigningView } from "@/lib/signingApi";
+import SigningDone, { type NextStep } from "@/components/signing/SigningDone";
+import { formatSignedAt } from "@/lib/signedTime";
+import { fieldGroup, formatMoney, isAutoField, paymentsAction, RECIPIENT_STATE, signingAction, signingDownloadUrl, signWithRetry, type OfferSigningState, type PaymentView, type SigningView } from "@/lib/signingApi";
 const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
@@ -45,7 +47,7 @@ function moneyLabel(cents: number, currency: string): string {
   const code = (currency || "AUD").toUpperCase(); const money = formatMoney(cents, currency);
   return money.startsWith("$") ? `${code}${money}` : money;
 }
-const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" });
+const when = (iso: string) => formatSignedAt(iso);
 const ZOOMS = [0.75, 1, 1.25, 1.5];
 
 /** The numbered steps at the top: done, current, still to come. `current` past the last index means every step is done. */
@@ -349,9 +351,20 @@ export default function SigningPage() {
   // F04 wizard (2026-11-19): the Agent Application Form is filled step by step; the F05 and the P06 keep this page.
   const f04 = view?.onboarding?.kind === "application";
   const hasBottomBar = !!view && !f04 && !declined && !declining && (canSign || (showPay && !paid) || paymentPage);
-  const downloads = view && (complete || paymentPage) ? <div className="flex flex-wrap gap-3">
-    <a className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-sm font-medium text-background-50 hover:bg-primary-600" href={view.url} download data-testid="download-signed"><i className="ri-download-line" aria-hidden="true" />Download signed copy</a>
-  </div> : null;
+  /** A new link to the document on every Download / Open PDF click (the server's links last five minutes). */
+  const freshUrl = () => signingDownloadUrl(token);
+  const openPdf = async () => {
+    // Opened at once (so no pop-up blocker steps in), then pointed at the new link; closed again if no link comes back.
+    const tab = window.open("", "_blank"); if (tab) tab.opener = null;
+    try { const url = await freshUrl(); if (tab) tab.location.href = url; else window.location.href = url; }
+    catch { tab?.close(); setError("The document could not be opened. Please try again."); }
+  };
+  const kind = view?.onboarding?.kind ?? null;
+  // "What happens next" after signing: the offer letter (deposit, then the CoE / VoE) and the referee check; other documents need nothing more.
+  const offerSteps: NextStep[] = [["ri-mail-check-line", "Our admissions team has your signed letter"],
+    ...(hasPayment ? [[paid ? "ri-checkbox-circle-line" : "ri-bank-card-line", paid ? "Your initial deposit is paid" : `Pay your ${depositLabel} initial deposit below`] as NextStep] : []),
+    ["ri-file-shield-2-line", `We issue your ${coeLabel} and email it to you`]];
+  const refereeSteps: NextStep[] = [["ri-mail-check-line", "SLIT has your reference"], ["ri-search-eye-line", "SLIT reviews the agent's application"], ["ri-checkbox-circle-line", "Nothing more is needed from you"]];
   return <main className={`min-h-screen bg-background-100 font-body text-foreground-900 ${hasBottomBar ? "pb-28" : "pb-10"} sm:pb-12`}>
     <header className="border-b border-background-200 bg-white">
       <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3">
@@ -380,32 +393,26 @@ export default function SigningPage() {
       {declined ? <p role="status" className={card}>You declined this request. The sender has been told. Please contact them if you need a new document.</p> : view && f04 ? (canSign
         ? <F04Wizard token={token} view={view} codeCheck={{ needed: !!view.requireCode, session: codeSession, render: () => <CodeCheck token={token} to={view.codeTo} onVerified={setCodeSession} /> }}
           onSigned={async () => { setJustSigned(true); await load(); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
-        : <F04Done view={view} justSigned={justSigned} />) : view ? <>
+        : <F04Done view={view} justSigned={justSigned} fetchUrl={freshUrl} />) : view ? <>
         {paymentPage ? <>
-          {/* OFFER-DEPOSIT: the same link after signing: "Offer accepted", the deposit to pay (or paid), the signed copy. The letter itself is not shown again. */}
-          <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:p-5" data-testid={justSigned ? "offer-signed" : "offer-already-signed"} data-accepted="true">
-            <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white" aria-hidden="true"><i className="ri-check-line text-lg" /></span>
-              <div className="min-w-0 flex-1">
-                <p className="font-heading text-base font-semibold text-emerald-900">Offer accepted <i className="ri-checkbox-circle-fill align-middle" aria-hidden="true" /></p>
-                <p className="text-sm text-emerald-900/80">{justSigned ? "Thank you. Your signed letter has been sent to our admissions team." : "Your signed offer letter is with our admissions team."}{view.signedAt ? ` Signed ${when(view.signedAt)}.` : ""}
-                  {hasPayment && !paid ? ` Your initial deposit of ${depositLabel} is still to be paid; you can pay it below.` : ""}</p>
-                <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                  <a className="inline-flex items-center gap-1 font-medium text-emerald-900 underline underline-offset-2" href={view.url} download data-testid="download-signed"><i className="ri-download-line" aria-hidden="true" />Download signed copy</a>
-                </p>
-              </div>
-            </div>
-          </div>
+          {/* OFFER-DEPOSIT: the same link after signing: "Offer accepted", what happens next, the signed copy, then the deposit to pay (or paid). The letter itself is not shown again. */}
+          <section className={card} data-accepted="true">
+            <SigningDone testId={justSigned ? "offer-signed" : "offer-already-signed"} message={justSigned ? "Thank you. Your offer is accepted." : "Your offer is accepted."}
+              note={hasPayment && !paid ? `Your initial deposit of ${depositLabel} is still to be paid; you can pay it below.` : "A copy of your signed letter is emailed to you."}
+              signedAt={view.signedAt} steps={offerSteps} fetchUrl={freshUrl} downloadLabel="Download signed copy" />
+          </section>
           {pay?.required && pay.payment && <div ref={paymentCard}><PaymentCard pay={pay} note={payNote} busy={paying} showPay={showPay} afterSigning polling={polling} coeLabel={coeLabel} onPay={() => void payNow()} /></div>}
           {offerState?.mismatch && !paid && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">A payment was received that does not match the deposit on your offer. Our admissions team will contact you.</p>}
-          {!hasPayment && !pay && <p className="text-xs text-foreground-500">Download links work for a few minutes; reload this page for new ones.</p>}
         </> : <>
-          {complete ? <div role="status" className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:p-5" data-testid="signing-complete">
-            <p className="font-semibold">This document is complete: everyone required has signed.</p>
-            {downloads}
-            <p className="text-sm text-foreground-600">A copy is also emailed to every signer. Download links work for a few minutes; reload this page for new ones.</p>
-          </div> : mine ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">{justSigned ? "Thank you, your signature is recorded. " : "You have signed this document. "}
-            It will be complete when everyone required has signed, and a copy will be emailed to you then.</p>
+          {complete ? <section className={card}>
+            <SigningDone testId="signing-complete" signedAt={view.signedAt} fetchUrl={freshUrl} downloadLabel="Download signed copy"
+              message={kind === "referee" ? (justSigned ? "Thank you. Your reference has been submitted." : "This reference has been signed and submitted.")
+                : justSigned ? "Thank you. The document is signed and complete." : "This document is complete: everyone required has signed."}
+              note="A copy is also emailed to every signer." steps={kind === "referee" ? refereeSteps : undefined} />
+          </section> : mine ? <section className={card}>
+            <SigningDone testId="signing-mine" signedAt={view.recipient.signed_at ?? null} message={justSigned ? "Thank you, your signature is recorded." : "You have signed this document."}
+              note="It will be complete when everyone required has signed, and a copy will be emailed to you then." />
+          </section>
             : offer ? <p className={`${card} text-sm text-foreground-700`}>Hello {view.recipient.name}. Read every page of your offer letter. Your initials go on every page, your signature and the date in the signature block, and you answer whether you elect to pay more than the required pre-paid fee. Then confirm the code we email you and sign at the bottom.{hasPayment || offerState?.hasPayment ? ` Your offer is accepted as soon as you sign; the ${depositLabel} initial deposit is paid by card on this page afterwards.` : ""}</p>
             : view.onboarding ? <p className={`${card} text-sm text-foreground-700`} data-testid="onboarding-intro">Hello {view.recipient.name}. These are the agent onboarding documents for <strong>{view.onboarding.agencyName}</strong>: the Agent Application Form (pages 1 to {view.onboarding.formPages}) and the Agent Agreement (from page {view.onboarding.formPages + 1}). What we already hold is printed. Fill in the highlighted fields, answer each Yes / No question, give two references, then sign once at the bottom: your signature goes on both documents.</p>
             : <p className={`${card} text-sm text-foreground-700`}>Hello {view.recipient.name}. You are signing as <strong>{view.recipient.role}</strong>. Read the complete document, fill in the highlighted fields, then sign at the bottom.</p>}
@@ -426,7 +433,7 @@ export default function SigningPage() {
                 <span className="w-12 text-center text-xs tabular-nums text-foreground-700" aria-live="polite" data-testid="zoom-level">{Math.round(zoom * 100)}%</span>
                 <button type="button" aria-label="Zoom in" disabled={zoom >= ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)])} className="flex h-8 w-8 items-center justify-center rounded-md border border-background-300 text-foreground-700 hover:bg-background-100 disabled:opacity-40"><i className="ri-zoom-in-line" aria-hidden="true" /></button>
               </div>
-              <a className="text-xs font-medium text-primary-700 underline underline-offset-2" href={view.url} target="_blank" rel="noreferrer">Open PDF</a>
+              <button type="button" className="cursor-pointer text-xs font-medium text-primary-700 underline underline-offset-2" onClick={() => void openPdf()} data-testid="open-pdf">Open PDF</button>
             </div>
             <div className="bg-background-100 p-2 sm:p-4">
               <PdfPages source={view.url} zoom={zoom} onLoaded={setPages} overlay={(page) => canSign ? view.fields.filter((f) => f.page === page).map((f) => {

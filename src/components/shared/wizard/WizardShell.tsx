@@ -65,13 +65,13 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
       {/* Body */}
       <div className={variant === "modal" ? "max-h-[62vh] overflow-y-auto p-5 md:p-6" : "p-5 md:p-6"}>{children}</div>
 
-      {/* Footer */}
-      <div className={stickyFooter
+      {/* Footer (none when there is nothing to put in it: a done page) */}
+      {footerStart == null && footerEnd == null ? null : <div className={stickyFooter
         ? "sticky bottom-0 z-20 flex flex-row items-center justify-between gap-3 rounded-b-xl border-t border-background-200 bg-background-50/95 px-4 py-3 backdrop-blur sm:static sm:bg-background-50 sm:p-5 md:px-6"
         : "flex flex-col gap-3 border-t border-background-200 p-5 sm:flex-row sm:items-center sm:justify-between md:px-6"} data-testid="wizard-footer">
         <div className="flex items-center gap-3">{footerStart}</div>
         {footerEnd}
-      </div>
+      </div>}
 
       {notices}
       {overlay}

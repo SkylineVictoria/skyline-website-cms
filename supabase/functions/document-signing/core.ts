@@ -71,7 +71,7 @@ const LINK_INVALID = "This signing link is invalid or expired.";
 export const LINK_GONE = "This link is no longer available.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
-const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
+const LINK_ACTIONS = ["open", "download", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
 /** The F04 wizard's draft ("Save and continue later"): at most this many characters of JSON. */
 const DRAFT_MAX = 60000;
 const isApplication = (record: { onboarding?: unknown }) => (record.onboarding as { kind?: string } | null)?.kind === "application";
@@ -260,6 +260,14 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
       };
       const record = await linkCall("open", { ip: call.ip });
+      if (action === "download") {
+        // The signing page's Download button (2026-11-20): a new short-lived link on every click, so the page never holds a stale one.
+        // The same document "open" shows (the signed PDF once signed); never the completion certificate.
+        const signed = record.state === "signed";
+        const path = signed ? record.signed_path : record.current_path ?? record.original_path;
+        const expected = signed ? record.signed_hash : record.current_hash ?? record.original_hash;
+        return { url: await fileUrl(path, expected, `${safeName(record.title)}${signed ? "-signed" : ""}.pdf`) };
+      }
       if (action === "draft_save") {
         // F04 wizard "Save and continue later": the contact's answers so far, kept on the server for this link's request and signer.
         if (!isApplication(record) || !ports.serviceRpc) throw new SigningError("Only the application form can be saved as a draft.");

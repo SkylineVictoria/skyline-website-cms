@@ -5,6 +5,7 @@ import { FieldError, WIZARD_INPUT, WizardLabel, WizardTextField } from "@/compon
 import AddressAutocomplete, { type AddressPick } from "@/components/shared/application-form/AddressAutocomplete";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import SignaturePad from "@/components/signing/SignaturePad";
+import SigningDone, { type NextStep } from "@/components/signing/SigningDone";
 import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type SigningView } from "@/lib/signingApi";
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
@@ -787,43 +788,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   );
 }
 
-/** The tick drawn once after signing (no motion when the reader asks for less: index.css). */
-function SuccessTick() {
-  return (
-    <svg viewBox="0 0 52 52" className="f04-tick-pop h-16 w-16 text-primary-600" aria-hidden="true" data-testid="f04-success-tick">
-      <circle className="f04-tick-circle" cx="26" cy="26" r="24" fill="none" stroke="currentColor" strokeWidth="3" />
-      <path className="f04-tick-check" d="M15 27 l7 7 l15 -16" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/** After submit: a tick, what happens next, and the signed application to download. */
-export function F04Done({ view, justSigned }: { view: SigningView; justSigned: boolean }) {
+/** After submit: a tick, what happens next, and the signed application to download (SigningDone, shared by every signing link). */
+export function F04Done({ view, justSigned, fetchUrl }: { view: SigningView; justSigned: boolean; fetchUrl: () => Promise<string> }) {
   // 2026-11-20: the agreement was signed with the form; SLIT countersigns it on approval (no second signature).
-  const steps: Array<[string, string]> = [["ri-mail-send-line", "We've emailed your 2 referees"], ["ri-search-eye-line", "SLIT reviews"],
+  const steps: NextStep[] = [["ri-mail-send-line", "We've emailed your 2 referees"], ["ri-search-eye-line", "SLIT reviews"],
     ["ri-file-text-line", view.onboarding?.combined ? "You'll receive the countersigned agreement" : "You'll receive the agent agreement"]];
   return (
     <WizardShell variant="page" icon="ri-checkbox-circle-line" title="Application submitted" subtitle={view.onboarding?.agencyName ? `Agent application for ${view.onboarding.agencyName}` : "Agent application"}
-      stepper={null} footerStart={null}
-      footerEnd={<a href={view.url} download className={WIZARD_PRIMARY_CLASS} data-testid="f04-download"><i className="ri-download-line" aria-hidden="true" />Download signed PDF</a>}>
-      <div role="status" className="flex flex-col items-center gap-3 py-2 text-center text-sm text-foreground-800" data-testid={justSigned ? "f04-submitted" : "f04-already-submitted"}>
-        <SuccessTick />
-        <p className="text-base font-semibold text-foreground-950">{justSigned ? "Thank you. Your application has been submitted." : "This application has been signed and submitted."}</p>
-        {view.signedAt ? <p className="text-xs text-foreground-500">Signed {new Date(view.signedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}</p> : null}
-      </div>
-      <section className="mt-5" data-testid="f04-next-steps">
-        <h3 className="mb-3 text-center text-sm font-semibold text-foreground-900">What happens next</h3>
-        <ol className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-center">
-          {steps.map(([icon, label], i) => (
-            <li key={label} className="flex items-center gap-2 sm:contents">
-              <span className="flex flex-1 items-center gap-2 rounded-lg border border-background-200 bg-background-100/60 px-3 py-2 text-sm text-foreground-900 sm:flex-none">
-                <i className={`${icon} text-primary-600`} aria-hidden="true" />{label}</span>
-              {i < steps.length - 1 ? <i className="ri-arrow-right-line hidden text-foreground-400 sm:inline" aria-hidden="true" /> : null}
-            </li>
-          ))}
-        </ol>
-        <p className="mt-4 text-center text-xs text-foreground-500">The download link works for a few minutes; reload this page for a new one.</p>
-      </section>
+      stepper={null} footerStart={null} footerEnd={null}>
+      <SigningDone message={justSigned ? "Thank you. Your application has been submitted." : "This application has been signed and submitted."}
+        testId={justSigned ? "f04-submitted" : "f04-already-submitted"} signedAt={view.signedAt} steps={steps} fetchUrl={fetchUrl} downloadTestId="f04-download" />
     </WizardShell>
   );
 }

@@ -173,6 +173,12 @@ export async function signingAddressSearch(token: string, q: string): Promise<{ 
 export async function signingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
   return invokeFunction<T>("document-signing", body, "The signing request could not be completed.", file);
 }
+/** A new short-lived link to the signed document of this signing link (the Download button asks on every click). */
+export async function signingDownloadUrl(token: string): Promise<string> {
+  const r = await signingAction<{ url?: string }>({ action: "download", token });
+  if (!r?.url) throw new Error("The download could not start.");
+  return r.url;
+}
 /** The `payments` function (Stripe Checkout on a signing request): a link holder sends the signing token, an administrator their session. Errors come back as { error }. */
 export function paymentsAction<T>(body: Record<string, unknown>): Promise<T> {
   return invokeFunction<T>("payments", body, "The payment request could not be completed.");

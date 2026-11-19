@@ -36,3 +36,14 @@ export async function syncMicrosoftGroup(intakeId: string): Promise<{ synced?: n
   }
   return data ?? {};
 }
+
+/** Read-only check of the Microsoft 365 app: IDs in use, token claims and test calls with Microsoft's exact answers. */
+export async function diagnoseMicrosoft(): Promise<Record<string, unknown>> {
+  const { data, error } = await supabase.functions.invoke("intake-groups", { body: { action: "diagnose" } });
+  if (error) {
+    let message = error.message;
+    try { const body = await (error as { context?: Response }).context?.json(); if (body?.error) message = body.error; } catch { /* keep message */ }
+    throw new Error(message);
+  }
+  return (data?.diagnosis ?? {}) as Record<string, unknown>;
+}

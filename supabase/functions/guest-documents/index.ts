@@ -8,6 +8,8 @@ import {
   checkGuestFile, documentRef, GUEST_CONSENT_VERSION, isDeclarable, isGuestCategory, publicDocument, tokenHashHex, visaApplies,
 } from "../_shared/guest-link.ts";
 import { runGuestUpload, type UploadPort } from "../_shared/guest-upload.ts";
+import { loadRules, ruleList, ruleNumber } from "../_shared/business-rules.ts";
+import { documentLimitProblem, documentLimits } from "../_shared/validation/person.ts";
 
 // Supabase's background-task API is supplied by the Edge runtime, not Deno CLI.
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
@@ -147,6 +149,11 @@ Deno.serve(async (request) => {
         console.log(JSON.stringify({ event: "guest_upload_rejected", reason: checked.code, found: checked.found ?? null, declared: file.type.slice(0, 60), bytes: bytes.length }));
         return failed(checked.code === "too_large" ? "Each file must be 10 MB or smaller." : checked.code === "empty" ? "This file is empty." : `This file looks like ${checked.found ?? "an unsupported file"}, not a PDF, JPG or PNG.`, checked.code === "too_large" ? 413 : 415);
       }
+      // Business Rules: the application document size and types SLIT allows (never above the 10 MB, PDF / JPG / PNG ceiling).
+      const rules = await loadRules(admin, ["admissions.application_document_limit_mib", "admissions.application_document_types"]);
+      const limited = documentLimitProblem(bytes.length, checked.mime, documentLimits(ruleNumber(rules, "admissions.application_document_limit_mib", 10),
+        ruleList(rules, "admissions.application_document_types", ["JPEG", "PNG", "PDF"])));
+      if (limited) return failed(limited, 415);
       const { data: app } = await admin.from("enrollment_applications").select("tenant_id").eq("id", applicationId).maybeSingle();
       const replaced = body.replaceRef ? await findDocument(body.replaceRef) : null;
       const checkOwnership = checkDocumentOwnership(admin, "enrollment-documents", checkCategory);

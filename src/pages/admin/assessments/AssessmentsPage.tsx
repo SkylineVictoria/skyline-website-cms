@@ -8,7 +8,7 @@ import CalendarView from "@/components/assessment/CalendarView";
 import ProgressList, { type Progress } from "@/components/assessment/ProgressList";
 import { fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/assessment/api";
 import { questionType } from "@/lib/assessment/registry";
-import { asmAdmin, downloadCsv, type AssessmentRow, type AuditRow, type BankRow, type BatchOption, type OutcomeRow, type Overview, type Settings } from "@/pages/admin/lib/assessments";
+import { asmAdmin, downloadCsv, type AssessmentRow, type AuditRow, type BankRow, type BatchOption, type OutcomeRow, type Overview, type Settings, attemptsRange } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import AttemptDrawer from "./panels/AttemptDrawer";
 
@@ -266,19 +266,20 @@ function SettingsTab() {
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
   if (!s) return <SkeletonLines lines={5} />;
-  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { maxAttempts: s.max_attempts, reassessmentDays: s.reassessment_days, lateSubmission: s.late_submission, rollupRule: s.rollup_rule, dueSoonDays: s.due_soon_days, requireTrainerRole: s.require_trainer_role, declarationText: s.declaration_text, instructions: s.instructions, evidenceMaxMb: s.evidence_max_mb, evidenceAllowedTypes: s.evidence_allowed_types })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
+  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { requireTrainerRole: s.require_trainer_role, declarationText: s.declaration_text, instructions: s.instructions, evidenceMaxMb: s.evidence_max_mb, evidenceAllowedTypes: s.evidence_allowed_types })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
   return (
     <div className="max-w-3xl space-y-4">
       <p className="text-sm text-foreground-700">Institution-wide rules; an assessment may override attempts, the reassessment window and the late rule. Attempt counts and windows are configuration, not a compliance ruling: confirm them against the Standards for RTOs.</p>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Maximum attempts"><TextInput type="number" min={1} max={10} value={s.max_attempts} onChange={(e) => setS({ ...s, max_attempts: Number(e.target.value) })} /></Field>
-        <Field label="Reassessment window (days)"><TextInput type="number" min={1} max={90} value={s.reassessment_days} onChange={(e) => setS({ ...s, reassessment_days: Number(e.target.value) })} /></Field>
-        <Field label="Due-soon reminder (days before)"><TextInput type="number" min={1} max={30} value={s.due_soon_days} onChange={(e) => setS({ ...s, due_soon_days: Number(e.target.value) })} /></Field>
-        <Field label="Late submissions"><Select value={s.late_submission} onChange={(e) => setS({ ...s, late_submission: e.target.value as Settings["late_submission"] })}><option value="allow">Allow (flagged as late)</option><option value="block">Block after the late date</option></Select></Field>
-        <Field label="Task rollup suggestion"><Select value={s.rollup_rule} onChange={(e) => setS({ ...s, rollup_rule: e.target.value as Settings["rollup_rule"] })}><option value="all_satisfactory">All questions S → task S (suggestion only)</option><option value="assessor_only">No suggestion; the assessor decides</option></Select></Field>
+        <Field label="Maximum attempts"><TextInput type="number" readOnly disabled min={attemptsRange().minimum} max={attemptsRange().maximum} value={s.max_attempts} /></Field>
+        <Field label="Reassessment window (days)"><TextInput type="number" readOnly disabled value={s.reassessment_days} /></Field>
+        <Field label="Due-soon reminder (days before)"><TextInput type="number" readOnly disabled value={s.due_soon_days} /></Field>
+        <Field label="Late submissions"><Select value={s.late_submission} disabled onChange={() => undefined}><option value="allow">Allow (flagged as late)</option><option value="block">Block after the late date</option></Select></Field>
+        <Field label="Task rollup suggestion"><Select value={s.rollup_rule} disabled onChange={() => undefined}><option value="all_satisfactory">All questions S → task S (suggestion only)</option><option value="assessor_only">No suggestion; the assessor decides</option></Select></Field>
         <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} onChange={(e) => setS({ ...s, require_trainer_role: e.target.value === "role" })}><option value="role">Intake trainers with the Trainer role, named assessors, admins</option><option value="any">Any active intake trainer, named assessors, admins</option></Select></Field>
-        <Field label="Evidence file limit (MB)"><TextInput type="number" min={1} max={200} value={s.evidence_max_mb} onChange={(e) => setS({ ...s, evidence_max_mb: Number(e.target.value) })} /></Field>
+        <Field label="Evidence file limit (MB)"><TextInput type="number" readOnly disabled value={s.evidence_max_mb} /></Field>
       </div>
+      <p className="text-xs text-foreground-600"><i className="ri-lock-line mr-1" aria-hidden="true" />Maximum attempts, reassessment window, due-soon reminder, late submissions, task rollup and evidence file limit: set in <Link className="underline" to="/admin/business-rules">Administration › Business Rules</Link>.</p>
       <Field label="Student declaration (shown and signed at submission; its hash is kept with every submission)"><TextArea rows={4} value={s.declaration_text} onChange={(e) => setS({ ...s, declaration_text: e.target.value })} /></Field>
       <Field label="Instructions shown on every assessment"><TextArea rows={3} value={s.instructions} onChange={(e) => setS({ ...s, instructions: e.target.value })} /></Field>
       <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} value={s.evidence_allowed_types.join("\n")} onChange={(e) => setS({ ...s, evidence_allowed_types: e.target.value.split("\n").map((x) => x.trim()).filter(Boolean) })} /></Field>

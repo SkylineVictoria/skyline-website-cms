@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "@/pages/agency/components/Dialog";
 import { getCoeDocument, issueCoeVoe, readCoeDocumentContent, uploadCoeDocument, type CoeDocumentInfo } from "@/pages/agency/lib/portalRegistrations";
 import { COE_KINDS, MAX_COE_BYTES, issueBlockers, validatePdfBytes, validatePdfFile, type CoeKind } from "@/pages/agency/lib/coeVoe";
+import { ruleNumber } from "@/lib/businessRules";
+
+/** Business Rules admissions.registration_coe_voe_pdf_mib, never above the 3 MB the database stores. */
+const coeMaxBytes = () => Math.min(MAX_COE_BYTES, ruleNumber("admissions.registration_coe_voe_pdf_mib", 3) * 1024 * 1024);
 
 const field = "w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-950";
 const primary = "inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-4 py-2.5 text-sm font-semibold text-background-50 hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60";
@@ -36,7 +40,7 @@ export default function CoeVoePanel({ registrationId, applicationId, application
   const upload = async (file: File | undefined) => {
     if (!file) return;
     setMessage("");
-    const nameProblem = validatePdfFile({ name: file.name, size: file.size });
+    const nameProblem = validatePdfFile({ name: file.name, size: file.size }, coeMaxBytes());
     if (nameProblem) { setMessage(nameProblem); return; }
     setBusy(true);
     try {
@@ -94,7 +98,7 @@ export default function CoeVoePanel({ registrationId, applicationId, application
           <input ref={fileInput} aria-label="CoE or VoE PDF" type="file" accept="application/pdf,.pdf" className={field} disabled={busy || registrationState !== "verified" || applicationStatus !== "offer_accepted"} onChange={(e) => void upload(e.target.files?.[0])} />
         </div>
       ) : null}
-      <p className="text-xs text-foreground-500">PDF only, up to {MAX_COE_BYTES / (1024 * 1024)} MB. It is stored privately and is emailed to the recipients configured for “CoE / VoE issued” when you issue it.</p>
+      <p className="text-xs text-foreground-500">PDF only, up to {Math.round(coeMaxBytes() / (1024 * 1024) * 10) / 10} MB. It is stored privately and is emailed to the recipients configured for “CoE / VoE issued” when you issue it.</p>
       {message ? <p role="status" className="rounded-md bg-background-100 px-3 py-2 text-foreground-800">{message}</p> : null}
       {!issued ? (
         <>

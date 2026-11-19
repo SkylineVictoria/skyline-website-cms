@@ -15,6 +15,19 @@ type Tab = "bookings" | "types" | "availability" | "people";
 const KIND_LABEL: Record<string, string> = { staff: "Staff", agent: "Agent", student: "Student", other: "" };
 const NEW_TYPE: MeetingType = { name: "", description: "", duration: 30, locationKind: "phone", locationDetail: "", locationId: null, buffer: 0, minNoticeHours: 4, maxDaysAhead: 60, requiresLogin: false, active: true };
 const DEFAULT_HOURS: AvailabilityRow[] = [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: "09:00", end: "17:00" }));
+// Business Rules (booking.new_type_*, booking.initial_host_availability) arrive with booking_me(); the constants above are the fallback.
+const newType = (me: BookingMe): MeetingType => ({ ...NEW_TYPE, ...(me.newType ?? {}) });
+const initialHours = (me: BookingMe): AvailabilityRow[] => (me.initialHours?.length ? me.initialHours : DEFAULT_HOURS);
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const clock = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "am" : "pm"}`; };
+/** "Monday to Friday, 9 am to 5 pm" for the hours a new booking page starts with. */
+function describeHours(rows: AvailabilityRow[]): string {
+  const days = [...new Set(rows.map((r) => r.weekday))].sort((a, b) => a - b);
+  if (!days.length) return "no hours";
+  const run = days.every((d, i) => i === 0 || d === days[i - 1] + 1);
+  const dayText = days.length > 2 && run ? `${DAY_NAMES[days[0]]} to ${DAY_NAMES[days[days.length - 1]]}` : days.map((d) => DAY_NAMES[d]).join(", ");
+  return `${dayText}, ${clock(rows[0].start)} to ${clock(rows[0].end)}`;
+}
 const ROOM: ResourceKind = { noun: "room", load: roomAvailability, save: saveRoomAvailability, empty: "No rooms yet. Add rooms in LMS › Timetable › Settings › Locations & rooms." };
 const TRAINER: ResourceKind = { noun: "trainer", load: trainerAvailability, save: saveTrainerAvailability, empty: "No active staff yet." };
 type Who = "me" | "rooms" | "trainers" | "students";
@@ -122,12 +135,12 @@ function SetupCard({ me, onDone, onError }: { me: BookingMe; onDone: (next: Book
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
-    try { onDone(await saveBookingHost({ handle, displayName: name, timezone, listed, enabled: true, availability: DEFAULT_HOURS })); } catch (e) { onError(e); } finally { setBusy(false); }
+    try { onDone(await saveBookingHost({ handle, displayName: name, timezone, listed, enabled: true, availability: initialHours(me) })); } catch (e) { onError(e); } finally { setBusy(false); }
   };
   return (
     <Card className="mb-5 p-5">
       <h2 className="font-heading text-base font-bold text-foreground-950">Set up your booking page</h2>
-      <p className="mt-1 text-sm text-foreground-600">You get a link to share. It starts with Monday to Friday, 9 am to 5 pm; change that under Availability.</p>
+      <p className="mt-1 text-sm text-foreground-600">You get a link to share. It starts with {describeHours(initialHours(me))}; change that under Availability.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Field label="Name people see" required><TextInput value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="Link name" required hint={`${me.origin.replace(/^https:\/\//, "")}/book/${handle || "…"}`}><TextInput value={handle} maxLength={40} onChange={(e) => setHandle(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} /></Field>
@@ -214,7 +227,7 @@ function TypesTab({ me, onDone, onError }: { me: BookingMe; onDone: (next: Booki
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
         <p className="text-sm text-foreground-600">Each meeting type has its own length, place and link.</p>
-        <Button size="sm" icon="ri-add-line" onClick={() => setEditing({ ...NEW_TYPE })}>Add meeting type</Button>
+        <Button size="sm" icon="ri-add-line" onClick={() => setEditing(newType(me))}>Add meeting type</Button>
       </div>
       {me.types.length === 0 ? <p className="p-4 text-sm text-foreground-600">No meeting types yet. Add one, for example “Intro call, 30 minutes”.</p> : (
         <ul className="divide-y divide-background-200">

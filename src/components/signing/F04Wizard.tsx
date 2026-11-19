@@ -8,6 +8,7 @@ import SignaturePad from "@/components/signing/SignaturePad";
 import SigningDone, { type NextStep } from "@/components/signing/SigningDone";
 import { softBreak } from "@/components/signing/softBreak";
 import { formatSignedAt } from "@/lib/signedTime";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type SigningView } from "@/lib/signingApi";
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
@@ -126,7 +127,7 @@ function Upload({ token, kind, file, error, onChange }: { token: string; kind: F
         </div>
       ) : (
         <label className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-background-300 px-3 py-1.5 text-xs font-semibold text-foreground-700 hover:bg-background-100 ${busy ? "opacity-50" : ""}`}>
-          <i className="ri-upload-2-line" aria-hidden="true" />{busy ? "Uploading…" : `Upload the ${F04_ATTACHMENTS[kind].toLowerCase()} (PDF, PNG or JPEG, up to 5 MB)`}
+          <i className="ri-upload-2-line" aria-hidden="true" />{busy ? "Uploading…" : `Upload the ${F04_ATTACHMENTS[kind].toLowerCase()} (PDF, PNG or JPEG, up to ${Math.min(5, ruleNumber("agents.agent_application_attachment_cap_mib", 5))} MB)`}
           <input type="file" accept="application/pdf,image/png,image/jpeg" className="sr-only" disabled={busy} onChange={(e) => { void send(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
       )}
@@ -210,7 +211,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
   const flags = useMemo(() => (admin ? reviewFlags : correctionFlags) ?? {}, [admin, reviewFlags, correctionFlags]);
   const order = useMemo(() => visibleSteps(mode, flags), [mode, flags]);
-  const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name, mode === "agent" || mode === "admin-prefill"),
+  const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name, (mode === "agent" || mode === "admin-prefill") && ruleText("agents.agent_application_yes_no_fallback", "No") === "No"),
     [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name, mode]);
   // F04 + P06 signed once (2026-11-20): the agreement's terms and the witness (preset by staff, or typed + drawn here).
   const combined = view.onboarding?.combined === true && !staff;

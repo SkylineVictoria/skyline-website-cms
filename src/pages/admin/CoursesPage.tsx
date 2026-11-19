@@ -25,7 +25,6 @@ import type { CatalogueCourse } from "@/pages/admin/lib/courseCatalogue";
 
 type SortKey = "order" | "name" | "updated";
 
-const FEATURED_LIMIT = HOME_COURSE_LIMIT;
 
 /** A course row opens its Website tab in Master Data › Courses. */
 const websiteTab = (slug: string) => `/admin/courses/${slug}`;
@@ -105,9 +104,9 @@ export default function CoursesPage() {
   };
 
   const toggleFeatured = (course: AdminCourse) => {
-    if (!course.featured && featuredCount >= FEATURED_LIMIT) {
+    if (!course.featured && featuredCount >= HOME_COURSE_LIMIT) {
       push(
-        `Up to ${FEATURED_LIMIT} courses can be featured; featured courses lead the homepage carousel. Turn one off before featuring another.`,
+        `Up to ${HOME_COURSE_LIMIT} courses can be featured; featured courses lead the homepage carousel. Turn one off before featuring another.`,
         "error",
       );
       return;
@@ -266,8 +265,8 @@ export default function CoursesPage() {
                       </button>
                     </td>
                     <td className="px-4 py-3">
-                      <span title={!c.featured && featuredCount >= FEATURED_LIMIT ? `The homepage carousel shows up to ${FEATURED_LIMIT} courses and ${featuredCount}/${FEATURED_LIMIT} are featured. Turn one off to feature this course.` : undefined}>
-                        <Toggle checked={c.featured} disabled={!c.featured && featuredCount >= FEATURED_LIMIT} onChange={() => toggleFeatured(c)} />
+                      <span title={!c.featured && featuredCount >= HOME_COURSE_LIMIT ? `The homepage carousel shows up to ${HOME_COURSE_LIMIT} courses and ${featuredCount}/${HOME_COURSE_LIMIT} are featured. Turn one off to feature this course.` : undefined}>
+                        <Toggle checked={c.featured} disabled={!c.featured && featuredCount >= HOME_COURSE_LIMIT} onChange={() => toggleFeatured(c)} />
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -309,7 +308,7 @@ export default function CoursesPage() {
         Showing {filtered.length} of {data.courses.length} courses. Use the arrows to set display order —
         the public website lists courses in this order.{" "}
         <strong className="font-semibold text-foreground-700">
-          {featuredCount}/{FEATURED_LIMIT}
+          {featuredCount}/{HOME_COURSE_LIMIT}
         </strong>{" "}
         featured on the homepage.
       </p>

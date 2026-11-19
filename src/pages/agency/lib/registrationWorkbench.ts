@@ -43,12 +43,16 @@ export function registrationChecklist(input: ChecklistInput): ChecklistItem[] {
   ];
 }
 
-/** Reasons verification would be refused; an empty list means the form may be submitted. */
-export function verifyBlockers(input: ChecklistInput & { coeInput: string }): string[] {
+/** What verification needs (Business Rules admissions.registration_verification_prerequisites; the CoE number is always needed). */
+export const VERIFY_PREREQUISITES = ["Registration lodged", "Offer accepted or later", "At least one evidence item", "Valid CoE number"] as const;
+
+/** Reasons verification would be refused; an empty list means the form may be submitted. `required` = the prerequisites SLIT keeps. */
+export function verifyBlockers(input: ChecklistInput & { coeInput: string }, required: readonly string[] = VERIFY_PREREQUISITES): string[] {
   const blockers: string[] = [];
-  if (input.state !== "lodged") blockers.push("Mark the registration as lodged first.");
-  if (!["offer_accepted", "coe_issued", "enrolled"].includes(input.applicationStatus)) blockers.push("The offer must be accepted before registration can be verified.");
-  if (input.evidenceCount < 1) blockers.push("Record at least one piece of evidence.");
+  const needs = (item: string) => required.includes(item);
+  if (input.state !== "lodged" && !(input.state === "draft" && !needs("Registration lodged"))) blockers.push("Mark the registration as lodged first.");
+  if (needs("Offer accepted or later") && !["offer_accepted", "coe_issued", "enrolled"].includes(input.applicationStatus)) blockers.push("The offer must be accepted before registration can be verified.");
+  if (needs("At least one evidence item") && input.evidenceCount < 1) blockers.push("Record at least one piece of evidence.");
   const coe = normaliseCoeNumber(input.coeInput);
   if (!coe.ok && coe.error) blockers.push(coe.error);
   return blockers;

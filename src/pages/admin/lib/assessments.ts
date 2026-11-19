@@ -1,6 +1,7 @@
 /** Assessment Management in the CMS: shapes the `asm_admin` RPC returns (camelCase) and small helpers. */
 import { asmAdmin } from "@/lib/assessment/api";
 import type { Definition, QuestionKey, UnitMapping } from "@/lib/assessment/types";
+import { ruleObject } from "@/lib/businessRules";
 
 export { asmAdmin };
 
@@ -55,4 +56,11 @@ export function downloadCsv(name: string, rows: Record<string, unknown>[]) {
 }
 export function downloadJson(name: string, value: unknown) {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" })); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/** The maximum attempts an administrator may enter (Business Rules assessment.attempts_allowed_range; the database checks it too). */
+export function attemptsRange(): { minimum: number; maximum: number } {
+  const r = ruleObject("assessment.attempts_allowed_range", { minimum: 1, maximum: 10 });
+  const minimum = Math.min(10, Math.max(1, Number(r.minimum) || 1));
+  return { minimum, maximum: Math.max(minimum, Math.min(10, Number(r.maximum) || 10)) };
 }

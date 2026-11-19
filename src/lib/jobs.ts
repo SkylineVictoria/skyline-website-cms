@@ -1,5 +1,6 @@
 // Job posts and job applications: the pure parts (labels, checks, the remembered "apply for this job" intent). Browser-free so
 // scripts/test-staff-registration.ts covers them; the database (hr_admin_job_save, hr_job_apply) checks everything again.
+import { hrNumber, megabytes, onHrRules } from "@/lib/hrRules";
 
 export type EmploymentType = "full_time" | "part_time";
 export const EMPLOYMENT_TYPES: readonly EmploymentType[] = ["full_time", "part_time"];
@@ -33,18 +34,23 @@ export function jobProblems(form: JobForm): Partial<Record<keyof JobForm, string
   return problems;
 }
 
-/** Resume and cover letter files on the public form: PDF or Word .docx, 5 MB or smaller (staff-register checks the content too). */
+/** Resume and cover letter files on the public form: PDF or Word .docx, 5 MB or smaller (staff-register checks the content too).
+ * The size and the cover letter length are Business Rules (hrms.job_attachment_limit_mib, hrms.cover_letter_limit_chars). */
 export const JOB_FILE_EXTENSION: Record<string, string> = {
   "application/pdf": "pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
 };
 export const JOB_FILE_ACCEPT = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-export const JOB_FILE_MAX_BYTES = 5 * 1024 * 1024;
-export const COVER_LETTER_MAX = 5000;
+export let JOB_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export let COVER_LETTER_MAX = 5000;
+onHrRules(() => {
+  JOB_FILE_MAX_BYTES = hrNumber("hrms.job_attachment_limit_mib", 5) * 1024 * 1024;
+  COVER_LETTER_MAX = hrNumber("hrms.cover_letter_limit_chars", 5000);
+});
 
 /** "" when the file can be sent, otherwise what is wrong. A .docx dragged from some browsers has no type: the name decides. */
 export function jobFileProblem(file: { name: string; type: string; size: number }): string {
   if (!jobFileMime(file)) return "Upload a PDF or Word (.docx) file.";
-  if (file.size <= 0 || file.size > JOB_FILE_MAX_BYTES) return "The file must be 5 MB or smaller.";
+  if (file.size <= 0 || file.size > JOB_FILE_MAX_BYTES) return `The file must be ${megabytes(JOB_FILE_MAX_BYTES)} or smaller.`;
   return "";
 }
 

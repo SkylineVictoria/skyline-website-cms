@@ -1,5 +1,6 @@
 import { enrolSections, type AppField, type AppSection } from "@/data/applicationForms";
 import { courses } from "@/data/courses";
+import { onRules, ruleList } from "@/lib/businessRules";
 
 /**
  * The agency portal reuses the exact same international student application
@@ -183,3 +184,23 @@ export function summarizeCourses(labels: string[]): string {
   if (labels.length === 0) return "No course selected";
   return labels.map((label) => label.split(" - ")[0]).join(", ");
 }
+/**
+ * Business Rules: which address and emergency contact details are required (admissions.australian_address_required_fields,
+ * admissions.overseas_address_required_fields, admissions.emergency_contact_required_details). A detail left out of its list becomes
+ * optional on the form; the database's submission check (admissions_field_optional) follows the same lists.
+ */
+const REQUIRED_DETAIL_RULES: ReadonlyArray<{ rule: string; labels: Readonly<Record<string, string>> }> = [
+  { rule: "admissions.australian_address_required_fields", labels: { au_suburb: "Suburb", au_state: "State", au_zip: "ZIP / Postal Code" } },
+  { rule: "admissions.overseas_address_required_fields", labels: { ov_suburb: "Suburb", ov_state: "State / Territory", ov_zip: "ZIP / Postal Code" } },
+  { rule: "admissions.emergency_contact_required_details", labels: { ec_name: "Full Name", ec_phone: "Contact Number", ec_in_au: "Whether the contact is in Australia" } },
+];
+/** Whether a field the rules cover is required now (true for any other field name). */
+export function detailRequired(name: string): boolean {
+  const entry = REQUIRED_DETAIL_RULES.find((r) => name in r.labels);
+  return entry ? ruleList(entry.rule, Object.values(entry.labels)).includes(entry.labels[name]) : true;
+}
+onRules(() => {
+  for (const list of [enrolSections, portalSections]) for (const section of list) for (const field of section.fields) {
+    if (REQUIRED_DETAIL_RULES.some((r) => field.name in r.labels)) field.required = detailRequired(field.name);
+  }
+});

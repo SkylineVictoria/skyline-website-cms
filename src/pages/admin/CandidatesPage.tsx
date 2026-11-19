@@ -6,7 +6,8 @@ import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionTabs,
 import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
 import { HrFields, HrHistory, HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
 import { adminListJobs, type AdminJob } from "@/lib/jobsApi";
-import { JOB_APPLICATION_STATUS_LABEL, JOB_FILE_ACCEPT, jobFileProblem } from "@/lib/jobs";
+import { JOB_APPLICATION_STATUS_LABEL, JOB_FILE_ACCEPT, JOB_FILE_MAX_BYTES, jobFileProblem } from "@/lib/jobs";
+import { megabytes } from "@/lib/hrRules";
 import {
   HR_PAGE_SIZE, hrName, hrDate, emptyPerson, getCandidate, hireCandidate, listCandidates, listCandidatesByJob, progressCandidate, saveCandidate, stages, uploadCandidateFile,
   type Candidate, type CandidateAction, type CandidateRow, type Page,
@@ -244,7 +245,7 @@ export function CandidateDetailPage() {
         <div className="space-y-3">{([["resume", "Resume", row.resume], ["cover_letter", "Cover letter", row.coverLetterFile]] as const).map(([which, label, file]) => <div key={which}>
           {file && !row.filesPurged ? <Button size="sm" variant="outline" onClick={() => void openFile(file.storagePath)} data-testid={`candidate-view-${which}`}>View {label.toLowerCase()} · {file.filename}</Button>
             : <p className="text-sm text-foreground-600">{row.filesPurged ? `${label} removed (retention)` : `No ${label.toLowerCase()} yet`}</p>}
-          {pending && row.source === "manual" ? <Field label={`Upload ${label.toLowerCase()} (PDF or Word .docx, 5 MB)`}>
+          {pending && row.source === "manual" ? <Field label={`Upload ${label.toLowerCase()} (PDF or Word .docx, ${megabytes(JOB_FILE_MAX_BYTES)})`}>
             <input className="block w-full text-sm" type="file" accept={JOB_FILE_ACCEPT} disabled={uploading} data-testid={`candidate-upload-${which}`} onChange={(e) => {
               const picked = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (picked) void upload(which, picked);
             }} />

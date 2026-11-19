@@ -32,6 +32,8 @@ export interface ApplyDeps {
   remove(path: string): Promise<void>;
   hash(value: string): Promise<string>;
   newId(): string;
+  /** Business Rules hrms.job_attachment_limit_mib / hrms.cover_letter_limit_chars (index.ts); never above the fixed ceilings. */
+  limits?: { fileBytes?: number; coverLetterChars?: number };
 }
 
 // eslint-disable-next-line no-control-regex -- control characters are never valid in a name
@@ -47,6 +49,9 @@ function cleanPersonName(value: unknown, label: string): { ok: true; value: stri
 }
 
 export async function handleApply(form: FormData, meta: { ip: string | null }, deps: ApplyDeps): Promise<ApplyResult> {
+  const fileBytes = Math.min(MAX_RESUME_BYTES, Math.max(1, deps.limits?.fileBytes ?? MAX_RESUME_BYTES));
+  const coverChars = Math.min(MAX_COVER_LETTER_CHARS, Math.max(1, deps.limits?.coverLetterChars ?? MAX_COVER_LETTER_CHARS));
+  const fileMb = `${Math.round((fileBytes / (1024 * 1024)) * 10) / 10} MB`;
   const callerKey = await deps.hash(meta.ip ?? "anonymous");
   if (!(await deps.takeRateLimit(`staff-register:caller:apply:${callerKey}`, 5, 600))) {
     return { status: 429, body: { error: "Please wait a few minutes before trying again." }, headers: { "Retry-After": "600" } };
@@ -66,7 +71,7 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
 
   const resume = form.get("resume");
   if (!resume || typeof resume === "string") return fieldError("resume", "Attach your resume (PDF or Word .docx).");
-  if (resume.size < 1 || resume.size > MAX_RESUME_BYTES) return fieldError("resume", "The resume must be 5 MB or smaller.");
+  if (resume.size < 1 || resume.size > fileBytes) return fieldError("resume", `The resume must be ${fileMb} or smaller.`);
   const bytes = new Uint8Array(await resume.arrayBuffer());
   const kind = detectResume(resume.name, bytes);
   if (!kind) return fieldError("resume", "Attach your resume as a PDF or Word (.docx) file.");
@@ -75,12 +80,12 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
   if (jobRaw && !UUID.test(jobRaw)) return fieldError("jobId", "This job is no longer open.");
   const coverText = String(form.get("coverLetter") ?? "").replace(/\r\n/g, "\n").trim();
   if (coverText && !jobRaw) return fieldError("coverLetter", "A cover letter goes with a job application.");
-  if (coverText.length > MAX_COVER_LETTER_CHARS || LETTER_CONTROL.test(coverText)) return fieldError("coverLetter", `Keep the cover letter under ${MAX_COVER_LETTER_CHARS} characters.`);
+  if (coverText.length > coverChars || LETTER_CONTROL.test(coverText)) return fieldError("coverLetter", `Keep the cover letter under ${coverChars} characters.`);
   const coverFile = form.get("coverLetterFile");
   let cover: { bytes: Uint8Array; kind: "pdf" | "docx"; name: string } | null = null;
   if (coverFile && typeof coverFile !== "string" && coverFile.size > 0) {
     if (!jobRaw) return fieldError("coverLetterFile", "A cover letter goes with a job application.");
-    if (coverFile.size > MAX_RESUME_BYTES) return fieldError("coverLetterFile", "The cover letter must be 5 MB or smaller.");
+    if (coverFile.size > fileBytes) return fieldError("coverLetterFile", `The cover letter must be ${fileMb} or smaller.`);
     const coverBytes = new Uint8Array(await coverFile.arrayBuffer());
     const coverKind = detectResume(coverFile.name, coverBytes);
     if (!coverKind) return fieldError("coverLetterFile", "Attach the cover letter as a PDF or Word (.docx) file.");
@@ -106,7 +111,7 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
     if (applied.reason === "invalid_phone") return fieldError("phone", "Enter your mobile number with its country code.");
     if (applied.reason === "invalid_name") return fieldError("firstName", "Check your name.");
     if (applied.reason === "job_closed") return fieldError("jobId", "This job is no longer open.");
-    if (applied.reason === "invalid_cover_letter") return fieldError("coverLetter", `Keep the cover letter under ${MAX_COVER_LETTER_CHARS} characters.`);
+    if (applied.reason === "invalid_cover_letter") return fieldError("coverLetter", `Keep the cover letter under ${coverChars} characters.`);
     // 'exists' for this email (owner decision 2026-11-12): the public "account already exists" answer, never the role.
     // Any other 'exists' (the mobile is on another record, or an older database without `field`): the same answer as success.
     if (applied.reason === "exists" && applied.field === "email") return { status: 409, body: publicEmailTakenBody() };

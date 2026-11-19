@@ -72,8 +72,10 @@ export interface AdminDeps {
   inviteLogin(email: string, name: string, redirectTo: string): Promise<{ userId: string | null; error: string | null }>;
   /** Retention (purge): true only for a verified service_role token of this project (the scheduled job), never a person. */
   isWorker?: boolean;
-  /** EF_HR_RETENTION_MONTHS (1-120, default 6). */
+  /** EF_HR_RETENTION_MONTHS (1-120) when set, else Business Rules hrms.onboarding_file_retention_fallback (default 6). */
   retentionMonths?: number;
+  /** Business Rules hrms.job_attachment_limit_mib in bytes (never above MAX_RESUME_BYTES). */
+  jobFileBytes?: number;
   /** Deletes storage objects; resolves with an error text when the storage call failed (then nothing is marked). */
   purgeFiles?(paths: string[]): Promise<{ error: string | null }>;
   /** The uploaded file (multipart offer_upload / candidate_file), or null. */
@@ -508,7 +510,8 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (!candidate?.profileId || !UUID.test(candidate.profileId) || candidate.source !== "manual" || candidate.status !== "applied") {
         return { status: 400, body: { error: "Files can be added to an open manual candidate only; a Careers applicant's files stay as submitted." } };
       }
-      if (file.bytes.length > MAX_RESUME_BYTES) return { status: 400, body: { error: "The file must be 5 MB or smaller.", field: "file" } };
+      const maxBytes = Math.min(MAX_RESUME_BYTES, Math.max(1, deps.jobFileBytes ?? MAX_RESUME_BYTES));
+      if (file.bytes.length > maxBytes) return { status: 400, body: { error: `The file must be ${Math.round((maxBytes / (1024 * 1024)) * 10) / 10} MB or smaller.`, field: "file" } };
       const kind = detectResume(file.name, file.bytes);
       if (!kind) return { status: 400, body: { error: "Attach a PDF or Word (.docx) file.", field: "file" } };
       const path = `${candidate.profileId}/${which === "resume" ? "resume" : "cover-letter"}/${deps.newId()}.${kind}`;

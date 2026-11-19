@@ -18,7 +18,8 @@
 // Organization.Read.All, Domain.Read.All, Mail.Send.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
-import { KINDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
+import { KINDS, LICENCE_RULE_IDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
+import { loadRules } from '../_shared/business-rules.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,7 +40,8 @@ Deno.serve(async(req:Request)=>{
   const raw=await req.text();if(raw.length>2000)return json({error:'Request too large.'},413);
   let body:Record<string,unknown>;try{body=JSON.parse(raw);}catch{return json({error:'Invalid JSON.'},400);}
   const action=String(body.action??'');
-  const ports:Ports={env:(n)=>Deno.env.get(n),fetch,rpc:(name,args)=>caller.rpc(name,args)};
+  // Business Rules: the licence used when EF_MICROSOFT365_*_SKU is not set (office365.*_license_fallback).
+  const ports:Ports={env:(n)=>Deno.env.get(n),fetch,rpc:(name,args)=>caller.rpc(name,args),rules:await loadRules(caller,LICENCE_RULE_IDS)};
   if(action==='m365_status'||action==='people'||action==='groups'){
    const gate=await caller.rpc('admin_business_require');
    if(gate.error)return json({error:gate.error.code==='42501'?'Administrator access required.':'Access could not be checked.'},gate.error.code==='42501'?403:500);

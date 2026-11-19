@@ -1,9 +1,11 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { currentTenantSite, resolveTenantSite } from "@/lib/tenantSite";
+import { ruleNumber } from "@/lib/businessRules";
 
 export const CMS_MEDIA_BUCKET = "cms-media";
 export const TENANT_PUBLIC_MEDIA_BUCKET = "tenant-public-media";
-const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+/** Business Rule cms.cms_document_limit_mib (20 MiB today; never above the tenant-public-media bucket limit of 20 MiB). */
+const maxDocumentMib = () => Math.min(20, Math.max(1, ruleNumber("cms.cms_document_limit_mib", 20)));
 const DOCUMENT_EXTENSIONS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv"]);
 
 export type StoredFile = {
@@ -26,7 +28,8 @@ function extension(name: string) { return name.split(".").pop()?.toLowerCase() ?
 export function validateDocument(file: File) {
   const ext = extension(file.name);
   if (!DOCUMENT_EXTENSIONS.has(ext)) throw new Error("Allowed file types: PDF, Word, Excel, PowerPoint, text, RTF, or CSV.");
-  if (file.size === 0 || file.size > MAX_DOCUMENT_BYTES) throw new Error("Files must be between 1 byte and 20 MB.");
+  const mib = maxDocumentMib();
+  if (file.size === 0 || file.size > mib * 1024 * 1024) throw new Error(`Files must be between 1 byte and ${mib} MB.`);
 }
 
 /** Uploads without upsert, then verifies that the exact object exists. */

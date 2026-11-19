@@ -1,6 +1,7 @@
 
 import { formatPhone, parseStoredPhone, validateStoredPhone } from "../../supabase/functions/_shared/validation/identifiers";
 import { bankDigits as digits, bankProblems as sharedBankProblems } from "../../supabase/functions/_shared/validation/person";
+import { hrNumber, megabytes, onHrRules } from "@/lib/hrRules";
 
 /** Staff > Employees, simple (20261110170000): types and the checks shared by the form and tests. No network here. */
 
@@ -30,7 +31,9 @@ export const EMPLOYEE_DOC_CATEGORIES = ["Passport", "Visa", "Driving Licence", "
 export type EmployeeDocCategory = (typeof EMPLOYEE_DOC_CATEGORIES)[number];
 export const EMPLOYEE_DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.doc,.docx,application/pdf,image/jpeg,image/png,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOC_MIME = ["application/pdf", "image/png", "image/jpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
-export const EMPLOYEE_DOC_MAX_BYTES = 10 * 1024 * 1024;
+/** Business Rules: hrms.employee_document_max_bytes (hr_admin_emp_doc_add checks the same). */
+export let EMPLOYEE_DOC_MAX_BYTES = 10 * 1024 * 1024;
+onHrRules(() => { EMPLOYEE_DOC_MAX_BYTES = hrNumber("hrms.employee_document_max_bytes", 10 * 1024 * 1024); });
 
 /* validation: the database checks the same rules (20261110170000) */
 
@@ -61,7 +64,7 @@ export function employeeProblems(form: EmployeeForm): Partial<Record<keyof Emplo
 export function employeeFileProblem(file: { type: string; size: number; name: string }): string | null {
   if (!DOC_MIME.includes(file.type)) return "Upload a PDF, JPG, PNG or Word file.";
   if (file.size < 1) return "The file is empty.";
-  if (file.size > EMPLOYEE_DOC_MAX_BYTES) return "The file must be 10 MB or smaller.";
+  if (file.size > EMPLOYEE_DOC_MAX_BYTES) return `The file must be ${megabytes(EMPLOYEE_DOC_MAX_BYTES)} or smaller.`;
   return null;
 }
 

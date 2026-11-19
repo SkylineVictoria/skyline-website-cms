@@ -1,0 +1,114 @@
+[
+  {
+    "type": "technical",
+    "id": "editor-schema",
+    "reason": "Rule editor labels, presentation and defaults for an unpublished form or the version schema.",
+    "fingerprints": [
+      "193236ebe88f34bb444fae91884652dabe2bcef620f1c8de353ce5663036f500",
+      "27f1918c42d988b2290a977037f96418aa162c1d1eb6c6af8220bd161f2958e6",
+      "54af919bdc8f32b545f7b43d70b9485272b2413431d02dd89a7ba1c8ba567b29",
+      "587a8162cc02265532c0fa7e2aa48ca52bbd049a25eef7de5d89707d987b9bee",
+      "5a7b2573dfab119ec7a255fdb7090dfe15f3a29fe8015de7a5ecee0d404186a8",
+      "65ff57bb1a13963c11f469f88d4b9997282d7ae3209f23e3af798784b4f89721",
+      "68865d34b4449496fdb3504de27a881dd7ebf32f1811f7386eb98031650d1ce3",
+      "7aa2c6d2090509ecbdf46793dcca916cea9d3c91b8d727d55af2e0e7b53520dd",
+      "85a235ed15f8441692484e4863b3d5cecedcb6216029174671a8f7fe3d7d5cfb",
+      "86b449c7e15317cec30535c49bbec7500007fde0b5de870a9645d6e156bcc977",
+      "8b0766de8aab6d3728f498bd0cb3d57be877653b456029edf56693334cd8bbd2",
+      "90b75c5177c4b90cf4237b5dbe1144575158963b0760f3d0d9c1d3e6e525c88f",
+      "9216a5a0c3aa89cd9465bd0410efc68386972e6dfc48bbed1b794cd23615909e",
+      "928f8959a080cb1dc68076720511e5f86d61d3480e0109ca679146918d361c13",
+      "952cd34e88083c6ffa075f9d536a45450b2074ead7a22d4b9470e9487d041d9d",
+      "9904bda84f780a23842a2752906a69ef4ad6b6f8943140f0cbe287b40e74a322",
+      "a2529ffabb6db50c5a61a386f99eebc3f0106cc85003b499ffc38ad2328b124c",
+      "a4f468b059259f5503c58cc99e544fa3cb913f5adb6bc436f67081fb81489c0f",
+      "bd33de80c71f21ce9b01032fe6852f03ae8bb76895450d619170d556c001ea39",
+      "d939525de7f31dfdbe4c14a7d2a799c49bbed2e3adae12c4fc645b51a6955f4d",
+      "dc4cda04118ce61f5eeba84cd559c407319ffa405aac21f87c5a6fb7468985aa",
+      "e4efd6cd9932b944d196d9998faec6cb0dceee19cd6bc24c4f970d345d9390e4",
+      "ed1eff7fbd1d295ce826d6737ae86b31ff06999fa66f554815588d44b83b1044",
+      "efaf0eb713deca6e2979e1a3e70e6bd9cf3d8c2dd9554b57f9fd48ba5d3858dc",
+      "fbe81c93b6507eb034b1eed6ba867736d2f8988480d2504193e1acd6ad3c73cb",
+      "ff51791789a18c754aeddc0b7ab05d3472954a18526d12248a8dbd72d283914f"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.unit_upload_max_bytes",
+    "reason": "Reads the current server-evaluated value and displays the limit to the user.",
+    "fingerprints": [
+      "36e457fab7fa576d0f0e545b4ca2f5e675029f0b5992f7ab0b22c4bbe67923c2",
+      "74344ca2abb505943975b6b02e402d26142fe8dd111bc2afcedf3ac21b03b566",
+      "aa979603c3d28224528693a6f25cf9a9634e0235c8895d30de597ba194d521b5"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "rule-engine-schema",
+    "reason": "Defines engine types, valid inputs, bounded history queries, and deterministic version selection.",
+    "fingerprints": [
+      "0140e53e6f258cae365579a415d3cd9fc1ba21f8ffd67a23cdf4b75a71a59cdb",
+      "3e886ba7086bc38006a576eb109c753f18a1514fa03e61ce5ffad9a8043fec82",
+      "4ddda5d91dd69c8d15225369f25183cd625791422f0277568fa9eedbd19dfe81",
+      "512f55a13f3e6b8b52ff7b9d2e4189a95c35cec3ab2cc8cceed94fb07069636f",
+      "5ccd9fc064e0487479f3b84a8536d249a39ee10f7b1e2bcd6ad8a458c4d14cc5",
+      "73f5df6ec73f70de4f4367a7aa12042af6bb58251b477b4e57be8d0d058bf3ff",
+      "782ae6d923276cabbe1dbc932519e8fe23564343fdd31ec3fe36a327eb1c6d3a",
+      "8b7355c726277561f14442727fb7e4cb3ed69704b4c7968601ff0298d3b40e25",
+      "90475aff1bbe55aee110674df0d0db5b46a135f61cfe64612029aed945cb3414",
+      "b8231c286587fc97b4a74c2385e19f85259376c603b10c898f02318848d9a995",
+      "c3f06b0df8fc54924164738238499119ca08e04d3d85092469b4c4d3b6cd2ca4",
+      "cd76cd3672caeeae447d202fe64690b52a2d50f46dba41cca412f0f8aa197bc7",
+      "d0136d8b574ae932306714e1359463f90372d0c5d194f748f8f0f3437dac7190",
+      "dba05ac20b0a925a1ccdf2f64886645a215f9e7ed02826c3b3f9e1389412bf7c"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "publishing-control",
+    "reason": "Enforces attributed approval, independent administrator authorization, and configured second-person publication.",
+    "fingerprints": [
+      "075558ae9482c7c9f09dad08b29aadbfd0e1449cd26ad7d8292367d737ec4008",
+      "4a955d43f4e04e0740397081581e664f6a354321e00cae2f77613a0a818313c9",
+      "53e81211b9336a9c5cb3f236859b5d50fcd1a87bf763d273ba68a86f677a2a3a",
+      "64af14cab62b1af09d89de6462feba16d4b9c691916deff737cbd3a5fdb6d1c9",
+      "66654998f3c185e18cf9cc09fccd9715343a56df0f9b38b9099be1d41a09eabd",
+      "7df96c8cd0bf636e39d04382170e8dc39b0da67ffb6192006ca1d6c1aa89268b",
+      "924a934b20e6fdde9235f83fbd0511ee797625ac50c0c280812f34ff099d4aed",
+      "9db44602c4e27afc4f1ecc7b199b78ac5ee8ff0d33540147f54f14190db96543"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "storage-ceiling",
+    "reason": "Maintains the existing Storage infrastructure ceiling and reads the current continuity value from Storage.",
+    "fingerprints": [
+      "4a3a479cd50f1cda7464dd3c5a551bdc878219519ce7127889b997cabaadcfd8",
+      "52c06d33190b809cc24947d03acec00ee1def5f2b4e202a4a33379bf1316aec7",
+      "73496ed80d5dc535c6e3ce04cc1a6127b6ace46af94116c19c30ae2dab314857",
+      "7cf6612ff0838b8eca6b71053f914bc6dd46628850793cdb5cd3db7f3640c40b",
+      "8d29ce0390f177643d3170ef0cf455ef213a86db941633ef1819634a8fb14058",
+      "d9262f055f56b79b21b8452c44e1d2e2c5d232398bd34ffb9e678333a6316b0b",
+      "e45f9afe0963e6b75fd977412847e328e52922dff6f834e6fb88e2287b541838",
+      "f882c88b72e934a78ddbd31e811d57b4aa1913ae5a1847d66cfe38fa009b135d"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.unit_upload_max_bytes",
+    "reason": "Registers or enforces the LMS learning attachment limit through the centralized engine.",
+    "fingerprints": [
+      "684be5a328ce891a60ed3c417cdc2dd97dd6e0286912ad9670e64f4e1f96a9ac",
+      "c91a22ef961638d09463e1db861a07e6c99d6a03199d87321f25a9f7c662bcb2",
+      "e776351267410b0f6df376a61dee4c342eab158a5367bb827ef9b8f033aff2f2"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "upload-rights",
+    "reason": "Maintains the existing learning content editing permission independently.",
+    "fingerprints": [
+      "42980fef4e582253211aeaf5150b7bf13737c3eb885d2750feca88411624fa5f"
+    ]
+  }
+]

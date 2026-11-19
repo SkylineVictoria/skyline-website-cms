@@ -18,6 +18,8 @@ const AREAS: { key: string; label: string; icon: string; to: string; tone: strin
   { key: "certificatesReady", label: "Ready for a certificate", icon: "ri-award-line", to: "/admin/lms/completion", tone: "text-green-700 bg-green-50", empty: "No one ready yet." },
   { key: "batchesWithoutClasses", label: "Intakes with no class dates", icon: "ri-calendar-close-line", to: "/admin/lms/intakes", tone: "text-red-700 bg-red-50", empty: "Every intake with students has classes." },
   { key: "classesToday", label: "Classes today", icon: "ri-calendar-2-line", to: "/admin/lms/timetable", tone: "text-foreground-700 bg-background-100", empty: "No classes today." },
+  // 2026-11-20: the daily check (cron_http_health_check) of the scheduled jobs that call Edge Functions: 3+ calls without a 2xx answer in 24 h.
+  { key: "scheduledJobs", label: "Scheduled jobs failing", icon: "ri-alarm-warning-line", to: "/admin", tone: "text-red-700 bg-red-50", empty: "Every scheduled job answered normally." },
 ];
 const ago = (iso?: string | null) => {
   if (!iso) return "";

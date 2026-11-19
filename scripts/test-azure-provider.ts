@@ -1098,6 +1098,20 @@ test("sms: the 24-hour SQL expiry and the consent text without a STOP promise ar
   assert.match(sql, /TODO\(sms-stop\)/);
 });
 
+test("scheduled jobs: every HTTP dispatcher posts through cron_http_post, a daily check flags 3+ failed calls, the dashboard shows them", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120063419_cron_http_health.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const patched = [...sql.matchAll(/select pg_temp\.patch\('public\.([a-z_]+)\(\)', 'net\.http_post\(', 'public\.cron_http_post\(''([a-z-]+)'', '\);/g)].map((m) => `${m[1]}:${m[2]}`);
+  assert.deepEqual(patched, ["hr_holiday_sync_dispatch:hr-holiday-sync", "hr_retention_dispatch:hr-retention-purge", "integration_refresh_dispatch:integration-token-refresh",
+    "notification_dispatch_worker:notification-delivery-worker", "portal_dispatch_document_extraction_worker:portal-document-extraction-worker",
+    "public_assistant_dispatch_index_worker:public-assistant-index-worker", "signing_dispatch:signing-notifications", "support_mail_dispatch:support-ticket-mail"]);
+  assert.match(sql, /r\.status_code not between 200 and 299/, "anything but a 2xx answer is a failed call");
+  assert.match(sql, /'no response within an hour'/);
+  assert.match(sql, /cron_http_health_check\(p_hours integer default 24, p_min_failures integer default 3\)/);
+  assert.match(sql, /cron\.schedule\('cron-http-health', '30 21 \* \* \*'/);
+  const board = readFileSync(new URL("../src/pages/admin/components/NeedsActionBoard.tsx", import.meta.url), "utf8");
+  assert.match(board, /key: "scheduledJobs", label: "Scheduled jobs failing"/);
+});
+
 test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {
   const { port } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c")], false);
   const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);

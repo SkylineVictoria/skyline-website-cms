@@ -8,15 +8,17 @@
 //   lookup { personType, personId }          -> existing Microsoft 365 accounts for the person, the address, the licence and its free seats
 //   create { personType, personId, dryRun?, differentPerson? } -> create (or with dryRun: every check, nothing written or created)
 //   link { personType, personId, msUserId }  -> link an existing Microsoft 365 account to the record (o365_link)
-// Person types: student -> EF_MICROSOFT365_STUDENT_DOMAIN + STANDARDWOFFPACK_STUDENT; employee / trainer -> slit.edu.au +
-// STANDARDWOFFPACK_FACULTY (owner 2026-11-20; EF_MICROSOFT365_STAFF_DOMAIN / _STAFF_SKU override). Agents get no mailbox.
+//   resend { personType, personId, dryRun? } -> new temporary password + login email for an account already created (never a second account)
+//   groups {}                                -> the tenant's groups (for the owner to map to person types)
+// Person types: student -> EF_MICROSOFT365_STUDENT_DOMAIN + STANDARDWOFFPACK_STUDENT; employee / trainer / agent -> slit.edu.au +
+// STANDARDWOFFPACK_FACULTY (owner 2026-11-20; EF_MICROSOFT365_STAFF_DOMAIN / _STAFF_SKU override).
 // The flow lives in _shared/office365-provision.ts (tested offline). The temporary password is never stored or returned.
 // Secrets: EF_MICROSOFT365_CLIENT_ID, _CLIENT_SECRET, _TENANT_ID, _STUDENT_DOMAIN, _WELCOME_SENDER; optional _STUDENT_SKU, _STAFF_DOMAIN,
 // _STAFF_SKU, _USAGE_LOCATION (default AU). App permissions (Application, admin consent): User.ReadWrite.All, LicenseAssignment.ReadWrite.All,
 // Organization.Read.All, Domain.Read.All, Mail.Send.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
-import { KINDS, link, lookup, MESSAGES, provision, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
+import { KINDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -38,9 +40,10 @@ Deno.serve(async(req:Request)=>{
   let body:Record<string,unknown>;try{body=JSON.parse(raw);}catch{return json({error:'Invalid JSON.'},400);}
   const action=String(body.action??'');
   const ports:Ports={env:(n)=>Deno.env.get(n),fetch,rpc:(name,args)=>caller.rpc(name,args)};
-  if(action==='m365_status'||action==='people'){
+  if(action==='m365_status'||action==='people'||action==='groups'){
    const gate=await caller.rpc('admin_business_require');
    if(gate.error)return json({error:gate.error.code==='42501'?'Administrator access required.':'Access could not be checked.'},gate.error.code==='42501'?403:500);
+   if(action==='groups'){const g=await listGroups(ports);return json(g.body,g.status);}
    if(action==='people'){
     const r=await caller.rpc('email_mgmt_people',{p_type:String(body.personType??''),p_query:String(body.q??'').slice(0,80)});
     if(r.error)return json({error:r.error.code==='22023'?r.error.message:'The people could not be loaded.'},r.error.code==='22023'?400:500);
@@ -57,8 +60,8 @@ Deno.serve(async(req:Request)=>{
   // The student page (studentId) or Create Email (personType + personId).
   const kind=(body.studentId!==undefined?'student':String(body.personType??'')) as PersonKind;
   const personId=String(body.studentId??body.personId??'');
-  if(!['state','create','lookup','link'].includes(action))return json({error:'Unknown action.'},400);
-  if(!KINDS.includes(kind))return json({error:'Choose Student, Employee or Trainer.'},400);
+  if(!['state','create','lookup','link','resend'].includes(action))return json({error:'Unknown action.'},400);
+  if(!KINDS.includes(kind))return json({error:'Choose Student, Employee, Trainer or Agent.'},400);
   if(!uuid.test(personId))return json({error:'Choose a person.'},400);
   if(action==='state'){
    if(kind!=='student')return json({error:'Unknown action.'},400);
@@ -68,8 +71,9 @@ Deno.serve(async(req:Request)=>{
    return json({configured:configured(),account:p.account?{...p.account,message:p.account.lastError?MESSAGES[p.account.lastError]??null:null}:null});
   }
   const r=action==='lookup'?await lookup(ports,kind,personId)
+   :action==='resend'?await resend(ports,kind,personId,{dryRun:body.dryRun===true})
    :action==='link'?await link(ports,kind,personId,String(body.msUserId??''))
-   :await provision(ports,kind,personId,{dryRun:body.dryRun===true,differentPerson:body.differentPerson===true});
+   :await provision(ports,kind,personId,{dryRun:body.dryRun===true,differentPerson:body.differentPerson===true,domain:typeof body.domain==='string'?body.domain.slice(0,100):undefined});
   return json(r.body,r.status);
  }catch{return json({error:'The request could not be completed. Retry.'},500);}
 });

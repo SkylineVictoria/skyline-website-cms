@@ -32,12 +32,15 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
 }
 export const fetchMicrosoft365Status = () => call<Microsoft365Status>({ action: "m365_status" });
 /** Create Email (2026-11-20): Student, Employee or Trainer (agents get no mailbox). */
-export type MailboxKind = "student" | "employee" | "trainer";
+export type MailboxKind = "student" | "employee" | "trainer" | "agent";
+/** What happened to a person's account, step by step (resumable). */
+export interface Office365Steps { accountCreatedAt: string | null; licenceAssignedAt: string | null; groupsAddedAt: string | null; groupsError: string | null; welcomeSentAt: string | null; welcomeError: string | null }
 export interface Office365Existing { id: string; upn: string; mail: string | null; displayName: string; enabled: boolean; match: "linked" | "email" | "username" | "name" }
 export interface Office365Lookup {
   person: { name: string; email: string | null }; plan: { domain: string; sku: string; licenceName: string };
-  licence: { total: number; available: number } | null; account: null | { email: string; status: string; linked?: boolean };
-  existing: Office365Existing[]; address: string | null; blocked: string | null;
+  licence: { total: number; available: number } | null;
+  account: null | { email: string; status: string; linked?: boolean; msUserId?: string | null; lastError?: string | null; licenceSku?: string | null; steps?: Office365Steps };
+  existing: Office365Existing[]; address: string | null; blocked: string | null; domains?: string[]; groups?: number;
 }
 export type Office365CreateReply = { ok?: true; email?: string; welcomeSent?: boolean; warning?: string; dryRun?: true; sku?: string; welcomeTo?: string };
 /** A refusal that carries the matches (already has / possible match), so the screen can offer to link. */
@@ -56,8 +59,11 @@ async function callWithBody<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 export const lookupOffice365 = (personType: MailboxKind, personId: string) => callWithBody<Office365Lookup>({ action: "lookup", personType, personId });
-export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean } = {}) =>
+export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string } = {}) =>
   callWithBody<Office365CreateReply>({ action: "create", personType, personId, ...opts });
+/** Resend login email: a new temporary password (change at next sign-in), any missing licence / group step finished; never a second account. */
+export const resendOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean } = {}) =>
+  callWithBody<{ ok?: true; email: string; welcomeSent?: boolean; welcomeTo?: string; dryRun?: true }>({ action: "resend", personType, personId, ...opts });
 export const linkOffice365 = (personType: MailboxKind, personId: string, msUserId: string) => callWithBody<{ ok: true; email: string }>({ action: "link", personType, personId, msUserId });
 export const fetchEmailPeople = (personType: PersonType, q = "") => call<{ people: EmailPerson[] }>({ action: "people", personType, q }).then((r) => r.people ?? []);
 

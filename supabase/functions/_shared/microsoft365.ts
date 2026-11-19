@@ -30,6 +30,8 @@ export interface Microsoft365Status {
   consent: { granted: string[]; missing: string[]; welcomeEmail: boolean };
   domains: Array<{ name: string; verified: boolean; found: boolean }>;
   licences: Array<{ sku: string; available: number; total: number; student: boolean; staff: boolean }>;
+  /** The mailbox the login emails are sent from (EF_MICROSOFT365_WELCOME_SENDER): found in the tenant, enabled, with an Exchange licence. */
+  sender: { address: string; found: boolean; enabled: boolean; exchangeLicence: boolean; plans: string[] } | null;
   /** One plain sentence per problem, in the order to fix them. */
   problems: string[];
   checkedAt: string;
@@ -64,7 +66,7 @@ export async function microsoft365Status(env: Env, request: typeof fetch = fetch
   const status: Microsoft365Status = {
     configured: !!(clientId && secret && tenantId), connected: false, ready: false, tenant: null, clientIdEnd: clientId ? clientId.slice(-4) : null,
     checks: { connection: "not_checked", consent: "not_checked", domain: "not_checked", licence: "not_checked" },
-    consent: { granted: [], missing: [...REQUIRED_ROLES], welcomeEmail: false }, domains: [], licences: [], problems: [], checkedAt: now().toISOString(),
+    consent: { granted: [], missing: [...REQUIRED_ROLES], welcomeEmail: false }, domains: [], licences: [], sender: null, problems: [], checkedAt: now().toISOString(),
   };
   if (!status.configured) {
     status.checks.connection = "missing";
@@ -136,6 +138,21 @@ export async function microsoft365Status(env: Env, request: typeof fetch = fetch
     status.checks.licence = "failed";
     status.problems.push("The licences could not be read (Organization.Read.All needs admin consent).");
   }
+  // 5. The login-email sender: a real mailbox in the tenant (a licensed user with Exchange, or a shared mailbox).
+  const sender = read("EF_MICROSOFT365_WELCOME_SENDER").toLowerCase();
+  if (sender) {
+    try {
+      const r = await graph(`/users/${encodeURIComponent(sender)}?$select=id,accountEnabled,mail,assignedPlans`);
+      if (r.status === 404) { await r.body?.cancel(); status.sender = { address: sender, found: false, enabled: false, exchangeLicence: false, plans: [] }; }
+      else if (r.ok) {
+        const u = await r.json() as { accountEnabled?: boolean; assignedPlans?: Array<{ service?: string; capabilityStatus?: string }> };
+        const plans = [...new Set((u.assignedPlans ?? []).filter((p) => p.capabilityStatus === "Enabled").map((p) => String(p.service ?? "")))].filter(Boolean).sort();
+        status.sender = { address: sender, found: true, enabled: u.accountEnabled !== false, exchangeLicence: plans.includes("exchange"), plans };
+      } else await r.body?.cancel();
+    } catch { /* reported as unknown */ }
+    if (status.sender && !status.sender.found) status.problems.push(`The login emails are sent from ${sender}, which does not exist in Microsoft 365. Create it (a shared mailbox is enough) or change EF_MICROSOFT365_WELCOME_SENDER.`);
+    else if (status.sender && !status.sender.exchangeLicence) status.problems.push(`The login emails are sent from ${sender}, which has no Exchange Online licence. Unless it is a shared mailbox, give it a licence with Exchange (e.g. Office 365 A1 for faculty) in the Microsoft 365 admin centre.`);
+  } else status.problems.push("No sender mailbox is set for login emails (EF_MICROSOFT365_WELCOME_SENDER).");
   status.ready = Object.values(status.checks).every((c) => c === "ok");
   return status;
 }

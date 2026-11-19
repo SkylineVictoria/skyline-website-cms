@@ -1117,8 +1117,13 @@ test("Edge Function errors (2026-11-20): browser reports are locked down, queued
   // The allowlist is every function folder.
   const dirs = readdirSync(new URL("../supabase/functions/", import.meta.url), { withFileTypes: true })
     .filter((d) => d.isDirectory() && existsSync(new URL(`../supabase/functions/${d.name}/index.ts`, import.meta.url))).map((d) => d.name).sort();
-  const listed = [...(/select array\[([\s\S]*?)\]::text\[\]/.exec(sql)?.[1] ?? "").matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]).sort();
-  assert.deepEqual(listed, dirs, "edge_function_names() lists exactly the functions in supabase/functions");
+  // The latest definition wins: a later migration may redefine the list when a function is added.
+  const latest = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((n) => n.endsWith(".sql")).sort().reverse()
+    .map((n) => readFileSync(new URL(`../supabase/migrations/${n}`, import.meta.url), "utf8").replace(/\r\n/g, "\n"))
+    .find((t) => /create or replace function public\.edge_function_names\(\)/.test(t)) ?? sql;
+  const body = latest.slice(latest.lastIndexOf("create or replace function public.edge_function_names()"));
+  const listed = [...(/select array\[([\s\S]*?)\]::text\[\]/.exec(body)?.[1] ?? "").matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(listed, dirs, "edge_function_names() (latest definition) lists exactly the functions in supabase/functions");
   // The report table: no direct access; one validated, capped, rate-limited way in.
   assert.match(sql, /revoke all on public\.edge_function_errors from public, anon, authenticated;/);
   assert.match(sql, /status integer not null check \(status between 500 and 599\)/);

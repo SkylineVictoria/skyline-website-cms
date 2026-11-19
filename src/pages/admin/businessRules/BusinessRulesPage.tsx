@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { loadBusinessRules } from "@/lib/businessRules";
 import { Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { AdminLoading, Badge, Button, Card, Field, PageHeader, SectionTabs, TextInput } from "@/pages/admin/components/ui";
@@ -77,6 +78,7 @@ function RuleWorkspace() {
       if (error) throw new Error(["22023", "42501", "23505", "40001"].includes(error.code) ? error.message : registrationError);
       if (command !== "preview") {
         await reload();
+        if (command === "publish") void loadBusinessRules(true);
         if (command === "save") setSelected(data.rule_id);
         if (command === "category") setCategoryEdit(null);
         setMessage(command === "rollback" ? "Rollback draft created. Publish it to apply the change." : "Change saved.");

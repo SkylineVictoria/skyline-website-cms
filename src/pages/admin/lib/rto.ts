@@ -1,6 +1,7 @@
 // Courses, units, fees, intakes (the master timetable; an intake is its class group) and classrooms. Every read and write goes through
 // public.rto_admin, which checks the role (RTO Manager edits; Admin enrols; any CMS user reads and edits website settings).
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleKey, ruleList, ruleNumber, ruleObject } from "@/lib/businessRules";
 
 /** The database refuses duplicate LMS rows (migration 20261119184213_no_duplicate_lms_rows); say which one in plain words. */
 const DUPLICATES: Array<[RegExp, string]> = [
@@ -30,16 +31,21 @@ export type FeeType = "application" | "registration" | "enrolment" | "material" 
 export type GstTreatment = "gst_free" | "inclusive" | "exclusive";
 export interface FeeItem { id?: string; type: FeeType; label: string; amountCents: number; includedInTotal?: boolean; refundable?: boolean; gstTreatment?: GstTreatment }
 /** The default for a new line: every fee counts towards the total; an initial deposit is part of the tuition, so it does not. */
-export const includedByDefault = (type: FeeType) => type !== "initial_deposit" && type !== "oshc";
+export const includedByDefault = (type: FeeType) => !ruleList("finance.course_total_excluded_default", ["Initial deposit", "OSHC"]).map(ruleKey).includes(type);
 /** Application and registration fees are non-refundable unless a line says otherwise ("(Non-Refundable)" is printed from this flag). */
-export const refundableByDefault = (type: FeeType) => !["application", "registration", "enrolment"].includes(type);
+export const refundableByDefault = (type: FeeType) => !ruleList("finance.course_fee_nonrefundable_defaults", ["Application", "Registration", "Enrolment"]).map(ruleKey).includes(type);
 export const isRefundable = (item: FeeItem) => item.refundable ?? refundableByDefault(item.type);
 /** The offer letter's order: application, registration, material, tuition (then other), total; the deposit after it. */
 export const FEE_RANK: Record<FeeType, number> = { application: 1, enrolment: 1, registration: 2, material: 3, tuition: 4, other: 5, oshc: 6, initial_deposit: 7 };
 /** The amount a new line starts with: application $250, registration $0, initial deposit $1,500. */
-export const DEFAULT_FEE_CENTS: Partial<Record<FeeType, number>> = { application: 25000, registration: 0, initial_deposit: 150000 };
+const feeSuggestions = () => ruleObject("finance.course_fee_suggestions", { application: 250, registration: 0, initialDeposit: 1500 });
+export const DEFAULT_FEE_CENTS: Partial<Record<FeeType, number>> = {
+  get application() { return Math.round(Number(feeSuggestions().application) * 100); },
+  get registration() { return Math.round(Number(feeSuggestions().registration) * 100); },
+  get initial_deposit() { return Math.round(Number(feeSuggestions().initialDeposit) * 100); },
+};
 /** The pre-paid limit the offer letter states; a larger deposit needs the student's election to pay more. */
-export const DEPOSIT_LIMIT_CENTS = 150000;
+export const depositLimitCents = () => Math.round(ruleNumber("finance.course_fee_deposit_cap", 1500) * 100);
 /** GST: exclusive adds 10% to the line; inclusive already contains 1/11; GST-free adds nothing (same rule as the database). */
 export const lineTotal = (item: FeeItem) => (item.gstTreatment === "exclusive" ? item.amountCents + Math.round(item.amountCents / 10) : item.amountCents);
 export const lineGst = (item: FeeItem) => (item.gstTreatment === "exclusive" ? Math.round(item.amountCents / 10) : item.gstTreatment === "inclusive" ? Math.round(item.amountCents / 11) : 0);

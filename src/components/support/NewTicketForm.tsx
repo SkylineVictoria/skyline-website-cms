@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ruleNumber } from "@/lib/businessRules";
 import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, ticketStudents, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
 
 /** New ticket form for students and agents. Agents can say which student the ticket is about. */
@@ -61,7 +62,7 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
       <label className="block text-sm font-medium text-foreground-800">Description
         <textarea className={`${field} min-h-[140px]`} maxLength={10000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What do you need help with?" />
       </label>
-      <label className="block text-sm font-medium text-foreground-800">Attachments (optional, up to 5 files, 10 MB each)
+      <label className="block text-sm font-medium text-foreground-800">Attachments (optional, up to 5 files, {ruleNumber("support.ticket_attachment_limit_mib", 10)} MB each)
         <input type="file" multiple className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx"
           onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 5))} />
       </label>

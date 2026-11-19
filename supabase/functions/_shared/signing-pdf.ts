@@ -88,8 +88,11 @@ export async function stampDocument(original: Uint8Array | readonly Uint8Array[]
     return { font, size };
   };
   const placedSignature = new Set<string>();
-  const drawPng = async (page: (typeof pages)[number], box: { x: number; y: number; w: number; h: number }, bytes: Uint8Array) => {
-    const image = await pdf.embedPng(bytes);
+  const pictures = new Map<string, Awaited<ReturnType<typeof pdf.embedPng>>>();
+  const drawPng = async (page: (typeof pages)[number], box: { x: number; y: number; w: number; h: number }, dataUrl: string) => {
+    // One picture object per drawing, however many boxes show it.
+    if (!pictures.has(dataUrl)) pictures.set(dataUrl, await pdf.embedPng(signatureImageBytes(dataUrl)));
+    const image = pictures.get(dataUrl)!;
     const scale = Math.min(box.w / image.width, box.h / image.height);
     page.drawImage(image, { x: box.x, y: box.y + (box.h - image.height * scale) / 2, width: image.width * scale, height: image.height * scale });
   };
@@ -101,11 +104,17 @@ export async function stampDocument(original: Uint8Array | readonly Uint8Array[]
     const { width: W, height: H } = page.getSize();
     const box = { x: field.x * W, y: H - (field.y + field.h) * H, w: field.w * W, h: field.h * H };
     const signer = field.recipient_id ? signers.get(field.recipient_id) : null;
+    // A drawn signature as a value is always a picture, whatever the field's type (2026-11-20: the witness boxes are "text" fields in the
+    // installed agreement template and printed "data:image/png;base64,..." as text). Never written out as text.
+    const drawn = typeof field.value === "string" ? field.value.trim() : "";
+    if (field.type !== "checkbox" && /^data:image\//i.test(drawn)) {
+      if (drawn.startsWith("data:image/png;base64,")) { try { await drawPng(page, box, drawn); } catch { /* an unreadable drawing: the box stays empty */ } }
+      continue;
+    }
     if (field.type === "signature" && !field.recipient_id) {
       // A signature the sender prints (the institution's signatory on an agent agreement): a PNG picture, or a typed name slanted like a typed signature.
       const value = String(field.value ?? "").trim();
       if (!value) continue;
-      if (value.startsWith("data:image/png;base64,")) { await drawPng(page, box, signatureImageBytes(value)); continue; }
       const text = writer.clean(value, true);
       const { font, size } = fit(text, true, box.w - 4, box.h);
       page.drawText(text, { x: box.x + 2, y: box.y + (box.h - size) / 2 + size * 0.22, size, font, color: INK, ySkew: degrees(12) });

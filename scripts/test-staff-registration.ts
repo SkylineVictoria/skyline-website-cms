@@ -785,6 +785,38 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
 });
 
+test("witness signatures (2026-11-20): a drawn signature in any field is a picture, never \"data:image\" text (send, sign and approve stamps)", async () => {
+  const agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  // As the hosted template stores them (installed 2026-11-17): both witness signature boxes are "text" fields.
+  type P = { type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; key: string };
+  const asHosted = agreement.fields.map((f: P) => /witness_signature$/.test(f.key) ? { ...f, type: "text" } : f);
+  const drawing = `data:image/png;base64,${PNG_1PX}`;
+  const sent = onboarding.resolveFields(asHosted, { admin_witness_name: "Sue Witness", admin_witness_signature: drawing, agent_territory: "India" });
+  const toStamp = (fields: P[], recipient: string | null) => fields.map((f) => ({ recipient_id: recipient, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label }));
+  const afterSend = await signingPdf.stampDocument(agreement.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields: toStamp(sent.printed, null) });
+  // Signing: the agency witness's drawing arrives as the value of its (text) field, and the admin signs with a drawn signature.
+  const signerFields = sent.recipient.map((f: P) => ({ ...f, value: f.key === "agent_witness_signature" ? drawing : f.key === "agent_witness_name" ? "Raj Witness" : f.type === "signature" ? "" : "x" }));
+  const recipients = [{ id: "r1", name: "Ravi Kumar", email: "r@example.test", role: "Business contact", state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-20T00:00:00Z", signature_kind: "drawn", signature_image: PNG_1PX }];
+  const afterSign = await signingPdf.stampDocument(afterSend, { reference: "SLIT-2026-000099", title: "t", recipients, incremental: true, fields: toStamp(signerFields, "r1") });
+  const admin = onboarding.resolveFields(asHosted, { admin_name: "Hari Admin", admin_position: "CEO", admin_signature: drawing, admin_signed_date: "2026-11-20" }).printed.filter((f: P) => f.key.startsWith("admin_") && !f.key.startsWith("admin_witness"));
+  const issued = await signingPdf.stampDocument(afterSign, { reference: "", title: "t", recipients: [], incremental: true, fields: toStamp(admin, null) });
+  for (const [step, bytes] of [["send", afterSend], ["sign", afterSign], ["approve", issued]] as const) {
+    const leaked = (await pdfText(bytes)).filter((t) => /data:image|base64,/i.test(t.text));
+    assert.equal(leaked.length, 0, `after ${step}: no field prints a data URL as text (${leaked.map((t) => `p${t.page} ${t.text.slice(0, 30)}`).join("; ")})`);
+  }
+  const doc = await PdfLib.PDFDocument.load(issued);
+  const imagesOn = (n: number) => { const xo = doc.getPage(n).node.Resources()?.lookup(PdfLib.PDFName.of("XObject")); return xo instanceof PdfLib.PDFDict ? xo.keys().length : 0; };
+  const box = (key: string) => agreement.fields.find((f: P) => f.key === key)!;
+  const base = await PdfLib.PDFDocument.load(agreement.flattened);
+  const baseImages = (n: number) => { const xo = base.getPage(n).node.Resources()?.lookup(PdfLib.PDFName.of("XObject")); return xo instanceof PdfLib.PDFDict ? xo.keys().length : 0; };
+  for (const key of ["admin_witness_signature", "agent_witness_signature"]) {
+    const page = box(key).page - 1;
+    assert.ok(imagesOn(page) > baseImages(page), `${key}: the drawing is embedded as a picture on page ${page + 1}`);
+  }
+  const text = (await pdfText(issued)).map((t) => t.text).join(" ");
+  assert.ok(text.includes("Sue Witness") && text.includes("Raj Witness") && text.includes("Hari Admin"), "the witness names and the SLIT signatory still print as text");
+});
+
 test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign once, split and approve stays under 1 s of CPU here; incremental updates keep the original bytes", async () => {
   const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
   const timed = async <T>(name: string, work: () => Promise<T>, budget = 1000): Promise<T> => {
@@ -795,6 +827,12 @@ test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign on
   const form = await onboardingPdf.readBlankTemplate("form", blankBytes("form")), agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
   const png = PNG_1PX;
   const merged = await timed("merge the two blanks (once per template version)", () => onboardingPdf.mergePdfs([form.flattened, agreement.flattened]));
+  // The shipped blanks were 1.63 MB merged (P06 page content stored uncompressed, 250-460 dpi pictures); optimised 2026-11-20 to ~1.1 MB.
+  assert.ok(merged.length < 1_200_000, `the merged F04 + P06 blank is ${merged.length} bytes (budget 1.2 MB)`);
+  const loaded = await PdfLib.PDFDocument.load(merged);
+  const rawContent = loaded.getPages().flatMap((p) => { const c = p.node.Contents(); const refs = c instanceof PdfLib.PDFArray ? c.asArray() : [c];
+    return refs.map((r) => loaded.context.lookup(r as PdfLib.PDFRef)).filter((s) => s instanceof PdfLib.PDFRawStream && !s.dict.get(PdfLib.PDFName.of("Filter"))); });
+  assert.equal(rawContent.length, 0, "every page's content is compressed");
   const values: Record<string, string> = { agent_legal_entity: "Acme Education Pty Ltd", agent_abn: "51824753556", contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", declarant_name: "Ravi Kumar" };
   onboarding.yesNoDefaults(form.fields, values);
   const formR = onboarding.resolveFields(form.fields, values, { editablePrefill: true });

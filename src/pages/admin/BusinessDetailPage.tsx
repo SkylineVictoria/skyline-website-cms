@@ -1,7 +1,7 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ACTIVE_STAGES, STAGE_LABEL, type OnboardingStage } from "@/pages/admin/lib/agentOnboarding";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
@@ -33,18 +33,24 @@ export default function BusinessDetailPage() {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
 
+  // Reloads can overlap (opening the page, closing Prepare application, Send): only the latest one's answer is shown, so an older,
+  // slower answer never puts the header back to an earlier status ("Not sent yet" after Send, 2026-11-20).
+  const latestLoad = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++latestLoad.current;
     setLoading(true);
     setError("");
     try {
       const found = await getBusiness(id);
+      if (mine !== latestLoad.current) return;
       setBusiness(found);
       if (!found) setError("This business could not be found.");
     } catch (e) {
+      if (mine !== latestLoad.current) return;
       setBusiness(null);
       setError(e instanceof Error ? e.message : "We could not load this business.");
     } finally {
-      setLoading(false);
+      if (mine === latestLoad.current) setLoading(false);
     }
   }, [id]);
   useEffect(() => { setBusiness(null); void load(); }, [load]);

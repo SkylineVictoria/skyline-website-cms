@@ -32,7 +32,8 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
     try { setRows((await listOnboarding(business.id)).filter((r) => r.kind !== "agent")); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load the onboarding documents."); }
   }, [business.id]);
   useEffect(() => { void load(); }, [load]);
-  const refresh = async () => { await load(); await onChanged(); };
+  // The list and the page (header status, steps) reload together; the page reloads even when the list fails.
+  const refresh = async () => { await Promise.all([load(), onChanged().catch(() => undefined)]); };
   const act = async (key: string, work: () => Promise<string>) => {
     setBusy(key);
     try { push(await work()); await refresh(); } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }

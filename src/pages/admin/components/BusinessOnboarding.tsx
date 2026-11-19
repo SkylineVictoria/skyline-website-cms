@@ -61,7 +61,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
       {inactive ? (
         <Card className="p-5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding</h2>
-          <p className="mt-1 text-sm text-foreground-600">The onboarding runs once for the business, with its point of contact: the application form (emailed when the business was added), two referee checks, staff review, the agent agreement. Nobody from the business can sign in until an administrator activates it. Agents can be added meanwhile; they get only their sign-in invitation, sent at Activate.</p>
+          <p className="mt-1 text-sm text-foreground-600">The onboarding runs once for the business, with its point of contact: the application form and agreement (prepared by staff, emailed only when they press Send), two referee checks, staff review, the agent agreement. Nobody from the business can sign in until an administrator activates it. Agents can be added meanwhile; they get only their sign-in invitation, sent at Activate.</p>
           <ol className="mt-4 space-y-2 text-sm">
             <Step done={Boolean(contact)} label="Business admin agent (point of contact)" detail={contact ? `${contact.name}, ${contact.email}` : "Missing. Add business creates one; contact SLIT IT if it is missing."} />
             <Step done={ready} label="Signed agent agreement" detail={ready ? "Received: ready to activate." : "Follow the onboarding below (application form, referee checks, staff review, agreement), or upload a signed copy with a reason."} />

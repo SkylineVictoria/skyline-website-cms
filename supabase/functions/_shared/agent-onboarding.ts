@@ -34,9 +34,9 @@ export interface OnboardingField {
 export interface OnboardingDocument { key: "agent_application_form" | "agent_agreement" | "agent_referee_check_form"; name: string; title: string; sha256: string; pages: number; category: string; file: string }
 /** The two blanks, with the checksum of the files in public/templates: a different file is refused by the installer. */
 export const AGENT_ONBOARDING_DOCS: Record<OnboardingDoc, OnboardingDocument> = {
-  form: { key: "agent_application_form", name: "Agent Application Form", title: "Agent Application Form (F04)", sha256: "53cf0ab79594d0f0f8d47db112a39d443ff959f9797d48cbd796c7f4ae1368f4", pages: 2, category: "other", file: "agent_application_form_template_blank.pdf" },
-  agreement: { key: "agent_agreement", name: "Agent Agreement", title: "Education Agent Agreement (P06)", sha256: "2b4cfab02a24e874a1ffc1c4c8165da632377bf9358d1e00b357eb0c482e210a", pages: 13, category: "agency_agreement", file: "agent_agreement_template_blank.pdf" },
-  referee: { key: "agent_referee_check_form", name: "Agent Referee Check Form", title: "Agent Referee Check Form (F05)", sha256: "fe609be45c91a7b0f44e4a7d881ed5d088a66322df8a56313e61af6212a0ce20", pages: 1, category: "other", file: "agent_referee_check_form_template_blank.pdf" },
+  form: { key: "agent_application_form", name: "Agent Application Form", title: "Agent Application Form (F04)", sha256: "c247efe3e877df9b8f4ff90d4abac9b8938d22a7cdf0112d0b0c621d9cf74a83", pages: 2, category: "other", file: "agent_application_form_template_blank.pdf" },
+  agreement: { key: "agent_agreement", name: "Agent Agreement", title: "Education Agent Agreement (P06)", sha256: "5ca5213f8d2e95766f7eb8df51d5f408c203ce2270bd441b3e93c08561bc9f88", pages: 13, category: "agency_agreement", file: "agent_agreement_template_blank.pdf" },
+  referee: { key: "agent_referee_check_form", name: "Agent Referee Check Form", title: "Agent Referee Check Form (F05)", sha256: "afd78833c524411c1c4544e3bd19025bd5f974c941a5b8658862ce71a64377a1", pages: 1, category: "other", file: "agent_referee_check_form_template_blank.pdf" },
 };
 /** The agreement runs for two years from its commencement (Item 5). */
 export const AGREEMENT_TERM_YEARS = 2;

@@ -408,7 +408,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
               </div>
             </> : input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
             <div>
-              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email: the Agent Application Form goes here as soon as the business is added; the sign-in link follows after activation."} required>
+              <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email. Nothing is emailed when you add the business: you prepare the application next, and it goes to this email only when you press Send. The sign-in link follows after activation."} required>
                 <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
                   onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
                   onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />

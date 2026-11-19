@@ -15,7 +15,7 @@ import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, fac
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
-import { afterCompletion, ONBOARDING_ACTIONS, stepTimer, type OnboardingContext } from "./onboarding.ts";
+import { afterCompletion, ONBOARDING_ACTIONS, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -389,12 +389,15 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
         const typed = [name, ...Object.values(values).filter((v): v is string => typeof v === "string" && v !== "true" && v !== "false")];
         if (await letter.unsupportedText(typed)) throw new SigningError("Please use Latin letters for your name and answers on this PDF. You can draw your signature in any script.");
+        signTimer?.lap("check_text");
         const data = { signer_name: name, signature_kind: kind, signature_image: image, signature_hash: signatureHash, consent: SIGNING_CONSENT, values,
           document_hash: body.documentHash, ip: call.ip, user_agent: call.userAgent, code_session: typeof body.codeSession === "string" ? body.codeSession.slice(0, 64) : null };
         for (let attempt = 0; ; attempt++) {
           // What the document looks like once this person has signed; nothing is written yet.
           const plan = await linkCall("sign_plan", data);
+          signTimer?.lap("io_plan");
           const original = await fileBytes(plan.original_path, plan.original_hash);
+          signTimer?.lap("io_download");
           // The witness's drawn signature is printed in the agreement's witness box (never a typed field).
           const box = (plan.onboarding as typeof combinedPlan)?.witness?.box ?? combinedPlan?.witness?.box ?? null;
           const stampFields = witnessPng && box ? [...plan.fields, { recipient_id: null, type: "signature", page: Number(box.page), x: Number(box.x), y: Number(box.y), w: Number(box.w), h: Number(box.h),
@@ -403,16 +406,20 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const stamp = { reference: plan.reference, title: plan.title, fields: stampFields, recipients: plan.recipients, incremental: combinedPlan?.combined === true };
           const signed = await pdf.stampDocument(original, stamp);
           const signedHash = await sha256Hex(signed);
+          signTimer?.lap("stamp");
           const mine: string[] = [];
           const currentPath = `${plan.id}/signed-${ports.uuid()}.pdf`;
           await store(currentPath, signed); mine.push(currentPath);
+          signTimer?.lap("io_store");
           let certificatePath: string | null = null, certificateHash: string | null = null, certificateBytes: Uint8Array | null = null;
           if (plan.complete) {
             const certificate = await pdf.buildCertificate({ ...stamp, id: plan.id, createdAt: plan.created_at, sentAt: plan.sent_at, completedAt: plan.signed_at, signingMode: plan.signing_mode,
               originalHash: plan.original_hash, signedHash, consent: SIGNING_CONSENT, chainOk: plan.chain_ok,
               events: [...plan.events, { event: "signed", at: plan.signed_at, recipient_id: plan.recipient_id }, { event: "completed", at: plan.signed_at }] }, await ports.letterhead());
             certificatePath = `${plan.id}/certificate-${ports.uuid()}.pdf`; certificateHash = await sha256Hex(certificate); certificateBytes = certificate;
+            signTimer?.lap("certificate");
             await store(certificatePath, certificate); mine.push(certificatePath);
+            signTimer?.lap("io_store_certificate");
           }
           // An offer letter: the signed copy and the certificate are also kept on the application (Documents), in the same transaction.
           // Agent onboarding: the one signed document is split back into the application form and the agreement, kept on the agency.
@@ -427,9 +434,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
               documents = { ...documents, form_base64: toBase64(form), agreement_base64: toBase64(agreement) };
             }
           }
+          signTimer?.lap("encode");
           try {
             const after = await ports.service("sign", { hash, data: { ...data, revision: plan.revision, signed_at: plan.signed_at, current_path: currentPath, current_hash: signedHash,
               certificate_path: certificatePath, certificate_hash: certificateHash, ...documents } });
+            signTimer?.lap("io_commit");
             staged.length = 0; // Committed: these files are the record now and are never removed on a later error.
             // F04 wizard: the ACN, the MARN and the ticked declarations join the signed answers and the business profile (the draft is removed).
             if (submission && ports.serviceRpc) {
@@ -452,7 +461,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
                   .then(() => undefined, () => onboarding.combined ? undefined : inline()));
               } else await ports.later(inline());
             }
-            signTimer?.lap("stamp_certificate_store"); signTimer?.done({ fields: stampFields.length });
+            signTimer?.lap("io_after"); signTimer?.done({ fields: stampFields.length, bytes: signed.length });
             return { signed: true, complete: after.state === "signed", state: after.state };
           } catch (error) {
             const e = error as RpcError;
@@ -532,18 +541,21 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         const timer = stepTimer("onboarding_split");
         const source = await serviceRpc("agency_onboarding_split_source", { p_onboarding: onboardingId }) as { pending: boolean; requestId: string; state: string; path: string | null; hash: string | null; formPages: number };
         if (!source?.pending || source.state !== "signed" || !source.path || !source.hash) return { step, split: false };
-        const signed = await fileBytes(source.path, source.hash); timer.lap("download");
+        const signed = await fileBytes(source.path, source.hash); timer.lap("io_download");
         const [form, agreement] = await (await onboardingPdfModule()).splitPdf(signed, Number(source.formPages)); timer.lap("split");
         const stored = await serviceRpc("agency_onboarding_split_store", { p_onboarding: onboardingId, p_request: source.requestId, p_form: toBase64(form), p_agreement: toBase64(agreement) }) as { stored: boolean };
-        timer.lap("store");
+        timer.lap("io_store");
         await serviceRpc("agency_onboarding_followup_queue", { p_onboarding: onboardingId, p_step: "after_application" });
         timer.done({ formBytes: form.length, agreementBytes: agreement.length });
         return { step, split: stored?.stored === true };
       }
       if (step === "after_application") {
         const timer = stepTimer("onboarding_after_application");
+        takePdfWorkMs();
         await afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, { id: onboardingId, kind: "application" });
-        timer.done();
+        const pdfMs = takePdfWorkMs();
+        timer.lap("io_referee_requests_and_emails");
+        timer.done({ refereeFormsPdfMs: pdfMs }); // the referee forms built inside: their PDF time (CPU) is part of the io_ lap
         return { step, done: true };
       }
       throw new SigningError("Unknown follow-up step.");

@@ -95,11 +95,17 @@ async function buildDocument(ctx: OnboardingContext, template: OnboardingTemplat
   const { printed, recipient } = resolveFields(numbered(template.fields), values, options);
   let bytes = source;
   if (printed.length) {
-    bytes = await (await signingPdfModule()).stampDocument(source, { reference: "", title, recipients: [],
+    const started = performance.now();
+    // incremental: the prefilled values are appended to the installed blank (CPU budget, 2026-11-20); a full re-write when that is not possible.
+    bytes = await (await signingPdfModule()).stampDocument(source, { reference: "", title, recipients: [], incremental: true,
       fields: printed.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) });
+    pdfWorkMs += performance.now() - started;
   }
   return { bytes, printed, recipient };
 }
+/** PDF time spent in buildDocument since the last call (the cpu_steps log of a call that builds documents deep inside, e.g. the referee checks). */
+let pdfWorkMs = 0;
+export function takePdfWorkMs(): number { const ms = Math.round(pdfWorkMs); pdfWorkMs = 0; return ms; }
 const recipientFields = (fields: PlacedField[], role: string) => fields.map((f) => ({ type: f.type, role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, key: f.key, value: f.value }));
 
 interface Prepared {
@@ -411,11 +417,18 @@ export async function presendDiscard(ctx: OnboardingContext): Promise<Json> {
  * Wall-clock time of each step of a heavy action, logged once as JSON (no names, no values). In these CPU-bound steps the wall time is
  * close to the CPU time the platform counts (2 s per request), so the function logs show how much of the budget each step takes.
  */
+/**
+ * Step timings of one call, logged as {"event":"cpu_steps"}. Wall time: a lap named io_* waits on storage, the database or email; every
+ * other lap is synchronous work, so its time is CPU time, and computeMs (their sum) is the call's CPU apart from start-up and JSON.
+ */
 export function stepTimer(action: string) {
   const start = performance.now(); let last = start; const steps: Record<string, number> = {};
   return {
-    lap(name: string) { const now = performance.now(); steps[name] = Math.round(now - last); last = now; },
-    done(extra: Record<string, unknown> = {}) { console.log(JSON.stringify({ event: "cpu_steps", action, totalMs: Math.round(performance.now() - start), steps, ...extra })); },
+    lap(name: string) { const now = performance.now(); steps[name] = (steps[name] ?? 0) + Math.round(now - last); last = now; },
+    done(extra: Record<string, unknown> = {}) {
+      const computeMs = Object.entries(steps).filter(([name]) => !name.startsWith("io_")).reduce((sum, [, ms]) => sum + ms, 0);
+      console.log(JSON.stringify({ event: "cpu_steps", action, computeMs, totalMs: Math.round(performance.now() - start), steps, ...extra }));
+    },
   };
 }
 
@@ -432,7 +445,7 @@ export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTempla
   }
   const timer = stepTimer("onboarding_merge_blanks");
   const [formSource, agreementSource] = await Promise.all([ctx.fileBytes(form.sourcePath, form.sourceHash), ctx.fileBytes(agreement.sourcePath, agreement.sourceHash)]);
-  timer.lap("download");
+  timer.lap("io_download");
   const merged = await (await onboardingPdfModule()).mergePdfs([formSource, agreementSource]);
   timer.lap("merge");
   const sha = await sha256Hex(merged);
@@ -441,7 +454,7 @@ export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTempla
   const saved = await ctx.rpc("agency_onboarding_blank_cache_put", { p_key: key, p_path: path, p_sha256: sha, p_pages: Number(form.sourcePages) + Number(agreement.sourcePages) }) as { path: string; mine: boolean };
   if (saved?.mine === false) { try { await ctx.ports.storage.remove([path]); } catch { /* left for a later clean-up */ } }
   ctx.commit();
-  timer.lap("store"); timer.done({ bytes: merged.length, built: true });
+  timer.lap("io_store"); timer.done({ bytes: merged.length, built: true });
   return merged;
 }
 
@@ -545,7 +558,7 @@ async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prep
   const template = await installedTemplate(ctx, "agreement");
   const file = await ctx.rpc("agency_onboarding_file", { p_id: onboardingId, p_kind: "agreement" }) as { name: string; base64: string };
   const signed = Uint8Array.from(atob(String(file?.base64 ?? "")), (c) => c.charCodeAt(0));
-  timer.lap("read_agreement");
+  timer.lap("io_read_agreement");
   const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
   // The SLIT witness given in Prepare application is already on the agreement: it is not asked for (or printed) again.
   const witness = slitWitnessPrinted ? null : await drawnWitness(ctx.body.adminWitness);
@@ -571,9 +584,9 @@ async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prep
       attachments: [{ name: `${text(issued.name, 80).replace(/[^\w .()-]/g, "_")} - Agent Agreement.pdf`, contentType: "application/pdf", contentBase64: base64 }] }));
     emailed = outcome.state === "sent";
   }
-  timer.lap("store_and_email");
+  timer.lap("io_store_and_email");
   const released = await releaseAfterAgreement(ctx, onboardingId);
-  timer.lap("release"); timer.done({ bytes: bytes.length });
+  timer.lap("io_release"); timer.done({ bytes: bytes.length });
   return { issued: true, stage: issued.stage, to: issued.contact?.email ?? null, emailed, released: released.released, invitations: released.emailed };
 }
 

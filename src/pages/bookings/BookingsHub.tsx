@@ -70,9 +70,9 @@ export default function BookingsHub() {
       </div>
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`}>{notice}</p> : null}
-      {canHost && !me.host ? <SetupCard me={me} onDone={(next) => done(next, "Your booking page is ready. Add a meeting type so people can book.")} onError={fail} /> : null}
-      {me.host && !me.host.enabled ? <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Your booking page is switched off: nobody can book you until you switch it on under Availability.</p> : null}
-      {me.host && me.host.enabled && (me.types.filter((t) => t.active).length === 0 || me.availability.length === 0) ? (
+      {canHost && !me.host && who === "me" ? <SetupCard me={me} onDone={(next) => done(next, "Your booking page is ready. Add a meeting type so people can book.")} onError={fail} /> : null}
+      {who === "me" && me.host && !me.host.enabled ? <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Your booking page is switched off: nobody can book you until you switch it on under Availability.</p> : null}
+      {who === "me" && me.host && me.host.enabled && (me.types.filter((t) => t.active).length === 0 || me.availability.length === 0) ? (
         <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Nobody can book you yet: add {me.types.filter((t) => t.active).length === 0 ? "a meeting type" : "your available hours"}.</p>
       ) : null}
 

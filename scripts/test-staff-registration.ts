@@ -632,6 +632,8 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
     values: { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St" }, referees: referees.map((r) => ({ ...r })), received: 0, total: 2, template: templates().find((t) => t.systemKey === "agent_referee_check_form") ?? null,
     notified: { agentReferees: state.notifiedAgent, staffReferences: false } });
   let signData: Record<string, unknown> | null = null;
+  const blankCache = new Map<string, { path: string; sha256: string }>(); const queued: string[] = [];
+  const split = { pending: true, form: "", agreement: "" }; const signedRequest = { id: "", path: "", hash: "" };
   const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
     admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
       if (action === "subject_search") return [];
@@ -661,8 +663,11 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       }
       if (name === "agency_onboarding_presend_send") { state.stage = "application_sent"; return { id: onboardingId, requestId: args.p_request, reference: "SLIT-2026-101", stage: "application_sent" }; }
       if (name === "agency_onboarding_prefill_record" || name === "agency_abr_facts_record") return null;
+      // The merged blank cache (2026-11-20): one entry per pair of template versions; a second put is told which file is the one.
+      if (name === "agency_onboarding_blank_cache_get") return blankCache.get(String(args.p_key)) ?? null;
+      if (name === "agency_onboarding_blank_cache_put") { const have = blankCache.get(String(args.p_key)); if (have) return { ...have, mine: false }; const row = { path: String(args.p_path), sha256: String(args.p_sha256) }; blankCache.set(String(args.p_key), row); return { ...row, mine: true }; }
       if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2, slitWitness: true }; }
-      if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: String(signData!.agreement_base64) };
+      if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: split.agreement };
       if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
       throw new Error(`unexpected rpc ${name}`);
     },
@@ -673,6 +678,10 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       if (name === "agency_onboarding_mark_notified") { state.notifiedAgent = true; return null; }
       if (name === "agency_onboarding_application_extra" || name === "agency_onboarding_witness_record") return null;
       if (name === "agency_business_release") return { released: true, name: "Acme Education Pty Ltd", invitations: [] };
+      // The follow-up calls (2026-11-20): queued by the database; the test runs them itself (runFollowups).
+      if (name === "agency_onboarding_followup_queue") { queued.push(String(args.p_step)); return queued.length; }
+      if (name === "agency_onboarding_split_source") return { pending: split.pending, requestId: signedRequest.id, state: "signed", path: signedRequest.path, hash: signedRequest.hash, formPages: 2 };
+      if (name === "agency_onboarding_split_store") { split.form = String(args.p_form); split.agreement = String(args.p_agreement); split.pending = false; return { stored: true }; }
       throw new Error(`unexpected service ${name}`);
     },
     service: async (action: string) => { if (action === "notify_claim") return []; if (action === "path_referenced") return false; return true; },
@@ -722,7 +731,7 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       created_at: "2026-11-20T00:00:00Z", sent_at: "2026-11-20T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: plan,
       fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String((args.data?.values as Record<string, string>)?.[f.id] === "true") : f.type === "date" ? "20/11/2026" : ((args.data?.values as Record<string, string>)?.[f.id] ?? f.value ?? "") })),
       recipients: [{ ...recipient, state: "signed", signer_name: contact.name, signed_at: "2026-11-20T01:00:00Z", signature_kind: "typed" }], events: [] };
-    if (action === "sign") { signData = args.data ?? null; state.stage = "application_signed"; return { state: "signed" }; }
+    if (action === "sign") { signData = args.data ?? null; state.stage = "application_signed"; Object.assign(signedRequest, { id: sentApp.id, path: String(args.data?.current_path), hash: String(args.data?.current_hash) }); return { state: "signed" }; }
     if (action === "notify_claim") return [];
     if (action === "path_referenced") return false;
     throw new Error(`unexpected ${action}`);
@@ -744,7 +753,19 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   const signedValue = (key: string) => d.values[fieldRows.find((f) => f.key === key)!.id];
   assert.deepEqual([signedValue("agent_signatory_name"), signedValue("agent_signatory_position"), signedValue("agent_witness_name")], ["Ravi Kumar", "Director", "Jo Witness"], "the agreement's signatory is the declarant; the witness named");
   const pages = async (b64: string) => (await PdfLib.PDFDocument.load(new Uint8Array(Buffer.from(b64, "base64")))).getPageCount();
-  assert.deepEqual([await pages(d.form_base64), await pages(d.agreement_base64)], [2, 13], "the one signed PDF is split into the application form and the agreement");
+  // 2026-11-20 (CPU budget): the signature commits the whole signed document; the split and the referee checks are follow-up calls.
+  assert.equal(d.form_base64, undefined, "no split inside the signing request");
+  assert.deepEqual(queued, ["split"], "the split is queued");
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 0, "nothing else runs in the signing request");
+  const signedText = await pdfText(stored.get(signedRequest.path)!);
+  assert.ok(signedText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && signedText.some((t) => t.page <= 2 && t.text.includes("Ravi")), "pdf.js reads the signed copy (incremental updates on the original)");
+  const followup = (step: string) => signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step }, upload: null, ip: null, userAgent: null }, { ...ports, isServiceCaller: true } as typeof ports);
+  await assert.rejects(signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step: "split" }, upload: null, ip: null, userAgent: null }, ports), /Not available/, "only the service may run a follow-up");
+  assert.deepEqual(await followup("split"), { step: "split", split: true });
+  assert.deepEqual([await pages(split.form), await pages(split.agreement)], [2, 13], "the one signed PDF is split into the application form and the agreement");
+  assert.deepEqual(queued, ["split", "after_application"], "the split queues the rest");
+  assert.deepEqual(await followup("split"), { step: "split", split: false }, "a repeated split call does nothing");
+  await followup("after_application");
   assert.ok(services.some(([name, a]) => name === "agency_onboarding_witness_record" && a.p_name === "Jo Witness" && a.p_png === PNG_1PX), "the drawn witness is kept on the onboarding");
   assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 2, "both referees get their check at once");
   assert.ok(mails.some((m) => /^Ready for review: Acme Education Pty Ltd$/.test(m.subject) && /do not need to wait/.test(m.textBody)), "staff may review at once");
@@ -762,6 +783,51 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === null && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement; the SLIT witness set before sending is not replaced");
   const issuedMail = mails.find((m) => m.to === contact.email && /Your agent agreement/.test(m.subject))!;
   assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
+});
+
+test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign once, split and approve stays under 1 s of CPU here; incremental updates keep the original bytes", async () => {
+  const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+  const timed = async <T>(name: string, work: () => Promise<T>, budget = 1000): Promise<T> => {
+    const t = cpuMs(); const out = await work(); const used = cpuMs() - t;
+    assert.ok(used < budget, `${name} used ${used.toFixed(0)} ms of CPU (budget ${budget} ms)`);
+    return out;
+  };
+  const form = await onboardingPdf.readBlankTemplate("form", blankBytes("form")), agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  const png = PNG_1PX;
+  const merged = await timed("merge the two blanks (once per template version)", () => onboardingPdf.mergePdfs([form.flattened, agreement.flattened]));
+  const values: Record<string, string> = { agent_legal_entity: "Acme Education Pty Ltd", agent_abn: "51824753556", contact_given_name: "Ravi", contact_family_name: "Kumar", contact_email: "ravi@example.test", declarant_name: "Ravi Kumar" };
+  onboarding.yesNoDefaults(form.fields, values);
+  const formR = onboarding.resolveFields(form.fields, values, { editablePrefill: true });
+  const agrR = onboarding.resolveFields(agreement.fields, { agent_organisation_name: "Acme Education Pty Ltd", agent_abn: "51824753556", agreement_commencement_date: "2026-12-01", agent_territory: "India, Nepal",
+    agent_commission_percent: "25", admin_witness_name: "Sue Witness", admin_witness_signature: `data:image/png;base64,${png}` });
+  type P = { type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; key: string };
+  const printed = (fields: P[], offset = 0) => fields.map((f) => ({ recipient_id: null, type: f.type, page: f.page + offset, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label }));
+  const sent = await timed("send: stamp the merged blank (incremental)", () => signingPdf.stampDocument(merged, { reference: "", title: "t", recipients: [], incremental: true, fields: [...printed(formR.printed), ...printed(agrR.printed, 2)] }));
+  assert.deepEqual(sent.subarray(0, merged.length), merged, "the merged blank is kept byte for byte (incremental update)");
+  const fields = [...formR.recipient, ...agrR.recipient.map((f: P) => ({ ...f, page: f.page + 2 }))]
+    .map((f: P, i: number) => ({ recipient_id: "r1", type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, done: true, label: f.label, value: f.type === "checkbox" ? (i % 2 ? "true" : "false") : f.type === "text" ? `Answer ${i}, Course counselling, Applications and admissions` : null }));
+  const recipients = [{ id: "r1", name: "Ravi Kumar", email: "ravi@example.test", role: "Business contact", state: "signed", signer_name: "Ravi Kumar", signed_at: "2026-11-20T00:00:00Z", signature_kind: "drawn", signature_image: png }];
+  const signedDoc = await timed(`sign: stamp ${fields.length} fields on 15 pages (incremental)`, () => signingPdf.stampDocument(sent, { reference: "SLIT-2026-000099", title: "t", recipients, fields, incremental: true }));
+  assert.deepEqual(signedDoc.subarray(0, sent.length), sent, "the sent document is kept byte for byte inside the signed copy");
+  await timed("sign: completion certificate", () => signingPdf.buildCertificate({ reference: "SLIT-2026-000099", title: "t", fields, recipients, id: "x", createdAt: "2026-11-20T00:00:00Z", sentAt: "2026-11-20T00:00:00Z",
+    completedAt: "2026-11-20T00:00:00Z", signingMode: "sequential", originalHash: "a".repeat(64), signedHash: "b".repeat(64), consent: "I agree.", chainOk: true, events: [] }, null));
+  const [formPart, agreementPart] = await timed("follow-up: split into F04 + P06", () => onboardingPdf.splitPdf(signedDoc, 2));
+  const admin = onboarding.resolveFields(agreement.fields, { admin_name: "Hari Admin", admin_position: "CEO", admin_signature: "Hari Admin", admin_signed_date: "2026-11-20" }).printed.filter((f: P) => f.key.startsWith("admin_"));
+  const issued = await timed("approve: stamp the SLIT signatory on the signed P06 (incremental)", () => signingPdf.stampDocument(agreementPart, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(admin) }));
+  const issuedText = (await pdfText(issued)).map((t) => t.text).join(" ");
+  assert.ok(issuedText.includes("Hari Admin") && issuedText.includes("India, Nepal"), "pdf.js reads the signatory and the terms from the issued agreement");
+  assert.equal((await PdfLib.PDFDocument.load(formPart)).getPageCount(), 2);
+  // A document that does not end with a cross-reference table (an xref stream): stamped by a full re-write instead, never broken.
+  assert.equal(signingPdf.previousXref(form.flattened), null, "the installed blank ends with an xref stream");
+  const rewritten = await signingPdf.stampDocument(form.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(formR.printed) });
+  assert.equal((await PdfLib.PDFDocument.load(rewritten)).getPageCount(), 2);
+  // Fonts: Latin-1 text prints in the built-in Helvetica (no font file, no fontkit); anything else still embeds Noto Sans.
+  const latin = Buffer.from(issued.subarray(agreementPart.length)).toString("latin1");
+  assert.ok(latin.includes("/Helvetica") && !latin.includes("/FontFile2"), "the approve stamp embeds no font file");
+  const noto = await signingPdf.stampDocument(agreementPart, { reference: "", title: "t", recipients: [], incremental: true, fields: printed(admin).map((f) => f.label.includes("ame") || f.type === "text" ? { ...f, value: "Kaʻula Ah−Kim" } : f) });
+  const notoTail = Buffer.from(noto.subarray(agreementPart.length)).toString("latin1");
+  assert.ok(notoTail.includes("/FontFile2"), "a character only Noto Sans has (ʻ, −) embeds Noto Sans");
+  const before = new Set((await pdfText(agreementPart)).map((t) => t.text)); const notoItems = (await pdfText(noto)).map((t) => t.text).filter((t) => !before.has(t)); assert.ok(notoItems.some((t) => t.includes("Kaʻula Ah−Kim")), "pdf.js reads the name in Noto Sans");
 });
 
 test("onboarding per business (2026-11-19): Add business checks the blanks before saving; the signed agreement makes the business ready (nothing goes to it); Activate sends ONE set-password email to the contact and each held agent; per-agent actions are refused; a rejection is polite", async () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import F04Wizard from "@/components/signing/F04Wizard";
 import { answersOf, type F04Draft } from "@/components/signing/f04WizardLogic";
-import { openPresend, savePresend, sendPresend, type PresendData, type PresendOpen, type SigningView } from "@/lib/signingApi";
+import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
 
 /*
@@ -30,6 +30,8 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const load = useCallback(async () => {
     try {
       const o = await openPresend(agencyId);
+      // The merged application form + agreement blank is made ready in its own call, so Send only stamps it (CPU budget, 2026-11-20).
+      void warmPresend().catch(() => undefined);
       setOpened(o); setTerms(o.terms); setWitness(o.witness); setMessage(o.message);
       setSavedNote(o.savedAt ? `Draft saved ${new Date(o.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}${o.savedBy ? ` by ${o.savedBy}` : ""}` : null);
       setError("");

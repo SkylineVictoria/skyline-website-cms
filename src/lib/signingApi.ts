@@ -281,6 +281,8 @@ export const openPresend = (agencyId: string) => onboardingAction<PresendOpen>({
 export const savePresend = (agencyId: string, data: PresendData) => onboardingAction<{ onboardingId: string; savedAt: string }>({ action: "agent_onboarding_presend_save", agencyId, data });
 export const sendPresend = (agencyId: string, data: PresendData) => onboardingAction<AgentOnboardingSendResult & { combined?: boolean; slitWitness?: boolean }>({ action: "agent_onboarding_presend_send", agencyId, data });
 export const discardPresend = (onboardingId: string) => signingAction<{ discarded: boolean }>({ action: "agent_onboarding_presend_discard", onboardingId });
+/** Makes the merged application form + agreement blank ready (cached once per template version) before Send. */
+export const warmPresend = () => onboardingAction<{ ready: boolean }>({ action: "agent_onboarding_presend_warm" });
 /** What staff confirmed from ABN Lookup on Add business (kept on the business for the F04 prefill). */
 export type BusinessAbrInput = AbrConfirmed & { givenName: string; familyName: string };
 export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string; abr?: BusinessAbrInput }) =>

@@ -408,6 +408,52 @@ export async function presendDiscard(ctx: OnboardingContext): Promise<Json> {
 }
 
 /**
+ * Wall-clock time of each step of a heavy action, logged once as JSON (no names, no values). In these CPU-bound steps the wall time is
+ * close to the CPU time the platform counts (2 s per request), so the function logs show how much of the budget each step takes.
+ */
+export function stepTimer(action: string) {
+  const start = performance.now(); let last = start; const steps: Record<string, number> = {};
+  return {
+    lap(name: string) { const now = performance.now(); steps[name] = Math.round(now - last); last = now; },
+    done(extra: Record<string, unknown> = {}) { console.log(JSON.stringify({ event: "cpu_steps", action, totalMs: Math.round(performance.now() - start), steps, ...extra })); },
+  };
+}
+
+/**
+ * The application form and the agreement blanks merged into one PDF, once per pair of template versions (2026-11-20, CPU budget): kept in
+ * storage and recorded in agency_onboarding_blank_cache with its hash; every send appends its marks to it. Built here when missing (the
+ * Prepare application dialog asks for it when it opens, agent_onboarding_presend_warm, so a send rarely builds it).
+ */
+export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTemplate, agreement: OnboardingTemplate): Promise<Uint8Array> {
+  const key = `combined:${form.id}:${form.sourceHash.slice(0, 16)}:${agreement.id}:${agreement.sourceHash.slice(0, 16)}`;
+  const cached = await ctx.rpc("agency_onboarding_blank_cache_get", { p_key: key }) as { path: string; sha256: string } | null;
+  if (cached?.path) {
+    try { return await ctx.fileBytes(cached.path, cached.sha256); } catch { /* a missing or changed file: built again below */ }
+  }
+  const timer = stepTimer("onboarding_merge_blanks");
+  const [formSource, agreementSource] = await Promise.all([ctx.fileBytes(form.sourcePath, form.sourceHash), ctx.fileBytes(agreement.sourcePath, agreement.sourceHash)]);
+  timer.lap("download");
+  const merged = await (await onboardingPdfModule()).mergePdfs([formSource, agreementSource]);
+  timer.lap("merge");
+  const sha = await sha256Hex(merged);
+  const path = `templates/${form.id}/combined-${agreement.id}-${ctx.ports.uuid()}.pdf`;
+  await ctx.store(path, merged);
+  const saved = await ctx.rpc("agency_onboarding_blank_cache_put", { p_key: key, p_path: path, p_sha256: sha, p_pages: Number(form.sourcePages) + Number(agreement.sourcePages) }) as { path: string; mine: boolean };
+  if (saved?.mine === false) { try { await ctx.ports.storage.remove([path]); } catch { /* left for a later clean-up */ } }
+  ctx.commit();
+  timer.lap("store"); timer.done({ bytes: merged.length, built: true });
+  return merged;
+}
+
+/** Prepare application opened: the merged blank is made ready in its own call, so Send to point of contact only stamps. */
+export async function presendWarm(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const form = await installedTemplate(ctx, "form"), agreement = await installedTemplate(ctx, "agreement");
+  await mergedBlank(ctx, form, agreement);
+  return { ready: true };
+}
+
+/**
  * The combined document: the F04 (staff's values printed or prefilled, editable by the contact) followed by the P06 (the agency, ABN and
  * Items 3 to 5 printed; the SLIT witness printed when staff gave one in Prepare application). The agency admin's fields of both, on one
  * request, for one signature; the agency admin always gives their own witness (typed name, drawn on the signing page), except on a
@@ -416,7 +462,10 @@ export async function presendDiscard(ctx: OnboardingContext): Promise<Json> {
  */
 async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTemplate; agreement: OnboardingTemplate; values: Record<string, string>; agency: { name: string; abn: string | null };
   terms: { commencementDate: string; territory: string; commissionPercent: string }; slitWitness: { name: string; png: string } | null; agentWitness: { name: string; png: string } | null; title: string }) {
-  const formPart = await buildDocument(ctx, input.form, input.values, input.title, { editablePrefill: true });
+  // CPU budget (2026-11-20, 546 in production): the two blanks merged once and cached; the marks of this send are appended to that copy.
+  const merged = await mergedBlank(ctx, input.form, input.agreement);
+  const formResolved = resolveFields(numbered(input.form.fields), input.values, { editablePrefill: true });
+  const formPart = { printed: formResolved.printed, recipient: formResolved.recipient };
   const formPages = Number(input.form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
   // The SLIT witness (2026-11-20, owner): the agreement's SLIT witness line, name and drawn signature (admin_witness_signature prints a picture).
   const agreementValues: Record<string, string> = { agent_organisation_name: input.values.agent_legal_entity || input.values.agent_organisation_name || input.agency.name,
@@ -433,10 +482,12 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
   // The agent's witness signature is never a field to type into; its name is the agency admin's to give (required).
   const theirs = recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY && !(input.agentWitness && f.key === WITNESS_NAME_KEY))
     .map((f) => f.key === WITNESS_NAME_KEY ? { ...f, required: true } : f);
-  const source = await ctx.fileBytes(input.agreement.sourcePath, input.agreement.sourceHash);
-  const agreementBytes = print.length ? await (await signingPdfModule()).stampDocument(source, { reference: "", title: input.title, recipients: [],
-    fields: print.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) }) : source;
-  const bytes = await (await onboardingPdfModule()).mergePdfs([formPart.bytes, agreementBytes]);
+  const stamped = [...formPart.printed, ...print.map((f) => ({ ...f, page: f.page + formPages }))];
+  const timer = stepTimer("onboarding_build_combined");
+  const pdf = await signingPdfModule(); timer.lap("pdf_modules");
+  const bytes = stamped.length ? await pdf.stampDocument(merged, { reference: "", title: input.title, recipients: [], incremental: true,
+    fields: stamped.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) }) : merged;
+  timer.lap("stamp"); timer.done({ fields: stamped.length, bytes: bytes.length });
   const role = signerRole("form").key;
   return { bytes, formPages, agreementValues, printed: formPart.printed.length + print.length,
     fields: [...recipientFields(formPart.recipient, role), ...recipientFields(theirs.map((f) => ({ ...f, page: f.page + formPages })), role)],
@@ -490,17 +541,23 @@ export async function presendSend(ctx: OnboardingContext): Promise<Json> {
  * held sign-in invitations are released. No second signature from the agency.
  */
 async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prepared: Prepared, slitWitnessPrinted = false): Promise<Json> {
+  const timer = stepTimer("onboarding_issue_agreement");
   const template = await installedTemplate(ctx, "agreement");
   const file = await ctx.rpc("agency_onboarding_file", { p_id: onboardingId, p_kind: "agreement" }) as { name: string; base64: string };
   const signed = Uint8Array.from(atob(String(file?.base64 ?? "")), (c) => c.charCodeAt(0));
+  timer.lap("read_agreement");
   const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
   // The SLIT witness given in Prepare application is already on the agreement: it is not asked for (or printed) again.
   const witness = slitWitnessPrinted ? null : await drawnWitness(ctx.body.adminWitness);
   const values: Record<string, string> = { admin_name: adminName, admin_position: adminPosition, admin_signature: adminSignature, admin_signed_date: isoToday(), ...witnessValues(witness) };
   const mine = resolveFields(numbered(template.fields), values).printed.filter((f) => f.key.startsWith("admin_"));
-  const bytes = await (await signingPdfModule()).stampDocument(signed, { reference: "", title: `Agent agreement: ${text(prepared.agency.name, 150)}`, recipients: [],
+  const pdf = await signingPdfModule(); timer.lap("pdf_modules");
+  // Appended to the signed agreement (incremental update): its bytes, and the agency admin's signature in them, stay as signed.
+  const bytes = await pdf.stampDocument(signed, { reference: "", title: `Agent agreement: ${text(prepared.agency.name, 150)}`, recipients: [], incremental: true,
     fields: mine.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) });
-  const issued = await ctx.rpc("agency_onboarding_agreement_issue", { p_onboarding: onboardingId, p_base64: toBase64(bytes),
+  timer.lap("stamp");
+  const base64 = toBase64(bytes); timer.lap("base64");
+  const issued = await ctx.rpc("agency_onboarding_agreement_issue", { p_onboarding: onboardingId, p_base64: base64,
     p_data: { admin_name: adminName, admin_position: adminPosition, admin_witness_name: witness?.name ?? null } }) as
     { stage: string; already?: boolean; name: string; commencementDate?: string; expiryDate?: string; contact: { name: string; email: string } };
   let emailed = false;
@@ -511,10 +568,12 @@ async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prep
       subject: `Your agent agreement with Skyline Institute of Technology: ${text(issued.name, 100)}`,
       textBody: `Hello ${text(issued.contact.name, 80) || "there"},\n\nSkyline Institute of Technology has approved the application of ${text(issued.name, 120)} and countersigned the Education Agent Agreement you signed with it. `
         + `The completed agreement is attached.${issued.commencementDate ? ` It runs from ${words(issued.commencementDate)} to ${words(issued.expiryDate)}.` : ""}\n\nYou will receive a separate email to set your password for the agent portal.` + SIGN_OFF,
-      attachments: [{ name: `${text(issued.name, 80).replace(/[^\w .()-]/g, "_")} - Agent Agreement.pdf`, contentType: "application/pdf", contentBase64: toBase64(bytes) }] }));
+      attachments: [{ name: `${text(issued.name, 80).replace(/[^\w .()-]/g, "_")} - Agent Agreement.pdf`, contentType: "application/pdf", contentBase64: base64 }] }));
     emailed = outcome.state === "sent";
   }
+  timer.lap("store_and_email");
   const released = await releaseAfterAgreement(ctx, onboardingId);
+  timer.lap("release"); timer.done({ bytes: bytes.length });
   return { issued: true, stage: issued.stage, to: issued.contact?.email ?? null, emailed, released: released.released, invitations: released.emailed };
 }
 
@@ -841,6 +900,14 @@ export async function approveAndActivate(ctx: OnboardingContext): Promise<Json> 
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
   // A witness named without a drawn signature is refused before anything is approved.
   await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
+  // The signed documents not split yet (the follow-up call failed or is still running): it is asked for again, nothing is approved yet.
+  if (ctx.ports.serviceRpc) {
+    const split = await ctx.ports.serviceRpc("agency_onboarding_split_source", { p_onboarding: onboardingId }).catch(() => null) as { pending?: boolean; state?: string } | null;
+    if (split?.pending && split.state === "signed") {
+      await ctx.ports.serviceRpc("agency_onboarding_followup_queue", { p_onboarding: onboardingId, p_step: "split" }).catch(() => undefined);
+      throw new SigningError("The signed application and agreement are still being prepared. Try Approve again in a minute.", 409);
+    }
+  }
   const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string; combined?: boolean; refereesPending?: number; slitWitness?: boolean };
   // 2026-11-20: the agreement was signed with the application; it is countersigned and issued now (no P06 to sign again).
   if (approved.combined) {
@@ -905,6 +972,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_presend_save: presendSave,
   agent_onboarding_presend_send: presendSend,
   agent_onboarding_presend_discard: presendDiscard,
+  agent_onboarding_presend_warm: presendWarm,
   agent_onboarding_correction_send: correctionSend,
   agent_onboarding_approve: approveAndActivate,
   agent_onboarding_install: installBlank,

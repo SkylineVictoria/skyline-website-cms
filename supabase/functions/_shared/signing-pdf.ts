@@ -1,8 +1,8 @@
 // Documents & Signatures: the signed PDF and the completion certificate (SIGN-02). Runtime-neutral (Deno function and the offline tests
 // run the same code; pdf-lib comes from the function's import map or node_modules). Everything is drawn from the ORIGINAL document every
 // time somebody signs, so a signed copy never depends on an earlier signed copy. The PDFs exist only in memory here; nothing is logged.
-import { degrees, rgb, type PDFFont } from "pdf-lib";
-import { PdfWriter, type ImageData, type Row } from "./notification/pdf-layout.ts";
+import { degrees, PDFDict, PDFName, PDFRef, rgb, type PDFDocument, type PDFFont, type PDFPage } from "pdf-lib";
+import { PdfWriter, textOf, textWidth, type ImageData, type Row } from "./notification/pdf-layout.ts";
 import { formatDateTime } from "./notification/submission-pdf.ts";
 import { paletteOf } from "./offer-letter-pdf.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
@@ -13,7 +13,11 @@ export interface StampSigner {
   id: string; name: string; email: string; role: string; order?: number; required?: boolean; state: string; signer_name?: string | null; signed_at?: string | null;
   signature_kind?: string | null; signature_image?: string | null; viewed_at?: string | null; sent_at?: string | null; ip?: string | null; user_agent?: string | null;
 }
-export interface StampInput { reference: string; title: string; fields: StampField[]; recipients: StampSigner[] }
+export interface StampInput {
+  reference: string; title: string; fields: StampField[]; recipients: StampSigner[];
+  /** Append the marks as an incremental update instead of re-writing the file (large originals: much less CPU). Ignored when not possible. */
+  incremental?: boolean;
+}
 export const MAX_SIGNATURE_IMAGE_BYTES = 280 * 1024;
 
 const fromBase64 = (text: string) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
@@ -35,11 +39,11 @@ const INK = rgb(0.05, 0.1, 0.3);
  */
 export function layoutText(font: PDFFont, text: string, width: number, height: number): { font: PDFFont; size: number; lines: string[] } {
   let size = Math.min(11, height * 0.72);
-  while (size > 5 && font.widthOfTextAtSize(text, size) > width) size -= 0.5;
+  while (size > 5 && textWidth(font, text, size) > width) size -= 0.5;
   if (size >= 7 || height < 14) return { font, size, lines: [text] };
   for (let wrapped = Math.min(10, height * 0.72); wrapped >= 6; wrapped -= 0.5) {
     const lines = wrapWords(font, text, width, wrapped);
-    if (lines.length * wrapped * 1.2 <= height && lines.every((line) => font.widthOfTextAtSize(line, wrapped) <= width)) return { font, size: wrapped, lines };
+    if (lines.length * wrapped * 1.2 <= height && lines.every((line) => textWidth(font, line, wrapped) <= width)) return { font, size: wrapped, lines };
   }
   return { font, size, lines: [text] };
 }
@@ -47,7 +51,7 @@ function wrapWords(font: PDFFont, text: string, width: number, size: number): st
   const lines: string[] = []; let line = "";
   for (const word of text.split(/\s+/)) {
     const next = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(next, size) <= width || !line) line = next;
+    if (textWidth(font, next, size) <= width || !line) line = next;
     else { lines.push(line); line = word; }
   }
   if (line) lines.push(line);
@@ -57,12 +61,19 @@ function wrapWords(font: PDFFont, text: string, width: number, size: number): st
 /**
  * The original with every completed field drawn where it was placed (x, y, w, h are fractions of the page, from its top-left corner) and,
  * for a signer who signed without a signature field on a page, a "Signatures" page at the end. Fields of people who have not signed yet stay empty.
- * A field without a recipient is text the sender printed (a template variable on a PDF template).
+ * A field without a recipient is text the sender printed (a template variable on a PDF template). Several originals are joined first (pages
+ * numbered across them) and saved once: the combined application form + agreement (2026-11-20).
  */
-export async function stampDocument(original: Uint8Array, input: StampInput): Promise<Uint8Array> {
+export async function stampDocument(original: Uint8Array | readonly Uint8Array[], input: StampInput): Promise<Uint8Array> {
+  // incremental (2026-11-20, CPU budget): the marks are appended to the original as an incremental update instead of re-writing the whole
+  // file; only for one original and when no signature page has to be added. Any problem: the full re-write below.
+  const single = original instanceof Uint8Array ? original : original.length === 1 ? original[0] : null;
+  const needsPage = input.recipients.some((r) => r.state === "signed" && !input.fields.some((f) => f.done && f.type === "signature" && f.recipient_id === r.id));
+  const incremental = input.incremental === true && !!single && !needsPage && previousXref(single) !== null;
   // The writer starts one new page after the document's own (used for the signature page below, removed again when nobody needs it).
-  const writer = await PdfWriter.open(original, paletteOf(null));
-  const pdf = writer.pdf, pages = pdf.getPages().slice(0, -1);
+  const writer = await PdfWriter.open(original, paletteOf(null), { addPage: !incremental, text: textOf(input) });
+  const pdf = writer.pdf, pages = incremental ? pdf.getPages() : pdf.getPages().slice(0, -1);
+  const touched = new Set<number>();
   const signers = new Map(input.recipients.map((r) => [r.id, r]));
   const images = new Map<string, Awaited<ReturnType<typeof pdf.embedPng>>>();
   const imageOf = async (signer: StampSigner) => {
@@ -73,7 +84,7 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
   const fit = (text: string, bold: boolean, width: number, height: number, max = 22) => {
     const font = bold ? writer.bold : writer.regular;
     let size = Math.min(max, height * 0.72);
-    while (size > 5 && font.widthOfTextAtSize(text, size) > width) size -= 0.5;
+    while (size > 5 && textWidth(font, text, size) > width) size -= 0.5;
     return { font, size };
   };
   const placedSignature = new Set<string>();
@@ -86,6 +97,7 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
     if (!field.done) continue;
     const page = pages[field.page - 1];
     if (!page) continue;
+    touched.add(field.page - 1);
     const { width: W, height: H } = page.getSize();
     const box = { x: field.x * W, y: H - (field.y + field.h) * H, w: field.w * W, h: field.h * H };
     const signer = field.recipient_id ? signers.get(field.recipient_id) : null;
@@ -126,6 +138,10 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
       lines.forEach((line, i) => page.drawText(line, { x: box.x + 1, y: top - lineHeight * (i + 1) + size * 0.3, size, font, color: rgb(0, 0, 0) }));
     }
   }
+  if (incremental) {
+    try { return await appendUpdate(pdf, single!, writer.loadedObjects, [...touched].sort((a, b) => a - b).map((i) => pages[i])); }
+    catch { return await stampDocument(original, { ...input, incremental: false }); }
+  }
   const loose = input.recipients.filter((r) => r.state === "signed" && !placedSignature.has(r.id));
   if (loose.length) {
     writer.header({ institution: DEFAULT_INSTITUTION, logo: null, title: "Signatures", meta: ["Signature page", input.reference] });
@@ -142,7 +158,66 @@ export async function stampDocument(original: Uint8Array, input: StampInput): Pr
     writer.footers(DEFAULT_INSTITUTION, `${input.title} | ${input.reference}`);
   } else pdf.removePage(pdf.getPageCount() - 1);
   pdf.setSubject(`Signed electronically. Reference ${input.reference}`.replace(/[^\x20-\x7e]/g, "?"));
-  return await writer.save();
+  return await writer.save({ objectStreams: false });
+}
+
+/** The byte offset of the original's last cross-reference TABLE (startxref), or null when it ends otherwise (an xref stream, no startxref). */
+export function previousXref(original: Uint8Array): number | null {
+  const tail = new TextDecoder("latin1").decode(original.subarray(Math.max(0, original.length - 2048)));
+  const at = tail.lastIndexOf("startxref");
+  const m = at < 0 ? null : /^startxref\s+(\d+)\s+%%EOF\s*$/.exec(tail.slice(at));
+  if (!m) return null;
+  const offset = Number(m[1]);
+  if (!Number.isSafeInteger(offset) || offset <= 0 || offset >= original.length - 4) return null;
+  return new TextDecoder("latin1").decode(original.subarray(offset, offset + 4)) === "xref" ? offset : null;
+}
+
+/**
+ * An incremental update (PDF 32000-1 section 7.5.6): the original bytes unchanged, then every object created since it was opened and each
+ * changed page (with the resource dictionaries a drawing may have added to), a cross-reference table for them and a trailer whose /Prev
+ * points at the original's. Readers (pdf.js, Acrobat, pdf-lib) see the stamped pages; the original stays byte-for-byte inside the file.
+ */
+async function appendUpdate(pdf: PDFDocument, original: Uint8Array, loadedObjects: number, pages: PDFPage[]): Promise<Uint8Array> {
+  const prev = previousXref(original);
+  if (prev === null) throw new Error("no cross-reference table to update");
+  await pdf.flush();
+  const context = pdf.context;
+  type Writable = { sizeInBytes(): number; copyBytesInto(buffer: Uint8Array, offset: number): number };
+  const write = new Map<number, [PDFRef, Writable]>();
+  for (const [ref, obj] of context.enumerateIndirectObjects()) if (ref.objectNumber > loadedObjects) write.set(ref.objectNumber, [ref, obj as unknown as Writable]);
+  const keep = (value: unknown) => {
+    if (!(value instanceof PDFRef)) return value;
+    const obj = context.lookup(value);
+    if (obj) write.set(value.objectNumber, [value, obj as unknown as Writable]);
+    return obj;
+  };
+  for (const page of pages) {
+    write.set(page.ref.objectNumber, [page.ref, page.node as unknown as Writable]);
+    const resources = keep(page.node.get(PDFName.of("Resources")));
+    if (resources instanceof PDFDict) for (const key of ["Font", "XObject", "ExtGState", "ColorSpace"]) keep(resources.get(PDFName.of(key)));
+  }
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [original, encoder.encode("\n")];
+  let offset = original.length + 1;
+  const entries: Array<[number, number, number]> = [];
+  for (const [number, [ref, obj]] of [...write].sort((a, b) => a[0] - b[0])) {
+    const head = encoder.encode(`${number} ${ref.generationNumber} obj\n`), tail = encoder.encode("\nendobj\n");
+    const body = new Uint8Array(obj.sizeInBytes());
+    obj.copyBytesInto(body, 0);
+    entries.push([number, ref.generationNumber, offset]);
+    parts.push(head, body, tail);
+    offset += head.length + body.length + tail.length;
+  }
+  let xref = "xref\n";
+  for (const [number, generation, at] of entries) xref += `${number} 1\n${String(at).padStart(10, "0")} ${String(generation).padStart(5, "0")} n \n`;
+  const info = context.trailerInfo;
+  const size = Math.max(context.largestObjectNumber, ...entries.map(([n]) => n)) + 1;
+  const extra = `${info.Info ? ` /Info ${String(info.Info)}` : ""}${info.ID ? ` /ID ${String(info.ID)}` : ""}`;
+  parts.push(encoder.encode(`${xref}trailer\n<< /Size ${size} /Root ${String(info.Root)}${extra} /Prev ${prev} >>\nstartxref\n${offset}\n%%EOF\n`));
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
 }
 
 export interface CertificateInput extends StampInput {
@@ -159,7 +234,7 @@ export const signingEventLabel = (event: string) => EVENT_LABEL[event] ?? event.
 /** The completion certificate: the document and its hashes, every signer with how and when they signed, and the history with its hash chain. */
 export async function buildCertificate(input: CertificateInput, letterhead?: Letterhead | null): Promise<Uint8Array> {
   const institution = letterhead?.institution?.trim() || DEFAULT_INSTITUTION;
-  const writer = await PdfWriter.create(`Completion certificate ${input.reference}`, paletteOf(letterhead?.primary));
+  const writer = await PdfWriter.create(`Completion certificate ${input.reference}`, paletteOf(letterhead?.primary), { text: textOf([input, letterhead?.institution, institution, EVENT_LABEL]) });
   let logo = letterhead?.logo ?? null;
   if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
   const when = (value?: string | null) => value ? `${formatDateTime(value) || value} (Australia/Sydney) / ${new Date(value).toISOString()} UTC` : "not recorded";

@@ -15,7 +15,7 @@ import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, fac
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
-import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
+import { afterCompletion, ONBOARDING_ACTIONS, stepTimer, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -376,7 +376,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             }
           }
         }
+        const signTimer = combinedPlan?.combined ? stepTimer("onboarding_sign_once") : null;
         const [pdf, letter] = await Promise.all([signingPdfModule(), letterPdfModule()]);
+        signTimer?.lap("pdf_modules");
         let image: string | null = null, signatureHash: string;
         if (kind === "typed") signatureHash = await sha256Hex(new TextEncoder().encode(name));
         else { const bytes = pdf.signatureImageBytes(body.signatureImage); image = toBase64(bytes); signatureHash = await sha256Hex(bytes); }
@@ -397,7 +399,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const box = (plan.onboarding as typeof combinedPlan)?.witness?.box ?? combinedPlan?.witness?.box ?? null;
           const stampFields = witnessPng && box ? [...plan.fields, { recipient_id: null, type: "signature", page: Number(box.page), x: Number(box.x), y: Number(box.y), w: Number(box.w), h: Number(box.h),
             value: `data:image/png;base64,${witnessPng}`, done: true, label: "Witness signature" }] : plan.fields;
-          const stamp = { reference: plan.reference, title: plan.title, fields: stampFields, recipients: plan.recipients };
+          // The combined application form + agreement (15 pages): the signature appended as an incremental update (CPU budget, 2026-11-20).
+          const stamp = { reference: plan.reference, title: plan.title, fields: stampFields, recipients: plan.recipients, incremental: combinedPlan?.combined === true };
           const signed = await pdf.stampDocument(original, stamp);
           const signedHash = await sha256Hex(signed);
           const mine: string[] = [];
@@ -418,7 +421,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if ((plan.offer || onboarding) && plan.complete && certificateBytes) {
             documents = { signed_base64: toBase64(signed), certificate_base64: toBase64(certificateBytes) };
             // The first merged version and the combined application (2026-11-20) are split into the application form and the agreement.
-            if (onboarding && ((onboarding.kind ?? "merged") === "merged" || (onboarding.kind === "application" && onboarding.combined === true))) {
+            // Only the first merged version is split here; the combined application is split by its own follow-up call (CPU budget).
+            if (onboarding && (onboarding.kind ?? "merged") === "merged") {
               const [form, agreement] = await (await onboardingPdfModule()).splitPdf(signed, Number(onboarding.formPages));
               documents = { ...documents, form_base64: toBase64(form), agreement_base64: toBase64(agreement) };
             }
@@ -438,7 +442,17 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             }
             await ports.later(drainSigningMail(ports));
             // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.
-            if (onboarding && after.state === "signed") await ports.later(afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, onboarding).catch(() => undefined));
+            // CPU budget (2026-11-20): an application form's follow-up (the split of the combined document, the referee checks, the staff
+            // emails) runs in its own call, queued by the database (pg_net); only when that cannot be queued does it run here.
+            if (onboarding && after.state === "signed") {
+              const inline = () => afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, onboarding).catch(() => undefined);
+              if (onboarding.kind === "application" && ports.serviceRpc) {
+                const queue = ports.serviceRpc;
+                await ports.later(queue("agency_onboarding_followup_queue", { p_onboarding: onboarding.id, p_step: onboarding.combined ? "split" : "after_application" })
+                  .then(() => undefined, () => onboarding.combined ? undefined : inline()));
+              } else await ports.later(inline());
+            }
+            signTimer?.lap("stamp_certificate_store"); signTimer?.done({ fields: stampFields.length });
             return { signed: true, complete: after.state === "signed", state: after.state };
           } catch (error) {
             const e = error as RpcError;
@@ -502,6 +516,37 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
         certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };
+    }
+
+    // ------------------------------------------------------------------ an application form's follow-up (service role only, queued by the database)
+    // 2026-11-20, CPU budget: the work after the agency admin's one signature, in calls of its own. "split": the combined signed document
+    // becomes the application form and the agreement, then "after_application" is queued; "after_application": the referee checks, the
+    // agency admin's and the staff emails (afterCompletion).
+    if (action === "onboarding_followup") {
+      if (!ports.isServiceCaller || !ports.serviceRpc) throw new SigningError("Not available.", 403);
+      const onboardingId = String(body.onboardingId ?? "");
+      if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
+      const step = String(body.step ?? "");
+      const serviceRpc = ports.serviceRpc;
+      if (step === "split") {
+        const timer = stepTimer("onboarding_split");
+        const source = await serviceRpc("agency_onboarding_split_source", { p_onboarding: onboardingId }) as { pending: boolean; requestId: string; state: string; path: string | null; hash: string | null; formPages: number };
+        if (!source?.pending || source.state !== "signed" || !source.path || !source.hash) return { step, split: false };
+        const signed = await fileBytes(source.path, source.hash); timer.lap("download");
+        const [form, agreement] = await (await onboardingPdfModule()).splitPdf(signed, Number(source.formPages)); timer.lap("split");
+        const stored = await serviceRpc("agency_onboarding_split_store", { p_onboarding: onboardingId, p_request: source.requestId, p_form: toBase64(form), p_agreement: toBase64(agreement) }) as { stored: boolean };
+        timer.lap("store");
+        await serviceRpc("agency_onboarding_followup_queue", { p_onboarding: onboardingId, p_step: "after_application" });
+        timer.done({ formBytes: form.length, agreementBytes: agreement.length });
+        return { step, split: stored?.stored === true };
+      }
+      if (step === "after_application") {
+        const timer = stepTimer("onboarding_after_application");
+        await afterCompletion({ ports, store, fileBytes, commit: () => { staged.length = 0; } }, { id: onboardingId, kind: "application" });
+        timer.done();
+        return { step, done: true };
+      }
+      throw new SigningError("Unknown follow-up step.");
     }
 
     // ------------------------------------------------------------------ the schedule (service role) or an administrator: reminders, expiry, queued mail

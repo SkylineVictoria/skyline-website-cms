@@ -207,7 +207,8 @@ export default function PortalNotificationsPage() {
             />
             <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground-800">
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-4 w-4" />
-              I agree to receive text messages about my applications at this number. I can turn them off here at any time.
+              {/* Same words as the consent recorded by portal_set_sms_contact. TODO(sms-stop): add "Reply STOP to stop" once ClickSend inbound replies are wired up. */}
+              I agree to receive text messages about my applications at this number. I can turn them off on the Notifications page at any time.
             </label>
             <button
               type="submit"

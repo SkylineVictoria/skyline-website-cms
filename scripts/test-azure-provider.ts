@@ -1057,7 +1057,7 @@ function smsPort(queue: ClaimedSms[], storeOk = true) {
   };
   return { port, recorded };
 }
-const claimedSms = (id: string, attempt = 1): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt });
+const claimedSms = (id: string, attempt = 1, createdAt: string | null = new Date(Date.now() - 60_000).toISOString()): ClaimedSms => ({ id, leaseToken: `lease-${id}`, phone: "+61412345678", body: "Skyline: Application 42000000 is now under review", attempt, createdAt });
 
 test("sms dispatch: each outcome is recorded once with the right retry decision", async () => {
   const { port, recorded } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c", 3), claimedSms("d"), claimedSms("e")]);
@@ -1066,11 +1066,36 @@ test("sms dispatch: each outcome is recorded once with the right retry decision"
     { kind: "failed", code: "invalid_recipient" }, { kind: "unknown", code: "timeout" },
   ]);
   const summary = await dispatchSmsBatch(port, provider, 10);
-  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, stale: 0 });
+  assert.deepEqual(summary, { accepted: 1, retried: 1, failed: 2, unknown: 1, expired: 0, stale: 0 });
   assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}:${r.delay}`), [
     "a:accepted:null:false:0", "b:failed:rate_limit:true:60", "c:failed:provider:true:240", "d:failed:invalid_recipient:false:0", "e:unknown:timeout:false:0",
   ]);
   assert.deepEqual(provider.sent.map((m) => [m.deliveryId, m.to]), [["a", "+61412345678"], ["b", "+61412345678"], ["c", "+61412345678"], ["d", "+61412345678"], ["e", "+61412345678"]]);
+});
+
+test("sms dispatch: a text queued more than 24 hours ago is never sent; it is recorded as expired with its reason", async () => {
+  const now = Date.parse("2026-11-20T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(now - h * 3_600_000).toISOString();
+  const { port, recorded } = smsPort([claimedSms("old", 1, hoursAgo(25)), claimedSms("fresh", 1, hoursAgo(23)), claimedSms("edge", 1, hoursAgo(24.001)), claimedSms("undated", 1, null)]);
+  const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);
+  const summary = await dispatchSmsBatch(port, provider, 10, () => now);
+  assert.deepEqual(summary, { accepted: 1, retried: 0, failed: 0, unknown: 0, expired: 3, stale: 0 });
+  assert.deepEqual(provider.sent.map((m) => m.deliveryId), ["fresh"], "only the text queued within 24 hours reaches ClickSend");
+  assert.deepEqual(recorded.map((r) => `${r.id}:${r.outcome}:${r.code}:${r.retry}`), ["old:expired:older_than_24h:false", "fresh:accepted:null:false", "edge:expired:older_than_24h:false", "undated:expired:older_than_24h:false"]);
+  // A fenced record (lease lost) of an expired text counts as stale, and still nothing is sent.
+  const fenced = smsPort([claimedSms("old", 1, hoursAgo(30))], false);
+  const quiet = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000002" }]);
+  assert.deepEqual(await dispatchSmsBatch(fenced.port, quiet, 10, () => now), { accepted: 0, retried: 0, failed: 0, unknown: 0, expired: 0, stale: 1 });
+  assert.equal(quiet.sent.length, 0);
+});
+
+test("sms: the 24-hour SQL expiry and the consent text without a STOP promise are in the migration", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120052817_sms_expiry_and_consent.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(sql, /x\.state = 'pending' and x\.created_at < now\(\) - interval '24 hours'/);
+  assert.match(sql, /state = 'expired', state_reason = 'older_than_24h'/);
+  const consent = /values \(auth\.uid\(\), v_phone, '([^']+)'\)/.exec(sql)?.[1] ?? "";
+  assert.ok(consent.includes("Notifications page") && !/stop/i.test(consent), consent);
+  assert.match(sql, /TODO\(sms-stop\)/);
 });
 
 test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {

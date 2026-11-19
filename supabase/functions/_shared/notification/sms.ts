@@ -1,6 +1,8 @@
-// Runtime-neutral SMS transport: provider contract, ClickSend adapter, deterministic mock and the configuration gate.
-// Transport only: nothing enqueues or dispatches SMS yet. Same rules as delivery.ts: web standards only, and messages and
-// errors are fixed strings, never phone numbers, bodies, credentials or provider text.
+// Runtime-neutral SMS for portal users who opt in: provider contract, ClickSend adapter, deterministic mock, the configuration gate and
+// the dispatch loop. The database queues a text next to each pending email for an opted-in user (migration 20261116160000); the
+// notification-delivery worker sends them with dispatchSmsBatch when EF_NOTIFICATION_SMS_ENABLED=true and the ClickSend credentials are
+// set. A text queued more than 24 hours ago is never sent (SMS_MAX_AGE_MS; migration 20261120052817). Same rules as delivery.ts: web
+// standards only, and messages and errors are fixed strings, never phone numbers, bodies, credentials or provider text.
 
 import type { SendOutcome } from "./delivery.ts";
 
@@ -109,19 +111,32 @@ export function selectSmsProvider(config: Record<string, string | undefined>, op
 }
 
 // ---- dispatch loop ------------------------------------------------------------------------------
-/** One claimed SMS (migration 20261116160000). The phone number and body are held in memory for this send only. */
-export interface ClaimedSms { id: string; leaseToken: string; phone: string; body: string; attempt: number }
+/** A text queued longer ago than this is never sent: it is recorded as expired (reason older_than_24h). */
+export const SMS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** One claimed SMS (migration 20261116160000; createdAt since 20261120052817). The phone number and body are held in memory for this send only. */
+export interface ClaimedSms { id: string; leaseToken: string; phone: string; body: string; attempt: number; createdAt: string | null }
 export interface SmsDeliveryPort {
   claim(): Promise<ClaimedSms | null>;
-  record(delivery: ClaimedSms, outcome: "accepted" | "failed" | "unknown", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
+  record(delivery: ClaimedSms, outcome: "accepted" | "failed" | "unknown" | "expired", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
 }
-export interface SmsDispatchSummary { accepted: number; retried: number; failed: number; unknown: number; stale: number }
+export interface SmsDispatchSummary { accepted: number; retried: number; failed: number; unknown: number; expired: number; stale: number }
 
-export async function dispatchSmsBatch(port: SmsDeliveryPort, provider: SmsProvider, limit: number): Promise<SmsDispatchSummary> {
-  const summary: SmsDispatchSummary = { accepted: 0, retried: 0, failed: 0, unknown: 0, stale: 0 };
+/** True when the text was queued more than 24 hours before `now` (or its queue time cannot be read: it is not sent on a guess). */
+export function smsExpired(createdAt: string | null, now: number): boolean {
+  const queued = createdAt ? Date.parse(createdAt) : NaN;
+  return !Number.isFinite(queued) || now - queued > SMS_MAX_AGE_MS;
+}
+
+export async function dispatchSmsBatch(port: SmsDeliveryPort, provider: SmsProvider, limit: number, now: () => number = Date.now): Promise<SmsDispatchSummary> {
+  const summary: SmsDispatchSummary = { accepted: 0, retried: 0, failed: 0, unknown: 0, expired: 0, stale: 0 };
   for (let i = 0; i < limit; i++) {
     const sms = await port.claim();
     if (!sms) break;
+    // Never send a text older than 24 hours (the database expires most of them before the claim; this catches one that crossed the line).
+    if (smsExpired(sms.createdAt, now())) {
+      if (await port.record(sms, "expired", null, "older_than_24h", false, 0)) summary.expired++; else summary.stale++;
+      continue;
+    }
     const outcome = await provider.send({ deliveryId: sms.id, to: sms.phone, body: sms.body });
     let stored: boolean;
     if (outcome.kind === "accepted") { stored = await port.record(sms, "accepted", outcome.messageId, null, false, 0); if (stored) summary.accepted++; }

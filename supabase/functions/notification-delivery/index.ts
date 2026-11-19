@@ -26,7 +26,7 @@ async function worker() {
       if (error) throw new Error("sms claim");
       const row = Array.isArray(data) ? data[0] : data;
       if (!row) return null;
-      return { id: String(row.id), leaseToken: String(row.lease_token), phone: String(row.phone ?? ""), body: String(row.body ?? ""), attempt: Number(row.attempt_count ?? 1) };
+      return { id: String(row.id), leaseToken: String(row.lease_token), phone: String(row.phone ?? ""), body: String(row.body ?? ""), attempt: Number(row.attempt_count ?? 1), createdAt: row.created_at ? String(row.created_at) : null };
     },
     record: async (d, outcome, messageId, errorCode, retry, delay) => {
       const { data, error } = await admin.rpc("notification_record_sms_attempt", { p_id: d.id, p_lease: d.leaseToken, p_outcome: outcome, p_message_id: messageId, p_error: errorCode, p_retry: retry, p_delay: delay });

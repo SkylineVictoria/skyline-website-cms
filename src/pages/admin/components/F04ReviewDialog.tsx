@@ -35,7 +35,7 @@ export default function F04ReviewDialog({ onboardingId, agencyName, onClose, onD
   const view = useMemo(() => {
     if (!review) return null;
     return {
-      id: review.requestId, reference: "", title: `Agent application: ${agencyName}`, state: "signed", message: null, expiresAt: null, signedAt: review.signedAt, consent: "", documentHash: "", url: "", certificateUrl: null,
+      id: review.requestId, reference: "", title: `Agent application: ${agencyName}`, state: "signed", message: null, expiresAt: null, signedAt: review.signedAt, consent: "", documentHash: "", url: "",
       recipient: { id: review.contact.id, name: review.contact.name, email: review.contact.email, state: "signed" },
       fields: reviewFields(review.fields, review.answers), signers: [], onboarding: { id: review.onboardingId, kind: "application", agencyName },
       application: { draft: null, facts: review.facts, savedAt: null, prefill: { agent_acn: review.answers.agent_acn ?? "", agent_marn: review.answers.agent_marn ?? "" }, filled: [], attachments: review.attachments, correction: null },

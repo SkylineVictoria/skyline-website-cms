@@ -5,24 +5,38 @@ import { AGREEMENT_FROM_DECLARATION, composeRegistrationNumber, composeSuburb, c
 
 /*
  * The F04 wizard's rules, without React (owner briefs 2026-11-19 "fix prefill and make it short", and round 3 "less typing, nicer finish"):
- * what the page opens with, the values it signs with and the problems of each of the five steps (Business, Contact, Agency, References,
- * Review & sign). The server repeats every check (document-signing core.ts checkApplicationAnswers / checkApplicationSubmission) before
+ * what the page opens with, the values it signs with and the problems of each of the five steps (Business, References, Contact, Agency,
+ * Review & sign; owner 2026-11-20: the references straight after the business). The server repeats every check (document-signing core.ts checkApplicationAnswers / checkApplicationSubmission) before
  * anything is signed.
  */
 
 export type Answers = Record<string, string>;
 type Field = SigningView["fields"][number];
 /** What "Save and continue later" keeps on the server. office_postcode is the wizard's own key (printed in the Suburb box). acn: digits. */
-export interface F04Draft { answers: Answers; acn: string; marn: string; declarations: Record<string, boolean>; step: number }
+export interface F04Draft { answers: Answers; acn: string; marn: string; declarations: Record<string, boolean>; step: number; stepId?: string }
 
+// The order (owner 2026-11-20): Business -> References -> Contact -> Agency -> Review & sign, in every mode (the agency admin's form, the staff
+// Prepare application, which leaves the references out, and the staff review). Everything refers to a step by its id (F04_STEP), never by
+// its position, so changing the order here changes it everywhere.
 export const F04_STEPS = [
   { id: "business", short: "Business", icon: "ri-building-line", title: "Your business", text: "Check what the government register says about your business." },
+  { id: "references", short: "References", icon: "ri-team-line", title: "Two references", text: "Two people who know your agency's work." },
   { id: "contact", short: "Contact", icon: "ri-contacts-line", title: "Contact and office", text: "Who we deal with, and where your office is." },
   { id: "agency", short: "Agency", icon: "ri-briefcase-line", title: "Your agency", text: "A few questions about how you recruit students." },
-  { id: "references", short: "References", icon: "ri-team-line", title: "Two references", text: "Two people who know your agency's work." },
   { id: "review", short: "Review & sign", icon: "ri-quill-pen-line", title: "Review and sign", text: "Check your answers, tick the declaration and sign." },
 ] as const;
-export const REVIEW_STEP = F04_STEPS.length - 1;
+export type F04StepId = (typeof F04_STEPS)[number]["id"];
+/** Each step's position in F04_STEPS. */
+export const F04_STEP = Object.fromEntries(F04_STEPS.map((s, i) => [s.id, i])) as Record<F04StepId, number>;
+export const REVIEW_STEP = F04_STEP.review;
+/** The order before 2026-11-20: a draft saved then kept only the position of its step. */
+const STEP_IDS_BEFORE_2026_11_20: readonly F04StepId[] = ["business", "contact", "agency", "references", "review"];
+/** The position a saved draft reopens at: by its step id, or (an older draft) by its position in the old order. */
+export function draftStep(draft: Partial<Pick<F04Draft, "step" | "stepId">> | null | undefined): number {
+  if (!draft) return 0;
+  const id = (draft.stepId && draft.stepId in F04_STEP ? draft.stepId : STEP_IDS_BEFORE_2026_11_20[Math.min(Math.max(Number(draft.step) || 0, 0), 4)]) as F04StepId;
+  return F04_STEP[id] ?? 0;
+}
 
 export const COMPANY_KEYS = ["agent_legal_entity", "agent_trading_name", "agent_agency_name", "agent_abn", "agent_year_founded"] as const;
 export const COMPANY_LABEL: Record<string, string> = { agent_legal_entity: "Legal name", agent_trading_name: "Trading name", agent_agency_name: "Agency name", agent_abn: "ABN", agent_year_founded: "Year founded" };
@@ -129,7 +143,7 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   const merged: F04Draft = !draft ? base : {
     answers: { ...answers, ...Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k, v]) => String(v ?? "").trim() || blank(k))) },
     acn: acnDigits(draft.acn) || base.acn, marn: draft.marn ?? "", declarations: { ...(draft.declarations ?? {}) },
-    step: Math.min(Math.max(Number(draft.step) || 0, 0), F04_STEPS.length - 1) };
+    step: draftStep(draft) };
   const m = merged.answers;
   if (isPostcodeOnly(m.office_suburb)) m.office_suburb = "";
   // The declarant is the agency contact unless the contact names someone else (round 3); both stay editable.
@@ -171,14 +185,14 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
   const blank = (key: string) => !(a[key] ?? "").trim();
   const need = (key: string, message: string) => { if (field(key) && required(key) && blank(key)) p[key] = message; };
   const digits = (key: string, label: string) => { if (!blank(key) && !/^\d{1,6}$/.test(a[key].trim())) p[key] = `${label}: a number.`; };
-  if (step === 0) {
+  if (step === F04_STEP.business) {
     for (const key of COMPANY_KEYS) need(key, `Enter the ${COMPANY_LABEL[key].toLowerCase()}.`);
     if (!blank("agent_abn") && a.agent_abn.replace(/\s/g, "").length !== 11) p.agent_abn = "The ABN has 11 digits.";
     if (state.acn.trim() && !/^\d{9}$/.test(acnDigits(state.acn))) p.acn = "The ACN has 9 digits.";
     if (state.marn.trim() && !/^\d{1,10}$/.test(state.marn.replace(/\s/g, ""))) p.marn = "The MARN is a number: digits only.";
     if (!blank("agent_year_founded") && !/^\d{4}$/.test(a.agent_year_founded.trim())) p.agent_year_founded = "Enter the year as four digits, for example 2015.";
   }
-  if (step === 1) {
+  if (step === F04_STEP.contact) {
     for (const [key, label] of [["contact_given_name", "given name"], ["contact_family_name", "family name"], ["contact_position", "position"], ["contact_email", "email"]] as const) need(key, `Enter the contact's ${label}.`);
     if (!p.contact_position && choiceUnnamed(a.contact_position)) p.contact_position = "Type the position.";
     if (field("contact_phone") && blank("contact_phone")) p.contact_phone = "Enter the contact's phone with its country code.";
@@ -190,7 +204,7 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
     if (isAustralia(a.office_country) && !blank("office_postcode") && !/^\d{4}$/.test(a.office_postcode.trim())) p.office_postcode = "An Australian postcode has 4 digits.";
     if (field("office_suburb") && blank("office_suburb") && !blank("office_postcode")) p.office_suburb = "Enter the suburb or city for this postcode.";
   }
-  if (step === 2) {
+  if (step === F04_STEP.agency) {
     for (const q of QUESTIONS) {
       const asked = fields.some((f) => groupOf(f.key)?.key === q.key);
       if (!asked) continue;
@@ -203,7 +217,7 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
     if (/(^|,\s*)Other$/.test((a.services_provided ?? "").trim())) p.services_provided = "Name the other services.";
     if (/(^|,\s*)Other$/.test((a.other_countries_recruited ?? "").trim())) p.other_countries_recruited = "Name the other countries.";
   }
-  if (step === 3) {
+  if (step === F04_STEP.references) {
     for (const n of [1, 2]) {
       for (const [part, label, must] of REF_PARTS) if (must && field(`ref${n}_${part}`) && blank(`ref${n}_${part}`)) p[`ref${n}_${part}`] = `Enter reference ${n}'s ${label.toLowerCase()}.`;
       if (!blank(`ref${n}_email`) && !EMAIL.test(a[`ref${n}_email`].trim())) p[`ref${n}_email`] = "Enter a valid email address.";
@@ -231,17 +245,17 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
  * in the CMS) and "correction" (the agency admin changes only the flagged answers and signs again).
  */
 export type F04Mode = "agent" | "admin-review" | "correction" | "admin-prefill";
-const STEP_OF_KEY: Array<[RegExp, number]> = [
-  [/^(agent_legal_entity|agent_trading_name|agent_agency_name|agent_abn|agent_year_founded|agent_gst_registered|acn|marn)$/, 0],
-  [/^(contact_|office_|agent_website$)/, 1],
-  [/^ref[12]_/, 3],
+const STEP_OF_KEY: Array<[RegExp, F04StepId]> = [
+  [/^(agent_legal_entity|agent_trading_name|agent_agency_name|agent_abn|agent_year_founded|agent_gst_registered|acn|marn)$/, "business"],
+  [/^(contact_|office_|agent_website$)/, "contact"],
+  [/^ref[12]_/, "references"],
 ];
-/** The step a flagged answer is on (anything about the agency itself: step 3, Agency). */
-export const stepOfKey = (key: string) => STEP_OF_KEY.find(([re]) => re.test(key))?.[1] ?? 2;
+/** The step a flagged answer is on (anything about the agency itself: the Agency step). */
+export const stepOfKey = (key: string) => F04_STEP[STEP_OF_KEY.find(([re]) => re.test(key))?.[1] ?? "agency"];
 /** The steps shown: every step in agent and admin-review modes; in correction mode only the steps with a flagged answer, then Review & sign. */
 export function visibleSteps(mode: F04Mode, flags: Record<string, string> | null | undefined): number[] {
   // The pre-send step (2026-11-20): staff never fill the references; they are the agency admin's.
-  if (mode === "admin-prefill") return F04_STEPS.map((_, i) => i).filter((i) => i !== 3);
+  if (mode === "admin-prefill") return F04_STEPS.map((_, i) => i).filter((i) => i !== F04_STEP.references);
   if (mode !== "correction") return F04_STEPS.map((_, i) => i);
   const steps = new Set(Object.keys(flags ?? {}).map(stepOfKey));
   return [...F04_STEPS.map((_, i) => i).filter((i) => i !== REVIEW_STEP && steps.has(i)), REVIEW_STEP];

@@ -218,7 +218,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       <p className="text-sm font-medium text-foreground-900">1. Agent Application Form (F04){row.combined ? " and Agent Agreement (P06), signed once" : ""}</p>
       <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend link" />
       {row.applicationSignedAt ? <p className="text-xs text-foreground-600">Signed {new Date(row.applicationSignedAt).toLocaleDateString()} by {row.signerName ?? row.agent.name}.</p> : null}
-      <div className="flex flex-wrap gap-1.5">{row.files.form ? dl("form", ONBOARDING_FILE_LABEL.form) : null}{row.files.application_certificate ? dl("application_certificate", ONBOARDING_FILE_LABEL.application_certificate) : null}</div>
+      <div className="flex flex-wrap gap-1.5">{row.files.form ? dl("form", ONBOARDING_FILE_LABEL.form) : null}</div>
       {compact ? null : <ApplicationAttachments onboardingId={row.id} />}
       {!compact && reviewable ? <div className="flex flex-wrap gap-1.5 pt-1">
         <Button size="sm" icon="ri-file-search-line" disabled={!!busy} onClick={onReview} data-testid="review-application">Review application</Button>
@@ -244,7 +244,6 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         {ref.status === "received" && Object.keys(ref.answers ?? {}).length ? <dl className="mt-1 grid grid-cols-1 gap-x-4 text-xs sm:grid-cols-2">{REFEREE_LABELS.filter(([k]) => ref.answers[k]).map(([k, label]) => <div key={k} className="flex gap-1"><dt className="text-foreground-500">{label}:</dt><dd className="min-w-0 break-words">{ref.answers[k]}</dd></div>)}</dl> : null}
         <div className="mt-1 flex flex-wrap gap-1.5">
           {ref.files.form ? dl(`referee:${ref.id}`, `Referee check ${ref.position} (${ref.receivedVia === "upload" ? "uploaded" : "signed"})`) : null}
-          {ref.files.certificate ? dl(`referee_certificate:${ref.id}`, `Referee check ${ref.position} certificate`) : null}
           {!compact && ref.status !== "received" && !closed ? <>
             <Button size="sm" variant="outline" disabled={!!busy} onClick={() => onChangeReferee(ref)} data-testid={`change-referee-${ref.position}`}>Change referee email</Button>
             <UploadButton disabled={busy === `upload:${ref.id}`} onFile={(file) => onUpload(ref, file)} position={ref.position} />
@@ -260,7 +259,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       </div>
       {row.combined ? <div className="space-y-0.5 text-xs text-foreground-700" data-testid="agreement-combined">
         <p>Commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}</p>
-        {row.signatureEvent ? <p data-testid="signature-event">Signed once by {row.signatureEvent.signer ?? row.agent.name} on {new Date(row.signatureEvent.at).toLocaleString()} (application form and agreement){row.signatureEvent.ip ? ` · IP ${row.signatureEvent.ip}` : ""}.</p>
+        {row.signatureEvent ? <p data-testid="signature-event">Signed once by {row.signatureEvent.signer ?? row.agent.name} on {new Date(row.signatureEvent.at).toLocaleString()} (application form and agreement).</p>
           : row.stage === "application_sent" ? <p>Waiting for {row.agent.name} to sign the application form and the agreement (one signature).</p> : null}
         {row.slitWitness ? <p data-testid="slit-witness-note">SLIT witness: {row.slitWitness.name} (added before sending; drawn signature).</p> : null}
         {row.witness ? <p data-testid="agent-witness-note">Agency's witness: {row.witness.name} (added by the agency admin when signing; drawn signature).</p> : null}
@@ -270,7 +269,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       {row.activation ? <p className="text-xs text-emerald-800" data-testid="activation-note">Business activated on {new Date(row.activation.at).toLocaleDateString()}{row.activation.invitationId ? `; set-password email sent (${row.activation.invitationStatus === "accepted" ? "password set, signed in" : row.activation.invitationStatus === "pending" ? "waiting for the password" : "invitation withdrawn"})` : "; the agent already signs in"}.</p> : null}
       {row.agreement ? <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}{row.signedAt && row.stage === "agreement_signed" ? ` · signed ${new Date(row.signedAt).toLocaleDateString()}` : ""}</p> : null}
       {row.override ? <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="override-note">Sent before both references were back{row.override.by ? ` by ${row.override.by}` : ""} on {new Date(row.override.at).toLocaleDateString()}: “{row.override.reason}”</p> : null}
-      <div className="flex flex-wrap gap-1.5">{row.files.agreement ? dl("agreement", ONBOARDING_FILE_LABEL.agreement) : null}{row.files.certificate ? dl("certificate", ONBOARDING_FILE_LABEL.certificate) : null}</div>
+      <div className="flex flex-wrap gap-1.5">{row.files.agreement ? dl("agreement", ONBOARDING_FILE_LABEL.agreement) : null}</div>
     </div>
   </div>;
 }
@@ -292,7 +291,7 @@ function LegacyRow({ row, busy, onOpen, onRemind, onDownload }: { row: Onboardin
     </div>
     <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}
       {row.status === "signed" && row.signedAt ? ` · signed ${new Date(row.signedAt).toLocaleDateString()} by ${row.signerName ?? row.agent.name}` : ""}{row.status === "closed" ? ` · closed (${row.closedReason ?? "cancelled"})` : ""}</p>
-    <div className="flex flex-wrap gap-1.5">{(["form", "agreement", "certificate"] as const).filter((k) => row.files[k]).map((k) =>
+    <div className="flex flex-wrap gap-1.5">{(["form", "agreement"] as const).filter((k) => row.files[k]).map((k) =>
       <Button key={k} size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:${k}`} onClick={() => onDownload(row, k, ONBOARDING_FILE_LABEL[k])} data-testid={`download-${k}`}>{ONBOARDING_FILE_LABEL[k]}</Button>)}</div>
   </div>;
 }

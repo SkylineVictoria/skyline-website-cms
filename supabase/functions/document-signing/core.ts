@@ -529,8 +529,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
         recipient: record.recipient, fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
         requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
-        url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
-        certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };
+        // Only the signed document: the completion certificate (audit record: IP, browser, history) never goes to a link holder (owner 2026-11-20).
+        url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`) };
     }
 
     // ------------------------------------------------------------------ an application form's follow-up (service role only, queued by the database)
@@ -779,8 +779,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
     if (action === "admin_url") {
       const record = await admin("detail", body.id);
       const which = String(body.which ?? "document");
+      // The audit record (completion certificate): staff only, opened from the signing request page (View audit record); never emailed.
       if (which === "certificate") {
-        if (!record.certificate_path) throw new SigningError("The certificate is made when everyone has signed.");
+        if (!record.certificate_path) throw new SigningError("The audit record is made when everyone has signed.");
         return { url: await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) };
       }
       if (which === "original") return { url: await fileUrl(record.original_path, record.original_hash, `${safeName(record.title)}.pdf`) };
@@ -848,8 +849,9 @@ export async function drainSigningMail(ports: SigningPorts, limit = 20): Promise
       if (!to || !message) { await result("failed", undefined, !to ? "no recipient address" : "no template"); continue; }
       let attachments: Array<{ name: string; contentType: string; contentBase64: string }> | undefined;
       if (job.kind === "completed") {
-        // This email exists to deliver the signed PDF: a missing or changed file is not sent (failed, visible to the administrator).
-        const files: Array<[string, string, string]> = [[job.signed_path, job.signed_hash, `${safeName(job.title)}-signed.pdf`], [job.certificate_path, job.certificate_hash, `${safeName(job.title)}-certificate.pdf`]];
+        // This email exists to deliver the signed PDF: a missing or changed file is not sent (failed, visible to the administrator). The signed
+        // document only: the completion certificate (audit record) is never emailed to anyone, staff included (owner 2026-11-20).
+        const files: Array<[string, string, string]> = [[job.signed_path, job.signed_hash, `${safeName(job.title)}-signed.pdf`]];
         attachments = [];
         for (const [path, expected, name] of files) {
           const bytes = path ? await ports.storage.download(path) : null;

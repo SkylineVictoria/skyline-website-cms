@@ -10,7 +10,7 @@ import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFOR
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
 import { correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
-import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
+import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 
 /*
@@ -241,7 +241,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const persist = useCallback(async (at: number, force = false) => {
     // Staff review keeps no draft: Save changes writes the answers themselves.
     if (closed.current || staff) return true;
-    const draft = { ...stateRef.current, step: at };
+    const draft = { ...stateRef.current, step: at, stepId: STEPS[at]?.id };
     const json = JSON.stringify(draft);
     if (!force && json === lastSaved.current) return true;
     setSaved("saving");
@@ -263,7 +263,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments));
   const set = (key: string, value: string) => setState((s) => ({ ...s, answers: { ...s.answers, [key]: value } }));
   const setMany = (values: Record<string, string>) => setState((s) => ({ ...s, answers: { ...s.answers, ...values } }));
-  const warnings = step === 3 ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];
+  const warnings = step === F04_STEP.references ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];
   const signatureReady = method === "typed" ? (a.declarant_name ?? "").trim().length >= 2 : !!picture;
   // The witness (2026-11-20): a full name and a drawn signature, unless staff gave the witness before sending.
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
@@ -337,8 +337,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     setTried((t) => new Set(t).add(step));
     if (Object.keys(problems).length && !prefilling) {
       // A missing value hidden in a summary card opens its inputs.
-      if (step === 0) setEditCompany(true);
-      if (step === 1) { if (["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].some((k) => problems[k])) setEditContact(true); if (problems.office_street_address || problems.office_country || problems.office_postcode || problems.office_suburb) setEditAddress(true); }
+      if (step === F04_STEP.business) setEditCompany(true);
+      if (step === F04_STEP.contact) { if (["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].some((k) => problems[k])) setEditContact(true); if (problems.office_street_address || problems.office_country || problems.office_postcode || problems.office_suburb) setEditAddress(true); }
       setNotice({ tone: "error", text: "Some answers are missing or need a fix. They are marked below." }); return;
     }
     const target = returnTo ?? nextOf(step);
@@ -407,19 +407,19 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     const ref = (n: number) => [a[`ref${n}_contact_name`], a[`ref${n}_position`], a[`ref${n}_organisation`]].filter((s) => (s ?? "").trim()).join(", ") + ((a[`ref${n}_email`] ?? "").trim() ? ` · ${a[`ref${n}_email`]}` : "") + ((a[`ref${n}_phone`] ?? "").trim() ? ` · ${formatPhone(a[`ref${n}_phone`])}` : "");
     return (
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" data-testid="f04-review">
-        {section(0, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : ""],
+        {section(F04_STEP.business, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : ""],
           ["Year founded", a.agent_year_founded], ["MARN", state.marn]])}
-        {section(1, [["Contact", contactName], ["Position", a.contact_position], ["Email", a.contact_email], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", a.agent_website]])}
-        {section(2, [...QUESTIONS.filter((q) => asks(q.key)).map((q): [string, ReactNode] => [q.short, yn(q.key) + (yesNo(a[q.key]) === "YES" && q.attach && attachments[q.attach] ? ` · ${attachments[q.attach]!.name}` : "")]),
+        {section(F04_STEP.references, [["Reference 1", ref(1)], ["Reference 2", ref(2)]])}
+        {section(F04_STEP.contact, [["Contact", contactName], ["Position", a.contact_position], ["Email", a.contact_email], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", a.agent_website]])}
+        {section(F04_STEP.agency, [...QUESTIONS.filter((q) => asks(q.key)).map((q): [string, ReactNode] => [q.short, yn(q.key) + (yesNo(a[q.key]) === "YES" && q.attach && attachments[q.attach] ? ` · ${attachments[q.attach]!.name}` : "")]),
           ["Services", a.services_provided], ["Other countries", a.other_countries_recruited],
           ["Numbers", NUMBERS.filter(([k]) => (a[k] ?? "").trim()).map(([k, label]) => `${label}: ${a[k]}`).join(" · ")]])}
-        {section(3, [["Reference 1", ref(1)], ["Reference 2", ref(2)]])}
       </div>
     );
   };
 
   const body = (() => {
-    if (step === 0) {
+    if (step === F04_STEP.business) {
       const noBox = COMPANY_KEYS.filter((k) => !has(k) && (a[k] ?? "").trim());
       return (
         <div className="space-y-5">
@@ -472,7 +472,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         </div>
       );
     }
-    if (step === 1) {
+    if (step === F04_STEP.contact) {
       const pick = (p: AddressPick) => { setMany({ office_street_address: streetOf(p), office_suburb: p.suburb, office_state: p.state, office_postcode: p.postcode, office_province: "", office_country: "Australia" }); setEditAddress(false); };
       return (
         <div className="space-y-5">
@@ -531,7 +531,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         </div>
       );
     }
-    if (step === 2) return (
+    if (step === F04_STEP.agency) return (
       <div className="space-y-4">
         <div className="space-y-2">
           {QUESTIONS.filter((q) => asks(q.key)).map((q) => {
@@ -565,7 +565,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         </details>
       </div>
     );
-    if (step === 3) return (
+    if (step === F04_STEP.references) return (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {[1, 2].map((n) => {
           const k = (part: string) => `ref${n}_${part}`;

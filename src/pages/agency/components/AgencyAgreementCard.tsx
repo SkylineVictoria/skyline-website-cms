@@ -57,7 +57,7 @@ export default function AgencyAgreementCard({ agencyId, className = "" }: { agen
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     {signed.length > 0 && <ul className="mt-2 divide-y divide-background-200 text-sm">{signed.map((d) => <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
       <span>Signed {d.signedAt ? new Date(d.signedAt).toLocaleDateString() : ""} · {formatAuDate(d.commencementDate)} to {formatAuDate(d.expiryDate)}</span>
-      <span className="flex flex-wrap gap-1.5">{(["form", "agreement", "certificate"] as const).filter((k) => d.files[k]).map((k: OnboardingFileKind) =>
+      <span className="flex flex-wrap gap-1.5">{(["form", "agreement"] as const).filter((k) => d.files[k]).map((k: OnboardingFileKind) =>
         <button key={k} type="button" disabled={busy === `${d.id}:${k}`} onClick={() => void open(d.id, k)} className="rounded-md border border-background-300 bg-white px-3 py-1 text-xs font-medium hover:bg-background-100">
           <i className="ri-file-pdf-2-line mr-1" aria-hidden="true" />{ONBOARDING_FILE_LABEL[k]}</button>)}</span>
     </li>)}</ul>}

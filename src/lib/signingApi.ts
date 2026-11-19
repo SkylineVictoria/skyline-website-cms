@@ -114,7 +114,7 @@ export interface OnboardingAgreementTerms { commencementDate: string | null; exp
 export interface OnboardingWitnessPlan { preset: boolean; name: string | null; by: "admin" | "agent" | null; image: string | null }
 /** What a link holder gets: their own fields only, and who else is signing. */
 export interface SigningView {
-  id: string; reference: string; title: string; state: string; message: string | null; expiresAt: string | null; signedAt: string | null; consent: string; documentHash: string; url: string; certificateUrl: string | null;
+  id: string; reference: string; title: string; state: string; message: string | null; expiresAt: string | null; signedAt: string | null; consent: string; documentHash: string; url: string;
   /** Offer letters: the emailed 6-digit code confirms the signer before signing (codeTo: the masked address it goes to). */
   requireCode?: boolean; codeTo?: string | null; offer?: { studentName: string; applicationReference: string; prepaidMore: "YES" | "NO" | null } | null;
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };

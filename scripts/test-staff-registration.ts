@@ -155,7 +155,8 @@ test("signing mail: each job is sent once; a completed copy is sent only with ma
   const first = await signingCore.drainSigningMail(ports);
   assert.deepEqual(first, { sent: 2, failed: 1, requeued: 0 });
   assert.deepEqual(results, [[1, "sent"], [2, "sent"], [3, "failed"]], "a changed signed PDF is never attached");
-  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 2);
+  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 1, "the signed document only (2026-11-20: the audit record is never emailed)");
+  assert.ok(!JSON.stringify(sent).toLowerCase().includes("certificate"), "no certificate attachment, name or wording in any email");
   assert.deepEqual(await signingCore.drainSigningMail(ports), { sent: 0, failed: 0, requeued: 0 }, "nothing is sent twice");
   const off = await signingCore.drainSigningMail({ ...ports, mail: { ...ports.mail, provider: null } } as typeof ports);
   assert.deepEqual(off, { sent: 0, failed: 0, requeued: 0 }, "with sending off nothing is claimed");
@@ -761,6 +762,9 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.equal(d.form_base64, undefined, "no split inside the signing request");
   assert.deepEqual(queued, ["split"], "the split is queued");
   assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 0, "nothing else runs in the signing request");
+  const audit = signData as unknown as { certificate_path: string; certificate_hash: string };
+  assert.ok(/\/certificate-[0-9a-f-]+\.pdf$/.test(String(audit.certificate_path)) && stored.has(String(audit.certificate_path)) && /^[0-9a-f]{64}$/.test(String(audit.certificate_hash)),
+    "2026-11-20: the audit record (completion certificate) is still made and stored as evidence");
   const signedText = await pdfText(stored.get(signedRequest.path)!);
   assert.ok(signedText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && signedText.some((t) => t.page <= 2 && t.text.includes("Ravi")), "pdf.js reads the signed copy (incremental updates on the original)");
   const followup = (step: string) => signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step }, upload: null, ip: null, userAgent: null }, { ...ports, isServiceCaller: true } as typeof ports);
@@ -819,6 +823,33 @@ test("witness signatures (2026-11-20): a drawn signature in any field is a pictu
   }
   const text = (await pdfText(issued)).map((t) => t.text).join(" ");
   assert.ok(text.includes("Sue Witness") && text.includes("Raj Witness") && text.includes("Hari Admin"), "the witness names and the SLIT signatory still print as text");
+});
+
+test("F04 step order (2026-11-20): Business, References, Contact, Agency, Review & sign in the agency admin's form, Prepare application and the staff review; drafts and send-back follow", async () => {
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"], "the agency admin's invited view");
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", null)), ["business", "references", "contact", "agency", "review"], "the staff F04 review dialog");
+  assert.deepEqual(ids(logic.visibleSteps("admin-prefill", null)), ["business", "contact", "agency", "review"], "Prepare application: same order, the references are the agency admin's");
+  // Send back for correction: each flagged answer opens its own step, in the new order, then Review & sign.
+  const flagged = { contact_email: "wrong", ref2_phone: "missing", litigation_involved: "explain", agent_abn: "check" };
+  assert.deepEqual(ids(logic.visibleSteps("correction", flagged)), ["business", "references", "contact", "agency", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x" })), ["references", "review"], "only the references flagged");
+  assert.deepEqual(ids(logic.visibleSteps("correction", { office_address: "x", services_provided: "y" })), ["contact", "agency", "review"]);
+  for (const [key, step] of [["agent_legal_entity", "business"], ["marn", "business"], ["ref1_contact_name", "references"], ["ref2_email", "references"], ["contact_phone", "contact"],
+    ["office_suburb", "contact"], ["agent_website", "contact"], ["eatc_completed", "agency"], ["students_per_year", "agency"]] as const) {
+    assert.equal(logic.F04_STEPS[logic.stepOfKey(key)].id, step, `${key} is flagged on the ${step} step`);
+  }
+  // Each step checks its own answers at its new position.
+  const refFields = [1, 2].flatMap((n) => ["contact_name", "organisation", "email", "phone"].map((p) => ({ key: `ref${n}_${p}`, type: "text", required: true }))) as never;
+  const empty = { answers: {}, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.references };
+  assert.ok(Object.keys(logic.f04Problems(logic.F04_STEP.references, refFields, empty)).some((k) => k.startsWith("ref1_")), "the References step (second) asks for the references");
+  assert.deepEqual(logic.f04Problems(logic.F04_STEP.contact, refFields, empty), {}, "the Contact step does not ask for the references");
+  // Progress saving: a draft keeps its step by id; one saved before the change (position only, old order) reopens at the same step.
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 1 })].id, "contact", "an old draft at position 1 was on Contact");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 3 })].id, "references", "an old draft at position 3 was on References");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 0, stepId: "agency" })].id, "agency", "a new draft by its step id");
+  assert.equal(logic.draftStep(null), 0);
 });
 
 test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign once, split and approve stays under 1 s of CPU here; incremental updates keep the original bytes", async () => {
@@ -1182,12 +1213,12 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   assert.deepEqual(["0412 345 678", "+91 98765 43210", "03 9123 4567", "12345", ""].map((p) => abrLib.phoneE164(p)), ["+61412345678", "+919876543210", "+61391234567", null, null]);
 
   // The short wizard: five steps since round 3 (Review & sign); chips with Other; an upload asked for on Yes; referee problems before signing.
-  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References", "Review & sign"]);
+  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "References", "Contact", "Agency", "Review & sign"], "2026-11-20: the references straight after the business");
   assert.equal(logic.writeChips(["Accommodation", "Course counselling"], "Visa reviews", logic.SERVICES), "Course counselling, Accommodation, Visa reviews");
   assert.deepEqual(logic.readChips("Course counselling, Accommodation, Visa reviews", logic.SERVICES), { picked: ["Course counselling", "Accommodation"], other: "Visa reviews" });
   assert.deepEqual(logic.readChips("Canada, Other", logic.COUNTRIES), { picked: ["Canada"], other: "" }); assert.equal(logic.readChips("Canada", logic.COUNTRIES).other, null);
   const qFields = [{ id: "q1", type: "checkbox", key: "org_chart_attached:YES", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }, { id: "q2", type: "text", key: "services_provided", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }] as unknown as Parameters<typeof logic.f04Problems>[1];
-  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(2, qFields, { answers, acn: "", marn: "", declarations: {}, step: 2 }, files);
+  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(logic.F04_STEP.agency, qFields, { answers, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.agency }, files);
   assert.match(agencyStep({ org_chart_attached: "YES" }).attach_org_chart, /Upload the organisational chart, or answer No/);
   assert.equal(agencyStep({ org_chart_attached: "YES" }, { org_chart: { name: "chart.pdf", size: 10 } }).attach_org_chart, undefined);
   assert.match(agencyStep({ services_provided: "Accommodation, Other" }).services_provided, /Name the other services/);
@@ -1215,7 +1246,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   purvaFields.find((f) => f.key === "agent_year_founded")!.value = "2015";
   const draft = { acn: "603 584 676", answers: { agent_trading_name: "PURVA TECH PTY LTD", agent_year_founded: "", contact_position: "Test", office_suburb: "Melbourne", office_postcode: "3000" }, declarations: {}, marn: "", step: 2 };
   const purva = logic.initialF04(purvaFields, purvaFacts, { agent_acn: "603 584 676", contact_given_name: "Gourav", contact_family_name: "Gupta", agent_legal_entity: "PURVA TECH PTY LTD" }, draft, "Recipient Name");
-  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", 2]);
+  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", logic.F04_STEP.agency], "a draft saved at position 2 before 2026-11-20 was on Agency: it reopens there");
   // Page fallback with the field blank and no server fill: the card's date gives the year.
   const blankYear = logic.initialF04([field("agent_year_founded")] as unknown as WizFields, purvaFacts, null, null);
   assert.equal(blankYear.answers.agent_year_founded, "2015", "the page takes the year from the card's Active-from date when the server left it blank");
@@ -1236,7 +1267,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual(logic.readChoice("Other", logic.POSITIONS), { picked: null, other: "" });
   assert.deepEqual([logic.writeChoice("CEO", null), logic.writeChoice(null, ""), logic.writeChoice(null, "Head of admissions"), logic.writeChoice(null, null)], ["CEO", "Other", "Head of admissions", ""]);
   const contactFields = [field("contact_position", "", true)] as unknown as WizFields;
-  const contactStep = (position: string) => logic.f04Problems(1, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: 1 }).contact_position;
+  const contactStep = (position: string) => logic.f04Problems(logic.F04_STEP.contact, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.contact }).contact_position;
   assert.deepEqual([contactStep(""), contactStep("Other"), contactStep("Head of admissions"), contactStep("Owner")], ["Enter the contact's position.", "Type the position.", undefined, undefined]);
   const reviewFields = [field("declarant_name", "", true), field("declarant_role", "", true)] as unknown as WizFields;
   const reviewStep = (answers: Record<string, string>, declarations: Record<string, boolean> = logic.allDeclarations(true)) => logic.f04Problems(logic.REVIEW_STEP, reviewFields, { answers, acn: "", marn: "", declarations, step: logic.REVIEW_STEP });
@@ -1256,7 +1287,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.equal(signingCore.checkApplicationSubmission({ acn: "004-028-077", marn: "", declarations: all }, {}).acn, "004028077");
   assert.throws(() => signingCore.checkApplicationSubmission({ acn: "004 028 07", marn: "", declarations: all }, {}), /The ACN has 9 digits/);
   assert.equal(abrLib.printAcn("004028077"), "004 028 077", "shown in its groups");
-  assert.equal(logic.f04Problems(0, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: 0 }).acn, undefined, "the page accepts spaces too");
+  assert.equal(logic.f04Problems(logic.F04_STEP.business, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: logic.F04_STEP.business }).acn, undefined, "the page accepts spaces too");
 
   // 6. The Suburb box never holds a postcode alone (the test F04 stored "3000").
   assert.deepEqual(onboarding.normalizeOfficeAddress({ office_suburb: "3000" }), { office_suburb: "" });
@@ -1268,7 +1299,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual([zz.answers.office_suburb, zz.answers.office_postcode], ["", ""], "a stored postcode alone opens blank for the address search");
   const suburbField = [field("office_suburb")] as unknown as WizFields;
   assert.equal(logic.f04Values(suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000" } })["f-office_suburb"], "", "never signed as a postcode alone");
-  assert.equal(logic.f04Problems(1, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
+  assert.equal(logic.f04Problems(logic.F04_STEP.contact, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
   const sql = read("supabase/migrations/20261119171538_f04_round3.sql");
   assert.ok(["if v_sub ~ '^\\d{4}$' then", "p := p - 'office_suburb';", "'office_suburb', nullif(v_sub, '')", "update hr.sign_fields f set value = null", "r.state in ('sent', 'viewed', 'email_failed')"].every((s) => sql.includes(s)),
     "the send-side SQL drops a postcode-only suburb and unsigned F04s are cleaned");
@@ -1342,10 +1373,11 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.equal(onboarding.correctionFlagged("office_suburb", { office_address: "Wrong suburb" }), true, "one flag covers the office address");
   assert.equal(onboarding.correctionFlagged("contact_email", { office_address: "" }), false);
   // The steps a correction shows: those with a flagged answer, then Review & sign.
-  assert.deepEqual([logic.stepOfKey("acn"), logic.stepOfKey("office_address"), logic.stepOfKey("litigation_involved"), logic.stepOfKey("ref2_phone"), logic.stepOfKey("agent_year_founded")], [0, 1, 2, 3, 0]);
-  assert.deepEqual(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" }), [0, 3, 4]);
-  assert.deepEqual(logic.visibleSteps("admin-review", { ref1_email: "x" }), [0, 1, 2, 3, 4], "staff see every step");
-  assert.deepEqual(logic.visibleSteps("agent", null), [0, 1, 2, 3, 4]);
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(["acn", "office_address", "litigation_involved", "ref2_phone", "agent_year_founded"].map((k) => logic.F04_STEPS[logic.stepOfKey(k)].id), ["business", "contact", "agency", "references", "business"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" })), ["business", "references", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", { ref1_email: "x" })), ["business", "references", "contact", "agency", "review"], "staff see every step");
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"]);
   assert.equal(logic.correctionEditable("declarant_name", {}), true, "the declaration is given again");
   assert.equal(logic.correctionEditable("contact_email", { agent_trading_name: "" }), false);
   // Server side (core.ts): a correction's unflagged fields keep the values they were sent with, whatever the page posts.
@@ -2290,6 +2322,40 @@ async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
     return fonts.entries().map(([, ref]) => { const dict = doc.context.lookup(ref); return dict instanceof PdfLib.PDFDict ? String(dict.get(PdfLib.PDFName.of("BaseFont"))) : "?"; });
   });
 }
+
+test("completion certificate (2026-11-20): never emailed, downloaded or shown to anyone; only the signed documents leave; the audit record stays on the signing request for staff", async () => {
+  // Emails: every completion email (to the signer, an offer with a deposit, the administrator) mentions and attaches the signed document only.
+  const base = { id: 1, title: "Contract", reference: "SLIT-1", name: "Ann", to: "a@example.test", signed_path: "r/s.pdf", signed_hash: "a".repeat(64), certificate_path: "r/c.pdf", certificate_hash: "b".repeat(64) };
+  for (const job of [{ ...base, kind: "completed", audience: "recipient" }, { ...base, kind: "completed", audience: "admin", signers: [{ name: "Ann", role: "Student", state: "signed" }] },
+    { ...base, kind: "completed", audience: "recipient", deposit: { label: "AUD 500.00", link: "https://x.example/sign#t=1" } }]) {
+    const mail = signing.renderSigningEmail(job as never, null)!;
+    assert.ok(mail && !/certificate|IP address|user agent/i.test(`${mail.subject} ${mail.text}`), `no certificate wording: ${mail.subject}`);
+    assert.match(mail.text, /signed (document|copy) is attached/);
+  }
+  // The signer's view and every download: no certificate link or kind anywhere.
+  const core = read("supabase/functions/document-signing/core.ts");
+  assert.ok(!core.includes("certificateUrl"), "the signing link's view has no certificate link");
+  assert.match(core, /const files: Array<\[string, string, string\]> = \[\[job\.signed_path, job\.signed_hash, `\$\{safeName\(job\.title\)\}-signed\.pdf`\]\];/, "the completion email attaches the signed PDF only");
+  assert.match(core, /if \(which === "certificate"\) \{/, "staff still open the audit record from the signing request (admin_url)");
+  for (const file of ["src/pages/SigningPage.tsx", "src/pages/agency/components/AgencyAgreementCard.tsx", "src/pages/agency/components/ApplicationStatusPanels.tsx", "src/pages/admin/components/AgentOnboardingPanel.tsx"]) {
+    const text = read(file);
+    assert.ok(!/certificateUrl|"certificate"\)|application_certificate"|referee_certificate:|offer-letter-certificate|\["form", "agreement", "certificate"\]/.test(text), `${file}: no certificate download`);
+  }
+  assert.ok(!read("src/pages/admin/components/AgentOnboardingPanel.tsx").includes("· IP "), "the business page shows no IP address");
+  assert.match(read("src/pages/admin/components/signing/RequestDetail.tsx"), /View audit record/, "the signing request page (staff only) keeps the audit record");
+  // The database refuses the certificate kinds in every download and lists none (portal offer letters, agency onboarding).
+  const sql = read("supabase/migrations/20261120123517_signing_certificate_private.sql");
+  assert.match(sql, /if p_kind in \('certificate', 'application_certificate'\) or p_kind like 'referee_certificate:%' then\n  raise exception 'The audit record is not downloadable/);
+  assert.match(sql, /elsif p_kind = 'certificate' then\n  raise exception 'The audit record is not downloadable/);
+  for (const changed of [`'hasCertificate', false`, `'certificate', false, 'application_certificate', false)`, `'form', f.form_content is not null, 'certificate', false)`, `'agreement', o.agreement_content is not null, 'certificate', false)`]) {
+    assert.ok(sql.includes(changed), `listed as not available: ${changed}`);
+  }
+  // Staff (HR) offers: the signed copy carries the signature, not the audit details (kept in hr_svc_offer_sign).
+  const signedOffer = await offerPdf.stampSignedOffer(await makePdf(1), { signerName: "Asha Patel", signedAt: "2026-11-20T00:00:00Z", ip: "203.0.113.5", userAgent: "Mozilla/5.0 Test",
+    consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
+  const offerText = (await pdfText(signedOffer)).map((t) => t.text).join(" ");
+  assert.ok(offerText.includes("Asha Patel") && !/203\.0\.113\.5|Mozilla|IP address|Browser|abab/.test(offerText), "no IP address, browser or hash on the staff offer's signed copy");
+});
 
 test("offer PDF: signing keeps every original page and adds one signature page on the shared styling", async () => {
   const signed = await offerPdf.stampSignedOffer(await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",

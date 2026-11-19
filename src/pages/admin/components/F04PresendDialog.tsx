@@ -42,7 +42,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const view = useMemo(() => {
     if (!opened) return null;
     return {
-      id: opened.onboardingId ?? "", reference: "", title: `Agent application: ${agencyName}`, state: "draft", message: null, expiresAt: null, signedAt: null, consent: "", documentHash: "", url: "", certificateUrl: null,
+      id: opened.onboardingId ?? "", reference: "", title: `Agent application: ${agencyName}`, state: "draft", message: null, expiresAt: null, signedAt: null, consent: "", documentHash: "", url: "",
       recipient: { id: opened.contact?.id ?? "", name: opened.contact?.name ?? "", email: opened.contact?.email ?? "", role: "Business contact", state: "draft", signed_at: null },
       fields: opened.fields.map((f) => ({ ...f, x: 0, y: 0, w: 0, h: 0 })), signers: [], onboarding: { id: opened.onboardingId ?? "", kind: "application", agencyName, agencyId, formPages: 2 },
       application: { draft: null, facts: opened.facts, savedAt: null, prefill: { agent_acn: opened.acn, agent_marn: opened.marn }, filled: [], attachments: {}, correction: null },

@@ -2,7 +2,7 @@
  * This file deliberately does not modify Master Data, CRM or HRMS.
  * All references resolve through existing authoritative APIs.
  */
-export type LmsArea = "courses" | "units" | "intakes" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "timetable-templates" | "term-breaks" | "locations"
+export type LmsArea = "courses" | "units" | "intakes" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "room-availability" | "timetable-templates" | "term-breaks" | "locations"
   // Timetable views (LMS > Timetable tabs, ?view=), listed under Timetable in the sidebar.
   | "tt-calendar" | "tt-trainers" | "tt-rooms" | "tt-students" | "tt-intakes" | "tt-setup";
 export type LmsDependency = "course" | "intake" | "unit" | "unitDelivery" | "session";
@@ -24,6 +24,8 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   // calendar; term breaks, locations and saved course timetables are tabs of Settings. Old addresses still open.
   { id: "tt-calendar", label: "Calendar", route: "/admin/lms/timetable", icon: "ri-calendar-2-line", dependencies: [], parent: "timetable" },
   { id: "timetable-create", label: "Create timetable", route: "/admin/lms/timetable-create", icon: "ri-add-circle-line", dependencies: ["course", "intake"], parent: "timetable" },
+  // Room hours live in Bookings (one availability module for people and rooms); this is a shortcut to it.
+  { id: "room-availability", label: "Room availability", route: "/admin/bookings?tab=availability&who=rooms", icon: "ri-door-open-line", dependencies: [], parent: "timetable" },
   { id: "timetable-settings", label: "Settings", route: "/admin/lms/timetable-settings", icon: "ri-settings-3-line", dependencies: [], parent: "timetable" },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "session"], primaryAction: "Mark Attendance" },
   { id: "completion", label: "Completion", route: "/admin/lms/completion", icon: "ri-award-line", dependencies: ["course", "intake"] },

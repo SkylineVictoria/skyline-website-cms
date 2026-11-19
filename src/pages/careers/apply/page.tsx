@@ -4,7 +4,8 @@ import PageHero from "@/components/feature/PageHero";
 import Seo from "@/components/feature/Seo";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
-import { COVER_LETTER_MAX, EMPLOYMENT_TYPE_LABEL, JOB_FILE_ACCEPT, applyProblems, jobApplyPath, jobFileProblem, jobPath } from "@/lib/jobs";
+import { COVER_LETTER_MAX, EMPLOYMENT_TYPE_LABEL, JOB_FILE_ACCEPT, JOB_FILE_MAX_BYTES, applyProblems, jobApplyPath, jobFileProblem, jobPath } from "@/lib/jobs";
+import { megabytes } from "@/lib/hrRules";
 import { getJob, type Job } from "@/lib/jobsApi";
 import { applyAsStaff } from "@/lib/staffApi";
 import { readResumeContact, type ResumeContact } from "@/lib/resumeContact";
@@ -142,7 +143,7 @@ export default function CareerApplyPage() {
         <form onSubmit={(e) => void submit(e)} noValidate className="space-y-4" data-testid="job-apply-form">
           {errors.form ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{errors.form}</p> : null}
           <div>
-            <label className={label} htmlFor="job-resume">Resume (PDF or Word .docx, 5 MB) <span className="text-primary-600">*</span></label>
+            <label className={label} htmlFor="job-resume">Resume (PDF or Word .docx, {megabytes(JOB_FILE_MAX_BYTES)}) <span className="text-primary-600">*</span></label>
             <input id="job-resume" type="file" accept={JOB_FILE_ACCEPT} onChange={(e) => pickFile("resume", e.target.files?.[0] ?? null)} className="block w-full text-sm" data-testid="job-apply-resume" />
             {problem(errors.resume)}
             <p className="mt-2 text-sm text-foreground-600" role="status">
@@ -165,7 +166,7 @@ export default function CareerApplyPage() {
             {problem(errors.coverLetter)}
           </div>
           <div>
-            <label className={label} htmlFor="job-cover-file">Cover letter file (optional, PDF or Word .docx, 5 MB)</label>
+            <label className={label} htmlFor="job-cover-file">Cover letter file (optional, PDF or Word .docx, {megabytes(JOB_FILE_MAX_BYTES)})</label>
             <input id="job-cover-file" type="file" accept={JOB_FILE_ACCEPT} onChange={(e) => pickFile("coverLetterFile", e.target.files?.[0] ?? null)} className="block w-full text-sm" data-testid="job-apply-cover-file" />
             {problem(errors.coverLetterFile)}
           </div>

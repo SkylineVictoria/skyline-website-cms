@@ -13,6 +13,7 @@ import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import { authorizeWorker } from "../_shared/notification/delivery.ts";
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
 import { loadLetterhead } from "../_shared/letterhead.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
 // The PDF code (pdf-lib, the embedded fonts) is loaded only by the requests that make or check a PDF, so the worker boots light.
 const letterPdfModule = () => import("../_shared/offer-letter-pdf.ts");
 const offerPdfModule = () => import("../_shared/offer-pdf.ts");
@@ -23,8 +24,10 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUB
 const env: Record<string, string> = { SUPABASE_URL };
 for (const name of HR_MAIL_ENV) env[name] = Deno.env.get(name) ?? "";
 const config = readHrMailConfig(env);
-const retentionRaw = Number(Deno.env.get("EF_HR_RETENTION_MONTHS") ?? "6");
-const RETENTION_MONTHS = Number.isInteger(retentionRaw) && retentionRaw >= 1 && retentionRaw <= 120 ? retentionRaw : 6;
+// Retention period: EF_HR_RETENTION_MONTHS when set (1-120), otherwise Business Rules hrms.onboarding_file_retention_fallback.
+const retentionRaw = Number(Deno.env.get("EF_HR_RETENTION_MONTHS") ?? "");
+const RETENTION_ENV = Number.isInteger(retentionRaw) && retentionRaw >= 1 && retentionRaw <= 120 ? retentionRaw : null;
+const validMonths = (n: number) => (Number.isInteger(n) && n >= 1 && n <= 120 ? n : 6);
 const provider = selectHrMailProvider(env);
 
 const headers = {
@@ -65,6 +68,9 @@ Deno.serve(async (req) => {
   const service = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   const bucket = service.storage.from("staff-documents");
   const asError = (e: { code?: string; message?: string } | null) => (e ? { code: e.code, message: e.message } : null);
+  // Business Rules (HR), read only by the actions that use them.
+  const rules = body.action === "purge" || body.action === "candidate_file"
+    ? await loadRules(service, ["hrms.onboarding_file_retention_fallback", "hrms.job_attachment_limit_mib"]) : {};
 
   const result = await handleAdmin(body, {
     adminRpc: async (name, args) => { const { data, error } = await caller.rpc(name, args); return { data, error: asError(error) }; },
@@ -104,7 +110,8 @@ Deno.serve(async (req) => {
     newId: () => crypto.randomUUID(),
     // The retention job: a verified service_role token of this project (same check as the notification worker).
     isWorker: body.action === "purge" && (await authorizeWorker(req.headers.get("Authorization"), SUPABASE_URL)) === 200,
-    retentionMonths: RETENTION_MONTHS,
+    retentionMonths: RETENTION_ENV ?? validMonths(ruleNumber(rules, "hrms.onboarding_file_retention_fallback", 6)),
+    jobFileBytes: ruleNumber(rules, "hrms.job_attachment_limit_mib", 5) * 1024 * 1024,
     purgeFiles: async (paths) => { const { error } = await bucket.remove(paths); return { error: error ? error.message : null }; },
     findLogin: async (email) => {
       const found = await findAuthUserByEmail(service, email.toLowerCase());

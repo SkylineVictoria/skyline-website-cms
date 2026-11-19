@@ -16,6 +16,8 @@
  * The temporary password is never stored or returned.
  */
 
+import { ruleText, type RuleValues } from "./business-rules.ts";
+
 export type PersonKind = "student" | "employee" | "trainer" | "agent";
 export const KINDS: readonly PersonKind[] = ["student", "employee", "trainer", "agent"];
 /** The record table family of a person type (o365_step / o365_link). */
@@ -23,21 +25,38 @@ export const recordKind = (kind: PersonKind) => kind === "student" ? "student" :
 export const GRAPH = "https://graph.microsoft.com/v1.0";
 
 export interface Plan { kind: PersonKind; staff: boolean; domain: string; sku: string; licenceName: string }
-const LICENCE_NAMES: Record<string, string> = { STANDARDWOFFPACK_STUDENT: "Office 365 A1 for students", STANDARDWOFFPACK_FACULTY: "Office 365 A1 for faculty" };
+/**
+ * Business Rules office365.staff_license_fallback / office365.student_license_fallback name the licence used when EF_MICROSOFT365_STAFF_SKU /
+ * EF_MICROSOFT365_STUDENT_SKU is not set. Only plans with a mailbox are offered (never OFFICESUBSCRIPTION_*); the first of each list is
+ * the plan used before. Seats are still checked in the tenant before any user is created (licence_not_found / no_licences_available).
+ */
+export const STAFF_LICENCES: Readonly<Record<string, string>> = {
+  "Office 365 A1 for faculty": "STANDARDWOFFPACK_FACULTY", "Office 365 A1 Plus for faculty": "STANDARDWOFFPACK_IW_FACULTY",
+  "Office 365 A3 for faculty": "ENTERPRISEPACKPLUS_FACULTY", "Office 365 A5 for faculty": "ENTERPRISEPREMIUM_FACULTY",
+  "Microsoft 365 A3 for faculty": "M365EDU_A3_FACULTY", "Microsoft 365 A5 for faculty": "M365EDU_A5_FACULTY",
+};
+export const STUDENT_LICENCES: Readonly<Record<string, string>> = {
+  "Office 365 A1 for students": "STANDARDWOFFPACK_STUDENT", "Office 365 A1 Plus for students": "STANDARDWOFFPACK_IW_STUDENT",
+  "Office 365 A3 for students": "ENTERPRISEPACKPLUS_STUDENT", "Office 365 A5 for students": "ENTERPRISEPREMIUM_STUDENT",
+  "Microsoft 365 A3 for students": "M365EDU_A3_STUDENT", "Microsoft 365 A5 for students": "M365EDU_A5_STUDENT",
+};
+const LICENCE_NAMES: Record<string, string> = Object.fromEntries(Object.entries({ ...STAFF_LICENCES, ...STUDENT_LICENCES }).map(([name, sku]) => [sku, name]));
+export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback"];
 
 type Env = (name: string) => string | undefined;
 const read = (env: Env, n: string) => (env(n) ?? "").trim();
 
-/** The domain and licence for a person type. Throws when the staff domain would be the student domain. */
-export function planFor(kind: PersonKind, env: Env): Plan {
+/** The domain and licence for a person type. Throws when the staff domain would be the student domain. `rules`: the live licence fallbacks. */
+export function planFor(kind: PersonKind, env: Env, rules: RuleValues = {}): Plan {
   const studentDomain = read(env, "EF_MICROSOFT365_STUDENT_DOMAIN").toLowerCase();
+  const studentSku = read(env, "EF_MICROSOFT365_STUDENT_SKU") || STUDENT_LICENCES[ruleText(rules, "office365.student_license_fallback", "Office 365 A1 for students")] || "STANDARDWOFFPACK_STUDENT";
   if (kind === "student") {
-    const sku = read(env, "EF_MICROSOFT365_STUDENT_SKU") || "STANDARDWOFFPACK_STUDENT";
+    const sku = studentSku;
     return { kind, staff: false, domain: studentDomain, sku, licenceName: LICENCE_NAMES[sku] ?? sku };
   }
   const domain = (read(env, "EF_MICROSOFT365_STAFF_DOMAIN") || "slit.edu.au").toLowerCase();
-  const sku = read(env, "EF_MICROSOFT365_STAFF_SKU") || "STANDARDWOFFPACK_FACULTY";
-  if (domain === studentDomain || sku === (read(env, "EF_MICROSOFT365_STUDENT_SKU") || "STANDARDWOFFPACK_STUDENT")) throw new Error("staff_plan_invalid");
+  const sku = read(env, "EF_MICROSOFT365_STAFF_SKU") || STAFF_LICENCES[ruleText(rules, "office365.staff_license_fallback", "Office 365 A1 for faculty")] || "STANDARDWOFFPACK_FACULTY";
+  if (domain === studentDomain || sku === studentSku) throw new Error("staff_plan_invalid");
   return { kind, staff: true, domain, sku, licenceName: LICENCE_NAMES[sku] ?? sku };
 }
 
@@ -74,7 +93,7 @@ export interface Existing { id: string; upn: string; mail: string | null; displa
 export interface Steps { accountCreatedAt: string | null; licenceAssignedAt: string | null; groupsAddedAt: string | null; groupsError: string | null; welcomeSentAt: string | null; welcomeError: string | null }
 export interface Person { fullName: string; recordEmail: string | null; trainer?: boolean; account: null | { email: string; status: string; lastError: string | null; welcomeSentAt: string | null; msUserId?: string | null; linked?: boolean; licenceSku?: string | null; steps?: Steps } }
 type RpcResult = { data: unknown; error: { code?: string; message?: string } | null };
-export interface Ports { env: Env; fetch: typeof fetch; rpc: (name: string, args: Record<string, unknown>) => PromiseLike<RpcResult> }
+export interface Ports { env: Env; fetch: typeof fetch; rpc: (name: string, args: Record<string, unknown>) => PromiseLike<RpcResult>; rules?: RuleValues }
 export type Reply = { status: number; body: Record<string, unknown> };
 
 const RPC = {
@@ -184,7 +203,7 @@ const isReply = (x: unknown): x is Reply => !!x && typeof x === "object" && "sta
 
 /** What would happen for this person: existing accounts, the address, the licence and its free seats. Read-only. */
 export async function lookup(ports: Ports, kind: PersonKind, personId: string): Promise<Reply> {
-  let plan: Plan; try { plan = planFor(kind, ports.env); } catch (e) { return fail(e); }
+  let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   try {
     const graph = graphFor(ports, await appToken(ports));
@@ -236,7 +255,7 @@ function fail(e: unknown): Reply {
 
 /** Create (or retry a failed attempt), or with dryRun only say what would be created. */
 export async function provision(ports: Ports, kind: PersonKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string } = {}): Promise<Reply> {
-  let plan: Plan; try { plan = planFor(kind, ports.env); } catch (e) { return fail(e); }
+  let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   if (person.account?.status === "active") return { status: 409, body: { error: `Already has ${person.account.email}.`, code: "already_has", email: person.account.email } };
   // Never a second account: once the Microsoft user exists, only Resend login email (which finishes any missing step).
@@ -320,7 +339,7 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
 
 /** Link an existing Microsoft 365 account to the person's record (no account is created or changed in Microsoft 365). */
 export async function link(ports: Ports, kind: PersonKind, personId: string, msUserId: string): Promise<Reply> {
-  let plan: Plan; try { plan = planFor(kind, ports.env); } catch (e) { return fail(e); }
+  let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
   if (!/^[0-9a-f-]{36}$/i.test(msUserId)) return { status: 400, body: { error: "Choose the Microsoft 365 account to link." } };
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   try {
@@ -355,7 +374,7 @@ async function addGroups(ports: Ports, graph: Graph, kind: PersonKind, personId:
  * groups step finished, the login emailed. The password is never stored, logged or returned. dryRun: the checks only.
  */
 export async function resend(ports: Ports, kind: PersonKind, personId: string, opts: { dryRun?: boolean } = {}): Promise<Reply> {
-  let plan: Plan; try { plan = planFor(kind, ports.env); } catch (e) { return fail(e); }
+  let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   const acct = person.account;
   if (!acct?.msUserId) return { status: 409, body: { error: "No Microsoft 365 account has been created for this person yet.", code: "not_created" } };

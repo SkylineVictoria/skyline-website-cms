@@ -4,7 +4,8 @@
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
-  WITNESS_SIGNATURE_KEY, yesNoDefaults, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+  WITNESS_SIGNATURE_KEY, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+import { loadRules, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -39,6 +40,31 @@ const serviceRpc = async (ports: SigningPorts, name: string, args: Record<string
   try { return await ports.serviceRpc(name, args); }
   catch (error) { const e = error as RpcError; throw new SigningError(e.message, e.code === "42501" ? 403 : 400); }
 };
+
+/**
+ * Business Rules for agent onboarding, read once per action (the fallbacks are the values used before):
+ *   agents.onboarding_document_expiry_default / _reminder_default: a template without its own expiry / reminder days;
+ *   agents.agent_application_yes_no_fallback: an unanswered Yes / No question starts at No, or stays blank;
+ *   agents.onboarding_required_answer_groups: which Yes / No questions must be answered before signing.
+ */
+interface OnboardingRules { expiryDays: number; reminderDays: number; yesNoDefault: boolean; optionalGroups: Set<string> }
+const rulesRead = new WeakMap<object, Promise<OnboardingRules>>();
+function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<OnboardingContext, "rpc">>): Promise<OnboardingRules> {
+  let read = rulesRead.get(ctx);
+  if (!read) {
+    const call = ctx.ports.serviceRpc ? ctx.ports.serviceRpc.bind(ctx.ports) : ctx.rpc ? ctx.rpc.bind(ctx) : null;
+    read = loadRules({ rpc: async (fn, args) => { try { if (!call) throw new Error("no rpc"); return { data: await call(fn, args), error: null }; } catch (error) { return { data: null, error }; } } },
+      ["agents.onboarding_document_expiry_default", "agents.onboarding_document_reminder_default", "agents.agent_application_yes_no_fallback", "agents.onboarding_required_answer_groups"])
+      .then((values) => ({
+        expiryDays: Math.max(1, Math.round(ruleNumber(values, "agents.onboarding_document_expiry_default", 30))),
+        reminderDays: Math.max(0, Math.round(ruleNumber(values, "agents.onboarding_document_reminder_default", 3))),
+        yesNoDefault: ruleText(values, "agents.agent_application_yes_no_fallback", "No") === "No",
+        optionalGroups: optionalAnswerGroups(ruleList(values, "agents.onboarding_required_answer_groups", Object.values(REQUIRED_GROUP_LABELS))),
+      }));
+    rulesRead.set(ctx, read);
+  }
+  return read;
+}
 const numbered = (fields: PlacedField[], offset = 0) => fields.map((f) => ({ ...f, page: Number(f.page) + offset, x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h) }));
 
 /**
@@ -69,7 +95,7 @@ export async function installBlank(ctx: OnboardingContext): Promise<Json> {
   const path = `templates/${id}/source-${ctx.ports.uuid()}.pdf`;
   await ctx.store(path, read.flattened);
   const result = await ctx.rpc("agency_onboarding_template_install", { p_key: spec.key, p_data: { id, name: spec.name, title: spec.title, category: spec.category, roles: [signerRole(which)], fields: read.fields,
-    signing_mode: "sequential", expiry_days: 30, reminder_days: 3, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages, refresh } });
+    signing_mode: "sequential", expiry_days: (await onboardingRules(ctx)).expiryDays, reminder_days: (await onboardingRules(ctx)).reminderDays, source_path: path, source_hash: await sha256Hex(read.flattened), source_pages: read.pages, refresh } });
   if (result?.refreshed) { ctx.commit(); return { id: result.id, systemKey: spec.key, fields: read.fields.length, pages: read.pages, reused: false, refreshed: true, version: Number(result.version ?? 0) }; }
   if (result?.reused) {
     // Another send installed this blank first: its template is the one; this upload is not referenced by anything.
@@ -201,7 +227,7 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   // The ACN is kept as digits in the request's stored values (no box on the form; printed "603 584 676" on the page and in the registration box).
   if (values.agent_acn) values.agent_acn = acnDigits(values.agent_acn);
   // Every Yes / No question starts at No (2026-11-20), for any tick-box pair of the template.
-  yesNoDefaults(template.fields, values);
+  if ((await onboardingRules(ctx)).yesNoDefault) yesNoDefaults(template.fields, values);
   const title = `Agent application form: ${text(prepared.agency.name, 150)}`.slice(0, 200);
   // F04 wizard (2026-11-19): every value we hold is the contact's to correct (the Company summary's Edit), whatever its source.
   const made = await buildDocument(ctx, template, values, title, { editablePrefill: true });
@@ -209,8 +235,8 @@ export async function sendApplication(ctx: OnboardingContext): Promise<Json> {
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: values, original_hash: await sha256Hex(made.bytes), recipients,
-    fields: recipientFields(made.recipient, signerRole("form").key), subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: text(ctx.body.message, 2000) || null, edited: false,
-    template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
+    fields: relaxAnswerGroups(recipientFields(made.recipient, signerRole("form").key), (await onboardingRules(ctx)).optionalGroups), subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: text(ctx.body.message, 2000) || null, edited: false,
+    template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: template.reminderDays ?? (await onboardingRules(ctx)).reminderDays });
   let onboarding: Json;
   try {
     onboarding = await ctx.rpc("agency_onboarding_create", { p_agency: agencyId, p_agent: prepared.agent!.id, p_request: id,
@@ -300,7 +326,7 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   await ctx.store(`${id}/original.pdf`, made.bytes);
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: sentValues, original_hash: await sha256Hex(made.bytes), recipients,
     fields: recipientFields(made.recipient, signerRole("agreement").key), subject_type: "agent", subject_id: prepared.agent!.id, category: AGENT_ONBOARDING_DOCS.agreement.category,
-    message: text(ctx.body.message, 2000) || null, edited: false, template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
+    message: text(ctx.body.message, 2000) || null, edited: false, template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: template.reminderDays ?? (await onboardingRules(ctx)).reminderDays });
   const onboarding = await ctx.rpc("agency_onboarding_agreement_create", { p_onboarding: onboardingId, p_request: id, p_data: { commencement_date: commencement, expiry_date: expiryDate(commencement),
     territory, commission_percent: commission, admin_name: adminName, admin_position: adminPosition, values: sentValues, override_reason: text(ctx.body.overrideReason, 500) || null } });
   ctx.commit();
@@ -432,10 +458,11 @@ export async function presendOpen(ctx: OnboardingContext): Promise<Json> {
   const { values, facts } = await applicationValues(ctx, prepared);
   const answers: Record<string, string> = { ...values, ...(saved.presend?.answers ?? {}) };
   for (const key of Object.keys(answers)) if (REFERENCE_KEY.test(key)) delete answers[key];
-  yesNoDefaults(form.fields, answers);
+  const rules = await onboardingRules(ctx);
+  if (rules.yesNoDefault) yesNoDefaults(form.fields, answers);
   const fields = form.fields.filter((f) => f.key && (f.type === "text" || f.type === "checkbox")).map((f) => {
     const group = groupOf(f.key); const spec = AGENT_ONBOARDING_FIELDS[f.key];
-    return { id: f.key, key: f.key, type: f.type, label: spec?.label ?? f.label, required: spec?.required === true, page: Number(f.page), x: 0, y: 0, w: 0, h: 0, recipient_id: null,
+    return { id: f.key, key: f.key, type: f.type, label: spec?.label ?? f.label, required: spec?.required === true && !(group && rules.optionalGroups.has(group.key)), page: Number(f.page), x: 0, y: 0, w: 0, h: 0, recipient_id: null,
       value: group ? (String(answers[group.key] ?? "").toUpperCase() === group.answer ? "true" : "") : String(answers[answerKey(f.key)] ?? "") };
   });
   const record = prepared.values ?? {};
@@ -574,15 +601,15 @@ export async function presendSend(ctx: OnboardingContext): Promise<Json> {
   const acn = input.acn || acnDigits(values.agent_acn ?? "");
   if (acn) values.agent_acn = acn; else delete values.agent_acn;
   if (input.marn) values.agent_marn = input.marn;
-  yesNoDefaults(form.fields, values);
+  if ((await onboardingRules(ctx)).yesNoDefault) yesNoDefaults(form.fields, values);
   const title = `Agent application and agreement: ${text(prepared.agency.name, 150)}`.slice(0, 200);
   const made = await buildCombined(ctx, { form, agreement, values, agency: prepared.agency, terms: input, slitWitness: input.witness, agentWitness: null, title });
   const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
   const record = await ctx.admin("create", id, { title, template_id: form.id, rendered_text: null, field_values: { ...values, ...made.agreementValues }, original_hash: await sha256Hex(made.bytes), recipients,
-    fields: made.fields, subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: input.message || null, edited: false,
-    template_text: null, signing_mode: "sequential", expiry_days: form.expiryDays ?? 30, reminder_days: form.reminderDays ?? 3 });
+    fields: relaxAnswerGroups(made.fields, (await onboardingRules(ctx)).optionalGroups), subject_type: "agent", subject_id: prepared.agent!.id, category: "other", message: input.message || null, edited: false,
+    template_text: null, signing_mode: "sequential", expiry_days: form.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: form.reminderDays ?? (await onboardingRules(ctx)).reminderDays });
   let onboarding: Json;
   try {
     onboarding = await ctx.rpc("agency_onboarding_presend_send", { p_onboarding: draft.onboardingId, p_request: id,
@@ -736,7 +763,7 @@ export async function sendRefereeChecks(ctx: Pick<OnboardingContext, "ports" | "
     const message = `${text(follow.agent.name, 80)} of ${text(follow.agency.name, 120)} has applied to become an education agent for Skyline Institute of Technology and named you as a referee. `
       + "Please review the details, complete the form and sign it online. If you would rather, you can also email the completed form to the address printed on it.";
     await serviceRpc(ports, "agency_onboarding_referee_request_create", { p_referee: referee.id, p_data: { id, title, original_hash: await sha256Hex(bytes), template_id: template.id,
-      fields: recipientFields(recipient, signerRole("referee").key), message, expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3,
+      fields: recipientFields(recipient, signerRole("referee").key), message, expiry_days: template.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: template.reminderDays ?? (await onboardingRules(ctx)).reminderDays,
       values: Object.fromEntries(Object.entries(values).filter(([key]) => key !== "referee_email")) } });
     ctx.commit();
     sent++;
@@ -945,8 +972,8 @@ export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
   await ctx.store(`${id}/original.pdf`, made.bytes);
   const intro = "SLIT has reviewed your agent application and asks you to correct the highlighted answers, then sign again.";
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: values, original_hash: await sha256Hex(made.bytes), recipients,
-    fields: made.fields, subject_type: "agent", subject_id: review.contact.id, category: "other", message: [intro, message].filter(Boolean).join("\n\n").slice(0, 2000), edited: false,
-    template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? 30, reminder_days: template.reminderDays ?? 3 });
+    fields: relaxAnswerGroups(made.fields, (await onboardingRules(ctx)).optionalGroups), subject_type: "agent", subject_id: review.contact.id, category: "other", message: [intro, message].filter(Boolean).join("\n\n").slice(0, 2000), edited: false,
+    template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: template.reminderDays ?? (await onboardingRules(ctx)).reminderDays });
   let correction: Json;
   try { correction = await ctx.rpc("agency_onboarding_correction_request", { p_onboarding: onboardingId, p_request: id, p_data: { flags, message } }); }
   catch (error) {

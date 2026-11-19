@@ -15,7 +15,7 @@ import {
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
-import { portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
+import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { forgetIntakes, intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
@@ -565,8 +565,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const phone = String(new FormData(questionFormRef.current ?? undefined).get("ec_phone") ?? "").trim();
       // The shared rule (also the staff onboarding wizard's): name, phone with its country code, relationship.
       const problems = emergencyContactProblems({ name: answers.ec_name ?? "", phone, relationship: answers.ec_relationship ?? "" }, "the student");
-      if (problems.name) errors.ec_name = problems.name;
-      if (problems.phone) errors.ec_phone = problems.phone;
+      // Business Rules (admissions.emergency_contact_required_details): a detail SLIT made optional may stay blank, but what is typed is checked.
+      if (problems.name && (detailRequired("ec_name") || filled("ec_name"))) errors.ec_name = problems.name;
+      if (problems.phone && (detailRequired("ec_phone") || phone)) errors.ec_phone = problems.phone;
       if (problems.relationship) errors.ec_relationship = problems.relationship;
       values.ec_name = filled("ec_name");
       values.ec_phone = phone;

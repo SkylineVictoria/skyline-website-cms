@@ -6,7 +6,8 @@ import { createDocumentCategoryCheck } from "../_shared/document-extraction/clas
 import { readerFetch } from "../_shared/document-extraction/lab-reader-fetch.ts";
 import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
-import { DOCUMENT_MAX_BYTES, documentFileProblem } from "../_shared/validation/person.ts";
+import { DOCUMENT_MAX_BYTES, documentFileProblem, documentLimits } from "../_shared/validation/person.ts";
+import { loadRules, ruleList, ruleNumber } from "../_shared/business-rules.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -52,8 +53,11 @@ Deno.serve(async (request) => {
   if (target === "enrollment") {
     const { data, error } = await caller.rpc("portal_can_edit_application", { app_id: ownerId });
     if (error || data !== true) return fail("You cannot upload to this application.", 403);
-    const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
-    if (problem) return fail(problem, 415);
+    // Business Rules: the application document size and types SLIT allows (never above the 10 MB, PDF / JPG / PNG ceiling).
+    const rules = await loadRules(caller, ["admissions.application_document_limit_mib", "admissions.application_document_types"]);
+    const limits = documentLimits(ruleNumber(rules, "admissions.application_document_limit_mib", 10), ruleList(rules, "admissions.application_document_types", ["JPEG", "PNG", "PDF"]));
+    const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()), limits);
+    if (problem) return fail(problem, file.size > limits.maxBytes ? 413 : 415);
     bucketName = "enrollment-documents";
     folder = ownerId;
   } else if (target === "employee") {

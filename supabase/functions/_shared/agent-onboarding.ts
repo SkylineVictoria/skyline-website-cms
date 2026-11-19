@@ -200,6 +200,19 @@ export const ONBOARDING_KEY = /^[a-z][a-z0-9_]{0,60}(:[A-Z0-9]{1,10})?$/;
 
 /** The questions the agent must answer with Yes or No before signing (the form says so), and the signature. */
 export const REQUIRED_GROUPS = ["litigation_involved", "eatc_completed"];
+/** Business Rules agents.onboarding_required_answer_groups names these questions; one left out of the list may stay unanswered. */
+export const REQUIRED_GROUP_LABELS: Readonly<Record<string, string>> = { litigation_involved: "Litigation involved", eatc_completed: "EATC completed" };
+/** The question keys SLIT made optional, from the rule's list of labels (none when the list holds every label). */
+export function optionalAnswerGroups(requiredLabels: readonly string[]): Set<string> {
+  return new Set(REQUIRED_GROUPS.filter((key) => !requiredLabels.includes(REQUIRED_GROUP_LABELS[key])));
+}
+/** A signing field list with the tick boxes of optional questions no longer required. */
+export function relaxAnswerGroups<T extends { key?: string | null; required: boolean }>(fields: T[], optional: ReadonlySet<string>): T[] {
+  if (!optional.size) return fields;
+  return fields.map((f) => { const g = groupOf(f.key); return g && optional.has(g.key) ? { ...f, required: false } : f; });
+}
+/** Business Rules agents.agent_application_yes_no_fallback: the first choice (No) is what the form always did. */
+export const YES_NO_FALLBACKS = ["No", "Leave blank (the agent answers)"] as const;
 
 /**
  * F04 wizard (2026-11-19): the declaration statements of the form's page 2, each its own required tick box on the wizard's last step and

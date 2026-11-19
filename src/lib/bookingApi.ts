@@ -76,3 +76,12 @@ export function downloadIcs(b: BookingRow) {
   const a = document.createElement("a"); a.href = url; a.download = "booking.ics"; a.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+
+/** Rooms in the same availability tables (Bookings › Availability › Rooms; Admins / RTO Managers see, RTO Managers save). */
+export interface BookingRoom { id: string; name: string; capacity: number | null; location: string; openDays: number }
+export interface RoomUse { weekday: number; startTime: string; endTime: string; type: string; intakeId: string; intake: string; courseCode: string; startDate: string; endDate: string | null }
+export interface RoomAvailability { roomId: string; availability: AvailabilityRow[]; timeOff: TimeOffRow[]; bookings: RoomUse[] }
+export const bookingRooms = () => call<{ canEdit: boolean; rooms: BookingRoom[] }>("booking_room_availability", { p_action: "list", p_data: {} });
+export const roomAvailability = (roomId: string) => call<RoomAvailability>("booking_room_availability", { p_action: "get", p_data: { roomId } });
+export const saveRoomAvailability = (roomId: string, availability: AvailabilityRow[], timeOff: TimeOffRow[]) =>
+  call<RoomAvailability>("booking_room_availability", { p_action: "save", p_data: { roomId, availability, timeOff } });

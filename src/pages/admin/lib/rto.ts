@@ -84,7 +84,7 @@ export interface RtoBatch {
 export type SessionType = "theory" | "practical" | "assessment";
 export type Slot = "morning" | "afternoon" | "evening";
 export interface BatchSession {
-  id?: string; weekday: number; slot?: Slot; startTime: string; endTime: string; type: SessionType; roomId: string | null;
+  id?: string; weekday: number; slot?: Slot; startTime: string; endTime: string; type: SessionType; roomId: string | null; trainerId?: string | null;
   room?: string | null; locationId?: string | null; location?: string | null;
 }
 export interface Room { id: string; name: string; capacity: number | null; isActive: boolean }

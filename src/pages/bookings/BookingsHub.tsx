@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  WEEKDAYS, bookingDirectory, bookingMe, cancelBooking, deleteMeetingType, downloadIcs, formatWhen, rescheduleBooking, saveBookingHost, saveMeetingType, suggestHandle, timezones, viewerTimezone,
-  type AvailabilityRow, type BookingMe, type BookingRow, type DirectoryHost, type MeetingType, type TimeOffRow,
+  bookingDirectory, bookingMe, bookingRooms, cancelBooking, deleteMeetingType, downloadIcs, formatWhen, rescheduleBooking, saveBookingHost, saveMeetingType, suggestHandle, timezones, viewerTimezone,
+  type AvailabilityRow, type BookingMe, type BookingRoom, type BookingRow, type DirectoryHost, type MeetingType, type TimeOffRow,
 } from "@/lib/bookingApi";
 import SlotPicker from "./SlotPicker";
+import RoomAvailability from "./RoomAvailability";
+import { HoursCard, TimeOffCard } from "./AvailabilityCards";
 
 type Tab = "bookings" | "types" | "availability" | "people";
 const KIND_LABEL: Record<string, string> = { staff: "Staff", agent: "Agent", student: "Student", other: "" };
@@ -22,18 +24,25 @@ export default function BookingsHub() {
   const [me, setMe] = useState<BookingMe | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tab, setTab] = useState<Tab>("bookings");
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(params.get("tab") === "availability" ? "availability" : "bookings");
+  // Rooms in the same availability tables: only Admins and RTO Managers get the list (others: null, no Rooms switch).
+  const [rooms, setRooms] = useState<{ canEdit: boolean; rooms: BookingRoom[] } | null>(null);
   const load = useCallback(async () => { try { setMe(await bookingMe()); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Bookings could not be loaded."); } }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); bookingRooms().then(setRooms).catch(() => setRooms(null)); }, [load]);
   const done = (next: BookingMe, message: string) => { setMe(next); setNotice(message); setError(""); };
-  const fail = (e: unknown) => { setNotice(""); setError(e instanceof Error ? e.message : "That did not work. Please try again."); };
+  const fail = useCallback((e: unknown) => { setNotice(""); setError(e instanceof Error ? e.message : "That did not work. Please try again."); }, []);
+  const roomSaved = useCallback((message: string) => { setNotice(message); setError(""); void bookingRooms().then(setRooms).catch(() => undefined); }, []);
+  const who = rooms && params.get("who") === "rooms" ? "rooms" : "me";
+  const setWho = (w: "me" | "rooms") => { setNotice(""); setError(""); setParams(w === "rooms" ? { tab: "availability", who: "rooms" } : { tab: "availability" }, { replace: true }); };
 
   if (!me) return error ? <p role="alert" className={ALERT}>{error}</p> : <p role="status" className="text-sm text-foreground-600">Loading bookings…</p>;
   const canHost = me.identity.kind !== "other";
   const link = me.host ? `${me.origin}/book/${me.host.handle}` : "";
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "bookings", label: "My bookings" },
-    ...(canHost ? [{ id: "types" as Tab, label: "Meeting types" }, { id: "availability" as Tab, label: "Availability" }] : []),
+    ...(canHost ? [{ id: "types" as Tab, label: "Meeting types" }] : []),
+    ...(canHost || rooms ? [{ id: "availability" as Tab, label: "Availability" }] : []),
     { id: "people", label: "Book someone" },
   ];
 
@@ -67,7 +76,22 @@ export default function BookingsHub() {
       </nav>
       {tab === "bookings" ? <BookingsTab me={me} onChanged={(message) => { setNotice(message); void load(); }} onError={fail} /> : null}
       {tab === "types" ? (me.host ? <TypesTab me={me} onDone={done} onError={fail} /> : <p className="text-sm text-foreground-600">Set up your booking page first.</p>) : null}
-      {tab === "availability" ? (me.host ? <AvailabilityTab me={me} onDone={done} onError={fail} /> : <p className="text-sm text-foreground-600">Set up your booking page first.</p>) : null}
+      {tab === "availability" ? <>
+        {rooms ? (
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <span className="text-sm font-semibold text-foreground-900">Whose availability</span>
+            <div role="group" aria-label="Whose availability" className="inline-flex overflow-hidden rounded-md border border-background-300">
+              {(["me", "rooms"] as const).map((w) => (
+                <button key={w} type="button" aria-pressed={who === w} onClick={() => setWho(w)}
+                  className={`px-4 py-1.5 text-sm font-medium ${who === w ? "bg-primary-500 text-background-50" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{w === "me" ? "Me" : "Rooms"}</button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {who === "rooms" && rooms ? <RoomAvailability rooms={rooms.rooms} canEdit={rooms.canEdit} initialRoom={params.get("room")} onSaved={roomSaved} onError={fail} />
+          : me.host ? <AvailabilityTab me={me} onDone={done} onError={fail} />
+          : <p className="text-sm text-foreground-600">{canHost ? "Set up your booking page first." : "You have no booking page."}</p>}
+      </> : null}
       {tab === "people" ? <PeopleTab /> : null}
     </div>
   );
@@ -242,50 +266,11 @@ function AvailabilityTab({ me, onDone, onError }: { me: BookingMe; onDone: (next
     setBusy(true);
     try { onDone(await saveBookingHost({ ...page, availability: rows, timeOff: off.filter((o) => o.start && o.end) }), "Your availability was saved."); } catch (e) { onError(e); } finally { setBusy(false); }
   };
-  const patchRow = (index: number, patch: Partial<AvailabilityRow>) => setRows((list) => list.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-  const patchOff = (index: number, patch: Partial<TimeOffRow>) => setOff((list) => list.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   return (
     <div className="space-y-5">
-      <Card className="p-5">
-        <h2 className="font-heading text-base font-bold text-foreground-950">Weekly hours</h2>
-        <p className="text-sm text-foreground-600">In your time zone ({page.timezone.replace(/_/g, " ")}). A day without hours cannot be booked.{me.identity.kind === "staff" ? " Approved leave and public holidays are left out automatically." : ""}</p>
-        <div className="mt-3 divide-y divide-background-200">
-          {WEEKDAYS.map((label, weekday) => {
-            const mine = rows.map((r, index) => ({ r, index })).filter((x) => x.r.weekday === weekday);
-            return (
-              <div key={label} className="flex flex-wrap items-start gap-3 py-2.5">
-                <span className="w-24 pt-2 text-sm font-medium text-foreground-900">{label}</span>
-                <div className="flex-1 space-y-2">
-                  {mine.length === 0 ? <p className="pt-2 text-sm text-foreground-500">Not available</p> : mine.map(({ r, index }) => (
-                    <div key={index} className="flex items-center gap-2">
-                      <input type="time" aria-label={`${label} from`} value={r.start} onChange={(e) => patchRow(index, { start: e.target.value })} className="rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" />
-                      <span className="text-sm text-foreground-600">to</span>
-                      <input type="time" aria-label={`${label} to`} value={r.end} onChange={(e) => patchRow(index, { end: e.target.value })} className="rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" />
-                      <Button size="sm" variant="ghost" aria-label={`Remove ${label} hours`} onClick={() => setRows((list) => list.filter((_, i) => i !== index))}><i className="ri-close-line" aria-hidden="true" /></Button>
-                    </div>
-                  ))}
-                </div>
-                <Button size="sm" variant="outline" onClick={() => setRows((list) => [...list, { weekday, start: "09:00", end: "17:00" }])}>Add hours</Button>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-      <Card className="p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div><h2 className="font-heading text-base font-bold text-foreground-950">Time off</h2><p className="text-sm text-foreground-600">Days nobody can book you.</p></div>
-          <Button size="sm" variant="outline" onClick={() => setOff((list) => [...list, { start: "", end: "", note: "" }])}>Add time off</Button>
-        </div>
-        {off.length === 0 ? <p className="mt-3 text-sm text-foreground-500">None.</p> : off.map((o, index) => (
-          <div key={index} className="mt-3 flex flex-wrap items-center gap-2">
-            <input type="date" aria-label="First day" value={o.start} onChange={(e) => patchOff(index, { start: e.target.value, end: o.end && o.end >= e.target.value ? o.end : e.target.value })} className="rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" />
-            <span className="text-sm text-foreground-600">to</span>
-            <input type="date" aria-label="Last day" value={o.end} min={o.start} onChange={(e) => patchOff(index, { end: e.target.value })} className="rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" />
-            <input type="text" aria-label="Note" placeholder="Note (only you see it)" maxLength={200} value={o.note} onChange={(e) => patchOff(index, { note: e.target.value })} className="min-w-[10rem] flex-1 rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm" />
-            <Button size="sm" variant="ghost" aria-label="Remove time off" onClick={() => setOff((list) => list.filter((_, i) => i !== index))}><i className="ri-close-line" aria-hidden="true" /></Button>
-          </div>
-        ))}
-      </Card>
+      <HoursCard rows={rows} onChange={setRows} title="Weekly hours" emptyLabel="Not available"
+        intro={`In your time zone (${page.timezone.replace(/_/g, " ")}). A day without hours cannot be booked.${me.identity.kind === "staff" ? " Approved leave and public holidays are left out automatically." : ""}`} />
+      <TimeOffCard rows={off} onChange={setOff} intro="Days nobody can book you." notePlaceholder="Note (only you see it)" />
       <Card className="p-5">
         <h2 className="font-heading text-base font-bold text-foreground-950">Booking page</h2>
         <div className="mt-3 grid gap-4 md:grid-cols-2">

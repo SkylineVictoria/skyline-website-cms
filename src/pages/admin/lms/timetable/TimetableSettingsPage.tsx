@@ -8,7 +8,6 @@ import { reschedulingRulesRoute } from "@/pages/admin/businessRules/model";
 const TABS = [
   { id: "breaks", label: "Term breaks" },
   { id: "locations", label: "Locations & rooms" },
-  { id: "rescheduling", label: "Rescheduling rules" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -27,7 +26,7 @@ export default function TimetableSettingsPage() {
         </div>
         <Link to={reschedulingRulesRoute} className="mb-4 text-sm font-medium text-primary-700 hover:underline">Manage rescheduling rules</Link>
       </div>
-      {tab === "breaks" ? <LmsTermBreaksPage /> : tab === "locations" ? <LmsLocationsPage /> : <ReschedulingRules />}
+      {tab === "breaks" ? <LmsTermBreaksPage /> : <LmsLocationsPage />}
     </div>
   );
 }

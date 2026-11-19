@@ -1107,7 +1107,8 @@ test("templates: SMS size counts GSM-7 and Unicode parts", () => {
 });
 
 test("templates: every built-in template uses only known details, has a subject, and has a unique key", () => {
-  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8");
+  // A Windows checkout (core.autocrlf) has CRLF line endings: the seed markers below are matched on LF.
+  const sql = readFileSync(new URL("../supabase/migrations/20261116200000_communication_templates.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const seeds = sql.slice(sql.indexOf(") values\n"));
   const known = new Set(TEMPLATE_VARIABLES.map((v) => v.name));
   const used = templateVariables(seeds).filter((n) => !known.has(n));

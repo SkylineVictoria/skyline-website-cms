@@ -78,7 +78,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
           </div>
           <div>
             <Label htmlFor="wizard-preferred_intake">Intake</Label>
-            <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={intakeKey(answers.intake_id, answers.preferred_intake)} error={errors.preferred_intake}
+            <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={intakeKey(answers.intake_id, answers.preferred_intake, answers.intake_join_date)} error={errors.preferred_intake}
               className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} canAdd={canAddIntake} onAdd={onAddIntake} reloadToken={intakeReload} />
             <FieldError text={errors.preferred_intake} />
           </div>

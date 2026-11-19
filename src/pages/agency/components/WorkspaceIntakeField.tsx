@@ -7,11 +7,11 @@ import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
  * `intake_id` (the chosen intake row; empty for a fallback month) and `preferred_intake` (the intake's own label, or the month). It
  * follows the course checkboxes of the same form: a new course clears the intake and lists that course's intakes.
  */
-export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, initialIntakeId, initialLabel, disabled, className }: {
-  formId: string; courseField: string; courseIdOf: (label: string) => string | null; initialIntakeId: string; initialLabel: string; disabled?: boolean; className: string;
+export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, initialIntakeId, initialLabel, initialJoinDate = "", disabled, className }: {
+  formId: string; courseField: string; courseIdOf: (label: string) => string | null; initialIntakeId: string; initialLabel: string; initialJoinDate?: string; disabled?: boolean; className: string;
 }) {
   const [course, setCourse] = useState<string | null>(null);
-  const [intake, setIntake] = useState<{ id: string; label: string }>({ id: initialIntakeId, label: initialLabel });
+  const [intake, setIntake] = useState<{ id: string; label: string; joinDate: string }>({ id: initialIntakeId, label: initialLabel, joinDate: initialJoinDate });
   useEffect(() => {
     const form = document.getElementById(formId);
     if (!form) return undefined;
@@ -19,7 +19,7 @@ export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, 
       const box = form.querySelector<HTMLInputElement>(`input[name="${courseField}[]"]:checked`);
       const next = box?.value ?? null;
       setCourse((previous) => {
-        if (previous !== null && previous !== next) setIntake({ id: "", label: "" });
+        if (previous !== null && previous !== next) setIntake({ id: "", label: "", joinDate: "" });
         return next;
       });
     };
@@ -28,12 +28,13 @@ export default function WorkspaceIntakeField({ formId, courseField, courseIdOf, 
     form.addEventListener("input", read);
     return () => { cancelAnimationFrame(frame); form.removeEventListener("change", read); form.removeEventListener("input", read); };
   }, [formId, courseField]);
-  const choose = (picked: OpenIntake | null) => setIntake({ id: picked?.id ?? "", label: picked?.display ?? "" });
+  const choose = (picked: OpenIntake | null) => setIntake({ id: picked?.id ?? "", label: picked?.display ?? "", joinDate: picked?.joinDate ?? "" });
   return (
     <div>
-      <IntakeSelect id={`${formId}-preferred_intake`} courseId={course ? courseIdOf(course) : null} value={intakeKey(intake.id, intake.label)} onChange={choose} disabled={disabled} className={className} />
+      <IntakeSelect id={`${formId}-preferred_intake`} courseId={course ? courseIdOf(course) : null} value={intakeKey(intake.id, intake.label, intake.joinDate)} onChange={choose} disabled={disabled} className={className} />
       <input type="hidden" name="intake_id" value={intake.id} readOnly />
       <input type="hidden" name="preferred_intake" value={intake.label} readOnly />
+      <input type="hidden" name="intake_join_date" value={intake.joinDate} readOnly />
     </div>
   );
 }

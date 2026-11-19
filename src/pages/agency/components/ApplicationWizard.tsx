@@ -229,7 +229,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
             course: courses[0] ?? "", preferred_intake: pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
-            intake_id: application.courses?.[0]?.intakeId ?? "",
+            intake_id: application.courses?.[0]?.intakeId ?? "", intake_join_date: pick("intake_join_date"),
           });
         }
         // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
@@ -514,7 +514,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
     // A new course clears the intake: intakes belong to one course.
-    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "" } : {}) }));
+    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
     if (name === "course") setIntakeList(null);
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
@@ -525,7 +525,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return institutionCourseOf(label)?.courseId || null;
   };
   const setIntake = (intake: OpenIntake | null) => {
-    setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "" }));
+    setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "", intake_join_date: intake?.joinDate ?? "" }));
     setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
   };
   const intakesLoaded = (list: OpenIntake[]) => {
@@ -576,9 +576,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
-      const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"));
+      const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
-      else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display) === chosen))) errors.preferred_intake = "Choose the intake.";
+      else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen))) errors.preferred_intake = "Choose the intake.";
       if (filled("course")) {
         const staff = staffCourses ? staffCourseOf(answers.course) : null;
         const course: ApplicationCourseRow | null = staffCourses
@@ -589,6 +589,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       }
       values.courses_of_interest = filled("course") ? [answers.course] : [];
       values.preferred_intake = filled("preferred_intake");
+      // The start date picked (a unit start of the running class, or day one): placement starts the student there.
+      values.intake_join_date = filled("intake_join_date");
     }
     setAnswerErrors(errors);
     if (Object.values(errors).some(Boolean)) return false;

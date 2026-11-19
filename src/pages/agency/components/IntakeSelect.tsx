@@ -36,16 +36,16 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   const loading = Boolean(courseId) && state.intakes === null && !state.failed;
   const none = Boolean(courseId) && state.intakes !== null && intakes.length === 0;
   const fallback = intakes.length > 0 && intakes.every((i) => i.fallback);
-  const keyOf = (i: OpenIntake) => intakeKey(i.id, i.display);
+  const keyOf = (i: OpenIntake) => intakeKey(i.id, i.display, i.joinDate);
   const addable = canAdd && Boolean(courseId) && !loading && !state.failed && Boolean(onAdd);
-  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "The intake running now and the next one are listed. Joining a running intake starts from today; if a prerequisite unit has already finished, the student is moved to the next intake." : "The intakes of the course you choose are listed here.");
+  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "Each date is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
       <select id={id} value={intakes.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || (none && !addable)} aria-invalid={Boolean(error) || none}
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
-        <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : fallback ? "Select a start month" : "Select intake"}</option>
-        {intakes.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intakeDates(intake)}{intake.running ? " (running now)" : ""}</option>)}
+        <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : fallback ? "Select a start month" : "Select a start date"}</option>
+        {intakes.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.option ?? `${intakeDates(intake)}${intake.running ? " (running now)" : ""}`}</option>)}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
       </select>
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">

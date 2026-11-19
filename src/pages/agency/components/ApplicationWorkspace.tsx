@@ -1595,7 +1595,7 @@ export default function ApplicationWorkspace({
         ) : field.name === "preferred_intake" ? (
           <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
             courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
-            initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} />
+            initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} initialJoinDate={String(mergedInitial.intake_join_date ?? "")} />
         ) : field.name === "school_level" ? (
           <SchoolLevelField field={field} id={`${FORM_ID}-${field.name}`} locked={locked}
             choice={String(mergedInitial.highest_education ?? "")} schoolLevel={String(mergedInitial.school_level ?? "")} />

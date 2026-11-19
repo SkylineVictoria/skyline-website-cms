@@ -9,6 +9,16 @@ import { Frame } from './shared';
 import { useIntegrations, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
 import CommConnectionForm, { COMM_CONNECTORS } from './CommConnectionForm';
+import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
+import { m365Label, useMicrosoft365 } from '@/pages/admin/lib/microsoft365';
+
+/** Microsoft 365 (2026-11-20) is its own entry, first, with the one status Email Management shows (app-only Microsoft Graph checks). */
+const M365 = 'microsoft365';
+/** What each entry is for, where the name alone is not enough. */
+const PURPOSE: Record<string, string> = {
+  microsoft365: 'Email Management and student emails (Skyline\u2019s Entra app).',
+  microsoft_teams: 'Posts Communication Hub messages to Teams channels (channel links). Separate from Microsoft 365 email.',
+};
 
 type OAuthSetup = {
   callbackUrl: string;
@@ -87,9 +97,14 @@ export default function ConnectionsPage() {
   const app = definition && appSettings[definition.id];
   const isOAuth = definition?.auth_type === 'oauth2';
   const isAdmin = state.data?.isAdmin === true;
+  const m365 = useMicrosoft365(state.data?.connections.some(item => item.connector_id === M365) === true);
+  const nameOf = (connectorId: string | undefined) => state.data?.definitions.find(provider => provider.id === connectorId)?.name ?? connectorId ?? 'The';
+  /** The single status per entry: Microsoft 365 shows the same check as Email Management. */
+  const statusOf = (item: { connector_id: string; status: string }) => item.connector_id === M365 && (m365.status || m365.loading) ? m365Label(m365.status, m365.loading) : item.status.replaceAll('_', ' ');
+  const listed = [...(state.data?.connections ?? [])].sort((a, b) => Number(b.connector_id === M365) - Number(a.connector_id === M365));
 
   useEffect(() => {
-    if (!selected || !isOAuth || !isAdmin) return;
+    if (!selected || !isOAuth || !isAdmin || definition?.id === M365) return;
     let current = true;
     void integrationRequest<OAuthSetup>('oauth_setup', { connectionId: selected }).then(result => {
       if (!current) return;
@@ -98,7 +113,7 @@ export default function ConnectionsPage() {
       setEnvironment(result.configured ? result.environment : 'production');
     }).catch(problem => { if (current) setError(errorMessage(problem)); });
     return () => { current = false; };
-  }, [selected, isOAuth, isAdmin]);
+  }, [selected, isOAuth, isAdmin, definition?.id]);
 
   useEffect(() => {
     const code = params.get('code');
@@ -127,7 +142,9 @@ export default function ConnectionsPage() {
         await integrationRequest('oauth_complete', { connectionId, state: returnedState, code });
         await integrationRequest('test', { connectionId });
         setSetup(await integrationRequest<OAuthSetup>('oauth_setup', { connectionId }));
-        setNotice('Connection verified.');
+        const latest = await integrationRequest<Snapshot>('snapshot');
+        const connectorId = latest.connections.find(item => item.id === connectionId)?.connector_id;
+        setNotice(`${latest.definitions.find(provider => provider.id === connectorId)?.name ?? 'The'} connection verified.`);
       } catch (problem) {
         setError(errorMessage(problem));
       } finally {
@@ -228,10 +245,11 @@ export default function ConnectionsPage() {
       </Card>}
       {state.data && !state.data.connections.length && !adding && <p>No connections yet.</p>}
       <ul className="mb-4 max-w-2xl space-y-2">
-        {state.data?.connections.map(item => <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-background-300 p-3">
-          <div>
-            <p className="font-semibold">{state.data?.definitions.find(provider => provider.id === item.connector_id)?.name ?? item.connector_id}</p>
-            <p className="text-sm capitalize">{item.status.replaceAll('_', ' ')}</p>
+        {listed.map(item => <li key={item.id} className={`flex flex-wrap items-center justify-between gap-2 rounded border p-3 ${item.connector_id === M365 ? 'border-primary-300 bg-primary-50/40' : 'border-background-300'}`} data-testid={`connection-${item.connector_id}`}>
+          <div className="min-w-0">
+            <p className="font-semibold">{nameOf(item.connector_id)}</p>
+            {PURPOSE[item.connector_id] ? <p className="text-xs text-foreground-600">{PURPOSE[item.connector_id]}</p> : null}
+            <p className="text-sm capitalize" data-testid={`connection-status-${item.connector_id}`}>{statusOf(item)}</p>
           </div>
           {isAdmin && <Button variant="outline" disabled={busy} onClick={() => {
             setAdding(false);
@@ -239,7 +257,8 @@ export default function ConnectionsPage() {
           }}>{item.id === selected ? 'Close setup' : 'Manage'}</Button>}
           {!isAdmin && item.can_operate && !(COMM_CONNECTORS as readonly string[]).includes(item.connector_id) && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: item.id });
-            announce('Connection verified.');
+            if (item.connector_id === M365) await m365.refresh();
+            announce(`${nameOf(item.connector_id)} connection verified.`);
           })}>Check connection</Button>}
         </li>)}
       </ul>
@@ -251,6 +270,8 @@ export default function ConnectionsPage() {
             await integrationRequest('enable', { connectionId: selected });
             announce('Connection enabled.');
           })}>Enable connection</Button>
+        ) : definition?.id === M365 ? (
+          <Microsoft365Panel />
         ) : isOAuth && app ? (
           setup && (wrongDomain ? (
             <a className="underline" href={`${setup.callbackUrl}?connection=${encodeURIComponent(selected)}`}>Open CRM on the sign-in domain</a>
@@ -329,10 +350,10 @@ export default function ConnectionsPage() {
             <Button type="submit" disabled={busy || !secret.trim()}>{kind === 'api_key' ? 'Save & Connect' : 'Save'}</Button>
           </form>
         ))}
-        {!pendingApp && !commApp && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
+        {!pendingApp && !commApp && definition?.id !== M365 && connection?.credential_configured && (!isOAuth || setup?.authorized) && isAdmin && !disabled && connection.status !== 'connected' && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: selected });
-            announce('Connection verified.');
+            announce(`${nameOf(definition?.id)} connection verified.`);
           })}>Retry connection check</Button>
         )}
         {definition?.id === 'stripe' && connection.status === 'connected' && !disabled && (
@@ -345,7 +366,7 @@ export default function ConnectionsPage() {
             })}>{connection.webhook_configured ? 'Update payment webhook' : 'Set up payment webhook'}</Button>
           </section>
         )}
-        {!pendingApp && !commApp && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
+        {!pendingApp && !commApp && definition?.id !== M365 && connection && isAdmin && (connection.credential_configured || connection.webhook_configured) && (
           <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
             await integrationRequest('revoke', { connectionId: selected });
             if (isOAuth) {

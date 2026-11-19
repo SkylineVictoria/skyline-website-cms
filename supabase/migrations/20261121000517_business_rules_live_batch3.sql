@@ -170,10 +170,11 @@ revoke all on function public.asm_reminder_ignored_states() from public, anon;
 grant execute on function public.asm_reminder_ignored_states() to authenticated, service_role;
 
 select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure,
-  $o$and not exists (select 1 from public.asm_notifications x$o$,
-  $n$and (not public.rule_bool('assessment.due_sweep_duplicate_notifications', true) or not exists (select 1 from public.asm_notifications x$n$, 2);
-select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure, $o$x.event = 'overdue')$o$, $n$x.event = 'overdue'))$n$);
-select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure, $o$x.event = 'due_soon')$o$, $n$x.event = 'due_soon'))$n$);
+  $o$and not exists (select 1 from public.asm_notifications x where x.assignment_id = r.assignment_id and x.recipient_auth_user = r.auth_user and x.event = 'overdue')$o$,
+  $n$and (not public.rule_bool('assessment.due_sweep_duplicate_notifications', true) or not exists (select 1 from public.asm_notifications x where x.assignment_id = r.assignment_id and x.recipient_auth_user = r.auth_user and x.event = 'overdue'))$n$);
+select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure,
+  $o$and not exists (select 1 from public.asm_notifications x where x.assignment_id = r.assignment_id and x.recipient_auth_user = r.auth_user and x.event = 'due_soon')$o$,
+  $n$and (not public.rule_bool('assessment.due_sweep_duplicate_notifications', true) or not exists (select 1 from public.asm_notifications x where x.assignment_id = r.assignment_id and x.recipient_auth_user = r.auth_user and x.event = 'due_soon'))$n$);
 select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure,
   $o$t.state not in ('draft', 'void')) loop$o$, $n$not t.state = any(public.asm_reminder_ignored_states())) loop$n$);
 select public.business_rule_patch_function('public.asm_due_sweep()'::regprocedure,
@@ -296,10 +297,12 @@ select public.business_rule_patch_function('lms_allocation_private.plan_student(
   $o$not lms_allocation_private.unit_completed(p_student,u.id)$o$,
   $n$(not public.rule_bool('students.study_plan_exclude_completed', true) or not lms_allocation_private.unit_completed(p_student,u.id))$n$);
 select public.business_rule_patch_function('lms_allocation_private.plan_student(uuid, uuid)'::regprocedure,
-  $o$  if not exists(select 1 from public.intake_units where intake_id=p_intake)$o$,
-  $n$  if public.rule_bool('students.study_plan_require_dates', true) and (not exists(select 1 from public.intake_units where intake_id=p_intake)$n$);
-select public.business_rule_patch_function('lms_allocation_private.plan_student(uuid, uuid)'::regprocedure,
-  $o$t.unit_id=u.id)) then$o$, $n$t.unit_id=u.id))) then$n$);
+  $o$  if not exists(select 1 from public.intake_units where intake_id=p_intake)
+    or exists(select 1 from public.cms_course_units u where u.course_id=intake.course_id and u.is_active
+      and not exists(select 1 from public.intake_units t where t.intake_id=p_intake and t.unit_id=u.id)) then$o$,
+  $n$  if public.rule_bool('students.study_plan_require_dates', true) and (not exists(select 1 from public.intake_units where intake_id=p_intake)
+    or exists(select 1 from public.cms_course_units u where u.course_id=intake.course_id and u.is_active
+      and not exists(select 1 from public.intake_units t where t.intake_id=p_intake and t.unit_id=u.id))) then$n$);
 select public.business_rule_patch_function('lms_allocation_private.plan_student(uuid, uuid)'::regprocedure,
   $o$having max(t.end_date)>=joined$o$,
   $n$having case when public.rule_text('students.study_plan_late_join', 'Current units ending on or after the join date, then missed units in a future repetition')

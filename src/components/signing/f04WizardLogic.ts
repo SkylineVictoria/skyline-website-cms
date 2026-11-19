@@ -1,6 +1,7 @@
 import type { SigningView } from "@/lib/signingApi";
 import { abrYearFounded, acnDigits, acnFromAbn, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
-import { composeRegistrationNumber, composeSuburb, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { AGREEMENT_FROM_DECLARATION, composeRegistrationNumber, composeSuburb, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, WITNESS_NAME_KEY, yesNoDefaults,
+  type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 
 /*
  * The F04 wizard's rules, without React (owner briefs 2026-11-19 "fix prefill and make it short", and round 3 "less typing, nicer finish"):
@@ -97,7 +98,7 @@ export const yearFromFacts = (facts: Partial<AbrFacts> | null | undefined) => ab
  * older request has no box for), the register's facts, then the saved draft. A blank in the draft never empties a value the page has
  * (round 3: PURVA TECH's draft held an empty "Year founded" that hid the register's 2015).
  */
-export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | null, prefill: Record<string, string> | null, draft: Partial<F04Draft> | null, recipientName = ""): F04Draft {
+export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | null, prefill: Record<string, string> | null, draft: Partial<F04Draft> | null, recipientName = "", defaultNo = false): F04Draft {
   const answers: Answers = {};
   for (const f of fields) {
     if (!f.key) continue;
@@ -134,6 +135,8 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   // The declarant is the agency contact unless the contact names someone else (round 3); both stay editable.
   if (!String(m.declarant_name ?? "").trim()) m.declarant_name = [m.contact_given_name, m.contact_family_name].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ") || recipientName.trim();
   if (!String(m.declarant_role ?? "").trim() && String(m.contact_position ?? "").trim()) m.declarant_role = m.contact_position.trim();
+  // 2026-11-20: every Yes / No question starts at No (the agency admin and staff before sending; a review shows what was signed).
+  if (defaultNo) yesNoDefaults(fields, m);
   return merged;
 }
 
@@ -148,7 +151,10 @@ export function f04Values(fields: readonly Field[], state: F04Draft): Record<str
     if (f.type !== "text") continue;
     const key = keyOf(f);
     const suburb = (a.office_suburb ?? "").trim();
-    values[f.id] = key === "agent_registration_number" ? composeRegistrationNumber(state.acn, state.marn)
+    // The combined request (2026-11-20): the agreement's signatory is the declarant; the witness name is typed on the review step.
+    const declared = AGREEMENT_FROM_DECLARATION[key];
+    values[f.id] = declared ? (a[declared] ?? "").trim() : key === WITNESS_NAME_KEY ? (a[WITNESS_NAME_KEY] ?? "").trim()
+      : key === "agent_registration_number" ? composeRegistrationNumber(state.acn, state.marn)
       : key === "office_suburb" ? (suburb && !isPostcodeOnly(suburb) ? composeSuburb(suburb, a.office_postcode) : "")
       : key === "office_province" ? (/^\d{4}$/.test((a.office_province ?? "").trim()) ? "" : (a.office_province ?? "").trim())
       : (a[key] ?? "").trim();
@@ -224,7 +230,7 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
  * One wizard, three modes (2026-11-18): "agent" (the agency admin fills in and signs), "admin-review" (SLIT staff edit, flag and approve
  * in the CMS) and "correction" (the agency admin changes only the flagged answers and signs again).
  */
-export type F04Mode = "agent" | "admin-review" | "correction";
+export type F04Mode = "agent" | "admin-review" | "correction" | "admin-prefill";
 const STEP_OF_KEY: Array<[RegExp, number]> = [
   [/^(agent_legal_entity|agent_trading_name|agent_agency_name|agent_abn|agent_year_founded|agent_gst_registered|acn|marn)$/, 0],
   [/^(contact_|office_|agent_website$)/, 1],
@@ -234,6 +240,8 @@ const STEP_OF_KEY: Array<[RegExp, number]> = [
 export const stepOfKey = (key: string) => STEP_OF_KEY.find(([re]) => re.test(key))?.[1] ?? 2;
 /** The steps shown: every step in agent and admin-review modes; in correction mode only the steps with a flagged answer, then Review & sign. */
 export function visibleSteps(mode: F04Mode, flags: Record<string, string> | null | undefined): number[] {
+  // The pre-send step (2026-11-20): staff never fill the references; they are the agency admin's.
+  if (mode === "admin-prefill") return F04_STEPS.map((_, i) => i).filter((i) => i !== 3);
   if (mode !== "correction") return F04_STEPS.map((_, i) => i);
   const steps = new Set(Object.keys(flags ?? {}).map(stepOfKey));
   return [...F04_STEPS.map((_, i) => i).filter((i) => i !== REVIEW_STEP && steps.has(i)), REVIEW_STEP];

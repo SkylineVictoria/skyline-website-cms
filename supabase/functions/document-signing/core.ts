@@ -13,7 +13,7 @@ import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
 import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
-import { answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
+import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, type OnboardingContext } from "./onboarding.ts";
 
@@ -330,6 +330,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         // Agent Application Form (2026-11-19): the title comes from the list; the two referees need different email addresses. F04 wizard: the
         // declarations, the MARN and the ACN (checkApplicationSubmission); the registration box prints "ACN … / MARN …" from them.
         let submission: ApplicationSubmission | null = null;
+        const combinedPlan = record.onboarding as { combined?: boolean; witness?: { preset?: boolean; box?: { page: number; x: number; y: number; w: number; h: number } | null } | null } | null;
+        let witness: { name: string; png: unknown } | null = null;
         if (isApplication(record)) {
           const fields = (record.fields ?? []) as Array<{ id: string; type: string; key?: string | null; value?: string | null }>;
           const valueOf = (key: string) => { const f = fields.find((x) => x.key === key); return f ? { f, v: String(values[f.id] ?? f.value ?? "").trim() } : null; };
@@ -359,11 +361,30 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           }
           const registration = fields.find((f) => f.key === "agent_registration_number");
           if (registration) values[registration.id] = composeRegistrationNumber(submission.acn, submission.marn);
+          // F04 + P06 signed once (2026-11-20): the agreement's signatory is the declarant; the witness is typed (name) and DRAWN (signature)
+          // on this page unless staff gave the witness before sending (then it is printed already).
+          if (combinedPlan?.combined) {
+            for (const [key, from] of Object.entries(AGREEMENT_FROM_DECLARATION)) { const f = fields.find((x) => x.key === key); const source = valueOf(from); if (f && source) values[f.id] = source.v; }
+            if (!combinedPlan.witness?.preset) {
+              const w = (body.application as { witness?: { name?: unknown; png?: unknown } } | undefined)?.witness ?? {};
+              const witnessName = String(w.name ?? "").replace(/\s+/g, " ").trim().slice(0, 150);
+              if (witnessName.length < 2) throw new SigningError("Enter your witness's full name.");
+              if (typeof w.png !== "string" || !w.png.trim()) throw new SigningError("Ask your witness to draw their signature in the witness box (it cannot be typed).");
+              witness = { name: witnessName, png: w.png };
+              const nameField = fields.find((x) => x.key === WITNESS_NAME_KEY);
+              if (nameField) values[nameField.id] = witnessName;
+            }
+          }
         }
         const [pdf, letter] = await Promise.all([signingPdfModule(), letterPdfModule()]);
         let image: string | null = null, signatureHash: string;
         if (kind === "typed") signatureHash = await sha256Hex(new TextEncoder().encode(name));
         else { const bytes = pdf.signatureImageBytes(body.signatureImage); image = toBase64(bytes); signatureHash = await sha256Hex(bytes); }
+        let witnessPng: string | null = null;
+        if (witness) {
+          try { witnessPng = toBase64(pdf.signatureImageBytes(witness.png)); }
+          catch { throw new SigningError("Ask your witness to draw their signature again in the witness box."); }
+        }
         const typed = [name, ...Object.values(values).filter((v): v is string => typeof v === "string" && v !== "true" && v !== "false")];
         if (await letter.unsupportedText(typed)) throw new SigningError("Please use Latin letters for your name and answers on this PDF. You can draw your signature in any script.");
         const data = { signer_name: name, signature_kind: kind, signature_image: image, signature_hash: signatureHash, consent: SIGNING_CONSENT, values,
@@ -372,7 +393,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           // What the document looks like once this person has signed; nothing is written yet.
           const plan = await linkCall("sign_plan", data);
           const original = await fileBytes(plan.original_path, plan.original_hash);
-          const stamp = { reference: plan.reference, title: plan.title, fields: plan.fields, recipients: plan.recipients };
+          // The witness's drawn signature is printed in the agreement's witness box (never a typed field).
+          const box = (plan.onboarding as typeof combinedPlan)?.witness?.box ?? combinedPlan?.witness?.box ?? null;
+          const stampFields = witnessPng && box ? [...plan.fields, { recipient_id: null, type: "signature", page: Number(box.page), x: Number(box.x), y: Number(box.y), w: Number(box.w), h: Number(box.h),
+            value: `data:image/png;base64,${witnessPng}`, done: true, label: "Witness signature" }] : plan.fields;
+          const stamp = { reference: plan.reference, title: plan.title, fields: stampFields, recipients: plan.recipients };
           const signed = await pdf.stampDocument(original, stamp);
           const signedHash = await sha256Hex(signed);
           const mine: string[] = [];
@@ -388,11 +413,12 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           }
           // An offer letter: the signed copy and the certificate are also kept on the application (Documents), in the same transaction.
           // Agent onboarding: the one signed document is split back into the application form and the agreement, kept on the agency.
-          const onboarding = plan.onboarding && typeof plan.onboarding === "object" ? plan.onboarding as { id: string; kind?: string; formPages: number } : null;
+          const onboarding = plan.onboarding && typeof plan.onboarding === "object" ? plan.onboarding as { id: string; kind?: string; formPages: number; combined?: boolean } : null;
           let documents: Record<string, string> = {};
           if ((plan.offer || onboarding) && plan.complete && certificateBytes) {
             documents = { signed_base64: toBase64(signed), certificate_base64: toBase64(certificateBytes) };
-            if (onboarding && (onboarding.kind ?? "merged") === "merged") {
+            // The first merged version and the combined application (2026-11-20) are split into the application form and the agreement.
+            if (onboarding && ((onboarding.kind ?? "merged") === "merged" || (onboarding.kind === "application" && onboarding.combined === true))) {
               const [form, agreement] = await (await onboardingPdfModule()).splitPdf(signed, Number(onboarding.formPages));
               documents = { ...documents, form_base64: toBase64(form), agreement_base64: toBase64(agreement) };
             }
@@ -405,6 +431,10 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             if (submission && ports.serviceRpc) {
               await ports.serviceRpc("agency_onboarding_application_extra", { p_request: record.id, p_data: { agent_acn: submission.acn, agent_marn: submission.marn,
                 declarations: submission.declarations, declared_at: plan.signed_at } }).catch(() => undefined);
+            }
+            // The witness the agency admin added on this page is kept on the onboarding (staff see it; a correction prints it again).
+            if (witness && witnessPng && ports.serviceRpc) {
+              await ports.serviceRpc("agency_onboarding_witness_record", { p_request: record.id, p_name: witness.name, p_png: witnessPng }).catch(() => undefined);
             }
             await ports.later(drainSigningMail(ports));
             // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.

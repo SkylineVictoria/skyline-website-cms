@@ -108,6 +108,10 @@ export interface LegacySigningView { id: string; title: string; recipientName: s
 export interface SigningPreview { pdfBase64: string; title: string; text: string; templateText: string; edited: boolean; isHtml?: boolean; recipientName: string; recipientEmail: string; variables: string[]; templateName: string }
 export interface SigningContext { templates: SigningTemplate[]; requests: SigningRequest[] }
 export interface SigningSubject { name: string; email: string; values: Record<string, string> }
+/** The agreement's Items 3 to 5 as sent with the application (2026-11-20). */
+export interface OnboardingAgreementTerms { commencementDate: string | null; expiryDate: string | null; territory: string | null; commissionPercent: number | string | null }
+/** The agent's witness on the agreement: preset (printed, read-only here) or to add on the signing page (typed name, drawn signature). */
+export interface OnboardingWitnessPlan { preset: boolean; name: string | null; by: "admin" | "agent" | null; image: string | null }
 /** What a link holder gets: their own fields only, and who else is signing. */
 export interface SigningView {
   id: string; reference: string; title: string; state: string; message: string | null; expiresAt: string | null; signedAt: string | null; consent: string; documentHash: string; url: string; certificateUrl: string | null;
@@ -115,7 +119,9 @@ export interface SigningView {
   requireCode?: boolean; codeTo?: string | null; offer?: { studentName: string; applicationReference: string; prepaidMore: "YES" | "NO" | null } | null;
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };
   /** Agent onboarding (2026-11-17): the application form (the first `formPages` pages) and the agreement, sent as one document. */
-  onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string; kind?: string; stage?: string } | null;
+  onboarding?: { id: string; formPages: number; agencyName: string; agencyId: string; kind?: string; stage?: string;
+    /** 2026-11-20: the application request carries the agreement (P06) too, signed once; its terms and the witness (preset by staff, or added here). */
+    combined?: boolean; agreement?: OnboardingAgreementTerms | null; witness?: OnboardingWitnessPlan | null } | null;
   /** F04 wizard (2026-11-19): the saved draft ("Save and continue later") and the register's facts for the Company summary. */
   application?: { draft: unknown; facts: unknown; savedAt: string | null;
     /** 2026-11-19: values with no box of their own (agent_acn), the keys the open filled, the wizard uploads (organisation chart, business profile). */
@@ -242,6 +248,8 @@ export const sendAgentApplication = (input: { agencyId: string; agentId?: string
 export interface AgentAgreementSendInput {
   agencyId: string; onboardingId: string; agentId?: string | null; commencementDate: string; territory: string; commissionPercent: string; adminName: string; adminPosition: string;
   adminWitnessName?: string; message?: string; overrideReason?: string;
+  /** The SLIT witness: a typed name and a DRAWN signature (never typed), or nothing (2026-11-20). */
+  adminWitness?: { name: string; png: string } | null;
   adminSignature: { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
 }
 /** Stage 3: the agreement to the agent (at References received, or earlier with a typed reason). */
@@ -253,7 +261,26 @@ export const rejectOnboarding = (input: { onboardingId: string; reason: string }
  * to the contact at once (the three blanks are installed first when missing, before anything is saved). `warning` when the business was
  * saved but the form could not be sent (Resend application on its page).
  */
-export interface BusinessCreateResult { agencyId: string; businessId: string; agencyName: string; contactAgentId: string; application: AgentOnboardingSendResult | null; warning?: string; abrWarning?: string }
+export interface BusinessCreateResult { agencyId: string; businessId: string; agencyName: string; contactAgentId: string; application: AgentOnboardingSendResult | null; warning?: string; abrWarning?: string;
+  /** 2026-11-20: nothing is emailed by Add business; a draft opens for the pre-send step. */
+  presend?: boolean; onboardingId?: string | null }
+/*
+ * The pre-send step (owner brief 2026-11-20): staff fill or check the F04 (references left empty), the agreement terms and optionally the
+ * agent's witness (typed name + drawn signature), then Save draft or Send to point of contact (ONE request: F04 + P06, signed once).
+ */
+export interface PresendField { id: string; key: string; type: string; label: string; required: boolean; page: number; value: string }
+export interface PresendOpen {
+  onboardingId: string | null; agency: { id: string; name: string; abn: string | null }; contact: { id: string; name: string; email: string } | null; fields: PresendField[];
+  facts: unknown; acn: string; marn: string; message: string; terms: { commencementDate: string; territory: string; commissionPercent: string };
+  witness: { name: string; png: string | null }; savedAt: string | null; savedBy: string | null;
+}
+export interface PresendData {
+  answers: Record<string, string>; acn: string; marn: string; message: string; commencementDate: string; territory: string; commissionPercent: string; witnessName: string; witnessPng: string | null;
+}
+export const openPresend = (agencyId: string) => onboardingAction<PresendOpen>({ action: "agent_onboarding_presend_open", agencyId });
+export const savePresend = (agencyId: string, data: PresendData) => onboardingAction<{ onboardingId: string; savedAt: string }>({ action: "agent_onboarding_presend_save", agencyId, data });
+export const sendPresend = (agencyId: string, data: PresendData) => onboardingAction<AgentOnboardingSendResult & { combined?: boolean; witness?: string }>({ action: "agent_onboarding_presend_send", agencyId, data });
+export const discardPresend = (onboardingId: string) => signingAction<{ discarded: boolean }>({ action: "agent_onboarding_presend_discard", onboardingId });
 /** What staff confirmed from ABN Lookup on Add business (kept on the business for the F04 prefill). */
 export type BusinessAbrInput = AbrConfirmed & { givenName: string; familyName: string };
 export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string; abr?: BusinessAbrInput }) =>
@@ -276,7 +303,9 @@ export const saveApplicationReview = (onboardingId: string, changes: Record<stri
 export const sendApplicationBack = (input: { onboardingId: string; flags: Record<string, string>; message?: string }) =>
   onboardingAction<AgentOnboardingSendResult & { round?: number; to?: string; flagged?: number }>({ action: "agent_onboarding_correction_send", ...input });
 export const approveAgency = (input: AgentAgreementSendInput) =>
-  onboardingAction<{ approved: boolean; agencyStatus: string; agreement: AgentOnboardingSendResult | null; warning?: string }>({ action: "agent_onboarding_approve", ...input });
+  onboardingAction<{ approved: boolean; agencyStatus: string; agreement: AgentOnboardingSendResult | null; warning?: string; combined?: boolean; refereesPending?: number;
+    /** A combined onboarding: the signed agreement countersigned, issued and emailed; sign-in emails released. */
+    issued?: { issued: boolean; to: string | null; emailed: boolean; released: boolean; invitations: string[] } | null }>({ action: "agent_onboarding_approve", ...input });
 /** Stage 2 by hand: the referee checks still outstanding (after a failed automatic send). */
 export const sendRefereeChecks = (onboardingId: string) => onboardingAction<{ sent: number; skipped: number }>({ action: "agent_onboarding_send_referees", onboardingId });
 /** A referee's email address (and name) changes: the old request is voided, a new referee check goes out. */

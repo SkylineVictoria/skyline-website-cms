@@ -39,7 +39,7 @@ export default function AgencyNewPage() {
         </Card>
       ) : null}
       <AddBusinessForm
-        onCreated={({ agencyId, message }) => { push(message); navigate(`/admin/agencies/${agencyId}`, { replace: true }); }}
+        onCreated={({ agencyId, message }) => { push(message); navigate(`/admin/businesses/${agencyId}?prepare=1`, { replace: true }); }}
         cancel={<Link to="/admin/businesses" className="text-sm font-medium text-foreground-600 hover:text-foreground-900">Cancel</Link>}
       />
     </div>

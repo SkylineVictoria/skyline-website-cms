@@ -461,6 +461,7 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
         openOnboarding.add(String(args.p_agency)); return { id: "20000000-0000-4000-8000-000000000001", reference: "SLIT-2026-001", stage: "application_sent" };
       }
       if (name === "admin_business_create") return { agencyId: "30000000-0000-4000-8000-000000000002", businessId: "30000000-0000-4000-8000-000000000002", agencyName: String((args.p_agency as Record<string, unknown>).name), contactAgentId: "10000000-0000-4000-8000-000000000002" };
+      if (name === "agency_onboarding_presend_save") return { onboardingId: "22000000-0000-4000-8000-000000000001", savedAt: "2026-11-20T00:00:00Z", contact: { id: (args.p_data as { agentId: string }).agentId, name: "Pat Contact", email: "zz-test-poc@blackhole.postmarkapp.com" } };
       if (name === "agency_onboarding_agreement_create") {
         const d = args.p_data as Record<string, unknown>;
         if (state.stage !== "references_received" && !(typeof d.override_reason === "string" && d.override_reason.length >= 5)) throw { message: "Give a reason for sending the agreement before both references are back" };
@@ -602,20 +603,164 @@ test("agent onboarding (staged): the form goes alone; signing it sends a prefill
   assert.equal(early.override, true);
   assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_agreement_create").pop()![1].p_data as Record<string, unknown>).override_reason, "Referee 2 confirmed by phone");
 
-  // Add business (2026-11-19): the business and its point of contact are saved and the F04 goes to the contact at once, in one call.
-  const sentBefore = sent.length;
-  const added = await call({ action: "agent_onboarding_business_create", agency: { name: "ZZ Test Agency", code: "ZZ-TEST", registration_number: "11111111111" }, contactEmail: "ZZ-Test-POC@blackhole.postmarkapp.com", contactName: "Pat Contact" }) as { agencyId: string; application: { sent: boolean; stage: string } | null; warning?: string };
-  assert.ok(added.application?.sent && added.application.stage === "application_sent" && !added.warning, "the F04 is sent with the new business");
+  // Add business (2026-11-20): the business and its point of contact are saved with a DRAFT onboarding; nothing is emailed until staff
+  // send it from the pre-send step.
+  const sentBefore = sent.length, mailsBefore = mails.length;
+  const added = await call({ action: "agent_onboarding_business_create", agency: { name: "ZZ Test Agency", code: "ZZ-TEST", registration_number: "11111111111" }, contactEmail: "ZZ-Test-POC@blackhole.postmarkapp.com", contactName: "Pat Contact" }) as { agencyId: string; application: unknown; presend: boolean; onboardingId: string | null; warning?: string };
+  assert.ok(added.presend && added.application === null && added.onboardingId === "22000000-0000-4000-8000-000000000001" && !added.warning, "a draft is opened for the pre-send step");
   assert.deepEqual(rpcs.filter(([name]) => name === "admin_business_create").map(([, a]) => [a.p_contact_email, a.p_contact_name]), [["zz-test-poc@blackhole.postmarkapp.com", "Pat Contact"]]);
-  assert.equal(sent.length, sentBefore + 1, "exactly one application form");
-  assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").pop()![1].p_agent, "10000000-0000-4000-8000-000000000002", "to the point of contact");
-  // A double click / retry for the same business: refused by the database; nothing emailed; the unsent draft voided.
+  assert.equal((rpcs.filter(([name]) => name === "agency_onboarding_presend_save").pop()![1].p_data as { agentId: string }).agentId, "10000000-0000-4000-8000-000000000002", "the draft is for the point of contact");
+  assert.equal(sent.length, sentBefore, "no application form is sent by Add business"); assert.equal(mails.length, mailsBefore, "and nothing is emailed");
+  // The earlier action (an F04 alone) still refuses a second application for a business already in progress.
   const voidedBefore = voided.length;
-  await assert.rejects(call({ action: "agent_onboarding_send_application", agencyId: added.agencyId, agentId: "10000000-0000-4000-8000-000000000002" }), /already has an onboarding in progress/);
-  assert.equal(sent.length, sentBefore + 1, "no second F04"); assert.equal(voided.length, voidedBefore + 1, "the unsent draft is voided");
+  await assert.rejects(call({ action: "agent_onboarding_send_application", agencyId: "30000000-0000-4000-8000-000000000001" }), /already has an onboarding in progress/);
+  assert.equal(sent.length, sentBefore, "no second F04"); assert.equal(voided.length, voidedBefore + 1, "the unsent draft is voided");
   // A bad contact is refused before anything is saved.
   await assert.rejects(call({ action: "agent_onboarding_business_create", agency: { name: "X" }, contactEmail: "not-an-email", contactName: "Pat" }), /email address/);
   assert.equal(rpcs.filter(([name]) => name === "admin_business_create").length, 1);
+});
+
+test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Send makes ONE request (F04 + P06) with every Yes / No at No and no references; the agency admin signs once with a drawn witness; the signed PDF is split; Approve without referees countersigns and issues the agreement and emails it", async () => {
+  const stored = new Map<string, Uint8Array>(); const saved: Array<Record<string, unknown>> = []; const rpcs: Array<[string, Record<string, unknown>]> = []; const services: Array<[string, Record<string, unknown>]> = [];
+  const created: Array<Record<string, unknown>> = []; const sent: string[] = []; const mails: Array<{ to: string; subject: string; textBody: string; attachments?: Array<{ name: string; contentBase64: string }> }> = []; let n = 0;
+  const agencyId = "32000000-0000-4000-8000-000000000001", onboardingId = "22000000-0000-4000-8000-000000000009";
+  const contact = { id: "12000000-0000-4000-8000-000000000001", name: "Ravi Kumar", email: "ravi@example.test" };
+  const state = { stage: "draft", presend: null as Record<string, unknown> | null, notifiedAgent: false };
+  const referees = [1, 2].map((p) => ({ id: `42000000-0000-4000-8000-00000000000${p}`, position: p, name: p === 1 ? "Priya Nair" : "Sam Lee", organisation: "Harbour College", positionTitle: "", email: `ref${p}@example.test`, phone: "+61400111222", address: "", status: "pending", requestId: null as string | null }));
+  const templates = () => saved.map((t) => ({ id: t.id, systemKey: t.__key, status: "active", sourcePath: t.source_path, sourceHash: t.source_hash, sourcePages: t.source_pages, fields: t.fields, expiryDays: 30, reminderDays: 3 }));
+  const follow = () => ({ id: onboardingId, kind: "business", combined: true, stage: state.stage, agency: { id: agencyId, name: "Acme Education Pty Ltd" }, agent: contact, sentBy: { email: "hari@example.test", name: "Hari Admin" }, contacts: [], admins: [],
+    values: { agent_agency_name: "Acme Education Pty Ltd", agent_office_address: "1 Test St" }, referees: referees.map((r) => ({ ...r })), received: 0, total: 2, template: templates().find((t) => t.systemKey === "agent_referee_check_form") ?? null,
+    notified: { agentReferees: state.notifiedAgent, staffReferences: false } });
+  let signData: Record<string, unknown> | null = null;
+  const ports = { isServiceCaller: false, later: (work: Promise<unknown>) => work.then(() => undefined), letterhead: async () => null, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`,
+    admin: async (action: string, id: string | null, data: Record<string, unknown>) => {
+      if (action === "subject_search") return [];
+      if (action === "create") { created.push({ ...data, id }); return { id, reference: `SLIT-2026-10${created.length}` }; }
+      if (action === "send") { sent.push(id!); return { id, state: "sent" }; }
+      throw new Error(`unexpected ${action}`);
+    },
+    callerRpc: async (name: string, args: Record<string, unknown>) => {
+      rpcs.push([name, args]);
+      if (name === "agency_onboarding_template_install") {
+        const key = String(args.p_key); const have = saved.find((t) => t.__key === key);
+        if (have) return { id: have.id, systemKey: key, reused: true, fields: (have.fields as unknown[]).length, pages: have.source_pages, status: "active" };
+        if (!args.p_data) return null;
+        const d = args.p_data as Record<string, unknown>; saved.push({ ...d, __key: key }); return { id: d.id, systemKey: key, reused: false, fields: (d.fields as unknown[]).length, pages: d.source_pages, status: "active" };
+      }
+      if (name === "agency_onboarding_templates") return templates();
+      if (name === "agency_onboarding_prepare") return { agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556" }, agent: contact, admin: { name: "Hari Admin", position: "CEO", signaturePng: null },
+        values: { agent_agency_name: "Acme Education Pty Ltd", contact_email: contact.email, agent_website: "acme.example.test" } };
+      if (name === "agency_abr_get") return null;
+      if (name === "agency_onboarding_presend_get") return { onboardingId: state.presend ? onboardingId : null, stage: state.presend ? "draft" : null, openStage: state.stage === "draft" ? null : state.stage,
+        agency: { id: agencyId, name: "Acme Education Pty Ltd", abn: "51824753556", status: "Onboarding" }, contact, presend: (state.presend?.presend ?? null) as Record<string, unknown> | null,
+        terms: { commencementDate: state.presend?.commencementDate ?? null, territory: state.presend?.territory ?? "", commissionPercent: state.presend?.commissionPercent ?? null }, witness: { name: null, png: null }, savedAt: null, savedBy: null };
+      if (name === "agency_onboarding_presend_save") {
+        const d = args.p_data as Record<string, unknown>;
+        state.presend = { ...d, presend: { answers: d.answers, acn: d.acn, marn: d.marn } };
+        return { onboardingId, savedAt: "2026-11-20T00:00:00Z", contact };
+      }
+      if (name === "agency_onboarding_presend_send") { state.stage = "application_sent"; return { id: onboardingId, requestId: args.p_request, reference: "SLIT-2026-101", stage: "application_sent" }; }
+      if (name === "agency_onboarding_prefill_record" || name === "agency_abr_facts_record") return null;
+      if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2 }; }
+      if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: String(signData!.agreement_base64) };
+      if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
+      throw new Error(`unexpected rpc ${name}`);
+    },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      services.push([name, args]);
+      if (name === "agency_onboarding_followup") return follow();
+      if (name === "agency_onboarding_referee_request_create") { const r = referees.find((x) => x.id === args.p_referee)!; r.status = "sent"; r.requestId = String((args.p_data as { id: string }).id); state.stage = "references_pending"; return { requestId: r.requestId }; }
+      if (name === "agency_onboarding_mark_notified") { state.notifiedAgent = true; return null; }
+      if (name === "agency_onboarding_application_extra" || name === "agency_onboarding_witness_record") return null;
+      if (name === "agency_business_release") return { released: true, name: "Acme Education Pty Ltd", invitations: [] };
+      throw new Error(`unexpected service ${name}`);
+    },
+    service: async (action: string) => { if (action === "notify_claim") return []; if (action === "path_referenced") return false; return true; },
+    storage: { download: async (p: string) => stored.get(p) ?? null, upload: async (p: string, bytes: Uint8Array) => { stored.set(p, bytes); return true; }, remove: async (paths: string[]) => { for (const p of paths) stored.delete(p); }, signedUrl: async () => null },
+    mail: { provider: { id: "mock", send: async (m: { to: string; subject: string; textBody: string }) => { mails.push(m); return { kind: "accepted" as const, messageId: `m-${mails.length}` }; } }, config: { from: { name: "SLIT", email: "noreply@example.test" }, adminTo: ["admin@example.test"], siteUrl: "https://site.example.test", problems: [] } },
+  } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const call = (body: Record<string, unknown>) => signingCore.handleSigning({ body, upload: null, ip: null, userAgent: null }, ports);
+  for (const which of ["form", "referee", "agreement"] as const) await signingCore.handleSigning({ body: { action: "agent_onboarding_install", which }, upload: { name: `${which}.pdf`, bytes: blankBytes(which) }, ip: null, userAgent: null }, ports);
+
+  // The pre-send step: a draft keeps what staff typed; a witness name without a drawn signature is refused (never typed).
+  await assert.rejects(call({ action: "agent_onboarding_presend_save", agencyId, data: { witnessName: "Jo Witness" } }), /must draw their signature/);
+  await call({ action: "agent_onboarding_presend_save", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director", agent_website: "https://acme.example.test", ref1_email: "x@example.test" } } });
+  assert.deepEqual((state.presend!.answers as Record<string, string>), { contact_title: "Mr", contact_position: "Director", agent_website: "https://acme.example.test" }, "the references are never pre-filled by staff");
+  const opened = await call({ action: "agent_onboarding_presend_open", agencyId }) as { fields: Array<{ key: string; value: string }>; terms: { territory: string } };
+  const openedValue = (key: string) => opened.fields.find((f) => f.key === key)?.value;
+  assert.deepEqual([openedValue("litigation_involved:NO"), openedValue("litigation_involved:YES"), openedValue("works_with_sub_agents:NO"), openedValue("eatc_completed:NO")], ["true", "", "true", "true"], "every Yes / No question opens at No");
+  assert.equal(openedValue("contact_title"), "Mr", "what staff saved is shown again");
+  // Send needs the agreement terms.
+  await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
+  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25" } }) as { id: string; sent: boolean; combined: boolean; witness: string };
+  assert.ok(sentApp.sent && sentApp.combined && sentApp.witness === "agency admin" && sent.length === 1, "one request, emailed to the point of contact");
+  const original = stored.get(`${sentApp.id}/original.pdf`)!;
+  assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the F04's 2 pages followed by the P06's 13");
+  const request = created[0] as { title: string; fields: Array<{ key: string; page: number; type: string; value: string; required: boolean }> };
+  const field = (key: string) => request.fields.find((f) => f.key === key);
+  assert.ok(field("agent_signature_form")!.page <= 2 && field("agent_signature")!.page > 2 && field("agent_signature")!.type === "signature", "one signer, a signature box on each document");
+  assert.ok(field("agent_witness_name")?.required && !field("agent_witness_signature"), "the witness name is the agency admin's to give; the witness signature is never a typing field");
+  assert.ok(!request.fields.some((f) => /^ref[12]_/.test(f.key) && f.value), "the references are empty");
+  assert.deepEqual([field("litigation_involved:NO")!.value, field("litigation_involved:YES")!.value, field("eatc_completed:NO")!.value], ["true", "", "true"], "Yes / No questions arrive at No");
+  const agreementText = await pdfText(original);
+  assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && agreementText.some((t) => t.page > 2 && t.text.includes("25%")), "the agreement terms are printed on the P06 pages");
+  const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
+  assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
+  assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
+
+  // The agency admin signs once; the witness types a name and draws.
+  const originalHash = await signingCore.sha256Hex(original);
+  const recipient = { id: "r1", name: contact.name, email: contact.email, role: "Business contact", state: "sent" };
+  const fieldRows = request.fields.map((f, i) => ({ id: `f${i}`, recipient_id: "r1", type: f.type, page: f.page, x: 0.5, y: 0.8, w: 0.3, h: 0.03, label: f.key, key: f.key, value: f.value, required: f.required }));
+  const plan = { id: onboardingId, kind: "application", formPages: 2, combined: true, witness: { preset: false, box: { ...sendData.witness_box!, x: 0.1, y: 0.1, w: 0.3, h: 0.05 } } };
+  const record = { id: sentApp.id, state: "sent", original_hash: originalHash, recipient, fields: fieldRows, signers: [], onboarding: plan };
+  const linkPorts = { ...ports, service: async (action: string, args: { data?: Record<string, unknown> }) => {
+    if (action === "rate") return true;
+    if (action === "open") return record;
+    if (action === "sign_plan") return { id: sentApp.id, reference: "SLIT-2026-101", title: request.title, revision: 1, complete: true, signed_at: "2026-11-20T01:00:00Z", original_path: `${sentApp.id}/original.pdf`, original_hash: originalHash,
+      created_at: "2026-11-20T00:00:00Z", sent_at: "2026-11-20T00:01:00Z", signing_mode: "sequential", recipient_id: "r1", chain_ok: true, offer: false, onboarding: plan,
+      fields: fieldRows.map((f) => ({ ...f, done: true, value: f.type === "checkbox" ? String((args.data?.values as Record<string, string>)?.[f.id] === "true") : f.type === "date" ? "20/11/2026" : ((args.data?.values as Record<string, string>)?.[f.id] ?? f.value ?? "") })),
+      recipients: [{ ...recipient, state: "signed", signer_name: contact.name, signed_at: "2026-11-20T01:00:00Z", signature_kind: "typed" }], events: [] };
+    if (action === "sign") { signData = args.data ?? null; state.stage = "application_signed"; return { state: "signed" }; }
+    if (action === "notify_claim") return [];
+    if (action === "path_referenced") return false;
+    throw new Error(`unexpected ${action}`);
+  } } as typeof ports;
+  const values: Record<string, string> = Object.fromEntries(fieldRows.filter((f) => f.type === "text").map((f) => [f.id, f.value || "x"]));
+  for (const f of fieldRows.filter((x) => x.type === "checkbox")) values[f.id] = f.value === "true" ? "true" : "false";
+  const setKey = (key: string, value: string) => { const f = fieldRows.find((x) => x.key === key); if (f) values[f.id] = value; };
+  for (const p of [1, 2]) { setKey(`ref${p}_contact_name`, referees[p - 1].name); setKey(`ref${p}_email`, referees[p - 1].email); setKey(`ref${p}_phone`, "+6140011122" + p); }
+  setKey("contact_title", "Mr"); setKey("contact_given_name", "Ravi"); setKey("contact_family_name", "Kumar"); setKey("contact_email", contact.email); setKey("contact_phone", "+61412345678");
+  setKey("declarant_name", "Ravi Kumar"); setKey("declarant_role", "Director"); setKey("office_suburb", "Footscray"); setKey("office_province", "");
+  const allTicked = Object.fromEntries(onboarding.F04_DECLARATIONS.map((d) => [d.key, true]));
+  const signAs = (witness: unknown) => signingCore.handleSigning({ body: { action: "sign", token: "c".repeat(64), name: "Ravi Kumar", agreed: true, values: { ...values }, documentHash: originalHash,
+    application: { acn: "", marn: "", declarations: allTicked, witness } }, upload: null, ip: "203.0.113.9", userAgent: "test" }, linkPorts);
+  await assert.rejects(signAs(undefined), /witness's full name/);
+  await assert.rejects(signAs({ name: "Jo Witness" }), /draw their signature/);
+  const signed = await signAs({ name: "Jo Witness", png: PNG_1PX }) as { signed: boolean; complete: boolean };
+  assert.ok(signed.signed && signed.complete);
+  const d = signData as unknown as { values: Record<string, string>; form_base64: string; agreement_base64: string };
+  const signedValue = (key: string) => d.values[fieldRows.find((f) => f.key === key)!.id];
+  assert.deepEqual([signedValue("agent_signatory_name"), signedValue("agent_signatory_position"), signedValue("agent_witness_name")], ["Ravi Kumar", "Director", "Jo Witness"], "the agreement's signatory is the declarant; the witness named");
+  const pages = async (b64: string) => (await PdfLib.PDFDocument.load(new Uint8Array(Buffer.from(b64, "base64")))).getPageCount();
+  assert.deepEqual([await pages(d.form_base64), await pages(d.agreement_base64)], [2, 13], "the one signed PDF is split into the application form and the agreement");
+  assert.ok(services.some(([name, a]) => name === "agency_onboarding_witness_record" && a.p_name === "Jo Witness" && a.p_png === PNG_1PX), "the drawn witness is kept on the onboarding");
+  assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 2, "both referees get their check at once");
+  assert.ok(mails.some((m) => /^Ready for review: Acme Education Pty Ltd$/.test(m.subject) && /do not need to wait/.test(m.textBody)), "staff may review at once");
+  assert.ok(mails.some((m) => m.to === contact.email && /do not need to wait for them/.test(m.textBody)), "the agency admin is not held up by the referees");
+
+  // Approve while both referees are still pending: no second signature; the agreement is countersigned, issued and emailed; sign-ins released.
+  await assert.rejects(call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Sue Witness" } }), /must draw their signature/);
+  state.stage = "references_pending";
+  const approved = await call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Sue Witness", png: PNG_1PX } }) as
+    { approved: boolean; combined: boolean; refereesPending: number; issued: { issued: boolean; emailed: boolean; released: boolean } | null; warning?: string };
+  assert.ok(approved.approved && approved.combined && approved.refereesPending === 2 && approved.issued?.issued && approved.issued.emailed && approved.issued.released && !approved.warning, JSON.stringify(approved));
+  assert.equal(sent.length, 1, "no P06 request is sent for a second signature");
+  const issue = rpcs.find(([name]) => name === "agency_onboarding_agreement_issue")![1] as { p_base64: string; p_data: { admin_name: string; admin_witness_name: string } };
+  const issuedText = await pdfText(new Uint8Array(Buffer.from(issue.p_base64, "base64")));
+  assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === "Sue Witness" && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement");
+  const issuedMail = mails.find((m) => m.to === contact.email && /Your agent agreement/.test(m.subject))!;
+  assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
 });
 
 test("onboarding per business (2026-11-19): Add business checks the blanks before saving; the signed agreement makes the business ready (nothing goes to it); Activate sends ONE set-password email to the contact and each held agent; per-agent actions are refused; a rejection is polite", async () => {

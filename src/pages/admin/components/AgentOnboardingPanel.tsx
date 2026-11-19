@@ -3,8 +3,9 @@ import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sendAgentApplication, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
+import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
 import F04ReviewDialog from "@/pages/admin/components/F04ReviewDialog";
+import F04PresendDialog from "@/pages/admin/components/F04PresendDialog";
 import { OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
 import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
@@ -21,7 +22,8 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
   const { push } = useToast();
   const [rows, setRows] = useState<OnboardingRow[] | null>(null);
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"agreement" | "approve" | "review" | "decline" | null>(null);
+  // Prepare application (2026-11-20) opens by itself after Add business (?prepare=1 on the business page).
+  const [dialog, setDialog] = useState<"agreement" | "approve" | "review" | "decline" | "presend" | null>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("prepare") === "1" ? "presend" : null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [changing, setChanging] = useState<OnboardingReferee | null>(null);
@@ -52,11 +54,17 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
   // Resend link (2026-11-18): the application form goes by itself when the business is added; this re-sends the open link (the form or a
   // correction), or sends a fresh form to the point of contact when there is no onboarding in progress (a failed first send, a closed one).
   const openForm = current && openRequest(current.application) ? current.application : null;
+  // 2026-11-20: a new application is always prepared first (Prepare application: the pre-send step); Resend link only re-sends an open one.
   const resendLink = () => act("resend-link", async () => {
     if (openForm?.recipientId) { await signingAction({ action: "resend", id: openForm.id, recipientId: openForm.recipientId }); return `Link sent again to ${current!.agent.email}.`; }
-    const r = await sendAgentApplication({ agencyId: business.id });
-    return r.sent ? `Application form sent to ${r.agent?.email ?? "the point of contact"} (${r.reference}).` : r.warning ?? "The form was created but not emailed.";
+    throw new Error("Nothing to resend: prepare the application and send it.");
   });
+  const draft = current?.stage === "draft" ? current : null;
+  const canPrepare = !!rows && (!current || !!draft) && !business.onboarding?.readyToActivate;
+  const closePresend = () => {
+    setDialog(null);
+    if (new URLSearchParams(window.location.search).has("prepare")) { const url = new URL(window.location.href); url.searchParams.delete("prepare"); window.history.replaceState(window.history.state, "", url.toString()); }
+  };
   const statusLine = current ? statusWords(current) : latest ? `${STAGE_LABEL_SHORT[latest.stage] ?? latest.stage}${latest.closedReason ? ` (${latest.closedReason})` : ""}.` : "No application form has been sent yet.";
   const profile = PROFILE_LABELS.filter(([key]) => (business.profile ?? {})[key]);
   // The register's facts kept when the application form was sent (or first opened): read-only.
@@ -66,18 +74,24 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding</h2>
-          <p className="text-sm text-foreground-600">Automatic, once per business with its agency admin: the application form goes out when the business is added; once it is signed, both referees get a referee check; when both have replied you review the application (edit, send back for correction, or approve). Approving activates the business and sends the agent agreement; sign-in emails go out when it is signed.</p>
+          <p className="text-sm text-foreground-600">Once per business with its agency admin. You prepare the application (business details, the agreement's terms, optionally the witness) and send it; the agency admin signs the application form and the agent agreement once. Both referees get a referee check at once, but you do not wait for them: review the application (edit, send back for correction, or approve). Approving activates the business, countersigns and issues the signed agreement, and sends the sign-in emails.</p>
           <p className="mt-1 text-sm font-medium text-foreground-900" data-testid="onboarding-status-line">{statusLine}</p>
           {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (two years, Item 5).</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {badge}
-          {rows && (openForm || !current) && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
+          {rows && openForm && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
+          {canPrepare ? <Button size="sm" icon="ri-edit-box-line" disabled={!!busy} onClick={() => setDialog("presend")} data-testid="prepare-application">{draft ? "Continue preparing" : "Prepare application"}</Button> : null}
         </div>
       </div>
       {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
       {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
-      {current ? <StagedOnboarding row={current} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => setDialog("agreement")} onReview={() => setDialog("review")} onDecline={() => setDialog("decline")}
+      {draft ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="onboarding-draft">
+        <p className="font-medium">Not sent yet: nothing has been emailed to {draft.agent.name} ({draft.agent.email}).</p>
+        <p className="mt-1">Prepare the application: check and fill in the business details, set the agreement's terms and, if you like, add the witness. Then send it to the point of contact to sign once (application form and agreement together).
+          {draft.presendSavedAt ? ` Draft saved ${new Date(draft.presendSavedAt).toLocaleString()}.` : ""}</p>
+      </div> : null}
+      {current && !draft ? <StagedOnboarding row={current} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => setDialog("agreement")} onReview={() => setDialog("review")} onDecline={() => setDialog("decline")}
         onSendReferees={() => act("referees", async () => { const r = await sendRefereeChecks(current.id); return r.sent ? `Referee check${r.sent === 1 ? "" : "s"} sent (${r.sent}).` : "Nothing to send: every referee has a request or is received."; })}
         onChangeReferee={setChanging} onUpload={(referee, file) => act(`upload:${referee.id}`, async () => { const r = await uploadRefereeForm(referee.id, file); return `Reference ${referee.position} marked as received (${r.stage === "references_received" ? "both references are in" : "waiting for the other"}).`; })} /> : null}
       {rows && rows.filter((r) => r !== current).length ? <details className="mt-4" open={!current}>
@@ -107,9 +121,11 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
         <dl className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-3">{abrFacts.map((f) => <div key={f.label}><dt className="text-xs text-foreground-500">{f.label}</dt><dd className="text-foreground-900">{f.value}</dd></div>)}</dl>
       </div> : null}
     </Card> : null}
-    {(dialog === "agreement" || dialog === "approve") && current ? <SendAgreementDialog row={current} agencyId={business.id} agencyName={business.name} approve={dialog === "approve"} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
+    {(dialog === "agreement" || dialog === "approve") && current ? <SendAgreementDialog row={current} agencyId={business.id} agencyName={business.name} approve={dialog === "approve" || !!current.combined} onClose={() => setDialog(null)} onSent={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
     {dialog === "review" && current ? <F04ReviewDialog onboardingId={current.id} agencyName={business.name} onClose={() => { setDialog(null); void refresh(); }}
       onDone={async (m) => { setDialog(null); push(m); await refresh(); }} onApprove={() => setDialog("approve")} /> : null}
+    {dialog === "presend" && canPrepare ? <F04PresendDialog agencyId={business.id} agencyName={business.name} onClose={() => { closePresend(); void refresh(); }}
+      onSent={async (m) => { closePresend(); push(m); await refresh(); }} /> : null}
     {dialog === "decline" && current ? <DeclineDialog row={current} onClose={() => setDialog(null)} onDeclined={async (m) => { setDialog(null); push(m); await refresh(); }} /> : null}
     {changing ? <ChangeRefereeDialog referee={changing} onClose={() => setChanging(null)} onDone={async (m) => { setChanging(null); push(m); await refresh(); }} /> : null}
     {openId ? <RequestDetail id={openId} onClose={() => setOpenId(null)} onChanged={() => void refresh()} /> : null}
@@ -120,6 +136,12 @@ const STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
   { label: "Application sent", stages: ["application_sent"] }, { label: "Awaiting referees", stages: ["application_signed", "references_pending"] },
   { label: "Review", stages: ["references_received", "correction_requested", "resubmitted"] }, { label: "Active: agreement", stages: ["references_approved", "agreement_sent"] }, { label: "Signed in", stages: ["agreement_signed"] },
 ];
+/** The combined flow (2026-11-20): one signature on both documents; referees never block; approval issues the agreement. */
+const COMBINED_STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
+  { label: "Sent to sign", stages: ["application_sent"] },
+  { label: "Signed once: review", stages: ["application_signed", "references_pending", "references_received", "correction_requested", "resubmitted"] },
+  { label: "Approved: agreement issued", stages: ["references_approved"] }, { label: "Signed in", stages: ["agreement_signed"] },
+];
 const STAGE_LABEL_SHORT: Partial<Record<OnboardingStage, string>> = { declined: "Declined", cancelled: "Closed", expired: "Expired", agreement_signed: "Agreement signed", legacy: "Sent as one document" };
 /** The status line of the business page: where it is up to and what happens next. */
 function statusWords(row: OnboardingRow): string {
@@ -127,7 +149,7 @@ function statusWords(row: OnboardingRow): string {
   const open = row.corrections?.find((c) => c.status === "open");
   switch (row.stage) {
     case "application_sent": return `Application sent to ${row.agent.name} (${row.agent.email})${row.application?.sentAt ? ` on ${new Date(row.application.sentAt).toLocaleDateString()}` : ""}: waiting for them to sign.`;
-    case "application_signed": case "references_pending": return `Awaiting referees: ${received} of ${total} replied. You are asked to review once both have.`;
+    case "application_signed": case "references_pending": return row.combined ? `Ready for review: the application form and the agreement are signed. Referees: ${received} of ${total} replied (you do not need to wait). Choose Review application.` : `Awaiting referees: ${received} of ${total} replied. You can review now; the review shows each referee's status.`;
     case "references_received": return "Ready for review: both referees have replied. Choose Review application.";
     case "correction_requested": return `Correction requested${open ? ` (round ${open.round})` : ""}: waiting for ${row.agent.name} to correct and sign again.`;
     case "resubmitted": return received < total ? `Resubmitted; a changed referee was contacted (${received} of ${total} replied).` : "Resubmitted: review the corrections.";
@@ -174,7 +196,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
   row: OnboardingRow; busy: string; compact?: boolean; onOpen: (id: string) => void; onRemind: (r: RequestSummary, who: string) => void; onDownload: (row: OnboardingRow, kind: OnboardingFileKind, label: string) => void;
   onSendAgreement: () => void; onReview: () => void; onDecline: () => void; onSendReferees: () => void; onChangeReferee: (r: OnboardingReferee) => void; onUpload: (r: OnboardingReferee, file: File) => void;
 }) {
-  const steps = STEPS;
+  const steps = row.combined ? COMBINED_STEPS : STEPS;
   // Activated: every step is done (the stage stays agreement_signed; the activation is recorded on the row).
   const index = row.activation ? steps.length : stepIndex(row.stage, steps);
   const received = row.referees.filter((r) => r.status === "received").length;
@@ -192,14 +214,14 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         <i className={state === "done" ? "ri-checkbox-circle-fill" : state === "current" ? "ri-radio-button-line" : "ri-checkbox-blank-circle-line"} aria-hidden="true" />{step.label}</li>; })}</ol>
     <p className="text-sm text-foreground-700"><strong>{row.activation ? "Activated" : row.label ?? (row.stage === "agreement_signed" ? "Ready to activate" : stageWords(row.stage, received, row.referees.length, "business"))}</strong> · to {row.agent.name} ({row.agent.email}) · started {new Date(row.createdAt).toLocaleDateString()}{row.adminName ? ` by ${row.adminName}` : ""}{closed && row.closedReason ? ` · ${row.closedReason}` : ""}</p>
     <div className="space-y-1 rounded-lg border border-background-200 p-3">
-      <p className="text-sm font-medium text-foreground-900">1. Agent Application Form (F04)</p>
+      <p className="text-sm font-medium text-foreground-900">1. Agent Application Form (F04){row.combined ? " and Agent Agreement (P06), signed once" : ""}</p>
       <RequestLine request={row.application} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} remindLabel="Resend link" />
       {row.applicationSignedAt ? <p className="text-xs text-foreground-600">Signed {new Date(row.applicationSignedAt).toLocaleDateString()} by {row.signerName ?? row.agent.name}.</p> : null}
       <div className="flex flex-wrap gap-1.5">{row.files.form ? dl("form", ONBOARDING_FILE_LABEL.form) : null}{row.files.application_certificate ? dl("application_certificate", ONBOARDING_FILE_LABEL.application_certificate) : null}</div>
       {compact ? null : <ApplicationAttachments onboardingId={row.id} />}
       {!compact && reviewable ? <div className="flex flex-wrap gap-1.5 pt-1">
         <Button size="sm" icon="ri-file-search-line" disabled={!!busy} onClick={onReview} data-testid="review-application">Review application</Button>
-        {row.stage === "references_received" || row.stage === "resubmitted" ? <Button size="sm" variant="ghost" icon="ri-close-circle-line" disabled={!!busy} onClick={onDecline} data-testid="decline-application">Decline…</Button> : null}
+        {["application_signed", "references_pending", "references_received", "resubmitted"].includes(row.stage) ? <Button size="sm" variant="ghost" icon="ri-close-circle-line" disabled={!!busy} onClick={onDecline} data-testid="decline-application">Decline…</Button> : null}
       </div> : null}
       <CorrectionHistory corrections={row.corrections ?? []} revisions={row.revisions ?? []} onOpen={onOpen} />
     </div>
@@ -231,10 +253,17 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
     </div>
     <div className="space-y-1 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-foreground-900">3. Agent Agreement (P06)</p>
-        {!compact && !row.agreement && !closed && canSend ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="send-agreement">Send agreement</Button> : null}
+        <p className="text-sm font-medium text-foreground-900">3. Agent Agreement (P06){row.combined ? ": signed with the application, countersigned on approval" : ""}</p>
+        {!compact && !row.combined && !row.agreement && !closed && canSend ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="send-agreement">Send agreement</Button> : null}
+        {!compact && row.combined && row.stage === "references_approved" ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="issue-agreement">Issue agreement</Button> : null}
       </div>
-      <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />
+      {row.combined ? <div className="space-y-0.5 text-xs text-foreground-700" data-testid="agreement-combined">
+        <p>Commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}</p>
+        {row.signatureEvent ? <p data-testid="signature-event">Signed once by {row.signatureEvent.signer ?? row.agent.name} on {new Date(row.signatureEvent.at).toLocaleString()} (application form and agreement){row.signatureEvent.ip ? ` · IP ${row.signatureEvent.ip}` : ""}.</p>
+          : row.stage === "application_sent" ? <p>Waiting for {row.agent.name} to sign the application form and the agreement (one signature).</p> : null}
+        {row.witness ? <p>Witness: {row.witness.name} ({row.witness.by === "admin" ? "added by SLIT before sending" : "added by the agency admin when signing"}; drawn signature).</p> : null}
+        {row.agreementIssuedAt ? <p className="text-emerald-800">Countersigned by {row.adminName || "SLIT"} and issued on {new Date(row.agreementIssuedAt).toLocaleDateString()}; the completed copy was emailed to {row.agent.email}.</p> : null}
+      </div> : <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />}
       {!row.activation && row.stage === "agreement_signed" ? <p className="text-xs font-medium text-emerald-800" data-testid="ready-to-activate-note">Signed: the business is ready to activate. Press Activate at the top of the page; the point of contact and every agent added meanwhile then get their sign-in email.</p> : null}
       {row.activation ? <p className="text-xs text-emerald-800" data-testid="activation-note">Business activated on {new Date(row.activation.at).toLocaleDateString()}{row.activation.invitationId ? `; set-password email sent (${row.activation.invitationStatus === "accepted" ? "password set, signed in" : row.activation.invitationStatus === "pending" ? "waiting for the password" : "invitation withdrawn"})` : "; the agent already signs in"}.</p> : null}
       {row.agreement ? <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}{row.signedAt && row.stage === "agreement_signed" ? ` · signed ${new Date(row.signedAt).toLocaleDateString()}` : ""}</p> : null}
@@ -267,18 +296,25 @@ function LegacyRow({ row, busy, onOpen, onRemind, onDownload }: { row: Onboardin
 }
 
 type SignatureMethod = "saved" | "drawn" | "typed";
-/** Send agreement: Items 3 to 5 and the SLIT signatory; before References received a typed reason is required and kept on the record. */
+/**
+ * Send agreement: Items 3 to 5 and the SLIT signatory; before References received a typed reason is required and kept on the record.
+ * 2026-11-20: on a combined onboarding (the agency admin signed the agreement with the application) Approve only takes the SLIT signatory:
+ * the signed agreement is countersigned and issued, nothing goes out for a second signature. The SLIT witness, when given, is a typed name
+ * and a DRAWN signature (never typed). Referees still pending are a warning, never a block.
+ */
 function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClose, onSent }: { row: OnboardingRow; agencyId: string; agencyName: string; approve?: boolean; onClose: () => void; onSent: (message: string) => Promise<void> }) {
   const [prepared, setPrepared] = useState<OnboardingPrepared | null>(null);
   const [error, setError] = useState(""); const [busy, setBusy] = useState("");
   const [commencement, setCommencement] = useState(todayIso());
   const [territory, setTerritory] = useState(""); const [commission, setCommission] = useState("");
-  const [adminName, setAdminName] = useState(""); const [adminPosition, setAdminPosition] = useState(""); const [witness, setWitness] = useState("");
+  const [adminName, setAdminName] = useState(""); const [adminPosition, setAdminPosition] = useState("");
+  const [witness, setWitness] = useState(""); const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [method, setMethod] = useState<SignatureMethod>("typed"); const [png, setPng] = useState<string | null>(null); const [save, setSave] = useState(true);
   const [message, setMessage] = useState(""); const [reason, setReason] = useState("");
+  const combined = !!row.combined;
   // Approve and activate agency (2026-11-18) sends the agreement in the same step; a plain send is only the retry after Approve.
-  const override = !approve && row.stage !== "references_approved";
-  const received = row.referees.filter((r) => r.status === "received").length;
+  const override = !approve && !combined && row.stage !== "references_approved";
+  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || 2;
   useEffect(() => {
     let live = true;
     prepareOnboarding(agencyId, row.agent.id).then((p) => {
@@ -288,17 +324,25 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
     }).catch((e: Error) => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [agencyId, row.agent.id]);
-  const ready = !!prepared && /^\d{4}-\d{2}-\d{2}$/.test(commencement) && territory.trim().length > 0 && /^\d{1,3}(\.\d{1,2})?$/.test(commission.trim().replace("%", ""))
-    && adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng)) && (!override || reason.trim().length >= 5);
+  const termsReady = combined || (/^\d{4}-\d{2}-\d{2}$/.test(commencement) && territory.trim().length > 0 && /^\d{1,3}(\.\d{1,2})?$/.test(commission.trim().replace("%", "")));
+  const witnessReady = (!witness.trim() && !witnessPng) || (witness.trim().length >= 2 && !!witnessPng);
+  const ready = !!prepared && termsReady && adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng))
+    && (!override || reason.trim().length >= 5) && witnessReady;
   const send = async () => {
     if (!ready || busy) return;
-    setBusy("Preparing the agreement…"); setError("");
+    setBusy(combined ? "Issuing the agreement…" : "Preparing the agreement…"); setError("");
     try {
       const input: AgentAgreementSendInput = { agencyId, onboardingId: row.id, agentId: row.agent.id, commencementDate: commencement, territory: territory.trim(), commissionPercent: commission.trim().replace("%", ""),
-        adminName: adminName.trim(), adminPosition: adminPosition.trim(), adminWitnessName: witness.trim() || undefined, message: message.trim() || undefined, overrideReason: override ? reason.trim() : undefined,
+        adminName: adminName.trim(), adminPosition: adminPosition.trim(), adminWitness: witnessPng && witness.trim() ? { name: witness.trim(), png: witnessPng } : null,
+        message: message.trim() || undefined, overrideReason: override ? reason.trim() : undefined,
         adminSignature: method === "saved" ? { kind: "saved" } : method === "drawn" ? { kind: "drawn", png: png ?? "", save } : { kind: "typed", name: adminName.trim() } };
-      if (approve) {
+      if (approve || combined) {
         const r = await approveAgency(input);
+        if (r.combined) {
+          const issued = r.issued;
+          await onSent(r.warning ?? (issued?.issued ? `Approved: ${agencyName} is active. The agreement ${row.agent.name} signed is countersigned and issued${issued.emailed ? `; the completed copy was emailed to ${issued.to ?? row.agent.email}` : ""}${issued.invitations.length ? `; sign-in emails sent to ${issued.invitations.join(", ")}` : ""}.` : "Approved."));
+          return;
+        }
         await onSent(r.warning ?? (r.agreement?.sent ? `Approved: ${agencyName} is active. Agent agreement sent to ${row.agent.email} (${r.agreement.reference}); sign-in emails go out when it is signed.` : r.agreement?.warning ?? "Approved; the agreement was created but not emailed."));
         return;
       }
@@ -306,26 +350,32 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
       await onSent(r.sent ? `Agreement sent to ${row.agent.name} (${row.agent.email}), reference ${r.reference}${r.override ? " (sent before both references were back; the reason is on the record)" : ""}.` : r.warning ?? "The request was created but not emailed.");
     } catch (e) { setError(e instanceof Error ? e.message : "The agreement could not be sent."); } finally { setBusy(""); }
   };
-  return <Modal open title={`${approve ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement"}: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-2xl"
+  const approving = approve || combined;
+  return <Modal open title={`${approving ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement"}: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-2xl"
     footer={<div className="flex flex-wrap items-center justify-end gap-2">
       <Button variant="outline" disabled={!!busy} onClick={onClose}>Cancel</Button>
-      <Button disabled={!ready || !!busy} onClick={() => void send()} data-testid={approve ? "approve-agency-confirm" : "send-agreement-confirm"}>{busy || (approve ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement for signature")}</Button>
+      <Button disabled={!ready || !!busy} onClick={() => void send()} data-testid={approving ? "approve-agency-confirm" : "send-agreement-confirm"}>{busy || (approving ? (combined ? "Approve, countersign and issue" : "Approve and activate agency") : override ? "Send agreement anyway" : "Send agreement for signature")}</Button>
     </div>}>
     <div className="space-y-4" data-testid="send-agreement-dialog">
-      {approve ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). The agency admin, {row.agent.name} ({row.agent.email}), receives the Agent Agreement (P06) to sign, with your signature filled in. When it is signed, the agency admin and every agent already added get their sign-in email.</p> : null}
-      <p className="text-sm text-foreground-600">The agent receives the Agent Agreement (P06) with a personal signing link, prefilled with Items 1 to 4 and the signatory from the application form.</p>
+      {combined ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). {row.agent.name} ({row.agent.email}) already signed the Agent Agreement with the application, so nothing is sent for a second signature: your signature below countersigns it, the completed agreement is emailed to them, and the agency admin and every agent already added get their sign-in email.</p>
+        : approve ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). The agency admin, {row.agent.name} ({row.agent.email}), receives the Agent Agreement (P06) to sign, with your signature filled in. When it is signed, the agency admin and every agent already added get their sign-in email.</p> : null}
+      {approving && received < total ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="approve-referees-warning">
+        <i className="ri-error-warning-line mr-1" aria-hidden="true" />Only {received} of {total} referees have replied. You can still approve; replies that arrive later are kept on the business record.</p> : null}
+      {combined ? null : <p className="text-sm text-foreground-600">The agent receives the Agent Agreement (P06) with a personal signing link, prefilled with Items 1 to 4 and the signatory from the application form.</p>}
       {override ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-        <p className="font-medium">{row.stage === "references_received" ? "Both references are back but not approved yet." : `Only ${received} of ${row.referees.length || 2} references ${received === 1 ? "is" : "are"} back.`} Sending now is logged on the record with your reason.</p>
+        <p className="font-medium">{row.stage === "references_received" ? "Both references are back but not approved yet." : `Only ${received} of ${total} references ${received === 1 ? "is" : "are"} back.`} Sending now is logged on the record with your reason.</p>
         <Field label="Reason" required><TextInput value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} placeholder="e.g. Referee confirmed by phone on 17 Nov" data-testid="override-reason" /></Field>
       </div> : null}
       {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}
       {!prepared ? !error && <p className="text-sm">Loading…</p> : <>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Commencement date (Item 5)" required><TextInput type="date" value={commencement} onChange={(e) => setCommencement(e.target.value)} data-testid="onboarding-commencement" /></Field>
-          <Field label="Territory (Item 3)" required><TextInput value={territory} onChange={(e) => setTerritory(e.target.value)} placeholder="e.g. India, Nepal" maxLength={200} data-testid="onboarding-territory" /></Field>
-          <Field label="Commission % (Item 4)" required><TextInput inputMode="decimal" value={commission} onChange={(e) => setCommission(e.target.value)} placeholder="25" maxLength={6} data-testid="onboarding-commission" /></Field>
-        </div>
-        <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date; the expiry is recorded on the business when it is signed.</p>
+        {combined ? <p className="text-sm text-foreground-700" data-testid="approve-terms">Signed terms: commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}.</p> : <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Commencement date (Item 5)" required><TextInput type="date" value={commencement} onChange={(e) => setCommencement(e.target.value)} data-testid="onboarding-commencement" /></Field>
+            <Field label="Territory (Item 3)" required><TextInput value={territory} onChange={(e) => setTerritory(e.target.value)} placeholder="e.g. India, Nepal" maxLength={200} data-testid="onboarding-territory" /></Field>
+            <Field label="Commission % (Item 4)" required><TextInput inputMode="decimal" value={commission} onChange={(e) => setCommission(e.target.value)} placeholder="25" maxLength={6} data-testid="onboarding-commission" /></Field>
+          </div>
+          <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date; the expiry is recorded on the business when it is signed.</p>
+        </>}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="SLIT signatory name" required><TextInput value={adminName} onChange={(e) => setAdminName(e.target.value)} maxLength={150} /></Field>
           <Field label="SLIT signatory position" required><TextInput value={adminPosition} onChange={(e) => setAdminPosition(e.target.value)} maxLength={150} placeholder="e.g. Chief Executive Officer" /></Field>
@@ -340,10 +390,13 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} className="h-4 w-4" />Save as my signature for next time</label></div> : null}
           {method === "typed" ? <p className="min-h-14 rounded-md border border-background-300 bg-background-50 px-4 py-3 text-2xl italic text-[#0d1a4d]">{adminName || "Your name appears here as the signature"}</p> : null}
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="SLIT witness name" hint="Optional; printed as the witness on the agreement."><TextInput value={witness} onChange={(e) => setWitness(e.target.value)} maxLength={150} /></Field>
-          <Field label="Message to the agent" hint="Optional; goes in the email."><TextArea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} /></Field>
+        <div className="space-y-2 rounded-md border border-background-200 p-3" data-testid="slit-witness">
+          <Field label="SLIT witness name" hint="Optional. The witness types their name and draws their signature below (a typed signature is not accepted).">
+            <TextInput value={witness} onChange={(e) => setWitness(e.target.value)} maxLength={150} data-testid="slit-witness-name" /></Field>
+          {witness.trim() ? <div><p className="mb-1 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p><SignaturePad onChange={setWitnessPng} /></div> : null}
+          {!witnessReady ? <p className="text-xs text-amber-800">The witness must draw their signature, or clear the witness's name.</p> : null}
         </div>
+        {combined ? null : <Field label="Message to the agent" hint="Optional; goes in the email."><TextArea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} /></Field>}
       </>}
     </div>
   </Modal>;

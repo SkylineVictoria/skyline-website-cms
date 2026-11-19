@@ -47,9 +47,9 @@ export const REFEREE_SIGNER_ROLE = { key: "referee", label: "Referee", order: 1,
 export const signerRole = (doc: OnboardingDoc) => doc === "referee" ? REFEREE_SIGNER_ROLE : ONBOARDING_SIGNER_ROLE;
 /** The onboarding runs in stages (2026-11-17): the form, then a referee check per reference, then the agreement. */
 export const ONBOARDING_STAGES = ["application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent", "agreement_signed"] as const;
-export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "legacy" | "cancelled" | "expired" | "declined" | "activated" | "correction_requested" | "resubmitted";
+export type OnboardingStage = typeof ONBOARDING_STAGES[number] | "draft" | "legacy" | "cancelled" | "expired" | "declined" | "activated" | "correction_requested" | "resubmitted";
 export const STAGE_LABEL: Record<OnboardingStage, string> = {
-  legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
+  draft: "Not sent yet (pre-fill)", legacy: "Sent as one document", application_sent: "Application form sent", application_signed: "Application form signed", references_pending: "Waiting for referees",
   references_received: "References received: review", references_approved: "References approved", agreement_sent: "Agreement sent", agreement_signed: "Agreement signed",
   cancelled: "Cancelled", expired: "Expired", declined: "Declined", activated: "Business activated",
   correction_requested: "Correction requested", resubmitted: "Resubmitted",
@@ -83,13 +83,15 @@ export const AGENT_ONBOARDING_FIELDS: Record<string, OnboardingField> = {
   admin_signature: admin("agreement", "SLIT signature", { type: "signature" }),
   admin_signed_date: auto("agreement", "SLIT signed date", { format: "date" }),
   admin_witness_name: admin("agreement", "SLIT witness name"),
-  admin_witness_signature: admin("agreement", "SLIT witness signature"),
+  // Witness signatures are drawn, never typed (2026-11-20): a PNG printed as a picture.
+  admin_witness_signature: admin("agreement", "SLIT witness signature (drawn)", { type: "signature" }),
   agent_signatory_name: agent("agreement", "Agent signatory name", { required: true }),
   agent_signatory_position: agent("agreement", "Agent signatory position", { required: true }),
   agent_signature: agent("agreement", "Agent signature", { type: "signature", source: "signing", required: true }),
   agent_signed_date: agent("agreement", "Agent signed date", { type: "date", source: "signing" }),
   agent_witness_name: agent("agreement", "Agent witness name"),
-  agent_witness_signature: agent("agreement", "Agent witness: type full name"),
+  // Never a field the signer types into: staff draw it before sending, or the agency admin's witness draws it on the signing page (stamped by document-signing).
+  agent_witness_signature: agent("agreement", "Agent witness signature (drawn)"),
   // ------------------------------------------------------------- Agent Application Form (F04), page 1: the agency
   agent_agency_name: autoOrAgent("form", "Agency name", { required: true }),
   agent_legal_entity: autoOrAgent("form", "Legal entity"),
@@ -345,7 +347,10 @@ export function resolveFields(fields: PlacedField[], values: Record<string, stri
     const key = answerKey(f.key);
     // A field the registry gives to the signer is theirs even when an older installed template stored it as the sender's (registration number).
     if (f.role !== "sender" || (spec && spec.role !== "sender")) {
-      const prefill = spec?.type === "text" && !spec.noPrefill ? printedValue(f.key, values[key] ?? "") : "";
+      // A Yes / No tick box comes ticked when we hold the question's answer (every question defaults to No, 2026-11-20: yesNoDefaults).
+      const group = spec?.type === "checkbox" ? groupOf(f.key) : null;
+      const prefill = group ? ((values[group.key] ?? "").trim().toUpperCase() === group.answer ? "true" : "")
+        : spec?.type === "text" && !spec.noPrefill ? printedValue(f.key, values[key] ?? "") : "";
       recipient.push({ ...f, ...(spec ? { role: spec.role === "sender" ? f.role : spec.role, label: spec.label, required: spec.required === true } : {}), value: prefill.slice(0, 500) });
       continue;
     }
@@ -391,3 +396,21 @@ export function correctionFlagged(key: string, flags: Record<string, unknown> | 
   return /^office_/.test(key) && Object.prototype.hasOwnProperty.call(flags, "office_address");
 }
 export const CORRECTION_ALWAYS_EDITABLE = ["declarant_name", "declarant_role"] as const;
+
+/** The agent's witness on the agreement: a typed name and a DRAWN signature (never a field the signer types a signature into). */
+export const WITNESS_NAME_KEY = "agent_witness_name", WITNESS_SIGNATURE_KEY = "agent_witness_signature";
+/** The agreement fields the agency admin's one signature fills on the combined request (F04 + P06): their values come from the declaration. */
+export const AGREEMENT_FROM_DECLARATION: Readonly<Record<string, "declarant_name" | "declarant_role">> = { agent_signatory_name: "declarant_name", agent_signatory_position: "declarant_role" };
+
+/**
+ * Every Yes / No question defaults to No (owner brief 2026-11-20), whatever the template: a question answered by a pair of tick boxes
+ * ("<question>:YES" / "<question>:NO") with no answer held gets "NO". Works for any template field pair, not a fixed list.
+ */
+export function yesNoDefaults<T extends Record<string, string>>(fields: ReadonlyArray<{ key?: string | null }>, values: T): T {
+  const options = new Map<string, Set<string>>();
+  for (const f of fields) { const g = groupOf(f.key); if (g) options.set(g.key, (options.get(g.key) ?? new Set<string>()).add(g.answer.toUpperCase())); }
+  for (const [question, answers] of options) {
+    if (answers.has("YES") && answers.has("NO") && !String(values[question] ?? "").trim()) (values as Record<string, string>)[question] = "NO";
+  }
+  return values;
+}

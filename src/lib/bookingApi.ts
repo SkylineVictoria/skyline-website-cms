@@ -85,3 +85,10 @@ export const bookingRooms = () => call<{ canEdit: boolean; rooms: BookingRoom[] 
 export const roomAvailability = (roomId: string) => call<RoomAvailability>("booking_room_availability", { p_action: "get", p_data: { roomId } });
 export const saveRoomAvailability = (roomId: string, availability: AvailabilityRow[], timeOff: TimeOffRow[]) =>
   call<RoomAvailability>("booking_room_availability", { p_action: "save", p_data: { roomId, availability, timeOff } });
+
+/** Trainers (active staff) in the same tables: their own Bookings hours when they have a booking page. */
+export interface BookingTrainer { id: string; name: string; email: string | null; ownPage: boolean; openDays: number }
+export const bookingTrainers = () => call<{ canEdit: boolean; trainers: BookingTrainer[] }>("booking_trainer_availability", { p_action: "list", p_data: {} });
+export const trainerAvailability = (staffId: string) => call<RoomAvailability & { ownPage: boolean }>("booking_trainer_availability", { p_action: "get", p_data: { staffId } });
+export const saveTrainerAvailability = (staffId: string, availability: AvailabilityRow[], timeOff: TimeOffRow[]) =>
+  call<RoomAvailability & { ownPage: boolean }>("booking_trainer_availability", { p_action: "save", p_data: { staffId, availability, timeOff } });

@@ -2,17 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
-  bookingDirectory, bookingMe, bookingRooms, cancelBooking, deleteMeetingType, downloadIcs, formatWhen, rescheduleBooking, saveBookingHost, saveMeetingType, suggestHandle, timezones, viewerTimezone,
-  type AvailabilityRow, type BookingMe, type BookingRoom, type BookingRow, type DirectoryHost, type MeetingType, type TimeOffRow,
+  bookingDirectory, bookingMe, bookingRooms, bookingTrainers, roomAvailability, saveRoomAvailability, saveTrainerAvailability, trainerAvailability, cancelBooking, deleteMeetingType, downloadIcs, formatWhen, rescheduleBooking, saveBookingHost, saveMeetingType, suggestHandle, timezones, viewerTimezone,
+  type AvailabilityRow, type BookingMe, type BookingRoom, type BookingTrainer, type BookingRow, type DirectoryHost, type MeetingType, type TimeOffRow,
 } from "@/lib/bookingApi";
 import SlotPicker from "./SlotPicker";
-import RoomAvailability from "./RoomAvailability";
+import ResourceAvailability, { type ResourceKind } from "./ResourceAvailability";
 import { HoursCard, TimeOffCard } from "./AvailabilityCards";
 
 type Tab = "bookings" | "types" | "availability" | "people";
 const KIND_LABEL: Record<string, string> = { staff: "Staff", agent: "Agent", student: "Student", other: "" };
 const NEW_TYPE: MeetingType = { name: "", description: "", duration: 30, locationKind: "phone", locationDetail: "", locationId: null, buffer: 0, minNoticeHours: 4, maxDaysAhead: 60, requiresLogin: false, active: true };
 const DEFAULT_HOURS: AvailabilityRow[] = [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: "09:00", end: "17:00" }));
+const ROOM: ResourceKind = { noun: "room", load: roomAvailability, save: saveRoomAvailability, empty: "No rooms yet. Add rooms in LMS › Timetable › Settings › Locations & rooms." };
+const TRAINER: ResourceKind = { noun: "trainer", load: trainerAvailability, save: saveTrainerAvailability, empty: "No active staff yet." };
+type Who = "me" | "rooms" | "trainers";
 const ALERT = "rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800";
 const NOTICE = "rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800";
 
@@ -28,13 +31,18 @@ export default function BookingsHub() {
   const [tab, setTab] = useState<Tab>(params.get("tab") === "availability" ? "availability" : "bookings");
   // Rooms in the same availability tables: only Admins and RTO Managers get the list (others: null, no Rooms switch).
   const [rooms, setRooms] = useState<{ canEdit: boolean; rooms: BookingRoom[] } | null>(null);
+  const [trainers, setTrainers] = useState<{ canEdit: boolean; trainers: BookingTrainer[] } | null>(null);
   const load = useCallback(async () => { try { setMe(await bookingMe()); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Bookings could not be loaded."); } }, []);
-  useEffect(() => { void load(); bookingRooms().then(setRooms).catch(() => setRooms(null)); }, [load]);
+  useEffect(() => { void load(); bookingRooms().then(setRooms).catch(() => setRooms(null)); bookingTrainers().then(setTrainers).catch(() => setTrainers(null)); }, [load]);
   const done = (next: BookingMe, message: string) => { setMe(next); setNotice(message); setError(""); };
   const fail = useCallback((e: unknown) => { setNotice(""); setError(e instanceof Error ? e.message : "That did not work. Please try again."); }, []);
-  const roomSaved = useCallback((message: string) => { setNotice(message); setError(""); void bookingRooms().then(setRooms).catch(() => undefined); }, []);
-  const who = rooms && params.get("who") === "rooms" ? "rooms" : "me";
-  const setWho = (w: "me" | "rooms") => { setNotice(""); setError(""); setParams(w === "rooms" ? { tab: "availability", who: "rooms" } : { tab: "availability" }, { replace: true }); };
+  const roomSaved = useCallback((message: string) => { setNotice(message); setError(""); void bookingRooms().then(setRooms).catch(() => undefined); void bookingTrainers().then(setTrainers).catch(() => undefined); }, []);
+  const tabParam = params.get("tab");
+  useEffect(() => { if (tabParam === "availability") setTab("availability"); }, [tabParam, params]);
+  const whoParam = params.get("who");
+  const who: Who = rooms && whoParam === "rooms" ? "rooms" : trainers && whoParam === "trainers" ? "trainers" : "me";
+  const setWho = (w: Who) => { setNotice(""); setError(""); setParams(w === "me" ? { tab: "availability" } : { tab: "availability", who: w }, { replace: true }); };
+  const whoOptions: Who[] = ["me", ...(rooms ? ["rooms" as Who] : []), ...(trainers ? ["trainers" as Who] : [])];
 
   if (!me) return error ? <p role="alert" className={ALERT}>{error}</p> : <p role="status" className="text-sm text-foreground-600">Loading bookings…</p>;
   const canHost = me.identity.kind !== "other";
@@ -42,7 +50,7 @@ export default function BookingsHub() {
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "bookings", label: "My bookings" },
     ...(canHost ? [{ id: "types" as Tab, label: "Meeting types" }] : []),
-    ...(canHost || rooms ? [{ id: "availability" as Tab, label: "Availability" }] : []),
+    ...(canHost || rooms || trainers ? [{ id: "availability" as Tab, label: "Availability" }] : []),
     { id: "people", label: "Book someone" },
   ];
 
@@ -77,18 +85,21 @@ export default function BookingsHub() {
       {tab === "bookings" ? <BookingsTab me={me} onChanged={(message) => { setNotice(message); void load(); }} onError={fail} /> : null}
       {tab === "types" ? (me.host ? <TypesTab me={me} onDone={done} onError={fail} /> : <p className="text-sm text-foreground-600">Set up your booking page first.</p>) : null}
       {tab === "availability" ? <>
-        {rooms ? (
+        {whoOptions.length > 1 ? (
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <span className="text-sm font-semibold text-foreground-900">Whose availability</span>
             <div role="group" aria-label="Whose availability" className="inline-flex overflow-hidden rounded-md border border-background-300">
-              {(["me", "rooms"] as const).map((w) => (
+              {whoOptions.map((w) => (
                 <button key={w} type="button" aria-pressed={who === w} onClick={() => setWho(w)}
-                  className={`px-4 py-1.5 text-sm font-medium ${who === w ? "bg-primary-500 text-background-50" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{w === "me" ? "Me" : "Rooms"}</button>
+                  className={`px-4 py-1.5 text-sm font-medium ${who === w ? "bg-primary-500 text-background-50" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{w === "me" ? "Me" : w === "rooms" ? "Rooms" : "Trainers"}</button>
               ))}
             </div>
           </div>
         ) : null}
-        {who === "rooms" && rooms ? <RoomAvailability rooms={rooms.rooms} canEdit={rooms.canEdit} initialRoom={params.get("room")} onSaved={roomSaved} onError={fail} />
+        {who === "rooms" && rooms ? <ResourceAvailability key="rooms" kind={ROOM} canEdit={rooms.canEdit} initial={params.get("room")} onSaved={roomSaved} onError={fail}
+            options={rooms.rooms.map((r) => ({ id: r.id, name: r.name, group: r.location, detail: [r.capacity ? `${r.capacity} seats` : "", r.openDays ? "" : "no hours set"].filter(Boolean).join(" · ") }))} />
+          : who === "trainers" && trainers ? <ResourceAvailability key="trainers" kind={TRAINER} canEdit={trainers.canEdit} initial={params.get("trainer")} onSaved={roomSaved} onError={fail}
+            options={trainers.trainers.map((t) => ({ id: t.id, name: t.name, group: "Trainers", detail: t.openDays ? "" : "no hours set" }))} />
           : me.host ? <AvailabilityTab me={me} onDone={done} onError={fail} />
           : <p className="text-sm text-foreground-600">{canHost ? "Set up your booking page first." : "You have no booking page."}</p>}
       </> : null}

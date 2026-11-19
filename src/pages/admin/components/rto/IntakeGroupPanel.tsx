@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { rto, type StaffOption } from "@/pages/admin/lib/rto";
-import { intakeGroup, syncMicrosoftGroup, type GroupDetail, type GroupMember } from "@/pages/admin/lib/intakeGroups";
+import { diagnoseMicrosoft, intakeGroup, syncMicrosoftGroup, type GroupDetail, type GroupMember } from "@/pages/admin/lib/intakeGroups";
 
 const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 const key = (m: GroupMember) => `${m.kind}:${m.id}`;
@@ -22,6 +22,7 @@ export default function IntakeGroupPanel({ intakeId }: { intakeId: string }) {
   const [body, setBody] = useState("");
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [link, setLink] = useState("");
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
 
   const show = (d: GroupDetail) => { setG(d); setLink(d.whatsappLink ?? ""); setError(""); };
   const load = useCallback(() => intakeGroup<GroupDetail>("get", { intakeId }).then(show).catch((e) => setError(e instanceof Error ? e.message : "The group did not load.")), [intakeId]);
@@ -41,6 +42,10 @@ export default function IntakeGroupPanel({ intakeId }: { intakeId: string }) {
     finally { setBusy(false); }
   };
 
+  const diagnose = async () => {
+    setBusy(true);
+    try { setDiag(await diagnoseMicrosoft()); } catch (e) { push(e instanceof Error ? e.message : "The check failed.", "error"); } finally { setBusy(false); }
+  };
   if (error) return <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>;
   if (!g) return <p role="status" className="text-sm text-foreground-600">Loading the group…</p>;
 
@@ -66,7 +71,10 @@ export default function IntakeGroupPanel({ intakeId }: { intakeId: string }) {
           <p className="mt-1 text-xl font-bold">{g.m365Members} of {g.members.length}</p>
           <p className="truncate text-xs text-foreground-600">{g.m365Address ?? (g.m365Status === "not_configured" ? "Microsoft 365 not set up yet" : g.m365Status === "failed" ? "Could not be created" : `${g.mailNickname}@… (being created)`)}</p>
           {g.m365Error ? <p className="mt-1 text-xs text-red-700">{g.m365Error}</p> : null}
-          {g.canManage && !closed ? <Button size="sm" variant="outline" className="mt-2" disabled={busy} onClick={() => void sync()}>Sync now</Button> : null}
+          {g.canManage ? <div className="mt-2 flex flex-wrap gap-2">
+            {!closed ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void sync()}>Sync now</Button> : null}
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void diagnose()}>Diagnose</Button>
+          </div> : null}
         </div>
         <div className={card}>
           <p className="text-sm font-semibold"><i className="ri-whatsapp-line" aria-hidden="true" /> WhatsApp group</p>
@@ -80,6 +88,11 @@ export default function IntakeGroupPanel({ intakeId }: { intakeId: string }) {
         </div>
       </div>
 
+      {diag ? <section className={card}>
+        <div className="flex items-center justify-between gap-2"><h3 className="font-semibold">Microsoft 365 check (read-only)</h3>
+          <button type="button" aria-label="Close the check" onClick={() => setDiag(null)} className="rounded-md p-1 text-foreground-500 hover:bg-background-200"><i className="ri-close-line" aria-hidden="true" /></button></div>
+        <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-background-100 p-3 text-xs">{JSON.stringify(diag, null, 2)}</pre>
+      </section> : null}
       <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
         <div className="space-y-4">
           <section className={card}>

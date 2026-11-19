@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleNumber } from "@/lib/businessRules";
 
 /** TKT-01 support tickets. All reads and writes go through the support_* database functions. */
 export type TicketCategory = "enrolment_documents" | "fees_payments" | "course_training" | "other";
@@ -57,7 +58,7 @@ export const replyTicket = (id: string, body: string, internal: boolean, attachm
 export const updateTicket = (id: string, change: { status?: TicketStatus; priority?: TicketPriority; assign?: "me" | "none" }) =>
   rpc<TicketRow>("support_ticket_update", { p_ticket: id, p_status: change.status ?? null, p_priority: change.priority ?? null, p_assign: change.assign ?? null }, "The ticket could not be updated.");
 
-const MAX_BYTES = 10 * 1024 * 1024;
+const maxMib = () => ruleNumber("support.ticket_attachment_limit_mib", 10);
 /** Uploads to the private support-attachments bucket under the caller's own folder. */
 export async function uploadTicketFiles(files: File[]): Promise<TicketAttachment[]> {
   if (files.length > 5) throw new Error("Attach at most 5 files.");
@@ -65,7 +66,7 @@ export async function uploadTicketFiles(files: File[]): Promise<TicketAttachment
   if (!auth.user) throw new Error("Sign in again to attach files.");
   const out: TicketAttachment[] = [];
   for (const file of files) {
-    if (file.size > MAX_BYTES) throw new Error(`${file.name} is larger than 10 MB.`);
+    if (file.size > maxMib() * 1024 * 1024) throw new Error(`${file.name} is larger than ${maxMib()} MB.`);
     const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120) || "file";
     const path = `${auth.user.id}/${crypto.randomUUID()}/${safe}`;
     const { error } = await supabase.storage.from("support-attachments").upload(path, file, { contentType: file.type || undefined, upsert: false });

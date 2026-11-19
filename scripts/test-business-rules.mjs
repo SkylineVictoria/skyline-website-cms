@@ -58,6 +58,19 @@ try {
   if (liveBaseline !== 26214400) throw new Error("Release changed the live upload limit");
   const snapshot = (await db.query("select count(*)::int as count from public.business_rule_audit_logs where action = 'publish' and after_data->'value' = '26214400'")).rows[0];
   if (snapshot.count !== 1) throw new Error("Release did not record upload publication");
+  const catalog = await readFile(new URL("../supabase/migrations/20261120224000_business_rules_source_catalog.sql", import.meta.url), "utf8");
+  const importCatalog = catalog.replace(/^begin;\s*$/m, "").replace(/\ncommit;\s*$/, "");
+  await db.exec(importCatalog);
+  await db.exec(importCatalog);
+  const catalogCounts = (await db.query(`select
+    count(*) filter (where v.state = 'reference' and r.registration->>'handler' = 'inventory_only')::int as reference_count,
+    count(*) filter (where v.state = 'draft')::int as drafts,
+    count(*) filter (where v.state = 'published')::int as published
+    from public.business_rule_versions v join public.business_rules r on r.id = v.rule_id`)).rows[0];
+  if (catalogCounts.reference_count !== 103 || catalogCounts.drafts !== 0 || catalogCounts.published !== 1) {
+    throw new Error("The source catalog must add only unique reference records");
+  }
+  console.log("PASS source catalog adds 91 references, preserves the live rule and can be re-imported safely");
   await db.exec("rollback");
   console.log("PASS release classifies inventory as references, publishes the existing upload limit and leaves no drafts");
 

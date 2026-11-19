@@ -1308,7 +1308,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.equal(logic.F04_STEPS[logic.REVIEW_STEP].id, "review");
   const page = read("src/components/signing/F04Wizard.tsx");
   assert.ok(["stickyFooter", "e.key !== \"Enter\"", "AUTOSAVE_PAUSE", "Saved ✓", "I agree to all of the above", "indeterminate", "We've emailed your 2 referees", "SLIT reviews", "You'll receive the agent agreement",
-    "Download signed PDF", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
+    "f04-download", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
   assert.ok(read("src/index.css").replace(/\r\n/g, "\n").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"),"the success tick respects reduced motion");
 });
 
@@ -1418,6 +1418,34 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.ok(dialog.includes("mode=\"admin-review\"") && dialog.includes("refereePanel"));
   assert.ok(["resend-link", "Resend to referee", "review-application", "correction-history", "approveAgency"].every((s) => panel.includes(s)) && !panel.includes("SendApplicationDialog") && !panel.includes("send-agreement-anyway"));
   assert.ok(read("src/pages/admin/components/signing/SubjectSigningPanel.tsx").includes("withoutF04("));
+});
+
+const softBreakMod = await load.import<typeof import("../src/components/signing/softBreak.ts")>("../src/components/signing/softBreak.ts");
+test("review application dialog (2026-11-20): opens on Review and decide, actions on every step, staff subtitle, one reference per row, ACN, agreement card, referee status", () => {
+  const wizard = read("src/components/signing/F04Wizard.tsx").replace(/\r\n/g, "\n"), dialog = read("src/pages/admin/components/F04ReviewDialog.tsx").replace(/\r\n/g, "\n");
+  // 1. Staff start on the summary; the tabs and the Edit links still move between steps.
+  assert.ok(wizard.includes(`const firstStep = mode === "admin-review" ? REVIEW_STEP :`), "opens on Review and decide");
+  assert.ok(wizard.includes(`onSelect={(n) => goTo(order[n])}`) && wizard.includes("data-testid={`f04-review-edit-${STEPS[index].id}`}") && wizard.includes(`data-testid="f04-review-back-summary"`), "tabs, Edit links, back to the summary");
+  // 2. The three actions sit in the footer on every step (no "last step only" branch); Save only with unsaved edits.
+  const buttons = wizard.slice(wizard.indexOf("const adminButtons = admin && review ?"), wizard.indexOf("// The pre-send step: Save draft"));
+  assert.ok(buttons.includes("f04-review-send-back") && buttons.includes("f04-review-approve") && !buttons.includes("last ?") && !buttons.includes("f04-next"), "Send back and Approve on every step");
+  assert.ok(wizard.includes("disabled={!dirty || !!reviewBusy}") && wizard.includes("footerStart={admin ? adminSave :"), "Save changes in the footer, enabled only with unsaved edits");
+  // 3. The staff subtitle.
+  assert.ok(wizard.includes("· Review the application, then approve or send it back.</> :"), "staff subtitle");
+  // 4. One reference per row, the email and phone on their own lines, wrapped at sensible points.
+  assert.ok(wizard.includes("section(F04_STEP.references, [[\"Reference 1\", ref(1)], [\"Reference 2\", ref(2)]], true)") && wizard.includes("f04-review-ref-${n}-email"), "one reference per row");
+  assert.ok(wizard.includes("softBreak(a.contact_email)") && wizard.includes("softBreak(a.agent_website)") && !/break-all/.test(wizard), "emails and web addresses never split mid-word");
+  const pieces = (node: unknown) => (Array.isArray(node) ? node : [node]).map((n) => (n as { props?: { children?: unknown[] } })?.props?.children ?? n);
+  const broken = pieces(softBreakMod.softBreak("ravi.kumar@globaledu.com.au")) as unknown[][];
+  assert.deepEqual(broken.map((c) => [c[0], c[1] !== null]), [["ravi", false], [".", true], ["kumar", false], ["@", true], ["globaledu", false], [".", true], ["com", false], [".", true], ["au", false]], "breaks only after . and @");
+  assert.equal(softBreakMod.softBreak(""), "");
+  // 5. ACN on the Business card, the agreement card with pictures, the referee status with Resend.
+  assert.ok(wizard.includes(`["ACN", state.acn ? printAcn(state.acn) : admin ? "—" : ""]`) && dialog.includes("agent_acn: review.answers.agent_acn || review.acn ||"), "ACN from the answers or the business");
+  for (const id of ["f04-review-agreement", "f04-review-agreement-signature", "f04-review-agreement-agency-witness", "f04-review-agreement-slit-witness", "Signed {formatSignedAt(sig.signedAt)}"]) assert.ok(wizard.includes(id), id);
+  assert.ok(dialog.includes("data:image/png;base64,") && dialog.includes("agencySignature:") && dialog.includes("slitWitness:"), "witness pictures stored as bare base64 become images");
+  assert.ok(dialog.includes("f04-referee-status-") && dialog.includes("\"Sent, not completed\"") && dialog.includes("\"Not sent yet\"") && dialog.includes("resendReferee(ref)"), "referee status with Resend");
+  const sql = read("supabase/migrations/20261120153517_onboarding_review_summary.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("'acn', a.acn, 'acnSource', a.acn_source") && sql.includes("'image', r.signature_image, 'signedAt', r.signed_at") && sql.includes("public.agency_onboarding_review_get(uuid)"), "review data: ACN and the agency admin's signature");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */
@@ -2341,6 +2369,24 @@ test("businesses (2026-11-20): an Active business offers only Active / Inactive 
   for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
   for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
   for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
+  // 2026-11-20 follow-up: the admin role is read whatever its case; every other row gets a reason (the greyed-out icon's tooltip).
+  assert.deepEqual(["Admin", "admin", " ADMIN ", "Editor", "", null].map((r) => del.isSlitAdmin(r as string)), [true, true, true, false, false, false]);
+  assert.equal(del.deleteBlockReason(row(), true), null);
+  assert.match(del.deleteBlockReason(row(), false)!, /Only a SLIT administrator/);
+  assert.match(del.deleteBlockReason(row({ agencyCode: "SLIT-DIRECT", status: "Active" }), true)!, /never be deleted/);
+  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Already onboarded: make it Inactive/);
+  assert.match(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true)!, /stays Inactive/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Not sent yet/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /^Awaiting referees: the application is signed/);
+  assert.match(del.deleteBlockReason(row({ students: 2 }), true)!, /students or applications/);
+  const listPage = read("src/pages/admin/BusinessesPage.tsx");
+  assert.ok(listPage.includes("const isAdmin = isSlitAdmin(user?.role);") && listPage.includes("title={reason}") && listPage.includes("border-red-300"), "red Delete where possible, a tooltip elsewhere");
+  // The tabs: Onboarding is a filter the list accepts and counts; every business is in exactly one tab, so they add up to All.
+  const listSql = read("supabase/migrations/20261120143517_business_list_onboarding_tab.sql").replace(/\r\n/g, "\n");
+  assert.ok(listSql.includes("not in ('', 'Active', 'Inactive', 'Onboarding')"), "Onboarding accepted as a filter");
+  assert.ok(listSql.includes("'onboarding', (select count(*) from searched where status = 'Onboarding' and not pending_review), 'pending', (select count(*) from searched where pending_review)"));
+  assert.ok(listSql.includes("'inactive', (select count(*) from searched where status = 'Inactive' and not pending_review)"));
+  assert.ok(listPage.includes(`: value === "Onboarding" ? counts?.onboarding`), "the Onboarding tab shows its count");
   // The typed confirmation: the name (case and spaces ignored) or the ABN.
   assert.equal(del.deleteConfirmMatches("  purva  tech pty ltd ", "PURVA TECH PTY LTD", "86603584676"), true);
   assert.equal(del.deleteConfirmMatches("86 603 584 676", "PURVA TECH PTY LTD", "86603584676"), true);
@@ -2405,6 +2451,43 @@ test("completion certificate (2026-11-20): never emailed, downloaded or shown to
     consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
   const offerText = (await pdfText(signedOffer)).map((t) => t.text).join(" ");
   assert.ok(offerText.includes("Asha Patel") && !/203\.0\.113\.5|Mozilla|IP address|Browser|abab/.test(offerText), "no IP address, browser or hash on the staff offer's signed copy");
+});
+
+const signedTime = await load.import<typeof import("../src/lib/signedTime.ts")>("../src/lib/signedTime.ts");
+test("signing done page (2026-11-20): Melbourne time with its zone, a new download link per click, steps inside the card, no stale-link note, no certificate", async () => {
+  // 4. The signed time: SLIT's time zone, named.
+  assert.equal(signedTime.formatSignedAt("2026-11-19T05:42:00Z"), "19 Nov 2026, 4:42 pm AEDT");
+  assert.equal(signedTime.formatSignedAt("2026-07-01T02:05:00Z"), "1 Jul 2026, 12:05 pm AEST", "winter: standard time");
+  assert.equal(signedTime.formatSignedAt("2026-11-19T13:00:00Z"), "20 Nov 2026, 12:00 am AEDT", "the Melbourne date, not the UTC one");
+  assert.deepEqual([signedTime.formatSignedAt(null), signedTime.formatSignedAt("not a date")], ["", ""]);
+  // 3. "download": the same document the page shows, a new link every call; only the signed PDF once signed, never the certificate.
+  const bytes = new Uint8Array([1, 2, 3]); const hash = await signingCore.sha256Hex(bytes);
+  let n = 0; const asked: string[] = [];
+  const record = { id: "r", title: "Agent referee check", state: "signed", signed_path: "r/signed.pdf", signed_hash: hash, original_path: "r/original.pdf", original_hash: hash,
+    certificate_path: "r/certificate.pdf", certificate_hash: hash, recipient: { id: "x", state: "signed" }, fields: [] };
+  const ports = { isServiceCaller: false, later: () => undefined, service: async (name: string) => (name === "open" ? record : true),
+    storage: { download: async () => bytes, upload: async () => true, remove: async () => undefined, signedUrl: async (p: string, _s: number, name?: string) => { asked.push(`${p}|${name}`); return `https://x.example/${p}?t=${++n}`; } },
+    mail: { provider: null, config: { from: null, adminTo: [], siteUrl: "", problems: [] } } } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const download = () => signingCore.handleSigning({ body: { action: "download", token: "a".repeat(64) }, upload: null, ip: null, userAgent: null }, ports) as Promise<{ url: string }>;
+  const first = await download(), second = await download();
+  assert.ok(first.url !== second.url && first.url.includes("r/signed.pdf"), "a fresh link per click");
+  assert.ok(asked.length === 2 && asked.every((a) => a.startsWith("r/signed.pdf|") && a.endsWith("-signed.pdf")), `the signed PDF, named as signed: ${asked.join(", ")}`);
+  assert.ok(!asked.some((a) => a.includes("certificate")), "never the completion certificate");
+  await assert.rejects(signingCore.handleSigning({ body: { action: "download", token: "../x" }, upload: null, ip: null, userAgent: null }, ports), (e: Error & { status?: number }) => e.status === 403, "a bad link is refused");
+  assert.equal(await read("src/lib/signingApi.ts").includes(`signingAction<{ url?: string }>({ action: "download", token })`), true);
+  // 1, 2 and 5. One shared done component: steps stacked on a phone and in a row from md up, the Download button in the same section, no footer bar.
+  const done = read("src/components/signing/SigningDone.tsx"), wizard = read("src/components/signing/F04Wizard.tsx"), page = read("src/pages/SigningPage.tsx");
+  assert.ok(done.includes("grid w-full max-w-sm grid-cols-1") && done.includes("md:grid-flow-col") && done.includes("break-words"), "steps wrap and stack");
+  assert.match(done, /<section className="mt-5 flex w-full flex-col items-center gap-5"[^>]*>[\s\S]*What happens next[\s\S]*<DownloadSigned[\s\S]*<\/section>/, "the download sits in the steps' section, centred");
+  assert.ok(done.includes("The download could not start.") && done.includes("Try again"), "an inline error with a retry");
+  assert.ok(wizard.includes("stepper={null} footerStart={null} footerEnd={null}>") && wizard.includes("<SigningDone "), "F04: no footer divider, the shared layout");
+  assert.ok(read("src/components/shared/wizard/WizardShell.tsx").includes("footerStart == null && footerEnd == null ? null"), "no empty footer bar");
+  assert.equal((page.match(/<SigningDone /g) ?? []).length, 3, "offer letter, completed document (referee, agreement, HR) and signed-by-me use it");
+  for (const [file, text] of [["SigningDone", done], ["F04Wizard", wizard], ["SigningPage", page]] as const) {
+    assert.ok(!/few minutes; reload|reload this page for/i.test(text), `${file}: no stale-link note`);
+    assert.ok(!/certificate/i.test(text), `${file}: no certificate anywhere`);
+  }
+  assert.ok(!page.includes("href={view.url} download") && !wizard.includes("href={view.url} download"), "no stored link offered for download");
 });
 
 test("offer PDF: signing keeps every original page and adds one signature page on the shared styling", async () => {

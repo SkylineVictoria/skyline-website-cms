@@ -19,7 +19,7 @@ import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/po
 import { activateBusinessOnboarding } from "@/lib/signingApi";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
-import { businessDeleteCheck } from "@/pages/admin/lib/businessData";
+import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData";
 
 type Tab = "details" | "agents" | "students" | "applications";
 const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
@@ -30,7 +30,7 @@ export default function BusinessDetailPage() {
   const navigate = useNavigate();
   // Delete business (2026-11-20): offered only when the database says this administrator may delete it now (Application sent).
   const { user } = useAuth();
-  const isAdmin = user?.role === "Admin";
+  const isAdmin = isSlitAdmin(user?.role);
   const [deletable, setDeletable] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [params, setParams] = useSearchParams();

@@ -6,9 +6,26 @@
 /** The system businesses (SLIT's own students, the admin preview agency): never deleted. */
 export const SYSTEM_BUSINESS_CODES = ["SLIT-DIRECT", "TEST-VIEW"] as const;
 
+/** The CMS role "Admin" (SLIT administrator), however the session spells it. */
+export const isSlitAdmin = (role: string | null | undefined) => String(role ?? "").trim().toLowerCase() === "admin";
+
+type DeleteRow = { status: string; onboardingLabel?: string | null; agencyCode?: string | null; students?: number | null; applications?: number | null };
+
+/** Why Delete business is not available for this row (the tooltip of the greyed-out icon), or null when it is. */
+export function deleteBlockReason(row: DeleteRow, isAdmin: boolean): string | null {
+  if (!isAdmin) return "Only a SLIT administrator can delete a business.";
+  if ((SYSTEM_BUSINESS_CODES as readonly string[]).includes(String(row.agencyCode ?? "").toUpperCase())) return "SLIT's own business: it can never be deleted.";
+  if (Number(row.students ?? 0) > 0 || Number(row.applications ?? 0) > 0) return "Has students or applications: make it Inactive instead.";
+  if (row.status === "Active") return "Already onboarded: make it Inactive instead.";
+  if (row.status === "Inactive") return "Only a business at Application sent can be deleted; this one stays Inactive.";
+  if (row.status === "Onboarding" && row.onboardingLabel === "Application sent") return null;
+  if (row.status === "Onboarding" && (!row.onboardingLabel || row.onboardingLabel === "Not sent yet")) return "Not sent yet: only a business at Application sent can be deleted.";
+  if (row.status === "Onboarding") return `${row.onboardingLabel}: the application is signed, so it cannot be deleted. Make it Inactive instead.`;
+  return "Only a business at Application sent can be deleted.";
+}
+
 /** Delete business is offered for this row: a SLIT administrator, the application at "Application sent", not a system business. */
-export const canOfferBusinessDelete = (row: { status: string; onboardingLabel?: string | null; agencyCode?: string | null }, isAdmin: boolean) =>
-  isAdmin && row.status === "Onboarding" && row.onboardingLabel === "Application sent" && !(SYSTEM_BUSINESS_CODES as readonly string[]).includes(String(row.agencyCode ?? "").toUpperCase());
+export const canOfferBusinessDelete = (row: DeleteRow, isAdmin: boolean) => deleteBlockReason(row, isAdmin) === null;
 
 /** The typed confirmation: the business name (case and spaces ignored) or its ABN (digits only). */
 export function deleteConfirmMatches(typed: string, name: string, abn: string): boolean {

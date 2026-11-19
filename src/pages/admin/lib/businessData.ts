@@ -35,7 +35,8 @@ export async function resendInvitation(agent: { invitationId: string | null; ema
 /** Stored status; "Onboarding" is a business made by staff whose agent agreement is not signed yet (migration 20261117220000). */
 export type BusinessStatus = "Active" | "Inactive" | "Onboarding";
 export type StatusCounts = Record<string, number>;
-export interface ListCounts { all: number; active: number; inactive: number }
+/** The tabs (2026-11-20): each business in exactly one of active / onboarding / inactive / pending (waiting for review); they add up to all. */
+export interface ListCounts { all: number; active: number; inactive: number; onboarding?: number; pending?: number }
 
 /** A business an agent registered from the sign-in page, waiting for a SLIT decision (migration 119). */
 export interface PendingRegistration {
@@ -244,7 +245,7 @@ export async function openBusinessDocument(path: string) {
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");
 
-export { businessDropdownStatuses, canOfferBusinessDelete, deleteConfirmMatches, SYSTEM_BUSINESS_CODES } from "@/pages/admin/lib/businessDelete";
+export { businessDropdownStatuses, canOfferBusinessDelete, deleteBlockReason, deleteConfirmMatches, isSlitAdmin, SYSTEM_BUSINESS_CODES } from "@/pages/admin/lib/businessDelete";
 /** Whether this administrator can delete the business now, and if not why (public.admin_business_delete_check). */
 export const businessDeleteCheck = (id: string) =>
   call<{ deletable: boolean; reason: string | null; name: string; abn: string | null }>("admin_business_delete_check", { p_business: id }, "We could not check this business.");

@@ -66,7 +66,10 @@ export interface ApplicationReview {
   referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; status: string; receivedAt: string | null; receivedVia: string | null; answers: Record<string, string>; request?: RequestSummary | null }>;
   correction: { round: number; message: string | null; flags: Record<string, string>; requestedAt: string; by: string | null } | null;
   combined?: boolean; terms?: { commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null } | null;
-  witness?: { name: string; by: string | null } | null; signatureEvent?: SignatureEvent | null;
+  witness?: { name: string; by: string | null; png?: string | null } | null; signatureEvent?: SignatureEvent | null;
+  /** 2026-11-20: the SLIT witness (preset by staff), the business's ACN, the agency admin's signature on the application request. */
+  slitWitness?: { name: string; png: string | null } | null; acn?: string | null; acnSource?: string | null;
+  agencySignature?: { name: string | null; kind: string | null; image: string | null; signedAt: string | null } | null;
 }
 export const getApplicationReview = (onboardingId: string) => call<ApplicationReview>("agency_onboarding_review_get", { p_onboarding: onboardingId }, "The application could not be opened for review.");
 export async function openRevisionFile(revisionId: string): Promise<void> {

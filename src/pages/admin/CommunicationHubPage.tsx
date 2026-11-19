@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import CommunicationTemplates from "@/pages/admin/components/CommunicationTemplates";
+import IntakeGroupsList from "@/pages/admin/components/IntakeGroupsList";
 import { openCommPopup } from "@/lib/commPopup";
 
 type Notice = { id: string; title: string | null; message: string | null; event: string | null; created_at: string | null; application_id: string | null };
-const sections = ["Templates", "Activity"] as const;
+const sections = ["Templates", "Groups", "Activity"] as const;
 type Section = typeof sections[number];
 
 export default function CommunicationHubPage() {
@@ -48,6 +49,6 @@ export default function CommunicationHubPage() {
         <p className="mt-2 whitespace-pre-wrap text-sm text-foreground-700">{n.message || "No message text"}</p>
         {n.application_id ? <Link className="mt-2 inline-block text-sm font-medium text-primary-600 underline" to={`/admin/applications/${n.application_id}`}>View application</Link> : null}
       </article>)}</div>}
-    </section> : section === "Templates" ? <CommunicationTemplates /> : null}
+    </section> : section === "Templates" ? <CommunicationTemplates /> : section === "Groups" ? <IntakeGroupsList /> : null}
   </main>;
 }

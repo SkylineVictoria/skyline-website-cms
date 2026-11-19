@@ -279,7 +279,7 @@ export interface PresendData {
 }
 export const openPresend = (agencyId: string) => onboardingAction<PresendOpen>({ action: "agent_onboarding_presend_open", agencyId });
 export const savePresend = (agencyId: string, data: PresendData) => onboardingAction<{ onboardingId: string; savedAt: string }>({ action: "agent_onboarding_presend_save", agencyId, data });
-export const sendPresend = (agencyId: string, data: PresendData) => onboardingAction<AgentOnboardingSendResult & { combined?: boolean; witness?: string }>({ action: "agent_onboarding_presend_send", agencyId, data });
+export const sendPresend = (agencyId: string, data: PresendData) => onboardingAction<AgentOnboardingSendResult & { combined?: boolean; slitWitness?: boolean }>({ action: "agent_onboarding_presend_send", agencyId, data });
 export const discardPresend = (onboardingId: string) => signingAction<{ discarded: boolean }>({ action: "agent_onboarding_presend_discard", onboardingId });
 /** What staff confirmed from ABN Lookup on Add business (kept on the business for the F04 prefill). */
 export type BusinessAbrInput = AbrConfirmed & { givenName: string; familyName: string };

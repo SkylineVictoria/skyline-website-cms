@@ -88,7 +88,7 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
       {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
       {draft ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="onboarding-draft">
         <p className="font-medium">Not sent yet: nothing has been emailed to {draft.agent.name} ({draft.agent.email}).</p>
-        <p className="mt-1">Prepare the application: check and fill in the business details, set the agreement's terms and, if you like, add the witness. Then send it to the point of contact to sign once (application form and agreement together).
+        <p className="mt-1">Prepare the application: check and fill in the business details, set the agreement's terms and, if you like, add the SLIT witness (the agency admin adds their own witness when signing). Then send it to the point of contact to sign once (application form and agreement together).
           {draft.presendSavedAt ? ` Draft saved ${new Date(draft.presendSavedAt).toLocaleString()}.` : ""}</p>
       </div> : null}
       {current && !draft ? <StagedOnboarding row={current} busy={busy} onOpen={setOpenId} onRemind={remind} onDownload={download} onSendAgreement={() => setDialog("agreement")} onReview={() => setDialog("review")} onDecline={() => setDialog("decline")}
@@ -261,7 +261,8 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         <p>Commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}</p>
         {row.signatureEvent ? <p data-testid="signature-event">Signed once by {row.signatureEvent.signer ?? row.agent.name} on {new Date(row.signatureEvent.at).toLocaleString()} (application form and agreement){row.signatureEvent.ip ? ` · IP ${row.signatureEvent.ip}` : ""}.</p>
           : row.stage === "application_sent" ? <p>Waiting for {row.agent.name} to sign the application form and the agreement (one signature).</p> : null}
-        {row.witness ? <p>Witness: {row.witness.name} ({row.witness.by === "admin" ? "added by SLIT before sending" : "added by the agency admin when signing"}; drawn signature).</p> : null}
+        {row.slitWitness ? <p data-testid="slit-witness-note">SLIT witness: {row.slitWitness.name} (added before sending; drawn signature).</p> : null}
+        {row.witness ? <p data-testid="agent-witness-note">Agency's witness: {row.witness.name} (added by the agency admin when signing; drawn signature).</p> : null}
         {row.agreementIssuedAt ? <p className="text-emerald-800">Countersigned by {row.adminName || "SLIT"} and issued on {new Date(row.agreementIssuedAt).toLocaleDateString()}; the completed copy was emailed to {row.agent.email}.</p> : null}
       </div> : <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />}
       {!row.activation && row.stage === "agreement_signed" ? <p className="text-xs font-medium text-emerald-800" data-testid="ready-to-activate-note">Signed: the business is ready to activate. Press Activate at the top of the page; the point of contact and every agent added meanwhile then get their sign-in email.</p> : null}
@@ -390,12 +391,12 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} className="h-4 w-4" />Save as my signature for next time</label></div> : null}
           {method === "typed" ? <p className="min-h-14 rounded-md border border-background-300 bg-background-50 px-4 py-3 text-2xl italic text-[#0d1a4d]">{adminName || "Your name appears here as the signature"}</p> : null}
         </div>
-        <div className="space-y-2 rounded-md border border-background-200 p-3" data-testid="slit-witness">
+        {combined && row.slitWitness ? <p className="rounded-md border border-background-200 p-3 text-sm text-foreground-700" data-testid="slit-witness-preset">SLIT witness: <strong>{row.slitWitness.name}</strong>, already on the agreement (added before sending).</p> : <div className="space-y-2 rounded-md border border-background-200 p-3" data-testid="slit-witness">
           <Field label="SLIT witness name" hint="Optional. The witness types their name and draws their signature below (a typed signature is not accepted).">
             <TextInput value={witness} onChange={(e) => setWitness(e.target.value)} maxLength={150} data-testid="slit-witness-name" /></Field>
           {witness.trim() ? <div><p className="mb-1 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p><SignaturePad onChange={setWitnessPng} /></div> : null}
           {!witnessReady ? <p className="text-xs text-amber-800">The witness must draw their signature, or clear the witness's name.</p> : null}
-        </div>
+        </div>}
         {combined ? null : <Field label="Message to the agent" hint="Optional; goes in the email."><TextArea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} /></Field>}
       </>}
     </div>

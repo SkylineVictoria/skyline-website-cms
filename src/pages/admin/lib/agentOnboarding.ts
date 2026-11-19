@@ -49,7 +49,7 @@ export interface OnboardingRow {
   /** 2026-11-18: the business status in words, the correction rounds and the PDF revisions after the first signature. */
   label?: string | null; corrections?: OnboardingCorrection[]; revisions?: OnboardingRevision[];
   /** 2026-11-20: the application request carries the agreement (signed once); the witness; the one signature on both; the agreement issued at approval. */
-  combined?: boolean; witness?: { name: string; by: "admin" | "agent" | null } | null; signatureEvent?: SignatureEvent | null; agreementIssuedAt?: string | null; presendSavedAt?: string | null;
+  combined?: boolean; witness?: { name: string; by: "admin" | "agent" | null } | null; slitWitness?: { name: string } | null; signatureEvent?: SignatureEvent | null; agreementIssuedAt?: string | null; presendSavedAt?: string | null;
 }
 /** One signature covered the application form and the agreement (2026-11-20): when, by whom, from where. */
 export interface SignatureEvent { at: string; request: string; signer: string | null; signatureKind?: string | null; ip?: string | null; userAgent?: string | null; documents?: string[] }

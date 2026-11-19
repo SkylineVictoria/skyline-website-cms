@@ -661,7 +661,7 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       }
       if (name === "agency_onboarding_presend_send") { state.stage = "application_sent"; return { id: onboardingId, requestId: args.p_request, reference: "SLIT-2026-101", stage: "application_sent" }; }
       if (name === "agency_onboarding_prefill_record" || name === "agency_abr_facts_record") return null;
-      if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2 }; }
+      if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2, slitWitness: true }; }
       if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: String(signData!.agreement_base64) };
       if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
       throw new Error(`unexpected rpc ${name}`);
@@ -692,8 +692,8 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.equal(openedValue("contact_title"), "Mr", "what staff saved is shown again");
   // Send needs the agreement terms.
   await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
-  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25" } }) as { id: string; sent: boolean; combined: boolean; witness: string };
-  assert.ok(sentApp.sent && sentApp.combined && sentApp.witness === "agency admin" && sent.length === 1, "one request, emailed to the point of contact");
+  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
+  assert.ok(sentApp.sent && sentApp.combined && sentApp.slitWitness && sent.length === 1, "one request, emailed to the point of contact");
   const original = stored.get(`${sentApp.id}/original.pdf`)!;
   assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the F04's 2 pages followed by the P06's 13");
   const request = created[0] as { title: string; fields: Array<{ key: string; page: number; type: string; value: string; required: boolean }> };
@@ -704,6 +704,7 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.deepEqual([field("litigation_involved:NO")!.value, field("litigation_involved:YES")!.value, field("eatc_completed:NO")!.value], ["true", "", "true"], "Yes / No questions arrive at No");
   const agreementText = await pdfText(original);
   assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && agreementText.some((t) => t.page > 2 && t.text.includes("25%")), "the agreement terms are printed on the P06 pages");
+  assert.ok(agreementText.some((t) => t.page > 2 && t.text.includes("Sue Witness")), "the SLIT witness from Prepare application is printed on the agreement");
   const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
   assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
   assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
@@ -752,13 +753,13 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   // Approve while both referees are still pending: no second signature; the agreement is countersigned, issued and emailed; sign-ins released.
   await assert.rejects(call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Sue Witness" } }), /must draw their signature/);
   state.stage = "references_pending";
-  const approved = await call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Sue Witness", png: PNG_1PX } }) as
+  const approved = await call({ action: "agent_onboarding_approve", onboardingId, agencyId, adminName: "Hari Admin", adminPosition: "CEO", adminSignature: { kind: "typed", name: "Hari Admin" }, adminWitness: { name: "Other Witness", png: PNG_1PX } }) as
     { approved: boolean; combined: boolean; refereesPending: number; issued: { issued: boolean; emailed: boolean; released: boolean } | null; warning?: string };
   assert.ok(approved.approved && approved.combined && approved.refereesPending === 2 && approved.issued?.issued && approved.issued.emailed && approved.issued.released && !approved.warning, JSON.stringify(approved));
   assert.equal(sent.length, 1, "no P06 request is sent for a second signature");
   const issue = rpcs.find(([name]) => name === "agency_onboarding_agreement_issue")![1] as { p_base64: string; p_data: { admin_name: string; admin_witness_name: string } };
   const issuedText = await pdfText(new Uint8Array(Buffer.from(issue.p_base64, "base64")));
-  assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === "Sue Witness" && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement");
+  assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === null && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement; the SLIT witness set before sending is not replaced");
   const issuedMail = mails.find((m) => m.to === contact.email && /Your agent agreement/.test(m.subject))!;
   assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
 });

@@ -175,7 +175,7 @@ export interface F04PrefillControls {
   busy: "" | "save" | "send"; contact: { name: string; email: string } | null; savedNote: string | null;
   onSaveDraft: (state: F04Draft) => void; onSend: (state: F04Draft) => void; onClose: () => void;
 }
-const PREFILL_WITNESS_HINT = "Optional. If you add a witness, type their name and have them draw the signature (it cannot be typed). Leave it empty and the agency admin adds their own witness when signing.";
+const PREFILL_WITNESS_HINT = "Optional. The SLIT witness types their name and draws their signature here (it cannot be typed); it is printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
 
 export default function F04Wizard({ token, view, codeCheck, onSigned, mode: modeProp = "agent", review, prefill }: {
   token: string; view: SigningView;
@@ -611,18 +611,18 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date.</p>
           </section>
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-witness">
-            <h3 className="text-sm font-semibold text-foreground-900">Witness to the agency admin's signature (optional)</h3>
+            <h3 className="text-sm font-semibold text-foreground-900">SLIT witness on the agreement (optional)</h3>
             <p className="text-sm text-foreground-600">{PREFILL_WITNESS_HINT}</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <WizardTextField id="f04-prefill-witness-name" name="witnessName" label="Witness full name" required={false} value={prefill.witness.name} maxLength={150} onChange={(v) => prefill.onWitness({ ...prefill.witness, name: v })} testId="f04-prefill-witness-name" />
+              <WizardTextField id="f04-prefill-witness-name" name="witnessName" label="SLIT witness full name" required={false} value={prefill.witness.name} maxLength={150} onChange={(v) => prefill.onWitness({ ...prefill.witness, name: v })} testId="f04-prefill-witness-name" />
             </div>
             <div>
-              <p className="mb-2 text-label font-medium text-foreground-800">Witness signature (drawn)</p>
+              <p className="mb-2 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p>
               {prefill.witness.png ? <div className="flex flex-wrap items-center gap-3">
-                <img src={prefill.witness.png} alt="The witness's drawn signature" className="max-h-20 rounded border border-background-300 bg-white p-1" data-testid="f04-prefill-witness-image" />
+                <img src={prefill.witness.png} alt="The SLIT witness's drawn signature" className="max-h-20 rounded border border-background-300 bg-white p-1" data-testid="f04-prefill-witness-image" />
                 <button type="button" className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => prefill.onWitness({ ...prefill.witness, png: null })} data-testid="f04-prefill-witness-redraw">Draw again</button>
               </div> : <SignaturePad onChange={(png) => prefill.onWitness({ ...prefill.witness, png })} />}
-              {(prefill.witness.name.trim() || prefill.witness.png) ? <button type="button" className="mt-2 cursor-pointer text-xs font-semibold text-foreground-600 underline-offset-2 hover:underline" onClick={() => prefill.onWitness({ name: "", png: null })} data-testid="f04-prefill-witness-clear">Leave the witness to the agency admin</button> : null}
+              {(prefill.witness.name.trim() || prefill.witness.png) ? <button type="button" className="mt-2 cursor-pointer text-xs font-semibold text-foreground-600 underline-offset-2 hover:underline" onClick={() => prefill.onWitness({ name: "", png: null })} data-testid="f04-prefill-witness-clear">Clear the SLIT witness</button> : null}
             </div>
           </section>
           <section className="space-y-2 border-t border-background-200 pt-5">
@@ -650,7 +650,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           {witnessPlan?.preset ? <div className="flex flex-wrap items-center gap-4 text-sm" data-testid="f04-witness-preset">
             <span><span className="text-xs text-foreground-500">Witness</span><br /><strong>{witnessPlan.name}</strong></span>
             {witnessPlan.image ? <img src={witnessPlan.image} alt="The witness's signature" className="max-h-16 rounded border border-background-300 bg-white p-1" /> : null}
-            <span className="text-xs text-foreground-500">Already on the agreement.</span>
+            <span className="text-xs text-foreground-500">Given with your first signature; it stays on the agreement.</span>
           </div> : <>
             <p className="text-sm text-foreground-600">Someone who watches you sign types their full name and draws their signature here. A typed signature is not accepted.</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

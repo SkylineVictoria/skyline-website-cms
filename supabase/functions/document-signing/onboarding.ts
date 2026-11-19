@@ -326,7 +326,7 @@ export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
 }
 
 /* ------------------------------------------------------------------ pre-send step and one signature (owner brief 2026-11-20)
- * Add business opens a draft; staff fill in the F04 (the references stay empty), the agreement terms and optionally the agent's witness
+ * Add business opens a draft; staff fill in the F04 (the references stay empty), the agreement terms and optionally the SLIT witness
  * (typed name + drawn signature), then Save draft or Send to point of contact. Send makes ONE request: the F04 pages followed by the P06
  * pages, signed once by the agency admin (the one signature fills the signature box of both documents). Approve countersigns and issues
  * the signed agreement; no second signature is asked for.
@@ -409,26 +409,29 @@ export async function presendDiscard(ctx: OnboardingContext): Promise<Json> {
 
 /**
  * The combined document: the F04 (staff's values printed or prefilled, editable by the contact) followed by the P06 (the agency, ABN and
- * Items 3 to 5 printed; the witness printed when staff gave one). The agency admin's fields of both, on one request, for one signature.
+ * Items 3 to 5 printed; the SLIT witness printed when staff gave one in Prepare application). The agency admin's fields of both, on one
+ * request, for one signature; the agency admin always gives their own witness (typed name, drawn on the signing page), except on a
+ * correction, where the witness given with the first signature is printed again (agentWitness).
  * The SLIT signatory is left blank: it is filled when SLIT approves (issueAgreement).
  */
 async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTemplate; agreement: OnboardingTemplate; values: Record<string, string>; agency: { name: string; abn: string | null };
-  terms: { commencementDate: string; territory: string; commissionPercent: string }; witness: { name: string; png: string } | null; title: string }) {
+  terms: { commencementDate: string; territory: string; commissionPercent: string }; slitWitness: { name: string; png: string } | null; agentWitness: { name: string; png: string } | null; title: string }) {
   const formPart = await buildDocument(ctx, input.form, input.values, input.title, { editablePrefill: true });
   const formPages = Number(input.form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
+  // The SLIT witness (2026-11-20, owner): the agreement's SLIT witness line, name and drawn signature (admin_witness_signature prints a picture).
   const agreementValues: Record<string, string> = { agent_organisation_name: input.values.agent_legal_entity || input.values.agent_organisation_name || input.agency.name,
     agent_abn: String(input.agency.abn ?? input.values.agent_abn ?? ""), agreement_commencement_date: input.terms.commencementDate, agent_territory: input.terms.territory,
-    agent_commission_percent: input.terms.commissionPercent };
+    agent_commission_percent: input.terms.commissionPercent, ...witnessValues(input.slitWitness) };
   const placed = numbered(input.agreement.fields);
   const { printed, recipient } = resolveFields(placed, agreementValues);
   const nameBox = placed.find((f) => f.key === WITNESS_NAME_KEY) ?? null, signatureBox = placed.find((f) => f.key === WITNESS_SIGNATURE_KEY) ?? null;
   const print: PlacedField[] = [...printed];
-  if (input.witness) {
-    if (nameBox) print.push({ ...nameBox, value: input.witness.name });
-    if (signatureBox) print.push({ ...signatureBox, type: "signature", value: `data:image/png;base64,${input.witness.png}` });
+  if (input.agentWitness) {
+    if (nameBox) print.push({ ...nameBox, value: input.agentWitness.name });
+    if (signatureBox) print.push({ ...signatureBox, type: "signature", value: `data:image/png;base64,${input.agentWitness.png}` });
   }
-  // The witness signature is never a field to type into; its name is the agency admin's to give (required) unless staff gave it.
-  const theirs = recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY && !(input.witness && f.key === WITNESS_NAME_KEY))
+  // The agent's witness signature is never a field to type into; its name is the agency admin's to give (required).
+  const theirs = recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY && !(input.agentWitness && f.key === WITNESS_NAME_KEY))
     .map((f) => f.key === WITNESS_NAME_KEY ? { ...f, required: true } : f);
   const source = await ctx.fileBytes(input.agreement.sourcePath, input.agreement.sourceHash);
   const agreementBytes = print.length ? await (await signingPdfModule()).stampDocument(source, { reference: "", title: input.title, recipients: [],
@@ -437,7 +440,7 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
   const role = signerRole("form").key;
   return { bytes, formPages, agreementValues, printed: formPart.printed.length + print.length,
     fields: [...recipientFields(formPart.recipient, role), ...recipientFields(theirs.map((f) => ({ ...f, page: f.page + formPages })), role)],
-    witnessBox: !input.witness && signatureBox ? { page: signatureBox.page + formPages, x: signatureBox.x, y: signatureBox.y, w: signatureBox.w, h: signatureBox.h } : null };
+    witnessBox: !input.agentWitness && signatureBox ? { page: signatureBox.page + formPages, x: signatureBox.x, y: signatureBox.y, w: signatureBox.w, h: signatureBox.h } : null };
 }
 
 /** Send to point of contact: the draft is saved, the combined request made and emailed. */
@@ -459,7 +462,7 @@ export async function presendSend(ctx: OnboardingContext): Promise<Json> {
   if (input.marn) values.agent_marn = input.marn;
   yesNoDefaults(form.fields, values);
   const title = `Agent application and agreement: ${text(prepared.agency.name, 150)}`.slice(0, 200);
-  const made = await buildCombined(ctx, { form, agreement, values, agency: prepared.agency, terms: input, witness: input.witness, title });
+  const made = await buildCombined(ctx, { form, agreement, values, agency: prepared.agency, terms: input, slitWitness: input.witness, agentWitness: null, title });
   const recipients = checkRecipients([{ name: prepared.agent!.name, email: prepared.agent!.email, role: signerRole("form").key, label: signerRole("form").label, order: 1, required: true }]);
   const id = ctx.ports.uuid();
   await ctx.store(`${id}/original.pdf`, made.bytes);
@@ -478,7 +481,7 @@ export async function presendSend(ctx: OnboardingContext): Promise<Json> {
   if (prefill) { try { await ctx.rpc("agency_onboarding_prefill_record", { p_onboarding: onboarding.id, p_prefill: { ...prefill, ...input.answers } }); } catch { /* history line only */ } }
   if (facts) { try { await ctx.rpc("agency_abr_facts_record", { p_agency: agencyId, p_facts: facts }); } catch { /* the wizard looks them up itself */ } }
   return await sendRequest(ctx, id, { reference: record.reference, onboardingId: onboarding.id, stage: onboarding.stage, combined: true, agent: { name: prepared.agent!.name, email: prepared.agent!.email },
-    printed: made.printed, fields: made.fields.length, witness: input.witness ? "staff" : "agency admin" });
+    printed: made.printed, fields: made.fields.length, slitWitness: !!input.witness });
 }
 
 /**
@@ -486,12 +489,13 @@ export async function presendSend(ctx: OnboardingContext): Promise<Json> {
  * and, when given, SLIT's witness (typed name + drawn signature); it is stored as the issued agreement, emailed to the agency admin, and the
  * held sign-in invitations are released. No second signature from the agency.
  */
-async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prepared: Prepared): Promise<Json> {
+async function issueAgreement(ctx: OnboardingContext, onboardingId: string, prepared: Prepared, slitWitnessPrinted = false): Promise<Json> {
   const template = await installedTemplate(ctx, "agreement");
   const file = await ctx.rpc("agency_onboarding_file", { p_id: onboardingId, p_kind: "agreement" }) as { name: string; base64: string };
   const signed = Uint8Array.from(atob(String(file?.base64 ?? "")), (c) => c.charCodeAt(0));
   const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
-  const witness = await drawnWitness(ctx.body.adminWitness);
+  // The SLIT witness given in Prepare application is already on the agreement: it is not asked for (or printed) again.
+  const witness = slitWitnessPrinted ? null : await drawnWitness(ctx.body.adminWitness);
   const values: Record<string, string> = { admin_name: adminName, admin_position: adminPosition, admin_signature: adminSignature, admin_signed_date: isoToday(), ...witnessValues(witness) };
   const mine = resolveFields(numbered(template.fields), values).printed.filter((f) => f.key.startsWith("admin_"));
   const bytes = await (await signingPdfModule()).stampDocument(signed, { reference: "", title: `Agent agreement: ${text(prepared.agency.name, 150)}`, recipients: [],
@@ -788,7 +792,7 @@ export async function reviewSave(ctx: OnboardingContext): Promise<Json> {
 
 interface ReviewData {
   onboardingId: string; stage: string; agency: { id: string; name: string; abn?: string | null }; contact: { id: string; name: string; email: string; role: string }; answers: Record<string, string>;
-  combined?: boolean; terms?: { commencementDate: string | null; territory: string | null; commissionPercent: number | string | null } | null; witness?: { name: string; by: string; png?: string | null } | null;
+  combined?: boolean; terms?: { commencementDate: string | null; territory: string | null; commissionPercent: number | string | null } | null; witness?: { name: string; by: string; png?: string | null } | null; slitWitness?: { name: string; png: string | null } | null;
 }
 export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
@@ -804,12 +808,13 @@ export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
   const values: Record<string, string> = { ...answers, agent_registration_number: composeRegistrationNumber(answers.agent_acn, answers.agent_marn) };
   const title = `Agent application ${review.combined ? "and agreement " : "form "}(correction): ${text(review.agency.name, 140)}`.slice(0, 200);
   // A combined application goes back with its agreement: the corrected answers and the agreement are signed again with one signature.
-  // The witness already given (by staff or with the first signature) is printed and stays as it is.
+  // The witnesses already given (SLIT's before sending, the agency's with the first signature) are printed and stay as they are.
   const made = review.combined && review.terms
     ? await (async () => {
       const combined = await buildCombined(ctx, { form: template, agreement: await installedTemplate(ctx, "agreement"), values, agency: { name: review.agency.name, abn: review.agency.abn ?? null },
         terms: { commencementDate: String(review.terms!.commencementDate ?? ""), territory: String(review.terms!.territory ?? ""), commissionPercent: String(review.terms!.commissionPercent ?? "") },
-        witness: review.witness?.png && review.witness.name ? { name: review.witness.name, png: review.witness.png } : null, title });
+        slitWitness: review.slitWitness?.png && review.slitWitness.name ? { name: review.slitWitness.name, png: review.slitWitness.png } : null,
+        agentWitness: review.witness?.png && review.witness.name ? { name: review.witness.name, png: review.witness.png } : null, title });
       return { bytes: combined.bytes, fields: combined.fields };
     })()
     : await (async () => { const single = await buildDocument(ctx, template, values, title, { editablePrefill: true }); return { bytes: single.bytes, fields: recipientFields(single.recipient, signerRole("form").key) }; })();
@@ -836,12 +841,12 @@ export async function approveAndActivate(ctx: OnboardingContext): Promise<Json> 
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
   // A witness named without a drawn signature is refused before anything is approved.
   await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
-  const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string; combined?: boolean; refereesPending?: number };
+  const approved = await ctx.rpc("agency_onboarding_approve", { p_onboarding: onboardingId }) as { stage: string; agencyStatus: string; combined?: boolean; refereesPending?: number; slitWitness?: boolean };
   // 2026-11-20: the agreement was signed with the application; it is countersigned and issued now (no P06 to sign again).
   if (approved.combined) {
     try {
       const prepared = await prepare(ctx, String(ctx.body.agencyId ?? ""), ctx.body.agentId);
-      return { approved: true, combined: true, agencyStatus: approved.agencyStatus, refereesPending: approved.refereesPending ?? 0, agreement: null, issued: await issueAgreement(ctx, onboardingId, prepared) };
+      return { approved: true, combined: true, agencyStatus: approved.agencyStatus, refereesPending: approved.refereesPending ?? 0, agreement: null, issued: await issueAgreement(ctx, onboardingId, prepared, approved.slitWitness === true) };
     } catch (error) {
       return { approved: true, combined: true, agencyStatus: approved.agencyStatus, agreement: null, issued: null,
         warning: `The application is approved, but the agreement could not be issued: ${(error as Error).message} Choose Approve again on the business page to issue it.` };

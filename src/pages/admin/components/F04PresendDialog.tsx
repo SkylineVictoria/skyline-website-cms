@@ -8,7 +8,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
  * Prepare application (owner brief 2026-11-20): after Add business nothing is emailed. Staff open the Agent Application Form (F04) here in
  * the same wizard the agency admin uses (admin-prefill mode): every detail can be filled or edited (title, position, website, the rest),
  * every Yes / No question starts at No, the references stay empty. The last step takes the agreement's terms (commencement, territory,
- * commission) and optionally the agent's witness (typed name + DRAWN signature). Save draft keeps it; Send to point of contact emails ONE
+ * commission) and optionally the SLIT witness (typed name + DRAWN signature, printed on the SLIT witness line; the agency admin gives their own witness on the form). Save draft keeps it; Send to point of contact emails ONE
  * request: the F04 followed by the P06, signed once by the agency admin.
  */
 const REFERENCE = /^ref[12]_/;
@@ -52,9 +52,9 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
     return { answers, acn: state.acn, marn: state.marn.replace(/\s/g, ""), message: message.trim(), commencementDate: terms.commencementDate, territory: terms.territory.trim(),
       commissionPercent: terms.commissionPercent.trim(), witnessName: witness.name.trim(), witnessPng: witness.png };
   };
-  // The witness is both a typed name and a drawn signature, or nothing (the agency admin then adds theirs).
-  const witnessProblem = () => (witness.name.trim() && !witness.png) ? "The witness must draw their signature (it cannot be typed), or clear the witness."
-    : (!witness.name.trim() && witness.png) ? "Type the witness's full name, or clear the witness." : null;
+  // The SLIT witness is both a typed name and a drawn signature, or nothing (the approver can then add it).
+  const witnessProblem = () => (witness.name.trim() && !witness.png) ? "The SLIT witness must draw their signature (it cannot be typed), or clear the SLIT witness."
+    : (!witness.name.trim() && witness.png) ? "Type the SLIT witness's full name, or clear the SLIT witness." : null;
   const saveDraft = async (state: F04Draft) => {
     if (busy) return;
     const problem = witnessProblem();
@@ -75,7 +75,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
     setBusy("send");
     try {
       const r = await sendPresend(agencyId, dataOf(state));
-      await onSent(r.sent ? `Application form and agreement sent to ${r.agent?.email ?? opened?.contact?.email ?? "the point of contact"} (${r.reference}) to sign once.${r.witness === "staff" ? " The witness you added is printed on the agreement." : ""}`
+      await onSent(r.sent ? `Application form and agreement sent to ${r.agent?.email ?? opened?.contact?.email ?? "the point of contact"} (${r.reference}) to sign once.${r.slitWitness ? " The SLIT witness is printed on the agreement." : ""}`
         : r.warning ?? "The request was created but not emailed.");
     } catch (e) { push(e instanceof Error ? e.message : "The application could not be sent.", "error"); }
     finally { setBusy(""); }

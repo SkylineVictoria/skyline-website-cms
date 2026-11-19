@@ -4,10 +4,15 @@
 // checks the choice again when the draft is saved and when it is submitted.
 import { supabase } from "@/pages/admin/lib/supabase";
 
-export interface OpenIntake { id: string | null; courseId: string; startDate: string; endDate: string | null; name: string; display: string; fallback?: boolean; running?: boolean }
+export interface OpenIntake {
+  id: string | null; courseId: string; startDate: string; endDate: string | null; name: string; display: string; fallback?: boolean; running?: boolean;
+  /** JOIN-AT-UNIT (owner, 2026-11-20): one entry per upcoming start: the day the student joins (a unit start, or the intake's day one). */
+  joinDate?: string; unitCode?: string; unitName?: string; firstDay?: boolean; prereqFirst?: boolean; option?: string;
+}
 
 /** The dropdown value of an intake: its id, or its label for a fallback month (which has no intake row). */
-export const intakeKey = (id: string | null | undefined, label: string | null | undefined) => (id ? id : label ? `month:${label}` : "");
+export const intakeKey = (id: string | null | undefined, label: string | null | undefined, joinDate?: string | null) =>
+  (id ? (joinDate ? `${id}@${joinDate}` : id) : label ? `month:${label}` : "");
 
 const cache = new Map<string, Promise<OpenIntake[]>>();
 /** Drops a course's cached list (an intake was just added), so the next load asks the database again. */
@@ -18,7 +23,7 @@ export function openIntakes(courseId: string): Promise<OpenIntake[]> {
   if (!key) return Promise.resolve([]);
   if (!cache.has(key)) {
     const request = (async () => {
-      const { data, error } = await supabase.rpc("course_intakes_open", { p_course: key });
+      const { data, error } = await supabase.rpc("course_join_options", { p_course: key });
       if (error) throw new Error("The intakes could not be loaded. Check your connection and try again.");
       return (data ?? []) as OpenIntake[];
     })();

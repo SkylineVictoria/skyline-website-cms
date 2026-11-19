@@ -46,6 +46,21 @@ try {
   for (const file of ["20261120220000_business_rules.sql", "20261120221000_business_rule_lms_upload.sql", inventoryFile, inventoryFile]) {
     await db.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
+  // Test the release against the pristine migration state and then restore the
+  // draft fixture for the existing draft-to-publication lifecycle cases.
+  const publication = await readFile(new URL("../supabase/migrations/20261120223000_publish_existing_business_rule.sql", import.meta.url), "utf8");
+  await db.exec("begin");
+  await db.exec(publication.replace(/^begin;\s*$/m, "").replace(/\ncommit;\s*$/, ""));
+  const counts = (await db.query("select state, count(*)::int as count from public.business_rule_versions group by state")).rows;
+  if (counts.length !== 2 || !counts.some(row => row.state === "published" && row.count === 1) ||
+      !counts.some(row => row.state === "reference" && row.count === 12)) throw new Error("Release leaves unexpected rule states");
+  const liveBaseline = (await db.query("select public.business_rule_evaluate('', $1, '{}') as value", [identifier])).rows[0].value;
+  if (liveBaseline !== 26214400) throw new Error("Release changed the live upload limit");
+  const snapshot = (await db.query("select count(*)::int as count from public.business_rule_audit_logs where action = 'publish' and after_data->'value' = '26214400'")).rows[0];
+  if (snapshot.count !== 1) throw new Error("Release did not record upload publication");
+  await db.exec("rollback");
+  console.log("PASS release classifies inventory as references, publishes the existing upload limit and leaves no drafts");
+
   const setActor = id => db.query("select set_config('app.actor',$1,false)", [id]);
   const setTenant = id => db.query("select set_config('app.tenant',$1,false)", [id]);
   const request = async (command, payload = {}) =>

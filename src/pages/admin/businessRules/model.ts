@@ -17,7 +17,8 @@ export type Definition = {
   then_action: string; else_action: string; priority: number; starts_on: string; ends_on: string;
   enabled: boolean; approval_required: boolean; source_url: string; notes: string;
 };
-export type Version = { id: string; rule_id: string; version: number; state: "draft" | "published" | "superseded"; definition: Definition; created_at: string; origin: string; approved_by: string | null };
+// rule-policy: technical version-shape Reflects stored version states and publication timestamps.
+export type Version = { id: string; rule_id: string; version: number; state: "draft" | "published" | "superseded" | "reference"; published_at?: string | null; definition: Definition; created_at: string; origin: string; approved_by: string | null };
 export type Category = { id: string; name: string };
 export type Rule = { id: string; identifier: string; registration: { scope: string; entity: string; value_type: string; handler?: string } | null; versions: Version[] };
 export type RegistryField = { key: string; label: string; value_type: string; scope: string };

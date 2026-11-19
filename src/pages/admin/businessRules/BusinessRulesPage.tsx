@@ -171,13 +171,13 @@ function RuleWorkspace() {
               const active = live?.definition.enabled;
               const awaiting = awaitingIntegration(rule);
               // rule-policy: technical status-labels Describes each stored version and registration state.
-              const label = awaiting ? "Review only" : active ? "Active" : live ? "Inactive" : next ? "Scheduled" : latest.state === "draft" ? "Draft" : "Expired";
+              const label = awaiting ? "Reference" : active ? "Active" : live ? "Inactive" : next ? "Scheduled" : latest.state === "draft" ? "Draft" : "Expired";
               return <tr key={rule.id} className="border-b border-background-200 align-top">
                 <th scope="row" className="p-2 font-medium"><button type="button" onClick={() => open(rule.id)} className="text-left text-primary-700">{latest.definition.name}</button><div className="mt-1 text-foreground-500">{locationLabel(locations, latest.definition.scope)}</div></th>
                 <td className="p-2">{snapshot.categories.find(c => c.id === latest.definition.category_id)?.name}</td><td className="p-2">{latest.definition.value_type}</td>
                 <td className="max-w-40 break-words p-2">{definitionSummary((live ?? next ?? latest).definition)}</td>
                 <td className="p-2"><Badge tone={active ? "success" : "muted"}>{label}</Badge>{latest.state === "draft" && active && <div className="mt-1">Draft pending</div>}</td>
-                <td className="p-2">{(live ?? next ?? latest).definition.starts_on}</td><td className="p-2">{dateTime(latest.created_at)}</td>
+                <td className="p-2">{awaiting ? "—" : (live ?? next ?? latest).definition.starts_on}</td><td className="p-2">{dateTime(latest.created_at)}</td>
                 <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>{awaiting ? "View" : "Edit"}</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
               </tr>;
             })}</tbody>
@@ -187,7 +187,7 @@ function RuleWorkspace() {
           <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule?.versions[0].definition.name ?? "Rule history"}</h2>{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All history</Button>}</div>
           {historyRule && <><Field label="Reason for rollback"><TextInput value={reason} onChange={e => setReason(e.target.value)} /></Field>
             {historyRule.versions.map(v => <div key={v.id} className="flex items-center justify-between gap-2 border-b border-background-200 pb-2"><span>Version {v.version} · {v.state} · {valueSummary(v.definition.value)}</span>
-              {v.state !== "draft" && <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => void submit("rollback", { rule_id: historyId, expected_version: historyRule.versions[0].id, target_version: v.id, reason })}>Restore as draft</Button>}</div>)}</>}
+              {v.published_at && <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => void submit("rollback", { rule_id: historyId, expected_version: historyRule.versions[0].id, target_version: v.id, reason })}>Restore as draft</Button>}</div>)}</>}
           {!history.length && <p>No recorded changes.</p>}
           {history.map(event => <details key={event.id} className="rounded border border-background-200 p-2"><summary className="cursor-pointer">{event.after_data?.name ?? event.before_data?.name} · {event.action} · {dateTime(event.created_at)}</summary>
             <p className="py-2">{event.reason}</p><p className="text-xs">Changed by {event.actor || "Migration"}</p><pre className="mt-2 overflow-x-auto text-xs">{JSON.stringify({ previous: event.before_data, updated: event.after_data }, null, 2)}</pre></details>)}
@@ -208,10 +208,10 @@ function RuleWorkspace() {
       </Card>
       {editor && current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between gap-2"><h2 className="font-bold">{version.definition.name}</h2><Button size="sm" variant="ghost" onClick={() => setSelected("")}>Close</Button></div>
-        <Badge tone="warn">Review only</Badge>
+        <Badge tone="muted">Reference</Badge>
         <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>
         <p>{version.definition.description}</p>
-        <p className="text-foreground-600">This is the value found in the existing workflow. Editing and publishing will become available when the workflow is connected.</p>
+        <p className="text-foreground-600">This reference records a setting currently used by the workflow. Editing will become available when that workflow is connected to Business Rules.</p>
         {version.definition.source_url && <a className="font-medium text-primary-700 hover:underline" href={version.definition.source_url} target="_blank" rel="noreferrer">View source</a>}
       </Card> : editor && <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
         rule={current} version={version} existingApprovalRequired={!!current && !!effective(current)?.definition.approval_required} categories={snapshot.categories} locations={locations} fields={snapshot.fields} busy={busy} close={() => setSelected("")} submit={submit} />}

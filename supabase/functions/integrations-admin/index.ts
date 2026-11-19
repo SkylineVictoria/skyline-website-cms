@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { pkceChallenge, oauthCallback, oauthConfig, oauthProviders, readOAuthCredential, stateHash, authorizeUrl, exchange, revokeAtProvider } from '../_shared/integrations/oauth.ts';
 import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
+import { microsoft365Status } from '../_shared/microsoft365.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,6 +164,15 @@ Deno.serve(async(req:Request)=>{
    if(action==='revoke'&&revokeCode==='revoke_not_supported')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline. This provider has no revoke API: remove Skyline from the account\'s connected apps there if required.'});
    if(action==='revoke'&&revokeCode==='revoke_failed')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline, but the provider did not confirm revocation. Remove Skyline from the account\'s connected apps there.'});
    return json({ok:true,...(action==='revoke'?{providerRevoked:revokeCode==='revoked'}:{})});
+  }
+  if((action==='test'||action==='retry')&&c.connector_id==='microsoft365'){
+   // 2026-11-20: Microsoft 365 is checked app-only (Email Management's status: connection, consent, domain, licence), one status in both places.
+   if(c.status==='disabled')return json({error:'Enable this connection before testing.'},409);
+   const s=await microsoft365Status(n=>Deno.env.get(n));
+   const now=new Date().toISOString();
+   const cr=await admin.from('integration_connections').update({status:s.ready?'connected':s.configured?'error':'not_connected',...(s.ready?{last_success_at:now}:{}),updated_at:now}).eq('id',c.id).neq('status','disabled');check(cr.error);
+   await log(s.ready?'connection_verified':'microsoft365_not_ready',s.ready?'info':'error');
+   return s.ready?json({ok:true,microsoft365:s}):json({error:`Microsoft 365 is not ready: ${s.problems[0]??'check the setup.'}`,microsoft365:s},409);
   }
   if(action==='test'||action==='retry'){
    if(c.status==='disabled')return json({error:'Enable this connection before testing.'},409);

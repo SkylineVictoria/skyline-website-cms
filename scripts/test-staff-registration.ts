@@ -1448,6 +1448,57 @@ test("review application dialog (2026-11-20): opens on Review and decide, action
   assert.ok(sql.includes("'acn', a.acn, 'acnSource', a.acn_source") && sql.includes("'image', r.signature_image, 'signedAt', r.signed_at") && sql.includes("public.agency_onboarding_review_get(uuid)"), "review data: ACN and the agency admin's signature");
 });
 
+const m365 = await load.import<typeof import("../supabase/functions/_shared/microsoft365.ts")>("../supabase/functions/_shared/microsoft365.ts");
+test("Microsoft 365 status (2026-11-20): one app-only check behind Email Management and Connections; every item a real Graph call; no secret leaves", async () => {
+  const SECRET = "s3cr3t-value-never-returned";
+  const env = (over: Record<string, string> = {}) => (n: string) => ({ EF_MICROSOFT365_CLIENT_ID: "00000000-aaaa-bbbb-cccc-000000001234", EF_MICROSOFT365_CLIENT_SECRET: SECRET,
+    EF_MICROSOFT365_TENANT_ID: "tenant-1", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", ...over } as Record<string, string>)[n];
+  const jwt = (roles: string[]) => `h.${btoa(JSON.stringify({ roles })).replace(/=+$/, "")}.sig`;
+  const ALL = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "Mail.Send"];
+  const graph = (o: { roles?: string[]; token?: Response; domains?: Array<{ id: string; isVerified: boolean }>; skus?: unknown[]; domainStatus?: number }) => {
+    const calls: string[] = [];
+    const request = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input); calls.push(`${init?.method ?? "GET"} ${url.replace(/\?.*$/, "")}`);
+      if (url.includes("login.microsoftonline.com")) return o.token ?? new Response(JSON.stringify({ access_token: jwt(o.roles ?? ALL) }), { status: 200 });
+      if (url.includes("/organization")) return new Response(JSON.stringify({ value: [{ id: "tenant-1", displayName: "Skyline Institute of Technology", verifiedDomains: [{ name: "slit.edu.au" }] }] }));
+      if (url.includes("/domains")) return o.domainStatus ? new Response("{}", { status: o.domainStatus }) : new Response(JSON.stringify({ value: o.domains ?? [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: true }] }));
+      if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: o.skus ?? [{ skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 500 }, consumedUnits: 120, capabilityStatus: "Enabled" }, { skuPartNumber: "O365_BUSINESS_PREMIUM", prepaidUnits: { enabled: 10 }, consumedUnits: 10 }] }));
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    return { request, calls };
+  };
+  // Ready: connection, consent, both domains verified, student seats free; GET only, nothing created.
+  const ok = graph({});
+  const ready = await m365.microsoft365Status(env(), ok.request);
+  assert.deepEqual([ready.ready, ready.checks, ready.tenant?.name, ready.clientIdEnd, ready.consent.missing, ready.consent.welcomeEmail], [true, { connection: "ok", consent: "ok", domain: "ok", licence: "ok" }, "Skyline Institute of Technology", "1234", [], true]);
+  assert.deepEqual(ready.licences[0], { sku: "STANDARDWOFFPACK_STUDENT", total: 500, available: 380, student: true }, "the student licence first, seats left");
+  assert.ok(ok.calls.slice(1).every((c) => c.startsWith("GET ")) && ok.calls[0].startsWith("POST https://login.microsoftonline.com/tenant-1/"), "only reads after the token");
+  assert.ok(!JSON.stringify(ready).includes(SECRET) && !JSON.stringify(ready).includes("h.ey"), "no secret or token in the result");
+  // Missing admin consent: the token's roles say exactly which application permissions to add.
+  const partial = await m365.microsoft365Status(env(), graph({ roles: ["User.ReadWrite.All", "Organization.Read.All"], domainStatus: 403 }).request);
+  assert.deepEqual([partial.ready, partial.checks.consent, partial.consent.missing], [false, "missing", ["LicenseAssignment.ReadWrite.All", "Domain.Read.All"]]);
+  assert.match(partial.problems[0], /Admin consent is missing for: LicenseAssignment\.ReadWrite\.All, Domain\.Read\.All\. In Entra > App registrations/);
+  assert.equal(partial.checks.domain, "missing", "without Domain.Read.All the organization's verified domains are used: the student domain is not listed there");
+  // A wrong / expired secret: plain advice, never Microsoft's text.
+  const bad = await m365.microsoft365Status(env(), graph({ token: new Response(JSON.stringify({ error: "invalid_client", error_codes: [7000215], error_description: "AADSTS7000215: Invalid client secret provided. Trace" }), { status: 401 }) }).request);
+  assert.deepEqual([bad.connected, bad.checks.connection, bad.checks.consent], [false, "failed", "not_checked"]);
+  assert.match(bad.problems[0], /client secret \(wrong or expired\)/); assert.ok(!bad.problems.join(" ").includes("Trace"));
+  // Not set up at all.
+  const none = await m365.microsoft365Status(env({ EF_MICROSOFT365_CLIENT_SECRET: "" }), graph({}).request);
+  assert.deepEqual([none.configured, none.checks.connection, none.ready], [false, "missing", false]);
+  // Domain not verified, no student seats.
+  const blocked = await m365.microsoft365Status(env(), graph({ domains: [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: false }], skus: [{ skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 5 }, consumedUnits: 5 }] }).request);
+  assert.deepEqual([blocked.checks.domain, blocked.checks.licence, blocked.domains], ["missing", "missing", [{ name: "slit.edu.au", verified: true, found: true }, { name: "student.slit.edu.au", verified: false, found: true }]]);
+  assert.ok(blocked.problems.some((p) => /student\.slit\.edu\.au is in Microsoft 365 but not verified/.test(p)) && blocked.problems.some((p) => /No STANDARDWOFFPACK_STUDENT seats are free/.test(p)));
+  // The screens: no hard-coded status; one shared check; Microsoft 365 first on Connections; named "connection verified" messages.
+  const page = read("src/pages/admin/EmailManagementPage.tsx"), connections = read("src/pages/admin/integrations/ConnectionsPage.tsx"), fn = read("supabase/functions/student-office365/index.ts"), adminFn = read("supabase/functions/integrations-admin/index.ts");
+  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && page.includes("fetchEmailPeople(personType)"), "Email Management reads the live status and loads people");
+  assert.ok(connections.includes("Number(b.connector_id === M365) - Number(a.connector_id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
+  assert.ok(fn.includes("action==='m365_status'||action==='people'") && fn.includes("caller.rpc('admin_business_require')") && adminFn.includes("c.connector_id==='microsoft365'") && adminFn.includes("microsoft365Status("), "both functions use the one check");
+  const sql = read("supabase/migrations/20261120163517_email_management_people.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("perform public.admin_business_require();") && sql.includes("revoke all on function public.email_mgmt_people(text, text) from public, anon;"), "people list: SLIT administrators only");
+});
+
 /* ------------------------------------------------------------------ phone normalisation */
 
 const VECTORS: Array<[string, string | null]> = [

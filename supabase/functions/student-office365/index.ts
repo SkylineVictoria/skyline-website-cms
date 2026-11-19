@@ -10,8 +10,12 @@
 // EF_MICROSOFT365_WELCOME_SENDER; optional EF_MICROSOFT365_STUDENT_SKU (default STANDARDWOFFPACK_STUDENT = Office 365 A1 for
 // students), EF_MICROSOFT365_USAGE_LOCATION (default AU).
 // Microsoft app permissions (Application, admin consent): User.ReadWrite.All, LicenseAssignment.ReadWrite.All,
-// Organization.Read.All, Mail.Send.
+// Organization.Read.All, Domain.Read.All, Mail.Send.
+// 2026-11-20 (Email Management): m365_status {} -> the one Microsoft 365 status (real Graph calls, nothing changed; the Connections page's
+// Microsoft 365 entry is set from the same result); people { personType, q } -> the Create Email "Existing person" list
+// (email_mgmt_people). Both SLIT administrators only (admin_business_require).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
+import { microsoft365Status } from '../_shared/microsoft365.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -73,6 +77,22 @@ Deno.serve(async(req:Request)=>{
   const raw=await req.text();if(raw.length>2000)return json({error:'Request too large.'},413);
   let body:Record<string,unknown>;try{body=JSON.parse(raw);}catch{return json({error:'Invalid JSON.'},400);}
   const action=String(body.action??''),studentId=String(body.studentId??'');
+  if(action==='m365_status'||action==='people'){
+   const gate=await caller.rpc('admin_business_require');
+   if(gate.error)return json({error:gate.error.code==='42501'?'Administrator access required.':'Access could not be checked.'},gate.error.code==='42501'?403:500);
+   if(action==='people'){
+    const r=await caller.rpc('email_mgmt_people',{p_type:String(body.personType??''),p_query:String(body.q??'').slice(0,80)});
+    if(r.error)return json({error:r.error.code==='22023'?r.error.message:'The people could not be loaded.'},r.error.code==='22023'?400:500);
+    return json({people:r.data??[]});
+   }
+   const s=await microsoft365Status((n)=>Deno.env.get(n));
+   // One status for both screens: the Connections page's Microsoft 365 entry is set from this same check.
+   const service=createClient(url,env('SUPABASE_SERVICE_ROLE_KEY'),{auth:{persistSession:false,autoRefreshToken:false}});
+   const now=new Date().toISOString();
+   await service.from('integration_connections').update({status:s.ready?'connected':s.configured?'error':'not_connected',...(s.ready?{last_success_at:now}:{}),updated_at:now})
+    .eq('connector_id','microsoft365').is('tenant_id',null).neq('status','disabled');
+   return json(s);
+  }
   if(!['state','create'].includes(action))return json({error:'Unknown action.'},400);
   if(!uuid.test(studentId))return json({error:'Select a student.'},400);
   const prep=await caller.rpc('student_o365_prepare',{p_student:studentId});

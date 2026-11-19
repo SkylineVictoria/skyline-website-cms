@@ -29,7 +29,7 @@ export interface Microsoft365Status {
   checks: { connection: CheckState; consent: CheckState; domain: CheckState; licence: CheckState };
   consent: { granted: string[]; missing: string[]; welcomeEmail: boolean };
   domains: Array<{ name: string; verified: boolean; found: boolean }>;
-  licences: Array<{ sku: string; available: number; total: number; student: boolean }>;
+  licences: Array<{ sku: string; available: number; total: number; student: boolean; staff: boolean }>;
   /** One plain sentence per problem, in the order to fix them. */
   problems: string[];
   checkedAt: string;
@@ -60,6 +60,7 @@ export async function microsoft365Status(env: Env, request: typeof fetch = fetch
   const clientId = read("EF_MICROSOFT365_CLIENT_ID"), secret = read("EF_MICROSOFT365_CLIENT_SECRET"), tenantId = read("EF_MICROSOFT365_TENANT_ID");
   const studentDomain = read("EF_MICROSOFT365_STUDENT_DOMAIN").toLowerCase();
   const studentSku = read("EF_MICROSOFT365_STUDENT_SKU") || "STANDARDWOFFPACK_STUDENT";
+  const staffSku = read("EF_MICROSOFT365_STAFF_SKU") || "STANDARDWOFFPACK_FACULTY";
   const status: Microsoft365Status = {
     configured: !!(clientId && secret && tenantId), connected: false, ready: false, tenant: null, clientIdEnd: clientId ? clientId.slice(-4) : null,
     checks: { connection: "not_checked", consent: "not_checked", domain: "not_checked", licence: "not_checked" },
@@ -125,8 +126,8 @@ export async function microsoft365Status(env: Env, request: typeof fetch = fetch
     if (!r.ok) { await r.body?.cancel(); throw new Error(String(r.status)); }
     const skus = ((await r.json()) as { value?: Array<{ skuPartNumber: string; capabilityStatus?: string; prepaidUnits?: { enabled?: number }; consumedUnits?: number }> }).value ?? [];
     status.licences = skus.filter((s) => (s.capabilityStatus ?? "Enabled") === "Enabled").map((s) => {
-      const total = Number(s.prepaidUnits?.enabled ?? 0); return { sku: s.skuPartNumber, total, available: Math.max(0, total - Number(s.consumedUnits ?? 0)), student: s.skuPartNumber === studentSku };
-    }).sort((a, b) => Number(b.student) - Number(a.student) || b.available - a.available);
+      const total = Number(s.prepaidUnits?.enabled ?? 0); return { sku: s.skuPartNumber, total, available: Math.max(0, total - Number(s.consumedUnits ?? 0)), student: s.skuPartNumber === studentSku, staff: s.skuPartNumber === staffSku };
+    }).sort((a, b) => Number(b.student) - Number(a.student) || Number(b.staff) - Number(a.staff) || b.available - a.available);
     const student = status.licences.find((l) => l.student);
     status.checks.licence = student && student.available > 0 ? "ok" : "missing";
     if (!student) status.problems.push(`The tenant has no ${studentSku} subscription (the student licence). Add it in the Microsoft 365 admin centre > Billing, or set EF_MICROSOFT365_STUDENT_SKU to the licence to use.`);

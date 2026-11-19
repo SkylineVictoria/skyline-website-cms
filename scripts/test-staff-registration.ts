@@ -1503,18 +1503,22 @@ const prov = await load.import<typeof import("../supabase/functions/_shared/offi
 test("Create Email for staff (2026-11-20): staff domain and faculty licence, existing mailbox found first, number only for a different person, dry run writes nothing", async () => {
   const ENV: Record<string, string> = { EF_MICROSOFT365_CLIENT_ID: "c", EF_MICROSOFT365_CLIENT_SECRET: "s", EF_MICROSOFT365_TENANT_ID: "t", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", EF_MICROSOFT365_WELCOME_SENDER: "admin@slit.edu.au" };
   // 1 and 2: domain and licence by person type; a staff plan can never be the student one.
-  assert.deepEqual(["student", "employee", "trainer"].map((k) => { const p = prov.planFor(k as never, (n) => ENV[n]); return [p.domain, p.sku]; }),
-    [["student.slit.edu.au", "STANDARDWOFFPACK_STUDENT"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"]]);
+  assert.deepEqual(["student", "employee", "trainer", "agent"].map((k) => { const p = prov.planFor(k as never, (n) => ENV[n]); return [p.domain, p.sku]; }),
+    [["student.slit.edu.au", "STANDARDWOFFPACK_STUDENT"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"]], "agents too get the faculty licence (owner's second brief)");
   assert.throws(() => prov.planFor("employee", (n) => ({ ...ENV, EF_MICROSOFT365_STAFF_DOMAIN: "student.slit.edu.au" } as Record<string, string>)[n]), /staff_plan_invalid/);
   assert.throws(() => prov.planFor("trainer", (n) => ({ ...ENV, EF_MICROSOFT365_STAFF_SKU: "STANDARDWOFFPACK_STUDENT" } as Record<string, string>)[n]), /staff_plan_invalid/);
   assert.ok(!read("src/pages/admin/EmailManagementPage.tsx").includes("OFFICESUBSCRIPTION_FACULTY") && !read("supabase/functions/_shared/office365-provision.ts").match(/addLicenses:[^\n]*OFFICESUBSCRIPTION/), "the apps-only licence is never assigned");
   // A fake tenant: users, seats; every call recorded.
   type U = { id: string; userPrincipalName: string; mail: string | null; displayName: string };
+  let mailFails = false;
   const world = (users: U[], faculty = { enabled: 45, consumed: 25 }) => {
-    const calls: string[] = []; const rpcs: string[] = [];
+    const calls: string[] = []; const rpcs: string[] = []; const steps: string[] = [];
     const request = (async (input: string | URL, init?: RequestInit) => {
       const url = decodeURIComponent(String(input)), method = init?.method ?? "GET"; calls.push(`${method} ${url.replace("https://graph.microsoft.com/v1.0", "")}`);
       if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "tok" }));
+      if (url.includes("/domains?")) return new Response(JSON.stringify({ value: [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: true }, { id: "slit.onmicrosoft.com", isVerified: true }, { id: "old.slit.edu.au", isVerified: false }] }));
+      if (method === "PATCH") return new Response(null, { status: 204 });
+      if (url.includes("/members/$ref")) return new Response(null, { status: 204 });
       if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: [{ skuId: "stu", skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 425 }, consumedUnits: 332 },
         { skuId: "fac", skuPartNumber: "STANDARDWOFFPACK_FACULTY", prepaidUnits: { enabled: faculty.enabled }, consumedUnits: faculty.consumed }, { skuId: "apps", skuPartNumber: "OFFICESUBSCRIPTION_FACULTY", prepaidUnits: { enabled: 7 }, consumedUnits: 6 }] }));
       const m = /\/users\/([^?/]+)\?/.exec(url);
@@ -1526,17 +1530,17 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
       if (method === "POST" && url.endsWith("/users")) return new Response(JSON.stringify({ id: "new-user" }), { status: 201 });
       if (url.includes("/licenseDetails")) return new Response(JSON.stringify({ value: [] }));
       if (url.includes("/assignLicense")) return new Response("{}");
-      if (url.includes("/sendMail")) return new Response(null, { status: 202 });
+      if (url.includes("/sendMail")) return mailFails ? new Response(JSON.stringify({ error: { code: "MailboxNotEnabledForRESTAPI", message: "The mailbox is either inactive, soft-deleted, or is hosted on-premise." } }), { status: 404 }) : new Response(null, { status: 202 });
       throw new Error(`unexpected ${method} ${url}`);
     }) as typeof fetch;
     const person = { fullName: "Asha Patel", recordEmail: "asha.personal@example.test", trainer: true, account: null as null | Record<string, unknown> };
     const rpc = async (name: string, args: Record<string, unknown>) => { rpcs.push(name);
       if (name.endsWith("_prepare")) return { data: person, error: null };
       if (name.endsWith("_claim")) return { data: { conflict: false, upn: args.p_upn, msUserId: null }, error: null };
-      if (name.endsWith("_finish") || name === "o365_link") return { data: {}, error: null };
+      if (name.endsWith("_finish") || name === "o365_link" || name === "o365_step") { steps.push(`${args.p_step ?? name}:${args.p_ok ?? ""}:${args.p_detail ?? ""}`); return { data: {}, error: null }; }
       throw new Error(name); };
     const ports = { env: (n: string) => ENV[n], fetch: request, rpc } as unknown as import("../supabase/functions/_shared/office365-provision.ts").Ports;
-    return { ports, calls, rpcs, person };
+    return { ports, calls, rpcs, person, steps };
   };
   const STAFF = "11111111-1111-4111-8111-111111111111";
   const writes = (calls: string[]) => calls.filter((c) => /^(POST|PATCH|DELETE) /.test(c) && !c.includes("login.microsoftonline.com"));
@@ -1583,12 +1587,51 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   // A real create (mocked): user, faculty licence, welcome email, recorded; the password never in the reply.
   const w9 = world([]);
   const made = await prov.provision(w9.ports, "employee", STAFF);
-  assert.deepEqual([made.status, made.body.email, w9.rpcs], [200, "asha.patel@slit.edu.au", ["staff_o365_prepare", "staff_o365_claim", "staff_o365_finish"]]);
+  assert.deepEqual([made.status, made.body.email, w9.rpcs.filter((r) => r !== "o365_step")], [200, "asha.patel@slit.edu.au", ["staff_o365_prepare", "staff_o365_claim", "staff_o365_finish"]]);
+  assert.deepEqual(w9.steps.filter((x) => !x.startsWith("staff_o365_finish")), ["account:true:", "licence:true:STANDARDWOFFPACK_FACULTY", "welcome:true:"], "each step recorded (no groups until mapped)");
   assert.deepEqual(writes(w9.calls).map((c) => c.split(" ")[1].replace(/\/users\/[^/]+/, "/users/:id")), ["/users", "/users/:id/assignLicense", "/users/:id/sendMail"]);
   assert.ok(!JSON.stringify(made.body).toLowerCase().includes("password"));
   // The screens: Agent gone from Create Email, the "not created from here yet" note gone, a dry run and a link button.
   const section = read("src/pages/admin/components/CreateEmailSection.tsx"), page = read("src/pages/admin/EmailManagementPage.tsx");
-  assert.ok(![section, page].some((t) => t.includes("are not created from here yet")) && section.includes(`const KIND_LABEL: Record<MailboxKind, string> = { student: "Student", employee: "Employee", trainer: "Trainer" };`) && section.includes("lookupOffice365(") && section.includes("linkOffice365(") && page.includes("<CreateEmailSection />"), "staff types work; agents not offered");
+  assert.ok(![section, page].some((t) => t.includes("are not created from here yet")) && section.includes(`const KIND_LABEL: Record<MailboxKind, string> = { student: "Student", employee: "Employee", trainer: "Trainer", agent: "Agent" };`) && section.includes("lookupOffice365(") && section.includes("linkOffice365(") && page.includes("<CreateEmailSection />"), "staff types incl. agents");
+
+  // Round 2. Domains: verified, never onmicrosoft.com, only the person type's own; the server refuses anything else.
+  const wd = world([]);
+  const lk = await prov.lookup(wd.ports, "agent", STAFF);
+  assert.deepEqual([lk.body.domains, (await prov.lookup(world([]).ports, "student", STAFF)).body.domains], [["slit.edu.au"], ["student.slit.edu.au"]]);
+  for (const bad of ["student.slit.edu.au", "slit.onmicrosoft.com", "old.slit.edu.au"]) {
+    const r = await prov.provision(world([]).ports, "employee", STAFF, { dryRun: true, domain: bad });
+    assert.deepEqual([r.status, r.body.code], [400, "domain_not_allowed"], bad);
+  }
+  assert.equal((await prov.provision(world([]).ports, "student", STAFF, { dryRun: true, domain: "slit.edu.au" })).body.code, "domain_not_allowed", "no staff domain for a student");
+  // Never a second account: once the Microsoft user exists, create is refused (no parth.patel1); Resend is the way.
+  const wc = world([]); wc.person.account = { email: "asha.patel@slit.edu.au", status: "failed", lastError: "welcome_email_failed", welcomeSentAt: null, msUserId: "aaaaaaaa-0000-4000-8000-0000000000aa", steps: { accountCreatedAt: "2026-11-19T13:02:28Z", licenceAssignedAt: null, groupsAddedAt: null, groupsError: null, welcomeSentAt: null, welcomeError: "404:MailboxNotEnabledForRESTAPI" } };
+  const again = await prov.provision(wc.ports, "employee", STAFF, { differentPerson: true });
+  assert.deepEqual([again.status, again.body.code, writes(wc.calls)], [409, "already_created", []]);
+  assert.match(String((await prov.lookup(wc.ports, "employee", STAFF)).body.blocked), /^Already created asha\.patel@slit\.edu\.au\. Use Resend login email\.$/);
+  // Resend: dry run changes nothing; for real a new temporary password (PATCH), the missing licence finished, the email sent; no password returned.
+  const existingUser: U = { id: "aaaaaaaa-0000-4000-8000-0000000000aa", userPrincipalName: "asha.patel@slit.edu.au", mail: "asha.patel@slit.edu.au", displayName: "Asha Patel" };
+  const wr = world([existingUser]); wr.person.account = wc.person.account;
+  const rdry = await prov.resend(wr.ports, "employee", STAFF, { dryRun: true });
+  assert.deepEqual([rdry.status, rdry.body.licenceNeeded, writes(wr.calls), wr.steps], [200, true, [], []]);
+  const rr = await prov.resend(wr.ports, "employee", STAFF);
+  assert.deepEqual([rr.status, rr.body.email], [200, "asha.patel@slit.edu.au"]);
+  assert.deepEqual(writes(wr.calls).map((c) => c.split(" ")[0] + " " + c.split(" ")[1].replace(/\/users\/[^/]+/, "/users/:id")), ["POST /users/:id/assignLicense", "PATCH /users/:id", "POST /users/:id/sendMail"]);
+  assert.deepEqual(wr.steps, ["licence:true:STANDARDWOFFPACK_FACULTY", "welcome:true:"]);
+  assert.ok(!JSON.stringify(rr.body).toLowerCase().includes("password\""), "no password in the reply");
+  // A failed login email keeps Microsoft's error code (never its text) and marks the step failed.
+  mailFails = true;
+  const wf = world([existingUser]); wf.person.account = wc.person.account;
+  const rf = await prov.resend(wf.ports, "employee", STAFF);
+  mailFails = false;
+  assert.deepEqual([rf.status, rf.body.graphCode, wf.steps.at(-1)], [409, "404:MailboxNotEnabledForRESTAPI", "welcome:false:404:MailboxNotEnabledForRESTAPI"]);
+  assert.ok(!JSON.stringify(rf.body).includes("soft-deleted"), "Microsoft's message text is not passed on");
+  // A linked account (not made by Skyline) is not resent; groups come from the mapping (none until the owner maps them).
+  const wl = world([existingUser]); wl.person.account = { ...wc.person.account, linked: true };
+  assert.equal((await prov.resend(wl.ports, "employee", STAFF)).body.code, "linked");
+  assert.deepEqual([prov.groupIds(prov.planFor("employee", (n) => ENV[n]), (n) => ENV[n]), prov.groupIds(prov.planFor("student", (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n]), (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n])],
+    [[], ["11111111-2222-4333-8444-555555555555"]]);
+  assert.ok(section.includes('data-testid="email-resend"') && section.includes('data-testid="email-domain"') && section.includes("{created ? null : confirming"), "Resend replaces Create once the account exists; the domain dropdown");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

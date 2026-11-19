@@ -1112,6 +1112,15 @@ test("scheduled jobs: every HTTP dispatcher posts through cron_http_post, a dail
   assert.match(board, /key: "scheduledJobs", label: "Scheduled jobs failing"/);
 });
 
+test("scheduled jobs: flags are emailed to the ops address through the notification queue, at most once a day", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261120071533_cron_health_email.sql", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(sql, /select 'gourav\.gupta@slit\.edu\.au'::text/);
+  assert.match(sql, /insert into public\.cron_health_mails\(day, jobs\) values \(current_date, v_n\) on conflict \(day\) do nothing;\n  if found then/, "the day is claimed before anything is queued");
+  assert.match(sql, /insert into public\.notification_deliveries\(recipient_email, event, template_source, subject, body\)/, "the existing queue, no new cron");
+  assert.ok(!/cron\.schedule/.test(sql), "no new cron job");
+  assert.match(sql, /event like 'ops\\_%'/, "the queue's subject rule admits ops events");
+});
+
 test("sms dispatch: stops at the batch limit and counts fenced (stale) records", async () => {
   const { port } = smsPort([claimedSms("a"), claimedSms("b"), claimedSms("c")], false);
   const provider = createMockSmsProvider([{ kind: "accepted", messageId: "MSG-00000001" }]);

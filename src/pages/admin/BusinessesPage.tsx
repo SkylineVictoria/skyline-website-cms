@@ -11,7 +11,7 @@ import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
-import { businessDropdownStatuses, canOfferBusinessDelete } from "@/pages/admin/lib/businessData";
+import { businessDropdownStatuses, deleteBlockReason, isSlitAdmin } from "@/pages/admin/lib/businessData";
 
 const PAGE_SIZE = 25;
 /** Active and Invited are worked out on the device from the active businesses (up to this many). */
@@ -28,7 +28,7 @@ export default function BusinessesPage() {
   // for a business that was ever active).
   const dropdownStatuses = businessDropdownStatuses(businessStatuses);
   const { user } = useAuth();
-  const isAdmin = user?.role === "Admin";
+  const isAdmin = isSlitAdmin(user?.role);
   const [deleting, setDeleting] = useState<BusinessRow | null>(null);
   // Active is the default tab; "all" in the address shows every business.
   const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Onboarding" ? "Onboarding" : values.status === "Invited" ? "Invited" : values.status === "Pending" ? "Pending" : "Active";
@@ -38,7 +38,8 @@ export default function BusinessesPage() {
   const [pending, setPending] = useState<PendingRegistration[]>([]);
   const [decline, setDecline] = useState<PendingRegistration | null>(null);
   const countFor = (value: string) => (value === "Active" ? (counts ? Math.max(0, counts.active - invited.size) : null)
-    : value === "Invited" ? (counts ? invited.size : null) : value === "Pending" ? (counts ? pending.length : null) : value === "Inactive" ? counts?.inactive : undefined) ?? null;
+    : value === "Invited" ? (counts ? invited.size : null) : value === "Pending" ? (counts ? (counts.pending ?? pending.length) : null) : value === "Inactive" ? counts?.inactive
+    : value === "Onboarding" ? counts?.onboarding : undefined) ?? null;
   const [rows, setRows] = useState<BusinessRow[]>([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<ListCounts | null>(null);
@@ -249,9 +250,23 @@ export default function BusinessesPage() {
                     </td>
                     <td>
                       <div className="flex flex-wrap justify-end gap-1.5">
-                        {canOfferBusinessDelete(row, isAdmin) ? (
-                          <Button size="sm" variant="ghost" icon="ri-delete-bin-line" onClick={() => setDeleting(row)} data-testid={`delete-business-${row.id}`} aria-label={`Delete ${row.name}`}>Delete</Button>
-                        ) : null}
+                        {(() => {
+                          // Delete business (2026-11-20): a clear red button where it is possible; elsewhere a greyed-out icon whose tooltip says why.
+                          const reason = deleteBlockReason(row, isAdmin);
+                          return reason === null ? (
+                            <button type="button" onClick={() => setDeleting(row)} data-testid={`delete-business-${row.id}`} aria-label={`Delete ${row.name}`}
+                              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-red-300 bg-white px-2.5 py-1 text-label font-medium text-red-700 hover:bg-red-50">
+                              <i className="ri-delete-bin-line" aria-hidden="true" />Delete
+                            </button>
+                          ) : (
+                            <span title={reason} className="inline-flex" data-testid={`delete-business-blocked-${row.id}`}>
+                              <button type="button" aria-disabled="true" aria-label={`Delete not available: ${reason}`} onClick={(e) => e.preventDefault()}
+                                className="inline-flex cursor-not-allowed items-center rounded-md border border-background-200 px-2 py-1 text-label text-foreground-300">
+                                <i className="ri-delete-bin-line" aria-hidden="true" />
+                              </button>
+                            </span>
+                          );
+                        })()}
                         <Link to={`/admin/businesses/${row.id}`} className="inline-flex items-center rounded-md border border-background-300 px-2.5 py-1 text-label font-medium text-foreground-800 hover:bg-background-100">Open</Link>
                       </div>
                     </td>

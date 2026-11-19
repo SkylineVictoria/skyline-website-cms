@@ -2341,6 +2341,24 @@ test("businesses (2026-11-20): an Active business offers only Active / Inactive 
   for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
   for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
   for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
+  // 2026-11-20 follow-up: the admin role is read whatever its case; every other row gets a reason (the greyed-out icon's tooltip).
+  assert.deepEqual(["Admin", "admin", " ADMIN ", "Editor", "", null].map((r) => del.isSlitAdmin(r as string)), [true, true, true, false, false, false]);
+  assert.equal(del.deleteBlockReason(row(), true), null);
+  assert.match(del.deleteBlockReason(row(), false)!, /Only a SLIT administrator/);
+  assert.match(del.deleteBlockReason(row({ agencyCode: "SLIT-DIRECT", status: "Active" }), true)!, /never be deleted/);
+  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Already onboarded: make it Inactive/);
+  assert.match(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true)!, /stays Inactive/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Not sent yet/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /^Awaiting referees: the application is signed/);
+  assert.match(del.deleteBlockReason(row({ students: 2 }), true)!, /students or applications/);
+  const listPage = read("src/pages/admin/BusinessesPage.tsx");
+  assert.ok(listPage.includes("const isAdmin = isSlitAdmin(user?.role);") && listPage.includes("title={reason}") && listPage.includes("border-red-300"), "red Delete where possible, a tooltip elsewhere");
+  // The tabs: Onboarding is a filter the list accepts and counts; every business is in exactly one tab, so they add up to All.
+  const listSql = read("supabase/migrations/20261120143517_business_list_onboarding_tab.sql").replace(/\r\n/g, "\n");
+  assert.ok(listSql.includes("not in ('', 'Active', 'Inactive', 'Onboarding')"), "Onboarding accepted as a filter");
+  assert.ok(listSql.includes("'onboarding', (select count(*) from searched where status = 'Onboarding' and not pending_review), 'pending', (select count(*) from searched where pending_review)"));
+  assert.ok(listSql.includes("'inactive', (select count(*) from searched where status = 'Inactive' and not pending_review)"));
+  assert.ok(listPage.includes(`: value === "Onboarding" ? counts?.onboarding`), "the Onboarding tab shows its count");
   // The typed confirmation: the name (case and spaces ignored) or the ABN.
   assert.equal(del.deleteConfirmMatches("  purva  tech pty ltd ", "PURVA TECH PTY LTD", "86603584676"), true);
   assert.equal(del.deleteConfirmMatches("86 603 584 676", "PURVA TECH PTY LTD", "86603584676"), true);

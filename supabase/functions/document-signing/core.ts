@@ -395,6 +395,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         for (let attempt = 0; ; attempt++) {
           // What the document looks like once this person has signed; nothing is written yet.
           const plan = await linkCall("sign_plan", data);
+          // The certificate's letterhead (Website Settings + the logo over HTTPS) is fetched while the document is stamped and stored.
+          const letterheadSoon = plan.complete ? ports.letterhead().catch(() => null) : null;
           signTimer?.lap("io_plan");
           const original = await fileBytes(plan.original_path, plan.original_hash);
           signTimer?.lap("io_download");
@@ -413,9 +415,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           signTimer?.lap("io_store");
           let certificatePath: string | null = null, certificateHash: string | null = null, certificateBytes: Uint8Array | null = null;
           if (plan.complete) {
+            const letterhead = await letterheadSoon;
+            signTimer?.lap("io_letterhead");
             const certificate = await pdf.buildCertificate({ ...stamp, id: plan.id, createdAt: plan.created_at, sentAt: plan.sent_at, completedAt: plan.signed_at, signingMode: plan.signing_mode,
               originalHash: plan.original_hash, signedHash, consent: SIGNING_CONSENT, chainOk: plan.chain_ok,
-              events: [...plan.events, { event: "signed", at: plan.signed_at, recipient_id: plan.recipient_id }, { event: "completed", at: plan.signed_at }] }, await ports.letterhead());
+              events: [...plan.events, { event: "signed", at: plan.signed_at, recipient_id: plan.recipient_id }, { event: "completed", at: plan.signed_at }] }, letterhead);
             certificatePath = `${plan.id}/certificate-${ports.uuid()}.pdf`; certificateHash = await sha256Hex(certificate); certificateBytes = certificate;
             signTimer?.lap("certificate");
             await store(certificatePath, certificate); mine.push(certificatePath);

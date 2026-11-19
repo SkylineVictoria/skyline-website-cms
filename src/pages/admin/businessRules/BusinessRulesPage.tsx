@@ -20,6 +20,9 @@ const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
 // rule-policy: technical table-labels Displays labels for persisted rule metadata.
 const ruleColumns = ["Rule", "Category", "Type", "Value", "Status", "Effective date", "Last modified", "Actions"];
 
+// rule-policy: technical reference-caption Explains that source records do not configure workflow behavior.
+const referenceCaption = "This reference records a setting, default, or template term found in the source. Existing workflows continue to use their current implementation or saved settings.";
+
 const reschedulingTitle = "Class rescheduling rules";
 const registrationError = "The Business Rules service is unavailable. Retry or contact your administrator.";
 
@@ -95,7 +98,8 @@ function RuleWorkspace() {
   const scoped = snapshot.rules.filter(rule => !scope || appliesTo(locations, rule.versions[0].definition.scope, scope));
   const filtered = scoped.filter(rule => {
     const d = rule.versions[0].definition;
-    return (!category || d.category_id === category) && `${d.name} ${d.identifier} ${d.description}`.toLowerCase().includes(search.trim().toLowerCase());
+    const categoryName = snapshot.categories.find(item => item.id === d.category_id)?.name ?? "";
+    return (!category || d.category_id === category) && `${d.name} ${d.identifier} ${d.description} ${categoryName}`.toLowerCase().includes(search.trim().toLowerCase());
   });
   const showRescheduling = (!scope || appliesTo(locations, timetableRulesScope, scope)) && !category
     && `${reschedulingTitle} timetable`.toLowerCase().includes(search.trim().toLowerCase());
@@ -175,7 +179,7 @@ function RuleWorkspace() {
               return <tr key={rule.id} className="border-b border-background-200 align-top">
                 <th scope="row" className="p-2 font-medium"><button type="button" onClick={() => open(rule.id)} className="text-left text-primary-700">{latest.definition.name}</button><div className="mt-1 text-foreground-500">{locationLabel(locations, latest.definition.scope)}</div></th>
                 <td className="p-2">{snapshot.categories.find(c => c.id === latest.definition.category_id)?.name}</td><td className="p-2">{latest.definition.value_type}</td>
-                <td className="max-w-40 break-words p-2">{definitionSummary((live ?? next ?? latest).definition)}</td>
+                <td className="max-w-40 break-words p-2"><span className="line-clamp-2">{definitionSummary((live ?? next ?? latest).definition)}</span></td>
                 <td className="p-2"><Badge tone={active ? "success" : "muted"}>{label}</Badge>{latest.state === "draft" && active && <div className="mt-1">Draft pending</div>}</td>
                 <td className="p-2">{awaiting ? "—" : (live ?? next ?? latest).definition.starts_on}</td><td className="p-2">{dateTime(latest.created_at)}</td>
                 <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>{awaiting ? "View" : "Edit"}</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
@@ -209,9 +213,11 @@ function RuleWorkspace() {
       {editor && current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between gap-2"><h2 className="font-bold">{version.definition.name}</h2><Button size="sm" variant="ghost" onClick={() => setSelected("")}>Close</Button></div>
         <Badge tone="muted">Reference</Badge>
-        <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>
+        {typeof version.definition.value === "object"
+          ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-background-100 p-2 text-xs">{JSON.stringify(version.definition.value, null, 2)}</pre>
+          : <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>}
         <p>{version.definition.description}</p>
-        <p className="text-foreground-600">This reference records a setting currently used by the workflow. Editing will become available when that workflow is connected to Business Rules.</p>
+        <p className="text-foreground-600">{referenceCaption}</p>
         {version.definition.source_url && <a className="font-medium text-primary-700 hover:underline" href={version.definition.source_url} target="_blank" rel="noreferrer">View source</a>}
       </Card> : editor && <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
         rule={current} version={version} existingApprovalRequired={!!current && !!effective(current)?.definition.approval_required} categories={snapshot.categories} locations={locations} fields={snapshot.fields} busy={busy} close={() => setSelected("")} submit={submit} />}

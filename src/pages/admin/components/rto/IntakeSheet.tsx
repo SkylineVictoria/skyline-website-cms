@@ -11,6 +11,7 @@ import HoursNote from "@/pages/admin/components/rto/HoursNote";
 import { OverrideStudentDrawer, PlaceByHandDrawer } from "@/pages/admin/components/rto/OverridePlacement";
 import IntakeAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
 import BatchCourseCalendar from "@/pages/admin/lms/BatchCourseCalendar";
+import ClassesToReschedule from "@/pages/admin/components/rto/ClassesToReschedule";
 import { Empty, MoreMenu, Section, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
 import IntakeGroupPanel from "@/pages/admin/components/rto/IntakeGroupPanel";
 import {
@@ -300,6 +301,7 @@ function ClassSetup({ detail, group: g, canEdit, hours, setupLabel, calendarKey,
         </div>
         <HoursNote check={hours} />
       </Section>
+      <ClassesToReschedule intakeId={detail.intake.id} onChanged={onReload} />
       <Section title="Class dates" helper="Every class of the course, month by month; term breaks greyed out. Made from the weekly class times.">
         <BatchCourseCalendar key={`${g.id}:${calendarKey}`} batchId={g.id} courseId={detail.intake.courseId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
           hasSlots={(g.sessions ?? []).length > 0} canManage={canEdit} reloadKey={calendarKey} onRemoved={async () => { onReload(); }} />

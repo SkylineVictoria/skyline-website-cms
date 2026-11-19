@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Modal, Select } from "@/pages/admin/components/ui";
 import { addDays, mondayOf, shortDate, timeRange, todayIso } from "@/pages/admin/lib/rto";
+import CantRunDialog from "@/pages/admin/components/rto/CantRunDialog";
 import { courseColour, loadCalendar, loadClassStudents, overlaps, trainerNames, type CalClass, type CalFilter, type CalPeople, type ClassStudent } from "./calendarData";
 
 type View = "month" | "week" | "day";
@@ -31,6 +32,7 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
   const [classes, setClasses] = useState<CalClass[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<CalClass | null>(null);
+  const [reload, setReload] = useState(0);
   const fixedKey = JSON.stringify(fixed);
 
   const range = useMemo(() => {
@@ -45,7 +47,7 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
       .then((r) => { if (live) setClasses(r); })
       .catch((e) => { if (live) { setError(e instanceof Error ? e.message : "The classes did not load."); setClasses([]); } });
     return () => { live = false; };
-  }, [range.from, range.to, filter, fixedKey]);
+  }, [range.from, range.to, filter, fixedKey, reload]);
 
   const byDay = useMemo(() => {
     const m = new Map<string, CalClass[]>();
@@ -207,13 +209,14 @@ export default function ClassCalendar({ people, fixed = {}, showFilters = true, 
         </div>
       )}
 
-      {open ? <ClassDetails c={open} clash={clash.get(open.id)} onClose={() => setOpen(null)} /> : null}
+      {open ? <ClassDetails c={open} clash={clash.get(open.id)} onClose={() => setOpen(null)} onChanged={() => { setOpen(null); setReload((n) => n + 1); }} /> : null}
     </div>
   );
 }
 
-function ClassDetails({ c, clash, onClose }: { c: CalClass; clash?: string; onClose: () => void }) {
+function ClassDetails({ c, clash, onClose, onChanged }: { c: CalClass; clash?: string; onClose: () => void; onChanged: () => void }) {
   const [students, setStudents] = useState<ClassStudent[] | null>(null);
+  const [cantRun, setCantRun] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
@@ -224,11 +227,13 @@ function ClassDetails({ c, clash, onClose }: { c: CalClass; clash?: string; onCl
     }
     return () => { live = false; };
   }, [c.id, c.prerequisite, c.studentList]);
+  if (cantRun) return <CantRunDialog sessionId={c.id} onClose={() => setCantRun(false)} onDone={(msg) => { window.alert(msg); onChanged(); }} />;
   const row = (label: string, value: string) => <div><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-medium text-foreground-950">{value}</dd></div>;
   return (
     <Modal open title={`${c.courseCode} ${c.batch} · ${shortDate(c.date)}`} onClose={onClose} width="max-w-2xl"
       footer={<div className="flex flex-wrap justify-end gap-2">
         {c.prerequisite ? <Link to="/admin/lms/courses" className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open course › Weekly TimeTable › Late joiners' class</Link> : <>
+        <Button variant="outline" size="sm" icon="ri-calendar-close-line" onClick={() => setCantRun(true)}>Can't run…</Button>
         <Link to={`/admin/lms/intakes#${c.intakeId}`} className="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600">Open intake</Link></>}
       </div>}>
       {clash ? <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">Clash: {clash}</p> : null}

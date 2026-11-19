@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { supabase } from "@/pages/admin/lib/supabase";
+import { reportFunctionFailure, supabase } from "@/pages/admin/lib/supabase";
 
 /** One Australian address as the address-search Edge Function (Geoscape) returns it. */
 export interface AddressPick { line: string; line2: string; suburb: string; state: string; postcode: string }
@@ -29,6 +29,7 @@ async function lookup(q: string, signal: AbortSignal): Promise<AddressLookup> {
     headers: { Authorization: `Bearer ${token}`, apikey: anon, "Content-Type": "application/json" },
     body: JSON.stringify({ q }),
   });
+  if (response.status >= 500) reportFunctionFailure("address-search", response.status, await response.clone().text().catch(() => ""), `Bearer ${token}`);
   const body = (await response.json().catch(() => null)) as { ok?: boolean; suggestions?: AddressPick[] } | null;
   if (!response.ok || !body?.ok || !Array.isArray(body.suggestions)) return { kind: "unavailable" };
   return { kind: "ok", suggestions: body.suggestions };

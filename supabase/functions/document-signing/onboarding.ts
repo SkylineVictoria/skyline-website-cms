@@ -329,6 +329,28 @@ export async function businessAcn(ctx: OnboardingContext, agencyId: string, abn?
   }
 }
 
+/**
+ * Delete business (owner 2026-11-20): only at "Application sent", only by a SLIT administrator, never a system business, never with
+ * students or applications; the database decides (public.admin_business_delete, with the typed name or ABN) and removes every row in one
+ * transaction with triggers off (nothing emailed). The signing files it names are then removed from storage. Silent: no email to anyone.
+ */
+export async function deleteBusiness(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const agencyId = agencyIdOf(ctx.body);
+  const result = await ctx.rpc("admin_business_delete", { p_business: agencyId, p_confirm: text(ctx.body.confirm, 300) }) as
+    { deleted: boolean; name: string; abn: string | null; files: string[] | null; counts: Record<string, number> };
+  const files = (result.files ?? []).filter((path) => typeof path === "string" && path.length > 0);
+  let filesLeft = 0;
+  if (files.length) {
+    try { await ctx.ports.storage.remove(files); }
+    catch (error) {
+      filesLeft = files.length;
+      console.warn(JSON.stringify({ event: "business_delete_files_left", count: files.length, error: String((error as Error)?.message ?? error).slice(0, 200) }));
+    }
+  }
+  return { deleted: true, name: result.name, abn: result.abn, counts: result.counts, filesRemoved: files.length - filesLeft, filesLeft };
+}
+
 export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
   await ctx.admin("subject_search", null, { type: "none" });
   await installedTemplate(ctx, "form"); await installedTemplate(ctx, "referee"); await installedTemplate(ctx, "agreement");
@@ -1025,6 +1047,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_referee_change: changeReferee,
   agent_onboarding_referee_upload: uploadRefereeForm,
   agent_onboarding_business_create: createBusiness,
+  agent_onboarding_business_delete: deleteBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
   // Retired (2026-11-19): agents have no onboarding of their own.

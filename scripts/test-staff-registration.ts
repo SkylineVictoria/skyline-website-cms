@@ -2323,6 +2323,56 @@ async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
   });
 }
 
+test("businesses (2026-11-20): an Active business offers only Active / Inactive and never goes back to Onboarding; Delete business only for SLIT admins at Application sent, removes everything silently, the link says no longer available", async () => {
+  const del = await load.import<typeof import("../src/pages/admin/lib/businessDelete.ts")>("../src/pages/admin/lib/businessDelete.ts");
+  // 1. The dropdown: Active and Inactive only (the status catalog also has Onboarding).
+  const catalog = [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }, { value: "Onboarding", label: "Onboarding" }];
+  assert.deepEqual(del.businessDropdownStatuses(catalog).map((c) => c.value), ["Active", "Inactive"]);
+  assert.ok(read("src/pages/admin/BusinessesPage.tsx").includes("{dropdownStatuses.map((item) => ("), "the row dropdown uses the filtered list");
+  // ... and the database refuses Onboarding for a business that was ever active, by any path; direct API deletes are refused too.
+  const sql = read("supabase/migrations/20261120133517_business_status_guard_and_delete.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /if new\.status = 'Onboarding' and old\.status is distinct from 'Onboarding' and \(old\.status = 'Active' or old\.onboarding_completed_at is not null\) then/);
+  assert.match(sql, /create trigger agencies_status_guard before update of status on public\.agencies/);
+  assert.match(sql, /if current_user in \('authenticated', 'anon'\) then\n   raise exception 'Delete a business with Delete business/);
+  // 2. Who sees Delete business: a SLIT administrator, a business at Application sent, never a system business.
+  const row = (over: Record<string, unknown> = {}) => ({ status: "Onboarding", onboardingLabel: "Application sent", agencyCode: "ZZ-1", ...over });
+  assert.equal(del.canOfferBusinessDelete(row(), true), true);
+  assert.equal(del.canOfferBusinessDelete(row(), false), false, "other staff: hidden");
+  for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
+  for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
+  for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
+  // The typed confirmation: the name (case and spaces ignored) or the ABN.
+  assert.equal(del.deleteConfirmMatches("  purva  tech pty ltd ", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("86 603 584 676", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("PURVA TECH", "PURVA TECH PTY LTD", "86603584676"), false);
+  assert.equal(del.deleteConfirmMatches("", "PURVA TECH PTY LTD", ""), false);
+  // The database rules (the same ones the screens use) and the complete removal.
+  for (const rule of ["'This is a system business: it cannot be deleted.'", "o.stage <> 'application_sent'", "r.state not in ('sent', 'viewed') or r.signed_at is not null",
+    "'This business has students or applications: make it Inactive instead.'", "if not public.cms_is_admin() then raise exception 'Only a SLIT administrator can delete a business.'",
+    "raise exception 'Type the business name or its ABN exactly to confirm.'"]) assert.ok(sql.includes(rule), `rule: ${rule}`);
+  for (const table of ["hr.sign_fields", "hr.sign_tokens", "hr.sign_token_history", "hr.sign_codes", "hr.sign_notifications", "hr.sign_events", "public.agency_onboarding_drafts",
+    "public.agency_onboarding_attachments", "public.agency_onboarding_corrections", "public.agency_onboarding_revisions", "public.agency_onboarding_referees", "public.agency_onboarding_events",
+    "hr.sign_recipients", "hr.sign_requests", "public.agency_onboarding", "public.comm_messages", "public.comm_conversations", "public.notification_deliveries", "public.portal_audit_log",
+    "public.agency_invitations", "public.agency_memberships", "public.agency_tenant_agents", "public.agency_tenants", "public.agents", "public.portal_profiles", "auth.users", "public.agencies"]) {
+    assert.ok(new RegExp(`delete from ${table.replace(".", "\\.")}\\b`).test(sql), `deletes ${table}`);
+  }
+  assert.match(sql, /set local session_replication_role = replica;/, "triggers off: nothing is queued or emailed");
+  assert.match(sql, /insert into public\.business_deletions\(deleted_by, deleted_by_name, business_name, abn\)/, "one minimal audit row");
+  assert.match(sql, /raise exception 'This link is no longer available\.'/, "a deleted request's link: neutral");
+  // The function: the database deletes, then the signing files it names are removed from storage; nothing is emailed.
+  const removed: string[] = []; const rpcs: string[] = [];
+  const ctx = { body: { agencyId: "11111111-1111-4111-8111-111111111111", confirm: "ZZ Test" }, admin: async () => null,
+    rpc: async (name: string) => { rpcs.push(name); return { deleted: true, name: "ZZ Test", abn: "49004028077", files: ["r1/original.pdf", "r1/signed-x.pdf"], counts: { agents: 1 } }; },
+    ports: { storage: { remove: async (paths: string[]) => { removed.push(...paths); } } } };
+  const out = await onboardingFn.deleteBusiness(ctx as never) as { deleted: boolean; filesRemoved: number; filesLeft: number };
+  assert.deepEqual([out.deleted, out.filesRemoved, out.filesLeft, rpcs, removed], [true, 2, 0, ["admin_business_delete"], ["r1/original.pdf", "r1/signed-x.pdf"]]);
+  assert.ok(!/send|mail|notify/i.test(rpcs.join(" ")), "no email call");
+  // The signing page: a deleted link shows "This link is no longer available", with nothing to request.
+  assert.match(read("supabase/functions/document-signing/core.ts"), /if \(\/no longer available\/i\.test\(e\.message\)\) throw new SigningError\(LINK_GONE, 410\);/);
+  const page = read("src/pages/SigningPage.tsx");
+  assert.ok(page.includes(`const gone = /no longer available/i.test(message);`) && page.includes(">This link is no longer available</p>"), "neutral page");
+});
+
 test("completion certificate (2026-11-20): never emailed, downloaded or shown to anyone; only the signed documents leave; the audit record stays on the signing request for staff", async () => {
   // Emails: every completion email (to the signer, an offer with a deposit, the administrator) mentions and attaches the signed document only.
   const base = { id: 1, title: "Contract", reference: "SLIT-1", name: "Ann", to: "a@example.test", signed_path: "r/s.pdf", signed_hash: "a".repeat(64), certificate_path: "r/c.pdf", certificate_hash: "b".repeat(64) };

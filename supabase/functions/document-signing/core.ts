@@ -67,6 +67,8 @@ export const sha256Hex = async (bytes: Uint8Array) => [...new Uint8Array(await c
 const TOKEN = /^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_INVALID = "This signing link is invalid or expired.";
+/** A link whose request was deleted (2026-11-20): neutral; no "request a new link". */
+export const LINK_GONE = "This link is no longer available.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
 const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
@@ -252,6 +254,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         try { return await ports.service(name, { hash, data }); }
         catch (error) {
           const e = error as RpcError; if (e.code === "SG409") throw error;
+          // The link's request no longer exists (its business was deleted at Application sent): a neutral answer, nothing else said.
+          if (/no longer available/i.test(e.message)) throw new SigningError(LINK_GONE, 410);
           throw new SigningError(/invalid or expired/.test(e.message) ? LINK_INVALID : e.message, /invalid or expired/.test(e.message) || e.code === "42501" ? 403 : e.code === "SG429" ? 429 : 400);
         }
       };

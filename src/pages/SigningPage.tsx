@@ -99,10 +99,18 @@ type Method = "typed" | "drawn" | "uploaded";
 function LinkProblem({ token, message }: { token: string; message: string }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const invalid = /invalid or expired/i.test(message);
+  // A link whose request no longer exists (e.g. the business was deleted before signing, 2026-11-20): a neutral page, nothing to request.
+  const gone = /no longer available/i.test(message);
   const request = async () => {
     setState("busy");
     try { await signingAction({ action: "link_request", token }); setState("done"); } catch { setState("error"); }
   };
+  if (gone) return <div className="rounded-xl border border-background-200 bg-white p-4 sm:p-5" data-testid="signing-link-gone">
+    <div className="flex items-start gap-3">
+      <i className="ri-link-unlink-m mt-0.5 text-xl text-foreground-500" aria-hidden="true" />
+      <p className="font-semibold text-foreground-900">This link is no longer available</p>
+    </div>
+  </div>;
   return <div className="space-y-4 rounded-xl border border-background-200 bg-white p-4 sm:p-5" data-testid="signing-link-problem">
     <div className="flex items-start gap-3">
       <i className="ri-link-unlink-m mt-0.5 text-xl text-foreground-500" aria-hidden="true" />

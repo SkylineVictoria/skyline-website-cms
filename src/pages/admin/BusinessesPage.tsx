@@ -9,6 +9,9 @@ import { changeBusinessStatus, invitedBusinesses, listBusinesses, listPendingReg
 import PendingRegistrationsTable from "@/pages/admin/components/PendingRegistrationsTable";
 import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
+import { businessDropdownStatuses, canOfferBusinessDelete } from "@/pages/admin/lib/businessData";
 
 const PAGE_SIZE = 25;
 /** Active and Invited are worked out on the device from the active businesses (up to this many). */
@@ -21,6 +24,12 @@ export default function BusinessesPage() {
   const { values, page, update, setPage, clear } = useListParams(KEYS);
   // Tabs and each row's dropdown use the backend's business statuses.
   const businessStatuses = useStatusCatalog().business;
+  // A business's own dropdown (2026-11-20): Active or Inactive only. Onboarding ends by itself and is never chosen (the database refuses it
+  // for a business that was ever active).
+  const dropdownStatuses = businessDropdownStatuses(businessStatuses);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "Admin";
+  const [deleting, setDeleting] = useState<BusinessRow | null>(null);
   // Active is the default tab; "all" in the address shows every business.
   const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Onboarding" ? "Onboarding" : values.status === "Invited" ? "Invited" : values.status === "Pending" ? "Pending" : "Active";
   // Invited: active, but nobody in it has signed in yet (its agents are all still invited).
@@ -224,7 +233,7 @@ export default function BusinessesPage() {
                               onChange={(e) => { if (e.target.value === "Inactive") setConfirm(row); else if (e.target.value === "Active" && row.status !== "Active") void change(row, "Active"); }}
                               className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${isInvited ? "border-amber-200 bg-amber-50 text-amber-900" : row.status === "Active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-background-300 bg-background-100 text-foreground-600"}`}>
                               {isInvited ? <option value="Invited">Invited</option> : null}
-                              {businessStatuses.map((item) => (
+                              {dropdownStatuses.map((item) => (
                                 <option key={item.value} value={item.value} disabled={isInvited && item.value === "Active"}>{busyId === row.id && item.value === shown ? "Saving…" : item.label}</option>
                               ))}
                             </select>
@@ -240,6 +249,9 @@ export default function BusinessesPage() {
                     </td>
                     <td>
                       <div className="flex flex-wrap justify-end gap-1.5">
+                        {canOfferBusinessDelete(row, isAdmin) ? (
+                          <Button size="sm" variant="ghost" icon="ri-delete-bin-line" onClick={() => setDeleting(row)} data-testid={`delete-business-${row.id}`} aria-label={`Delete ${row.name}`}>Delete</Button>
+                        ) : null}
                         <Link to={`/admin/businesses/${row.id}`} className="inline-flex items-center rounded-md border border-background-300 px-2.5 py-1 text-label font-medium text-foreground-800 hover:bg-background-100">Open</Link>
                       </div>
                     </td>
@@ -252,6 +264,8 @@ export default function BusinessesPage() {
         {!error && status !== "Pending" ? <Pager page={page} pageSize={PAGE_SIZE} total={total} loading={loading} onPage={setPage} /> : null}
       </Card>
 
+      {deleting ? <DeleteBusinessDialog business={{ id: deleting.id, name: deleting.name, abn: deleting.abn }} onClose={() => setDeleting(null)}
+        onDeleted={(message) => { setDeleting(null); push(message); setReload((n) => n + 1); }} /> : null}
       <ConfirmDialog
         open={Boolean(decline)}
         title={`Decline ${decline?.name ?? "this registration"}?`}

@@ -5,7 +5,7 @@ import { AdminLoading, Badge, Button, Card, Field, PageHeader, SectionTabs, Text
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
-import { appliesTo, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
+import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
 
 const tabs = [
   { id: "rules", label: "Rules", icon: "ri-list-check" },
@@ -17,6 +17,9 @@ const tabs = [
 const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
 const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
+// rule-policy: technical table-labels Displays labels for persisted rule metadata.
+const ruleColumns = ["Rule", "Category", "Type", "Value", "Status", "Effective date", "Last modified", "Actions"];
+
 const reschedulingTitle = "Class rescheduling rules";
 const registrationError = "The Business Rules service is unavailable. Retry or contact your administrator.";
 
@@ -148,7 +151,7 @@ function RuleWorkspace() {
           <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="mr-auto font-bold">{scope ? locationLabel(locations, scope) : "All Rules"} ({filtered.length + Number(showRescheduling)})</h2>
             <TextInput className="!w-44" type="search" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} /><Button size="sm" icon="ri-add-line" onClick={add}>Add Rule</Button></div>
           <div className="overflow-x-auto"><table className="w-full text-left text-xs">
-            <thead className="bg-background-100"><tr>{["Rule", "Category", "Type", "Current value", "Status", "Effective date", "Last modified", "Actions"].map(label => <th key={label} scope="col" className="p-2">{label}</th>)}</tr></thead>
+            <thead className="bg-background-100"><tr>{ruleColumns.map(label => <th key={label} scope="col" className="p-2">{label}</th>)}</tr></thead>
             <tbody>
               {showRescheduling && <tr className="border-b border-background-200 align-top">
                 <th scope="row" className="p-2 font-medium">
@@ -166,16 +169,19 @@ function RuleWorkspace() {
               {filtered.map(rule => {
               const latest = rule.versions[0], live = effective(rule), next = published(rule).find(v => v.definition.starts_on > today);
               const active = live?.definition.enabled;
+              const awaiting = awaitingIntegration(rule);
+              // rule-policy: technical status-labels Describes each stored version and registration state.
+              const label = awaiting ? "Review only" : active ? "Active" : live ? "Inactive" : next ? "Scheduled" : latest.state === "draft" ? "Draft" : "Expired";
               return <tr key={rule.id} className="border-b border-background-200 align-top">
                 <th scope="row" className="p-2 font-medium"><button type="button" onClick={() => open(rule.id)} className="text-left text-primary-700">{latest.definition.name}</button><div className="mt-1 text-foreground-500">{locationLabel(locations, latest.definition.scope)}</div></th>
                 <td className="p-2">{snapshot.categories.find(c => c.id === latest.definition.category_id)?.name}</td><td className="p-2">{latest.definition.value_type}</td>
-                <td className="max-w-40 break-words p-2">{active ? valueSummary(live.definition.value) : "—"}{active && live.definition.groups.length ? " · conditional" : ""}</td>
-                <td className="p-2"><Badge tone={active ? "success" : "muted"}>{active ? "Active" : live ? "Inactive" : next ? "Scheduled" : latest.state === "draft" ? "Draft" : "Expired"}</Badge>{latest.state === "draft" && active && <div className="mt-1">Draft pending</div>}</td>
+                <td className="max-w-40 break-words p-2">{definitionSummary((live ?? next ?? latest).definition)}</td>
+                <td className="p-2"><Badge tone={active ? "success" : "muted"}>{label}</Badge>{latest.state === "draft" && active && <div className="mt-1">Draft pending</div>}</td>
                 <td className="p-2">{(live ?? next ?? latest).definition.starts_on}</td><td className="p-2">{dateTime(latest.created_at)}</td>
-                <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>Edit</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
+                <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>{awaiting ? "View" : "Edit"}</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
               </tr>;
             })}</tbody>
-          </table>{!filtered.length && !showRescheduling && <p className="p-4 text-foreground-500">No rules match this view.</p>}</div>
+          </table>{!filtered.length && !showRescheduling && <p className="p-4 text-foreground-500">No rules match this view. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => { setSearch(""); filterMenu(""); }}>Show all rules</button></p>}</div>
         </>}
         {tab === "history" && <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule?.versions[0].definition.name ?? "Rule history"}</h2>{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All history</Button>}</div>
@@ -200,7 +206,14 @@ function RuleWorkspace() {
           })}
         </div>}
       </Card>
-      {editor && <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
+      {editor && current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">
+        <div className="flex items-center justify-between gap-2"><h2 className="font-bold">{version.definition.name}</h2><Button size="sm" variant="ghost" onClick={() => setSelected("")}>Close</Button></div>
+        <Badge tone="warn">Review only</Badge>
+        <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>
+        <p>{version.definition.description}</p>
+        <p className="text-foreground-600">This is the value found in the existing workflow. Editing and publishing will become available when the workflow is connected.</p>
+        {version.definition.source_url && <a className="font-medium text-primary-700 hover:underline" href={version.definition.source_url} target="_blank" rel="noreferrer">View source</a>}
+      </Card> : editor && <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
         rule={current} version={version} existingApprovalRequired={!!current && !!effective(current)?.definition.approval_required} categories={snapshot.categories} locations={locations} fields={snapshot.fields} busy={busy} close={() => setSelected("")} submit={submit} />}
     </div>}
   </>;

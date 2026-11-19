@@ -247,6 +247,8 @@ async function publicQualification(code: string, releaseNumber: string, sources:
       companionUrl: String(list(rel.externalLinks)[0]?.url ?? ""),
     },
     description: item("qualification description"),
+    /** The release's unit counts ({ core: 1, elective: 9 }), when the public API gives them. */
+    packagingCounts: { core: Number(((rel.packagingInformation ?? {}) as Json).core) || null, elective: Number(((rel.packagingInformation ?? {}) as Json).elective) || null },
     specialisations: list(rel.specializations).map(entry => {
       const packaging = (entry.packagingInformation ?? {}) as Json;
       return { code: String(entry.code ?? ""), title: text(entry.title), core: Number(packaging.core) || 0, elective: Number(packaging.elective) || 0 };
@@ -321,7 +323,10 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
     const elements = Array.from(node.childNodes).filter(
       (item): item is Element => item.nodeType === 1,
     );
-    if (!elements.length) {
+    // A paragraph with its own words beside inline markup ("<b>1</b> core unit, plus <b>9</b> elective units") is one line:
+    // reading only its elements kept the bold numbers and lost the words (AUR40226 showed "1", "9", "9", "2").
+    const ownText = Array.from(node.childNodes).some(item => item.nodeType === 3 && (item.textContent ?? "").trim());
+    if (!elements.length || ownText) {
       const line = content(node);
       if (line) lines.push(line);
       return;
@@ -393,7 +398,8 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
 
   const heading = lines.map(line => /^Total number of units\s*[:=]\s*(\d+)\b/i.exec(line)).find(Boolean);
   const coreCount = lines.map(line => /^(\d+)\s+core units?\b/i.exec(line)).find(Boolean);
-  const electiveCount = lines.map(line => /^(\d+)\s+elective(?:s|\s+units?)\b/i.exec(line)).find(Boolean);
+  // "9 elective units", or "1 core unit, plus 9 elective units, of which:".
+  const electiveCount = lines.map(line => /^(\d+)\s+elective(?:s|\s+units?)\b/i.exec(line) ?? /^\d+\s+core units?,?\s+plus\s+(\d+)\s+elective(?:s|\s+units?)\b/i.exec(line)).find(Boolean);
   const total = Number(heading?.[1]);
   const requiredElectives = Number(electiveCount?.[1]);
   const validCounts = total === Number(coreCount?.[1]) + requiredElectives && core.length === Number(coreCount?.[1])
@@ -401,7 +407,9 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
     && electives.size >= requiredElectives;
   let minimumGroup: { group: string; count: number } | null = null;
   // Only enable saving for prose formats whose constraints are fully understood.
-  const plain = coreStart >= 0 && !Object.keys(groups).length && !lines.some(line => /\b(?:must be selected from|up to \d+ units|at least \d+ units|specialisation|must be selected from the list|must be imported)\b/i.test(line));
+  // The allowance for units from other qualifications ("up to 6 units may be from … another Training Package") is not a rule
+  // on the listed electives, so it does not stop the check.
+  const plain = coreStart >= 0 && !Object.keys(groups).length && !lines.some(line => !/(?:training package|accredited course)/i.test(line) && /\b(?:must be selected from|up to \d+ units|at least \d+ units|specialisation|must be selected from the list|must be imported)\b/i.test(line));
   const grouped = /^(?:at least )?(\d+) elective units must be selected from Group ([A-Z])\b/i.exec(lines.find(line => /elective units must be selected from Group/i.test(line)) ?? "");
   const remaining = /^(?:for the remaining )(\d+) elective units\b/i.exec(lines.find(line => /for the remaining \d+ elective units/i.test(line)) ?? "");
   const range = /^up to (\d+) units may be selected from Groups ([A-Z])\s*[–-]\s*([A-Z])\b/i.exec(lines.find(line => /units may be selected from Groups/i.test(line)) ?? "");
@@ -469,6 +477,8 @@ export async function qualificationDetails(code: string, providerCode: string | 
   const [core, electives] = await Promise.all([attachNominalHours(withGrid(coreUnits), hoursLookup), attachNominalHours(withGrid(electiveUnits), hoursLookup)]);
   const review = {
     ...rules, core, electives,
+    // The packaging text's elective count, else the release's count on training.gov.au.
+    requiredElectives: rules.requiredElectives ?? registry.packagingCounts.elective,
     description: rules.description || registry.description,
     // A fallback unit list from the grid has no packaging text to check, so it always needs manual confirmation.
     canValidate: rules.canValidate && coreUnits === rules.core,

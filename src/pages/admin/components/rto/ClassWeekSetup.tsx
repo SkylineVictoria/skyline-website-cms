@@ -18,8 +18,8 @@ import {
 type Block = { weekday: number; start: number; end: number; type: SessionType; roomId: string; trainerId: string; manual: boolean };
 /** The days and times a room or trainer is booked for this course (owner, 2026-11-20: not only whole days). */
 type Window = { days: number[]; from: string; to: string };
-/** A room or trainer chosen for this course (once each). Its days and times are not set by hand (owner, 2026-11-20): Bookings
- * › Availability and other intakes' classes decide when it can take a class. */
+/** A room or trainer chosen for this course (once each), with the days and times it is booked for the course (owner,
+ * 2026-11-20: staff choose the slot, inside its Bookings › Availability). Other intakes' classes are still kept free. */
 type Pick = { key: string; id: string; theory: boolean; practical: boolean; /** Sized by the system, not changed by hand yet. */ fresh?: boolean; /** A trainer booking: the room booking it was made from. */ room?: string } & Window;
 let pickSeq = 0;
 const newKey = (id: string) => `${id}:${++pickSeq}`;
@@ -77,6 +77,36 @@ function hoursText(rows: AvailabilityRow[]) {
     return `${run} ${clock(toMin(s))} – ${clock(toMin(e))}`;
   }).join("; ");
 }
+const TIME_OPTIONS = Array.from({ length: 31 }, (_, i) => toTime(7 * 60 + i * 30)); // 7 am – 10 pm, half hours
+/** The days and times a room or trainer is booked for this course, inside its Bookings hours (`avail`; none = any time). */
+function SlotEditor({ value, onChange, avail, disabled, label }: { value: Window; onChange: (w: Window) => void; avail: AvailabilityRow[] | null; disabled?: boolean; label: string }) {
+  const openOn = (day: number) => !avail || !avail.length || avail.some((r) => r.weekday === day % 7);
+  const rows = (avail ?? []).filter((r) => value.days.some((d) => r.weekday === d % 7));
+  const lo = rows.length ? Math.min(...rows.map((r) => toMin(r.start))) : 7 * 60, hi = rows.length ? Math.max(...rows.map((r) => toMin(r.end))) : 22 * 60;
+  const options = TIME_OPTIONS.filter((t) => toMin(t) >= lo && toMin(t) <= hi);
+  const outside = avail?.length ? value.days.filter((d) => !covers(avail, d, toMin(value.from), toMin(value.to))) : [];
+  const bad = !value.days.length ? "Pick at least one day." : toMin(value.to) <= toMin(value.from) ? "The end must be after the start." : "";
+  const timeSelect = (which: "from" | "to") => <select aria-label={`${label}: ${which}`} value={value[which]} disabled={disabled}
+    onChange={(e) => onChange({ ...value, [which]: e.target.value })}
+    className="h-8 rounded-md border border-background-300 bg-background-50 px-2 text-sm font-medium text-foreground-900">
+    {(options.includes(value[which]) ? options : [value[which], ...options]).map((t) => <option key={t} value={t}>{clock(toMin(t))}</option>)}
+  </select>;
+  return <div className="space-y-1.5">
+    <div className="flex flex-wrap gap-1">
+      {DAYS.map((d, i) => {
+        const on = value.days.includes(i + 1), open = openOn(i + 1);
+        return <button key={d} type="button" aria-pressed={on} aria-label={`${label}: ${d}${open ? "" : " (closed in Bookings)"}`} disabled={disabled || (!open && !on)}
+          title={open ? undefined : "Closed on this day in Bookings › Availability"}
+          onClick={() => onChange({ ...value, days: on ? value.days.filter((x) => x !== i + 1) : [...value.days, i + 1].sort((a, b) => a - b) })}
+          className={`h-8 w-9 rounded border text-xs font-semibold ${on ? "border-primary-600 bg-primary-600 text-white" : open ? "border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100" : "cursor-not-allowed border-background-200 bg-background-200 text-foreground-400 line-through"}`}>{d.slice(0, 2)}</button>;
+      })}
+    </div>
+    <div className="flex items-center gap-1.5 whitespace-nowrap text-xs text-foreground-600">{timeSelect("from")}<span>to</span>{timeSelect("to")}</div>
+    {bad ? <p role="alert" className="text-xs font-semibold text-red-700">{bad}</p>
+      : outside.length ? <p className="text-xs text-amber-800">Closed at part of these times on {outside.map((d) => DAYS[d - 1]).join(", ")}: no class goes there then.</p> : null}
+  </div>;
+}
+const slotBad = (w: Window) => !w.days.length || toMin(w.to) <= toMin(w.from);
 const chip = (on: boolean, type: SessionType) => `min-h-9 rounded-full border px-3 text-xs font-semibold ${on ? TYPE_LOOK[type] : "border-background-300 bg-background-50 text-foreground-600 hover:bg-background-100"}`;
 
 export type ClassWeekSaved = { detail: IntakeDetail; generated: GenerateResult };
@@ -175,7 +205,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         try {
           const draft = JSON.parse(window.localStorage.getItem(DRAFT + intakeId) ?? "null") as { rooms: Pick[]; trainers: Pick[]; page: Page } | null;
           if (draft?.rooms?.length) {
-            const once = (l: Pick[]) => l.filter((x, i) => l.findIndex((y) => y.id === x.id) === i).map((x) => ({ ...x, ...WINDOW, fresh: false }));
+            const once = (l: Pick[]) => l.filter((x, i) => l.findIndex((y) => y.id === x.id) === i).map((x) => ({ ...x, ...(x.days?.length && x.from && x.to ? {} : WINDOW), fresh: false }));
             setRoomPicks(once(draft.rooms)); setTrainerPicks(once(draft.trainers ?? [])); if (!saved.length) setPage(draft.page ?? "rooms");
           }
         } catch { /* no draft */ }
@@ -476,10 +506,10 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
       {loadPanel}
 
       {page === "rooms" ? <section className="space-y-3">
-        <p className="text-sm text-foreground-600">Which rooms will this course use? Each room is for theory or for practical. A class can go in a room when it is open in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=rooms">Bookings › Availability</Link> and no other intake has a class in it then.</p>
+        <p className="text-sm text-foreground-600">Which rooms will this course use, and when? Each room is for theory or for practical; pick the days and times it is booked for this course. A class can go in a room only inside those times, when it is open in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=rooms">Bookings › Availability</Link> and no other intake has a class in it then.</p>
         {roomPicks.length ? <div className="overflow-x-auto rounded-lg border border-background-200">
-          <table className="w-full min-w-[760px] text-sm">
-            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Room</th><th className="px-3 py-2">Used for</th><th className="px-3 py-2">Open (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
+          <table className="w-full min-w-[980px] text-sm">
+            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Room</th><th className="px-3 py-2">Used for</th><th className="px-3 py-2">Booked for this course</th><th className="px-3 py-2">Open (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
             <tbody>{roomPicks.map((p) => { const r = rooms.find((x) => x.id === p.id); const h = roomHours[p.id]; return (
               <tr key={p.key} className="border-t border-background-200 align-top">
                 <td className="px-3 py-2 font-medium text-foreground-950">{r?.label ?? "Room"}</td>
@@ -487,6 +517,8 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
                   <button type="button" role="radio" aria-checked={p.theory} disabled={busy} className={chip(p.theory, "theory")} onClick={() => setRoomType(p.key, false)}>Theory</button>
                   <button type="button" role="radio" aria-checked={p.practical} disabled={busy} className={chip(p.practical, "practical")} onClick={() => setRoomType(p.key, true)}>Practical</button>
                 </div></td>
+                <td className="px-3 py-2"><SlotEditor label={`${r?.name ?? "Room"} booked`} value={p} avail={h ? h.avail : null} disabled={busy}
+                  onChange={(w) => setRoomPicks((l) => l.map((x) => (x.key === p.key ? { ...x, ...w, fresh: false } : x)))} /></td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : h.avail.length ? hoursText(h.avail) : "Any time (no hours set)"}</td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : busyText(h.uses)}</td>
                 <td className="px-3 py-2 text-right"><button type="button" disabled={busy} aria-label={`Remove ${r?.name ?? "room"}`} className="rounded p-2 text-red-700 hover:bg-red-50"
@@ -502,10 +534,10 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
       </section> : null}
 
       {page === "trainers" ? <section className="space-y-3">
-        <p className="text-sm text-foreground-600">Who teaches this course? A trainer can take a class when they are free in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=trainers">Bookings › Availability</Link> (Mon–Sun 9 am – 10 pm when they have no hours there) and are not teaching another intake then.</p>
+        <p className="text-sm text-foreground-600">Who teaches this course, and when? Pick the days and times each trainer is booked for it. A trainer can take a class only inside those times, when they are free in <Link className="font-semibold text-primary-700 hover:underline" to="/admin/bookings?tab=availability&who=trainers">Bookings › Availability</Link> (Mon–Sun 9 am – 10 pm when they have no hours there) and are not teaching another intake then.</p>
         {trainerPicks.length ? <div className="overflow-x-auto rounded-lg border border-background-200">
-          <table className="w-full min-w-[760px] text-sm">
-            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Trainer</th><th className="px-3 py-2">Teaches</th><th className="px-3 py-2">Free (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
+          <table className="w-full min-w-[980px] text-sm">
+            <thead className="bg-background-100 text-left text-xs font-semibold text-foreground-600"><tr><th className="px-3 py-2">Trainer</th><th className="px-3 py-2">Teaches</th><th className="px-3 py-2">Booked for this course</th><th className="px-3 py-2">Free (Bookings)</th><th className="px-3 py-2">Other intakes' classes</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr></thead>
             <tbody>{trainerPicks.map((p) => { const h = trainerHours[p.id]; return (
               <tr key={p.key} className="border-t border-background-200 align-top">
                 <td className="px-3 py-2 font-medium text-foreground-950">{trainerName(p.id)}</td>
@@ -513,6 +545,8 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
                   <button type="button" aria-pressed={p.theory} disabled={busy} className={chip(p.theory, "theory")} onClick={() => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, theory: !x.theory } : x)))}>Theory</button>
                   <button type="button" aria-pressed={p.practical} disabled={busy} className={chip(p.practical, "practical")} onClick={() => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, practical: !x.practical } : x)))}>Practical</button>
                 </div></td>
+                <td className="px-3 py-2"><SlotEditor label={`${trainerName(p.id)} booked`} value={p} avail={h ? (h.avail.length ? h.avail : TRAINER_DEFAULT) : null} disabled={busy}
+                  onChange={(w) => setTrainerPicks((l) => l.map((x) => (x.key === p.key ? { ...x, ...w, fresh: false } : x)))} /></td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : h.avail.length ? hoursText(h.avail) : "Mon–Sun 9 am – 10 pm"}</td>
                 <td className="px-3 py-2 text-xs text-foreground-700">{!h ? "…" : busyText(h.uses)}</td>
                 <td className="px-3 py-2 text-right"><button type="button" disabled={busy} aria-label={`Remove ${trainerName(p.id)}`} className="rounded p-2 text-red-700 hover:bg-red-50"
@@ -639,7 +673,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
         <Button variant="outline" icon="ri-arrow-left-line" disabled={busy || (at === 0 && !onBack)} onClick={() => (at === 0 ? onBack?.() : setPage(PAGES[at - 1].id))}>
           {at === 0 && onBack && steps ? `Back: step ${steps.first - 1}` : "Back"}</Button>
         {page !== "week"
-          ? <Button disabled={busy || (page === "rooms" && roomsMissing.length > 0) || (page === "trainers" && trainersMissing.length > 0)} icon="ri-arrow-right-line" onClick={() => setPage(PAGES[at + 1].id)}>Next: {PAGES[at + 1].label.toLowerCase()}</Button>
+          ? <Button disabled={busy || (page === "rooms" && (roomsMissing.length > 0 || roomPicks.some(slotBad))) || (page === "trainers" && (trainersMissing.length > 0 || trainerPicks.some(slotBad)))} icon="ri-arrow-right-line" onClick={() => setPage(PAGES[at + 1].id)}>Next: {PAGES[at + 1].label.toLowerCase()}</Button>
           : <span className="flex flex-wrap items-center justify-end gap-3">
             {why && !busy ? <span className="text-sm text-foreground-600">{why}</span> : null}
             <Button icon="ri-calendar-check-line" disabled={blocked} onClick={() => void create()}>{busy ? "Creating classes…" : hasClasses ? "Update classes" : createLabel ?? "Create classes"}</Button>

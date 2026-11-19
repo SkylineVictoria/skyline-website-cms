@@ -71,6 +71,19 @@ try {
     throw new Error("The source catalog must add only unique reference records");
   }
   console.log("PASS source catalog adds 91 references, preserves the live rule and can be re-imported safely");
+  const recheck = await readFile(new URL("../supabase/migrations/20261120225000_business_rules_runtime_recheck.sql", import.meta.url), "utf8");
+  const importRecheck = recheck.replace(/^begin;\s*$/m, "").replace(/\ncommit;\s*$/, "");
+  await db.exec(importRecheck);
+  await db.exec(importRecheck);
+  const rechecked = (await db.query(`select
+    count(*) filter(where state = 'reference')::int as reference_count,
+    count(*) filter(where state = 'draft')::int as drafts,
+    count(*) filter(where state = 'published')::int as published
+    from public.business_rule_versions`)).rows[0];
+  if (rechecked.reference_count !== 129 || rechecked.drafts !== 0 || rechecked.published !== 1) {
+    throw new Error("The second audit must add references without changing published state");
+  }
+  console.log("PASS runtime recheck adds 26 unique references without creating drafts or changing published state");
   await db.exec("rollback");
   console.log("PASS release classifies inventory as references, publishes the existing upload limit and leaves no drafts");
 

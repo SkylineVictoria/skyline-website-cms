@@ -2,6 +2,7 @@
 // Admins / RTO Managers set reasons, the steps for each reason in order with their limits, the general rules and the message.
 // One default set for every course; a course can have its own set.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ruleList, ruleNumber, ruleObject, weekdayIndex } from "@/lib/businessRules";
 import { Button, Select, TextInput } from "@/pages/admin/components/ui";
 import { addDays, loadClassSessions, todayIso, type ClassSession } from "@/pages/admin/lib/rto";
 import {
@@ -10,14 +11,21 @@ import {
 } from "@/pages/admin/lib/reschedule";
 
 const ALL_STEPS = Object.keys(STEP_LABEL) as StepType[];
-const NEW_STEP: Record<StepType, Step> = {
-  other_trainer: { type: "other_trainer", on: true, onlyCourseTrainers: true },
-  other_room: { type: "other_room", on: true, minSeats: "group" },
-  same_day_other_time: { type: "same_day_other_time", on: true, earliest: "08:00", latest: "21:00" },
-  another_day: { type: "another_day", on: true, days: [1, 2, 3, 4, 5], withinDays: 14, earliest: "08:00", latest: "21:00" },
-  join_other_intake: { type: "join_other_intake", on: true, maxExtraSeats: 6 },
-  spread: { type: "spread", on: true, maxExtraMinutes: 60, maxClasses: 4, addAt: "end" },
-  online: { type: "online", on: false, international: false },
+/** A new step's starting limits come from Business Rules (lms.reschedule_new_day_*, _join_extra_seats, _spread_limits). */
+const newStep = (t: StepType): Step => {
+  const hours = ruleObject("lms.reschedule_new_day_hours", { earliest: "08:00", latest: "21:00" });
+  const spread = ruleObject("lms.reschedule_spread_limits", { addAt: "end", classes: 4, extraMinutes: 60 });
+  const days = ruleList("lms.reschedule_new_day_weekdays", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]).map(weekdayIndex).filter((d) => d >= 0).sort();
+  const steps: Record<StepType, Step> = {
+    other_trainer: { type: "other_trainer", on: true, onlyCourseTrainers: true },
+    other_room: { type: "other_room", on: true, minSeats: "group" },
+    same_day_other_time: { type: "same_day_other_time", on: true, earliest: String(hours.earliest), latest: String(hours.latest) },
+    another_day: { type: "another_day", on: true, days, withinDays: ruleNumber("lms.reschedule_new_day_search_days", 14), earliest: String(hours.earliest), latest: String(hours.latest) },
+    join_other_intake: { type: "join_other_intake", on: true, maxExtraSeats: ruleNumber("lms.reschedule_join_extra_seats", 6) },
+    spread: { type: "spread", on: true, maxExtraMinutes: Number(spread.extraMinutes), maxClasses: Number(spread.classes), addAt: spread.addAt === "start" ? "start" : "end" },
+    online: { type: "online", on: false, international: false },
+  };
+  return steps[t];
 };
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const keyOf = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || `reason_${Date.now()}`;
@@ -140,7 +148,7 @@ export default function ReschedulingRules() {
           {canEdit ? <Button size="sm" variant="outline" className="w-full" icon="ri-add-line" onClick={() => {
             const label = window.prompt("Name of the reason (e.g. Trainer at training)")?.trim();
             if (!label) return;
-            update((r) => { r.reasons.push({ key: keyOf(label) + (r.reasons.some((x) => x.key === keyOf(label)) ? `_${r.reasons.length}` : ""), label, steps: [clone(NEW_STEP.another_day)] }); });
+            update((r) => { r.reasons.push({ key: keyOf(label) + (r.reasons.some((x) => x.key === keyOf(label)) ? `_${r.reasons.length}` : ""), label, steps: [newStep("another_day")] }); });
             setSel(rules.reasons.length);
           }}>Add reason</Button> : null}
         </aside>
@@ -172,7 +180,7 @@ export default function ReschedulingRules() {
                 </div>
                 {st.on ? <fieldset disabled={!canEdit} className="mt-2 flex flex-wrap items-center gap-3 pl-10"><Limits s={st} set={(n) => update((r) => { r.reasons[sel].steps[i] = n; })} /></fieldset> : null}
               </div>)}
-              {canEdit && unused.length ? <Select aria-label="Add step" value="" onChange={(e) => { const t = e.target.value as StepType; if (t) update((r) => { r.reasons[sel].steps.push(clone(NEW_STEP[t])); }); }}>
+              {canEdit && unused.length ? <Select aria-label="Add step" value="" onChange={(e) => { const t = e.target.value as StepType; if (t) update((r) => { r.reasons[sel].steps.push(newStep(t)); }); }}>
                 <option value="">+ Add step…</option>{unused.map((t) => <option key={t} value={t}>{STEP_LABEL[t]}</option>)}</Select> : null}
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm"><span className="font-semibold">Nothing works:</span> the class goes on <span className="font-semibold">Classes to reschedule</span> and a person picks the time. Always last.</div>
             </div> : <fieldset disabled={!canEdit} className="mt-3 space-y-3">

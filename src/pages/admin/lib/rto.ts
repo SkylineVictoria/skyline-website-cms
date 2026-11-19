@@ -1,7 +1,7 @@
 // Courses, units, fees, intakes (the master timetable; an intake is its class group) and classrooms. Every read and write goes through
 // public.rto_admin, which checks the role (RTO Manager edits; Admin enrols; any CMS user reads and edits website settings).
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleKey, ruleList, ruleNumber, ruleObject } from "@/lib/businessRules";
+import { onRules, ruleKey, ruleList, ruleNumber, ruleObject, ruleText } from "@/lib/businessRules";
 
 /** The database refuses duplicate LMS rows (migration 20261119184213_no_duplicate_lms_rows); say which one in plain words. */
 const DUPLICATES: Array<[RegExp, string]> = [
@@ -301,16 +301,19 @@ export type HoursSplit = { slitHours: number; theoryHours: number; practicalHour
 /** The suggested split: 40% theory, 40% practical, the remaining 20% assessment, in whole hours that add up exactly. */
 export function suggestHours(slitHours: number): HoursSplit {
   const total = Math.max(0, Math.round(slitHours));
-  const theoryHours = Math.round(total * 0.4);
-  const practicalHours = Math.round(total * 0.4);
+  const split = ruleObject("lms.unit_hours_split", { theoryPercent: 40, practicalPercent: 40, assessmentPercent: 20 });
+  const theoryHours = Math.round(total * Number(split.theoryPercent) / 100);
+  const practicalHours = Math.round(total * Number(split.practicalPercent) / 100);
   return { slitHours: total, theoryHours, practicalHours, assessmentHours: total - theoryHours - practicalHours };
 }
 /** A unit's duration from its SLIT hours: 20 hours is one week, rounded up to the half week (0.5 to 104 weeks, as stored). */
-export const HOURS_PER_WEEK = 20;
-export const weeksForHours = (hours: number) => Math.min(104, Math.max(0.5, Math.ceil((hours / HOURS_PER_WEEK) * 2) / 2));
+export let HOURS_PER_WEEK = 20;
+onRules(() => { HOURS_PER_WEEK = ruleNumber("lms.unit_duration_weekly_hours", 20); });
+const roundWeeks = (w: number) => { const step = ruleNumber("lms.unit_duration_rounding_weeks", 0.5) || 0.5; return Math.ceil(w / step - 1e-9) * step; };
+export const weeksForHours = (hours: number) => Math.min(ruleNumber("lms.unit_duration_ceiling", 104), Math.max(ruleNumber("lms.unit_duration_rounding_weeks", 0.5), roundWeeks(hours / HOURS_PER_WEEK)));
 /** A course's duration from its units' total SLIT hours: 20 hours a week, rounded up to the half week ("13.5 weeks"). */
 export const courseWeeksLabel = (hours: number) => {
-  const weeks = Math.ceil((hours / HOURS_PER_WEEK) * 2) / 2;
+  const weeks = roundWeeks(hours / HOURS_PER_WEEK);
   return `${weeks} week${weeks === 1 ? "" : "s"}`;
 };
 /** The hours to show: the saved ones once reviewed, otherwise the nominal hours split 40/40/20 (null when there are none). */
@@ -352,11 +355,20 @@ export async function loadClassSessions(batchId: string | null, from: string, to
 export type StudyLoad = "coe" | "voe";
 export const LOAD_HOURS: Record<StudyLoad, number> = { coe: 20, voe: 40 };
 export const LOAD_LABEL: Record<StudyLoad, string> = { coe: "CoE · 20 hours a week", voe: "VoE · 40 hours a week" };
+onRules(() => {
+  LOAD_HOURS.coe = ruleNumber("lms.coe_weekly_study_hours", 20);
+  LOAD_HOURS.voe = ruleNumber("lms.voe_weekly_study_hours", 40);
+  LOAD_LABEL.coe = `CoE · ${LOAD_HOURS.coe} hours a week`;
+  LOAD_LABEL.voe = `VoE · ${LOAD_HOURS.voe} hours a week`;
+});
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** An intake's default name (owner, 2026-11-20): course code, start date, Intake_Batch_COE or Intake_Batch_VOE,
  * "CPC30326_01-Dec-2026_Intake_Batch_COE"; "_2", "_3" ... when the course already has an intake of that name. */
 export function intakeDefaultName(courseCode: string, load: StudyLoad, startDate: string, taken: string[] = []) {
-  const base = `${courseCode}_${startDate.slice(8, 10)}-${MONTHS[Number(startDate.slice(5, 7)) - 1]}-${startDate.slice(0, 4)}_Intake_Batch_${load.toUpperCase()}`;
+  const pattern = ruleText("lms.intake_name_format", "{code}_{dd}-{Mon}-{yyyy}_Intake_Batch_{LOAD}");
+  const fill: Record<string, string> = { code: courseCode, dd: startDate.slice(8, 10), Mon: MONTHS[Number(startDate.slice(5, 7)) - 1], mm: startDate.slice(5, 7),
+    yyyy: startDate.slice(0, 4), LOAD: load.toUpperCase(), load: load.toLowerCase() };
+  const base = (pattern.includes("{") ? pattern : "{code}_{dd}-{Mon}-{yyyy}_Intake_Batch_{LOAD}").replace(/\{(\w+)\}/g, (m, k: string) => fill[k] ?? m);
   let name = base, n = 1;
   while (taken.includes(name)) name = `${base}_${++n}`;
   return name;

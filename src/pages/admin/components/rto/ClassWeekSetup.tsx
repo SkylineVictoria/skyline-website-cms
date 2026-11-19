@@ -5,6 +5,7 @@
 // split, where any hour can be clicked and class times added by hand. Create classes saves the week (rto_course_flow batch_setup)
 // and creates the dated classes inside the intake's unit dates (rto_class_sessions_generate).
 import { useEffect, useMemo, useState } from "react";
+import { onRules, ruleNumber, ruleObject, weekdayIndex } from "@/lib/businessRules";
 import { Link } from "react-router-dom";
 import { Button, Modal, Select } from "@/pages/admin/components/ui";
 import { roomAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
@@ -36,7 +37,12 @@ const TYPE_LOOK: Record<SessionType, string> = {
 const FIRST_HOUR = 9, LAST_HOUR = 22; // the grid: 9 am to 10 pm
 const HOURS = Array.from({ length: LAST_HOUR - FIRST_HOUR }, (_, i) => FIRST_HOUR + i);
 /** A trainer with no hours in Bookings is free Monday to Sunday, 9 am – 10 pm. */
-const TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, start: "09:00", end: "22:00" }));
+let TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, start: "09:00", end: "22:00" }));
+onRules(() => {
+  const f = ruleObject("lms.class_setup_availability_fallback", { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as unknown, start: "09:00", end: "22:00" });
+  const days = (Array.isArray(f.days) ? f.days : []).map((d) => weekdayIndex(String(d))).filter((d) => d >= 0);
+  TRAINER_DEFAULT = days.map((weekday) => ({ weekday, start: String(f.start), end: String(f.end) }));
+});
 
 const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
 const toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -346,7 +352,7 @@ export default function ClassWeekSetup({ intakeId, courseId, canEdit, onSaved, c
       let left = split[t];
       for (let weekday = 1; weekday <= 7 && left > 0; weekday++) {
         let started = false;
-        for (let h = FIRST_HOUR; h < LAST_HOUR && left > 0 && dayHours(weekday) < 8; h++) {
+        for (let h = FIRST_HOUR; h < LAST_HOUR && left > 0 && dayHours(weekday) < ruleNumber("lms.class_suggested_day_cap", 8); h++) {
           const s0 = h * 60;
           const p = taken(out, weekday, s0, s0 + 60) ? null : pickFor(t, weekday, s0, s0 + 60);
           if (!p || (trainerPicks.length && !p.trainerId)) { if (started) break; continue; }

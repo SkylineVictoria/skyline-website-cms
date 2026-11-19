@@ -2,6 +2,7 @@
 // outside the qualification by its code. The selection is checked against the official packaging rules (the same check
 // the server runs before saving), and a unit's prerequisites can be read from training.gov.au.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ruleText } from "@/lib/businessRules";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import type { RtoCourse, RtoUnit } from "@/pages/admin/lib/rto";
@@ -230,7 +231,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   // While the system reads the units and picks the electives, the screen is locked (owner, 2026-11-20: "run a loader so the
   // user doesn't play with it"). A course that already has electives is not picked for, so it is not locked.
   const coursePicked = units.some(unit => unit.isActive && unit.unitType !== "core") || imported.length > 0;
-  const picking = !!release && !coursePicked && !autoDone.current;
+  const picking = !!release && !coursePicked && !autoDone.current && !ruleText("lms.elective_automatic_selection_order", "Pick automatically").startsWith("Do not");
   const pickDefaults = (fresh: boolean) => {
     if (!release || !rules) return;
     const keep = new Set(fresh ? [...chosen].filter(code => official.get(code.toUpperCase())?.core) : chosen);
@@ -251,7 +252,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
     if (autoDone.current || !lookupsReady || !rules || !release) return;
     autoDone.current = true;
     const hasElectives = units.some(unit => unit.isActive && unit.unitType !== "core") || [...chosen].some(code => official.get(code.toUpperCase())?.core === false) || imported.length > 0;
-    if (!hasElectives) pickDefaults(false);
+    if (!hasElectives && !ruleText("lms.elective_automatic_selection_order", "Pick automatically").startsWith("Do not")) pickDefaults(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the prerequisites are read
   }, [lookupsReady, rules, release]);
   // Why Add is grey, in words (owner, 2026-11-19: the button was grey with no reason).

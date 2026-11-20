@@ -210,7 +210,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const [showWeekend, setShowWeekend] = useState(false);
   const autoDone = useRef(false);
   const roomsFor = (t: SessionType) => rooms.filter(r => t === "assessment" || r.kind === t);
-  const autoFill = () => {
+  const autoFill = (): Row[] => {
     // THE RULES (owner, 2026-11-21: "fill the form without mistakes"). Every class written here passes the same check (`problem`) that blocks booking,
     // and every number comes from Business Rules (none is typed into this screen):
     //  1. Hours a week: lms.coe_weekly_study_hours / lms.voe_weekly_study_hours (20 / 40 today), shared between Theory, Practical and Assessment like
@@ -290,6 +290,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     setAutoNote(got >= target0
       ? `Filled in for you: ${got} of ${target0} h, every class on a time when its room and trainer are free (rules: Administration › Business Rules).${testUsed ? ` ${testUsed} class${testUsed === 1 ? "" : "es"} use a test account as trainer because no real trainer was free then: pick a real trainer when one is available.` : ""} Change anything you like, then book the week.`
       : `Filled in ${got} of ${target0} h. For the other ${target0 - got} h no free time, room and trainer exist. ${why.join(" · ")}. Free a trainer (move or cancel that class, or add the trainer's hours in Bookings › Availability) or add a trainer, then press Auto-fill again; nothing was guessed.`);
+    return built;
   };
   const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);
   // A week that was never booked fills itself once the rooms' and trainers' open hours are read.
@@ -305,17 +306,17 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const addClass = (weekday: number) => setRows(list => { const at = list.map(r => r.weekday).lastIndexOf(weekday); const next = [...list]; next.splice(at + 1, 0, blank(weekday)); return next; });
   const remove = (r: Row) => setRows(list => (list.filter(x => x.weekday === r.weekday).length > 1 ? list.filter(x => x.key !== r.key) : list.map(x => (x.key === r.key ? blank(r.weekday) : x))));
 
-  const book = async () => {
-    if (why || busy) return;
+  const book = async (list: typeof sessions = sessions) => {
+    if (busy || (list === sessions && why)) return;
     setBusy(true); setError(""); setDone(null);
     try {
       // The intake is CoE or VoE as this screen books it.
       const loads = await loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>));
       if ((loads[intakeId] ?? "coe") !== load) await setIntakeLoad(intakeId, load);
-      const used = [...new Set(sessions.map(s => s.roomId))];
+      const used = [...new Set(list.map(s => s.roomId))];
       const seats = used.map(id => rooms.find(r => r.id === id)?.capacity ?? null);
       const capacity = seats.length && seats.every(Boolean) ? String(Math.min(...(seats as number[]))) : "";
-      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity, trainerIds: [...new Set(sessions.map(s => s.trainerId))] });
+      const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions: list, capacity, trainerIds: [...new Set(list.map(s => s.trainerId))] });
       let made: GenerateResult;
       try { made = await generateClassSessions(out.batchId); }
       catch (g) {
@@ -339,9 +340,16 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
       <span className={"ml-auto font-semibold " + (total === target ? "text-green-800" : total > target ? "text-red-700" : "text-foreground-900")}>Total {total} / {target} h</span>
     </div>
     {canEdit ? <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
-      <button type="button" disabled={busy || !hoursReady} onClick={() => { if (rows.some(filled) && !window.confirm("Replace the week with an automatic one?")) return; autoFill(); }}
-        className="inline-flex items-center gap-1 rounded-md bg-primary-600 px-2.5 py-1 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
-        <i className="ri-magic-line" aria-hidden="true" />Auto-fill the week</button>
+      <button type="button" disabled={busy || !hoursReady} onClick={() => {
+        // The AI takes over the whole week: it fills every class and, when all the hours fit, books it (nothing to click after).
+        const built = autoFill();
+        const list = built.map(r => ({ weekday: r.weekday, startTime: r.start, endTime: r.end, type: r.type, roomId: r.roomId, trainerId: r.trainerId }));
+        if (built.length && total0(built) >= target && !built.some(r => problem(r, built))) void book(list);
+      }}
+        className="inline-flex items-center gap-1 rounded-md bg-primary-600 px-2.5 py-1 font-semibold text-white hover:bg-primary-700 disabled:opacity-50" title="Fills the whole week and books it when every hour fits">
+        <i className="ri-magic-line" aria-hidden="true" />Auto-fill and book the week</button>
+      <button type="button" disabled={busy || !hoursReady} onClick={() => { autoFill(); }}
+        className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50" title="Fills the week for you to check before booking">Fill only</button>
       <button type="button" disabled={busy} onClick={() => { setRows([1, 2, 3, 4, 5, 6, 7].map(blank)); setAutoNote(""); setDone(null); }}
         className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Clear the week</button>
       <span className="text-foreground-500">{rooms.length} room{rooms.length === 1 ? "" : "s"} · {staff.length} trainer{staff.length === 1 ? "" : "s"}</span>
@@ -406,7 +414,7 @@ export default function WeeklyClassBookingDialog({ title, intakeId, courseId, lo
   title: string; intakeId: string; courseId: string; load: StudyLoad; canEdit: boolean; onClose: () => void;
   onBack?: () => void; backLabel?: string; onSaved?: (made: GenerateResult) => void; saveLabel?: string;
 }) {
-  return <Modal open keepOpen title={title} width="max-w-6xl" onClose={onClose}>
+  return <Modal open keepOpen title={title} width="max-w-[96vw]" onClose={onClose}>
     <WeeklyClassBooking intakeId={intakeId} courseId={courseId} load={load} canEdit={canEdit} onSaved={onSaved} saveLabel={saveLabel}
       footerStart={onBack ? <Button variant="outline" icon="ri-arrow-left-line" onClick={onBack}>{backLabel ?? "Back"}</Button> : null} />
   </Modal>;

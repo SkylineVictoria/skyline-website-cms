@@ -28,18 +28,19 @@ function Empty({ icon, title, text }: { icon: string; title: string; text: strin
     <h3 className="font-semibold text-foreground-900">{title}</h3><p className="mt-2 max-w-md text-sm text-foreground-600">{text}</p>
   </div>;
 }
-/** Email Management > Audit Logs (2026-11-21): every licence assign / remove from the Account directory (refused and failed ones too). */
+/** Email Management > Audit Logs (2026-11-21): every licence assign / remove and sign-in block / allow from the Account directory (refused and failed ones too). */
+const AUDIT_ACTION: Record<string, string> = { licence_removed: "Licence removed", licence_assigned: "Licence assigned", signin_blocked: "Sign-in blocked", signin_allowed: "Sign-in allowed" };
 function AuditLog() {
   const [rows, setRows] = useState<EmailAuditRow[] | null>(null); const [error, setError] = useState("");
   useEffect(() => { void fetchEmailAudit().then(setRows, (e: unknown) => setError(e instanceof Error ? e.message : "The audit log could not be loaded.")); }, []);
   const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" });
-  return <section className={panel}><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Licence assignments and removals from the Account directory, with who did them (Melbourne time).</p></div>
+  return <section className={panel}><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Licences assigned or removed and sign-in blocked or allowed in the Account directory, with who did them (Melbourne time).</p></div>
     {error ? <p role="alert" className="mt-4 text-sm text-red-700">{error}</p> : !rows ? <p className="mt-4 text-sm text-foreground-500">Loading…</p> : !rows.length
-      ? <div className="mt-5"><Empty icon="ri-file-list-3-line" title="No licence changes yet" text="Assigning or removing a licence in the Account directory is recorded here." /></div>
+      ? <div className="mt-5"><Empty icon="ri-file-list-3-line" title="No account changes yet" text="Assigning or removing a licence, or blocking or allowing sign-in, in the Account directory is recorded here." /></div>
       : <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm" data-testid="email-audit"><thead className="border-b border-background-200 text-foreground-600"><tr>{["Date / time", "Actor", "Action", "Account", "Licence", "Result"].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead>
         <tbody>{rows.map((r) => <tr key={r.id} className="border-b border-background-100"><td className="px-3 py-2 whitespace-nowrap">{when(r.at)}</td><td className="px-3 py-2">{r.actor}</td>
-          <td className="px-3 py-2">{r.action === "licence_removed" ? "Licence removed" : "Licence assigned"}</td><td className="px-3 py-2 break-all">{r.account}</td><td className="px-3 py-2">{r.licence ?? r.sku ?? "—"}</td>
-          <td className={`px-3 py-2 ${r.result === "ok" ? "text-emerald-700" : "text-red-700"}`}>{r.result === "ok" ? "Done" : r.result === "refused" ? `Refused${typeof r.detail?.reason === "string" ? `: ${r.detail.reason}` : ""}` : "Failed"}</td></tr>)}</tbody></table></div>}
+          <td className="px-3 py-2">{AUDIT_ACTION[r.action] ?? r.action}</td><td className="px-3 py-2 break-all">{r.account}</td><td className="px-3 py-2">{r.licence ?? r.sku ?? "—"}</td>
+          <td className={`px-3 py-2 ${r.result === "ok" ? "text-emerald-700" : "text-red-700"}`}>{r.result === "ok" ? "Done" : r.result === "refused" ? `Refused${typeof r.detail?.reason === "string" ? `: ${r.detail.reason}` : ""}` : `Failed${typeof r.detail?.reason === "string" ? `: ${r.detail.reason}` : typeof r.detail?.code === "string" ? ` (${r.detail.code})` : ""}`}</td></tr>)}</tbody></table></div>}
   </section>;
 }
 

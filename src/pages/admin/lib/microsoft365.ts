@@ -91,17 +91,22 @@ export interface DirectoryRow {
   person: { kind: "student" | "employee" | "trainer" | "agent"; id: string; name: string } | null;
   licences: Array<{ sku: string; name: string; skyline: boolean }>; exchange: boolean; admin: boolean | null; self: boolean; createdAt: string | null;
   canRemove: boolean; removeBlocked: string | null; assign: { sku: string; name: string } | null;
+  /** Block / allow sign-in: allowed unless signinBlocked says why not (own account, admin role, shared mailbox). */
+  canBlock: boolean; canAllow: boolean; signinBlocked: string | null;
 }
 export interface DirectoryPage {
   rows: DirectoryRow[]; total: number; page: number; pageSize: number; pages: number;
   counts: { accounts: number; activeMailboxes: number; byType: Record<DirectoryType, number> };
   adminRolesReadable: boolean; adminRolePermission: string;
 }
-export const fetchDirectory = (q: { q?: string; type?: string; status?: string; page?: number }) => callWithBody<DirectoryPage>({ action: "directory", ...q });
+export const fetchDirectory = (q: { q?: string; type?: string; status?: string; page?: number; fresh?: boolean }) => callWithBody<DirectoryPage>({ action: "directory", ...q });
 export const removeLicences = (userIds: string[]) =>
-  callWithBody<{ results: Array<{ id: string; upn: string; ok: boolean; error?: string; removed?: string[] }>; removed: number; refused: number }>({ action: "licence_remove", userIds });
-export const assignLicence = (userId: string) => callWithBody<{ ok: true; upn: string; licence: string }>({ action: "licence_assign", userId });
-export interface EmailAuditRow { id: number; at: string; actor: string; action: "licence_assigned" | "licence_removed"; account: string; sku: string | null; licence: string | null; result: "ok" | "refused" | "failed"; detail: Record<string, unknown> }
+  callWithBody<{ results: Array<{ id: string; upn: string; ok: boolean; error?: string; removed?: string[]; row?: DirectoryRow }>; removed: number; refused: number }>({ action: "licence_remove", userIds });
+export const assignLicence = (userId: string) => callWithBody<{ ok: true; upn: string; licence: string; row?: DirectoryRow }>({ action: "licence_assign", userId });
+/** Block (enabled false) or allow (true) sign-in; every account answered on its own, success only once Microsoft shows the change. */
+export const setSignin = (userIds: string[], enabled: boolean) =>
+  callWithBody<{ results: Array<{ id: string; upn: string; ok: boolean; error?: string; row?: DirectoryRow }>; changed: number; refused: number }>({ action: "signin_set", userIds, enabled });
+export interface EmailAuditRow { id: number; at: string; actor: string; action: "licence_assigned" | "licence_removed" | "signin_blocked" | "signin_allowed"; account: string; sku: string | null; licence: string | null; result: "ok" | "refused" | "failed"; detail: Record<string, unknown> }
 export async function fetchEmailAudit(): Promise<EmailAuditRow[]> {
   const { data, error } = await supabase.rpc("email_account_audit_list", { p_limit: 200 });
   if (error) throw new Error(error.message || "The audit log could not be loaded.");

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { ruleNumber } from "@/lib/businessRules";
-import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, ticketStudents, supportAttachmentCount, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
+import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, defaultTicketPriority, ticketCategories, ticketStudents, supportAttachmentCount, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
 
 /** New ticket form for students and agents. Agents can say which student the ticket is about. */
 export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isStudent: boolean; onCreated: (id: string, ref: string) => void; onCancel: () => void }) {
-  const [category, setCategory] = useState<TicketCategory>("enrolment_documents");
-  const [priority, setPriority] = useState<TicketPriority>("normal");
+  const [category, setCategory] = useState<TicketCategory>(() => ticketCategories()[0]);
+  const [priority, setPriority] = useState<TicketPriority>(defaultTicketPriority);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [cap, setCap] = useState<number | null>(null);
@@ -41,7 +41,7 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm font-medium text-foreground-800">Category
           <select className={field} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>
-            {(Object.keys(CATEGORY_LABEL) as TicketCategory[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+            {ticketCategories().map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
           </select>
         </label>
         <label className="block text-sm font-medium text-foreground-800">Priority

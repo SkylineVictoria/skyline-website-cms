@@ -1,5 +1,6 @@
 import { isRejectedDocumentStatus, RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { reportFunctionFailure, supabase } from "@/pages/admin/lib/supabase";
+import { hrNumber, onHrRules } from "@/lib/hrRules";
 import type { StaffDocCategory, StaffStatus } from "@/lib/staffStatus";
 import type { StaffDocSummary, StaffDocument } from "@/lib/staffApi";
 import { documentFileProblem } from "../../supabase/functions/_shared/validation/person";
@@ -176,7 +177,9 @@ export const myDocumentUrl = async (id: string) => String((await invoke({ action
 
 /** /staff/welcome#t=: the one-time set-password link that goes out with the offer. */
 export interface AccountView { name: string; firstName: string; email: string; expiresAt: string }
-export const PASSWORD_MIN = 12;
+/** The shortest staff password: Business Rule auth.password_min_staff (staff-onboarding checks the same). */
+export let PASSWORD_MIN = 12;
+onHrRules(() => { PASSWORD_MIN = Math.max(12, hrNumber("auth.password_min_staff", 12)); });
 /** The same rule the server applies (staff-onboarding passwordProblem). */
 export function newPasswordProblem(password: string, confirmation: string, email = ""): string | null {
   if (password.length < PASSWORD_MIN) return `Choose a password of at least ${PASSWORD_MIN} characters.`;

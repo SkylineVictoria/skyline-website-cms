@@ -121,7 +121,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           </Select>
         </Field>
       )}
-      <Field label="Students on" required hint="CoE students have 20 class hours a week; VoE students have 40.">
+      <Field label="Students on" required hint={`CoE students have ${LOAD_HOURS.coe} class hours a week; VoE students have ${LOAD_HOURS.voe}.`}>
         <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
           {(["coe", "voe"] as const).map((l) => (
             <button key={l} type="button" role="radio" aria-checked={load === l} onClick={() => setLoad(l)}

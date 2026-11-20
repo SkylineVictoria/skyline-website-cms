@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
+import { EMPLOYMENT_TYPE_LABEL, STAFF_EMPLOYMENT_TYPES, typeOptions } from "@/lib/jobs";
 import { adminListStaff, adminSaveEmployment, type StaffDetail, type StaffEmployment, type StaffEmploymentForm, type StaffListRow } from "@/lib/staffApi";
 import { listLocations, type HrLocation } from "@/lib/hrmsApi";
 import { STAFF_LOCATIONS_PATH } from "@/pages/admin/lib/staffRoutes";
@@ -55,7 +56,7 @@ export default function EmploymentDialog({ profileId, employment, onClose, onSav
           <Field label="Job title"><TextInput maxLength={150} value={form.jobTitle} onChange={(e) => patch({ jobTitle: e.target.value })} data-testid="staff-employment-title" /></Field>
           <Field label="Department"><TextInput maxLength={120} value={form.department} onChange={(e) => patch({ department: e.target.value })} data-testid="staff-employment-department" /></Field>
           <Field label="Job type"><Select value={form.employmentType} onChange={(e) => patch({ employmentType: e.target.value as StaffEmploymentForm["employmentType"] })} data-testid="staff-employment-type">
-            <option value="">Not set</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="contract">Contract</option>
+            <option value="">Not set</option>{typeOptions(STAFF_EMPLOYMENT_TYPES, form.employmentType).map((t) => <option key={t} value={t}>{EMPLOYMENT_TYPE_LABEL[t as keyof typeof EMPLOYMENT_TYPE_LABEL] ?? t}</option>)}
           </Select></Field>
           <Field label="Work location" hint={locations && locations.length === 0 ? "No locations yet: add one under HRMS › Locations." : undefined}>
             <Select value={form.locationId} onChange={(e) => patch({ locationId: e.target.value })} data-testid="staff-employment-location">

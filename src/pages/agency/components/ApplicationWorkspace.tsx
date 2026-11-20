@@ -56,12 +56,14 @@ import SegmentedControl from "@/components/shared/application-form/SegmentedCont
 import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
 import { stepTitle } from "@/components/shared/application-form/stepTitle";
+import { usiRequired } from "@/pages/agency/lib/admissionsRules";
 
 const FORM_ID = "portal-application-form";
 const STUDENT_CONTACT_FIELDS = new Set(["mobile", "email", "confirm_email", "email_note"]);
 const AUSTRALIAN_ADDRESS: Record<string, string> = { address_type: "Australian Address", au_country: "Australia" };
-// Answers the portal fixes (greyed out, not editable): an Australian address, and a USI is always required.
-const FIXED_VALUES: Record<string, string> = { ...AUSTRALIAN_ADDRESS, has_usi: "Yes" };
+// Answers the portal fixes (greyed out, not editable): an Australian address, and a USI while Business Rules
+// admissions.usi_required says Required (today); when SLIT makes the USI optional the "Do you already have a USI?" answer is asked.
+const fixedValues = (): Record<string, string> => (usiRequired() ? { ...AUSTRALIAN_ADDRESS, has_usi: "Yes" } : { ...AUSTRALIAN_ADDRESS });
 const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
 const AU_ADDRESS_FIELDS = ["au_street", "au_line2", "au_suburb", "au_state", "au_zip"] as const;
 const LICENCE_CATEGORY = "Driving Licence";
@@ -285,7 +287,7 @@ export default function ApplicationWorkspace({
     const out: DraftValues = { ...storedValues };
     for (const [name, value] of Object.entries(seed)) if (!String(out[name] ?? "").trim()) out[name] = value;
     // The student's address is always an Australian one (fixed and greyed out on the form).
-    Object.assign(out, FIXED_VALUES);
+    Object.assign(out, fixedValues());
     if (!Array.isArray(out.usi_consent) || !out.usi_consent.length) out.usi_consent = [USI_CONSENT_TEXT];
     for (const [name, value] of Object.entries(IDENTIFIER_DEFAULTS)) if (!String(out[name] ?? "").trim()) out[name] = value;
     for (const [name, value] of Object.entries(FORM_DEFAULTS)) if (!String(out[name] ?? "").trim()) out[name] = value;
@@ -633,7 +635,7 @@ export default function ApplicationWorkspace({
     // Fields are edited in place (there is no Edit button any more): a hand edit of a value filled from a document, worked out
     // from one, or pre-filled unlocks it exactly as Edit did, so nothing read later replaces it.
     const editedName = target?.name?.replace(/\[\]$/, "") ?? "";
-    if (editedName && event.nativeEvent.isTrusted && !(editedName in FIXED_VALUES)
+    if (editedName && event.nativeEvent.isTrusted && !(editedName in fixedValues())
       && (documentFields.has(editedName) || derivedFields.has(editedName) || prefilledFields.has(editedName))) {
       setUnlockedFields((prev) => (prev.has(editedName) ? prev : new Set(prev).add(editedName)));
     }
@@ -1504,7 +1506,7 @@ export default function ApplicationWorkspace({
       const saved = String(mergedInitial[field.name] ?? (field.name === "confirm_email" ? mergedInitial.email ?? "" : ""));
       return <input key={field.name} type="hidden" name={field.name} defaultValue={saved} />;
     }
-    const fixedAustralia = field.name in FIXED_VALUES;
+    const fixedAustralia = field.name in fixedValues();
     const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || fixedAustralia;
     // Always "Australian Address": the ways to fill it (search, licence, by hand) are offered above the fields instead.
     if (field.name === "address_type") return <input key={field.name} type="hidden" name={field.name} defaultValue={AUSTRALIAN_ADDRESS.address_type} />;
@@ -1971,7 +1973,7 @@ export default function ApplicationWorkspace({
                 summary={open ? undefined : summaryOf(index)}
                 direction={direction}
                 onToggle={(next) => (next ? openSection(index) : setExpanded((prev) => { const out = new Set(prev); out.delete(index); return out; }))}
-                note={!readOnly && section.fields.some((field) => visibleField(field) && field.type !== "file" && !(field.name in FIXED_VALUES) && isAutoFilled(field.name)) ? (
+                note={!readOnly && section.fields.some((field) => visibleField(field) && field.type !== "file" && !(field.name in fixedValues()) && isAutoFilled(field.name)) ? (
                   <p className="flex items-center gap-1.5 text-xs text-foreground-500">
                     <span className="h-1.5 w-1.5 rounded-full bg-foreground-400" aria-hidden="true" />
                     Auto-filled from your document. Click any field to edit.

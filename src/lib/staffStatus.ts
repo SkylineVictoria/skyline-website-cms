@@ -4,6 +4,7 @@
 
 import { checklist, expiryState, todayIso, type ChecklistItem, type DocLike, type DocumentKind, type ExpiryRule, type ReviewState } from "@/lib/documentChecklist";
 import { hrList, hrNumber, hrObject, hrText, onHrRules } from "@/lib/hrRules";
+import { STAFF_EMPLOYMENT_TYPES } from "@/lib/jobs";
 
 export type StaffStatus = "applied" | "invited" | "documents_submitted" | "offer_sent" | "offer_signed" | "active" | "rejected" | "inactive";
 export type StaffRole = "admin" | "trainer";
@@ -127,6 +128,15 @@ export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
   reactivate: { label: "Reactivate", confirm: "Reactivate", note: "optional", explain: "Gives back the role they had and marks them Active." },
   reopen: { label: "Reopen", confirm: "Reopen", note: "required", explain: "Moves the application back to Applications so you can send a new document link." },
 };
+// Link validity in the explanations follows hrms.staff_document_link_days / hrms.staff_account_link_days (hr.invite_create).
+onHrRules(() => {
+  const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+  const docs = days(hrNumber("hrms.staff_document_link_days", 14));
+  const login = days(hrNumber("hrms.staff_account_link_days", 7));
+  EMPLOYEE_ACTION.send_documents_link.explain = `Emails a private link (valid ${docs}) to add personal details and documents. No account is needed.`;
+  EMPLOYEE_ACTION.send_offer.explain = `Makes the offer letter from a template and emails it with the person's sign-in link (valid ${login}). They choose their own password, then read and sign the letter.`;
+  EMPLOYEE_ACTION.resend_login.explain = `Emails a new one-time link to choose a password (valid ${login}). The earlier link stops working at once.`;
+});
 
 /** Outbox and link emails as the admin sees them. */
 export const EMAIL_KIND_LABEL: Record<string, string> = {
@@ -263,7 +273,7 @@ export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): 
   const problems: Partial<Record<keyof PayDetailsInput, string>> = {};
   if (!input.jobTitle.trim()) problems.jobTitle = "Enter the position (job title).";
   else if (input.jobTitle.trim().length > 150) problems.jobTitle = "Keep the position under 150 characters.";
-  if (!["full_time", "part_time", "contract"].includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
+  if (!(STAFF_EMPLOYMENT_TYPES as string[]).includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
   if (!input.locationId) problems.locationId = "Choose the work location.";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) || Number.isNaN(Date.parse(`${input.startDate}T00:00:00Z`))) problems.startDate = "Enter the start date.";
   else {

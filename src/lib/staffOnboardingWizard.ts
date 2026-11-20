@@ -1,9 +1,13 @@
 // The staff onboarding wizard's logic, pure and browser-free so it is tested offline (scripts/test-staff-registration.ts):
 // the steps, what is still missing (the same list the database checks on Submit), and the "from your passport" notes.
 import {
-  EMPTY_STAFF_DETAILS, STAFF_FIELDS, STAFF_STEP_FIELDS, SUPER_CHOICE_LABEL, TAX_RESIDENCY_LABEL, staffProblems, superFundNeeded, type StaffDetails, type StaffField,
+  EMPTY_STAFF_DETAILS, STAFF_FIELDS, STAFF_STEP_FIELDS, SUPER_CHOICE_LABEL, TAX_RESIDENCY_LABEL, setStaffMinimumAge, staffProblems, superFundNeeded, type StaffDetails, type StaffField,
 } from "../../supabase/functions/_shared/validation/staff-onboarding";
+import { hrNumber, onHrRules } from "@/lib/hrRules";
 import { expiryState, requiredStaffCategories, staffDocNeedsExpiry, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
+
+// The youngest a staff member may be: Business Rule hrms.staff_minimum_age (the database checks the same).
+onHrRules(() => setStaffMinimumAge(hrNumber("hrms.staff_minimum_age", 14)));
 
 export type StaffWizardStepId = "documents" | "prefill" | "personal" | "bank" | "tax" | "review";
 export interface StaffWizardStep { id: StaffWizardStepId; short: string; icon: string; title: string; subtitle: string }

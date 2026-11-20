@@ -13,7 +13,6 @@ import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
 import MasterTimetableTab from "./MasterTimetableTab";
-import { DailyTimetableTab } from "./CourseWeeklyTimetable";
 import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
@@ -81,6 +80,8 @@ export default function LmsCoursesPage() {
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   /** Whether the selected course's master timetable (wizard step 4) is saved; null while unknown. */
   const [masterSaved, setMasterSaved] = useState<boolean | null>(null);
+  // Whether the course's VoE weekly calendar is saved (null: not read yet, or not available on this database).
+  const [voeSaved, setVoeSaved] = useState<boolean | null>(null);
   const [unitHours, setUnitHours] = useState<Record<string, UnitHours>>({});
   const [query, setQuery] = useState("");
   const [campus, setCampus] = useState("");
@@ -182,14 +183,16 @@ export default function LmsCoursesPage() {
     let live = true;
     void supabase.rpc("rto_master_timetable", { p_action: "get", p_data: { courseId: selectedId } })
       .then(({ data }) => { if (live) setMasterSaved(!!(data as { saved?: boolean } | null)?.saved); });
+    setVoeSaved(null);
+    void supabase.rpc("rto_voe_calendar", { p_action: "get", p_data: { courseId: selectedId } })
+      .then(({ data, error }) => { if (live && !error) setVoeSaved(!!(data as { saved?: boolean } | null)?.saved); });
     return () => { live = false; };
   }, [selectedId, reloadKey]);
   // A link such as the dashboard's "Open master timetable" names the course and the tab.
   useEffect(() => {
     const wanted = params.get("tab");
     if (!params.get("course") || !courses.length) return;
-    if (wanted === "master" || wanted === "units" || wanted === "voe" || wanted === "coeDaily" || wanted === "voeDaily") setTab(wanted);
-    else if (wanted === "prereq") setTab("coeDaily"); // the old Weekly TimeTable tab
+    if (wanted === "master" || wanted === "units" || wanted === "voe") setTab(wanted);
     setParams({}, { replace: true });
   }, [courses, params, setParams]);
   useEffect(() => {
@@ -291,6 +294,14 @@ export default function LmsCoursesPage() {
   const setupStep: "units" | "hours" | "master" | "classes" | "done" | null = !detail || detail.course.id !== selectedId || masterSaved === null ? null
     : !units.length ? "units" : slit.some(h => !h?.confirmed) ? "hours" : !masterSaved ? "master" : !classesDone ? "classes" : "done";
   const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "Rooms, trainers and weekly class times" } as const;
+  /** A weekly calendar tab opens the weekly calendar wizard until that calendar is saved (owner, 2026-11-21): CoE, then VoE. */
+  const openTab = (id: Tab) => {
+    setTab(id);
+    if (!selected || !canEdit) return;
+    if (id === "master" && masterSaved === false) setWizard({ courseId: selected.id, step: "master" });
+    else if (id === "voe" && masterSaved && voeSaved === false) setWizard({ courseId: selected.id, step: "voe" });
+    else if (id === "voe" && masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
+  };
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;
     const courseId = selected.id;
@@ -304,7 +315,7 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" }, { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const;
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" }] as const;
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   const pane: Pane = tab === "master" || tab === "voe" || tab === "prereq" || tab === "coeDaily" || tab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
@@ -461,7 +472,7 @@ export default function LmsCoursesPage() {
             <CricosCourseSection key={selectedId + ":edit"} courseId={selectedId} onSaved={() => { setReloadKey(k => k + 1); void load(selectedId); }} />
           </div> : <>
             <div role="tablist" aria-label="Course sections" className="mt-5 flex gap-5 border-b border-background-200">
-              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
+              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => openTab(t.id)}
                 className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
             </div>
             <div role="tabpanel" className="pt-4">
@@ -488,9 +499,6 @@ export default function LmsCoursesPage() {
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
-              {/* The timetables booked in course setup: the CoE intakes', then the VoE intakes' (owner, 2026-11-20). */}
-              {(tab === "coeDaily" || tab === "voeDaily" || tab === "prereq") && selectedId ? <DailyTimetableTab key={selectedId + ":" + reloadKey + tab} courseId={selectedId}
-                intakes={detail?.course.id === selectedId ? detail.intakes : []} canEdit={canEdit} load={tab === "voeDaily" ? "voe" : "coe"} /> : null}
             </div>
           </>}
         </>}

@@ -14,11 +14,13 @@ import OfferLetterDrawer from "@/components/shared/application-status/OfferLette
 import { getStudent, type ApplicationRow } from "@/pages/admin/lib/businessData";
 import { LETTER_CATEGORY } from "@/lib/offerLetters";
 
-export interface SubjectPreset { type: "student" | "employee" | "agent"; id: string; name?: string }
+export interface SubjectPreset { type: "student" | "employee" | "agent" | "agency"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
 const person = (n: number): Person => ({ role: `signer${n}`, label: n === 1 ? "Signer" : `Signer ${n}`, name: "", email: "", order: n, required: true });
-const SUBJECT_LABEL = { student: "Student", employee: "Employee", agent: "Agent" } as const;
-const SUBJECT_PLURAL = { student: "students", employee: "employees", agent: "agents" } as const;
+const SUBJECT_LABEL = { student: "Student", employee: "Employee", agent: "Agent", agency: "Agency" } as const;
+const SUBJECT_PLURAL = { student: "students", employee: "employees", agent: "agents", agency: "agencies" } as const;
+/** The agent onboarding blanks (F04, P06, F05) go only through the business onboarding flow; document-signing refuses them here too. */
+const ONBOARDING_KEYS = new Set(["agent_application_form", "agent_agreement", "agent_referee_check_form"]);
 /**
  * A template that is filled from one of the student's applications (2026-11-21): the student offer letter (its course, fee and
  * intake variables and {{#each courses}} blocks come from the application). It is prepared and sent by the Applications offer
@@ -58,7 +60,8 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
   // Emails are not signed; every other active template whose "Used for" matches the person type is offered (its current version is what
   // "create" uses). 2026-11-21: the student offer letter is offered too (it was left out, so "A student" had an empty list): it needs
   // one of the student's applications and is prepared from it below.
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && !ONBOARDING_KEYS.has(t.system_key ?? "")
+    && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
   const fromApplication = source === "template" && !!template && needsApplication(template);
   // The chosen student's applications, for a template filled from an application.
@@ -158,10 +161,10 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
       <section className="grid gap-4 md:grid-cols-2">
         <Field label="This document is for" hint="Optional. Fills the variables and lists the document on that person's record.">
           <Select value={subjectType} disabled={!!preset} onChange={(e) => { setSubjectType(e.target.value as typeof subjectType); setSubjectId(""); setQuery(""); setTemplateId(""); }}>
-            <option value="">Nobody in particular</option><option value="student">A student</option><option value="employee">An employee</option><option value="agent">An agent</option></Select></Field>
+            <option value="">Nobody in particular</option><option value="student">A student</option><option value="employee">An employee</option><option value="agent">An agent</option><option value="agency">An agency</option></Select></Field>
         {subjectType && (subjectId ? <div className="text-sm"><p className="mb-1.5 text-label font-medium text-foreground-800">{SUBJECT_LABEL[subjectType]}</p>
           <p className="rounded-md border border-background-300 px-3 py-2">{subject?.name ?? preset?.name ?? "Loading…"}{subject?.email ? ` · ${subject.email}` : ""}{!preset && <button type="button" className="ml-3 text-primary-700 underline" onClick={() => { setSubjectId(""); setSubject(null); }}>Change</button>}</p></div>
-          : <div><Field label={`Find the ${SUBJECT_LABEL[subjectType].toLowerCase()}`}><TextInput value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or email" data-testid="subject-search" /></Field>
+          : <div><Field label={`Find the ${SUBJECT_LABEL[subjectType].toLowerCase()}`}><TextInput value={query} onChange={(e) => setQuery(e.target.value)} placeholder={subjectType === "agency" ? "Business name, ABN or code" : "Name or email"} data-testid="subject-search" /></Field>
             {matches.length > 0 && <ul className="mt-1 max-h-40 overflow-y-auto rounded-md border border-background-300 text-sm">{matches.map((m) => <li key={m.id}><button type="button" className="block w-full px-3 py-2 text-left hover:bg-background-100" onClick={() => setSubjectId(m.id)}>{m.name} · {m.email}</button></li>)}</ul>}</div>)}
       </section>
       <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="radio" checked={source === "template"} onChange={() => setSource("template")} /> Use existing template</label>
@@ -197,7 +200,7 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
       </div>}
       {!fromApplication && <>
-      <section className="space-y-3"><h3 className="font-semibold">Recipients</h3>
+      <section className="space-y-3"><h3 className="font-semibold">Recipients</h3>{subjectType === "agency" && <p className="text-sm text-foreground-600" data-testid="compose-agency-recipient">The first signer is the business's agency admin (point of contact); change it here if someone else signs for the business.</p>}
         {people.map((p, i) => <div key={p.role} className="grid items-end gap-2 rounded-md border border-background-300 p-3 md:grid-cols-[1fr_1fr_1fr_auto]">
           <Field label={source === "template" ? `${p.label}: full name` : "Full name"} required><TextInput value={p.name} maxLength={150} onChange={(e) => setPerson(i, { name: e.target.value })} data-testid={`recipient-name-${i}`} /></Field>
           <Field label="Email" required><TextInput type="email" value={p.email} onChange={(e) => setPerson(i, { email: e.target.value })} data-testid={`recipient-email-${i}`} /></Field>

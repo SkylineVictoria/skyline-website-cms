@@ -40,9 +40,9 @@ const roleKey = (label: string, taken: string[]) => {
   return key;
 };
 /** The variables a record fills by itself, as placeholder cards beside the editor. */
-const RECORD_GROUP: Record<string, PlaceholderSpec["group"]> = { student: "Student", employee: "Employee record", agent: "Agent" };
+const RECORD_GROUP: Record<string, PlaceholderSpec["group"]> = { student: "Student", employee: "Employee record", agent: "Agent", agency: "Agency" };
 function recordPlaceholders(audience: SigningTemplate["audience"]): PlaceholderSpec[] {
-  const kinds = audience === "any" ? (["student", "employee", "agent"] as const) : [audience];
+  const kinds = audience === "any" ? (["student", "employee", "agent", "agency"] as const) : [audience];
   const seen = new Set<string>();
   const out: PlaceholderSpec[] = [];
   for (const kind of kinds) for (const key of SUBJECT_VARIABLES[kind]) {
@@ -334,7 +334,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       <Button disabled={busy} onClick={() => void save()} data-testid="template-save">{busy ? "Saving…" : "Save template"}</Button></div>}>
     <div className="space-y-5" data-testid="template-dialog">
       {error && <p role="alert" className={ALERT} data-testid="template-error">{error}</p>}
-      {draft.kind !== "email" && <div className="rounded-md border border-background-300 bg-background-100 px-3 py-2 text-sm" data-testid="template-used-for"><span className="text-foreground-600">Used for: </span><span className="font-semibold text-foreground-900">{({ student: "Students", employee: "Employees", agent: "Agents / Businesses", any: "Anyone" } as const)[loo ? "student" : draft.audience]}</span></div>}
+      {draft.kind !== "email" && <div className="rounded-md border border-background-300 bg-background-100 px-3 py-2 text-sm" data-testid="template-used-for"><span className="text-foreground-600">Used for: </span><span className="font-semibold text-foreground-900">{({ student: "Students", employee: "Employees", agent: "Agents", agency: "Agencies / Businesses", any: "Anyone" } as const)[loo ? "student" : draft.audience]}</span></div>}
       {!template && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => changeKind("text")} /> Letter or document to sign (rich text with placeholders)</label>
         {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => changeKind("email")} /> Email</label>}

@@ -11,7 +11,7 @@ import { AGENT_ONBOARDING_DOCS } from "../../../../../supabase/functions/_shared
 const withoutF04 = (templates: SigningContext["templates"]) => templates.filter((t) => (t as { system_key?: string | null }).system_key !== AGENT_ONBOARDING_DOCS.form.key);
 
 /** On a student's, an employee's or an agent's record: the documents sent to them for signature with their status, and a button to send another. */
-export default function SubjectSigningPanel({ type, id, name }: { type: "student" | "employee" | "agent"; id: string; name?: string }) {
+export default function SubjectSigningPanel({ type, id, name }: { type: "student" | "employee" | "agent" | "agency"; id: string; name?: string }) {
   const [requests, setRequests] = useState<SigningRequest[] | null>(null);
   const [error, setError] = useState(""); const [openId, setOpenId] = useState<string | null>(null); const [placeAfterCreateId, setPlaceAfterCreateId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<SigningContext["templates"] | null>(null);

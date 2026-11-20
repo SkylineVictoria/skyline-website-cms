@@ -1405,6 +1405,10 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
     "only the flagged answer and the declaration change; the registration box is composed again from ACN / MARN");
   assert.equal(signingCore.F04_SYSTEM_KEY, onboarding.AGENT_ONBOARDING_DOCS.form.key);
   assert.match(signingCore.F04_NOT_HERE, /sent automatically/);
+  // 2026-11-21: every onboarding blank (F04, P06, F05) stays in the onboarding flow: hidden in New signing request and refused by create.
+  assert.deepEqual([...signingCore.ONBOARDING_SYSTEM_KEYS].sort(), Object.values(onboarding.AGENT_ONBOARDING_DOCS).map((d) => d.key).sort());
+  assert.ok(read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('!ONBOARDING_KEYS.has(t.system_key ?? "")') && read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('<option value="agency">An agency</option>'));
+  assert.ok(signing.SUBJECT_VARIABLES.agency.includes("agency.commission") && signing.SUBJECT_VARIABLES.agency.includes("agency.legal_name") && signing.SUBJECT_VARIABLES.agency.includes("agency.abn"), "agency variables");
   // Staff review: the wizard reads the answers; Save sends only what changed (in the server's answer format, ACN digits).
   const reviewed = logic.reviewFields([{ id: "a", key: "agent_trading_name", type: "text", label: "", required: false, page: 1 }, { id: "b", key: "litigation_involved:YES", type: "checkbox", label: "", required: true, page: 1 },
     { id: "c", key: "litigation_involved:NO", type: "checkbox", label: "", required: true, page: 1 }, { id: "d", key: "office_suburb", type: "text", label: "", required: false, page: 1 }],

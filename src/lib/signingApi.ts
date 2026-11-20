@@ -11,7 +11,9 @@ export interface SigningTemplate {
   id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null;
   /** TPL-02: header and footer repeated on every page; [Variable] tokens active (templates saved in the sectioned editor). */
   header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
-  kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
+  kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent" | "agency"; category: string; status: "active" | "archived";
+  /** The agent onboarding blanks (agent_application_form, agent_agreement, agent_referee_check_form): never offered in New signing request. */
+  system_key?: string | null;
   version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
   /** Stripe: requests made from the template ask the signer for this payment (hr.sign_templates payment_* columns). */
   payment_enabled?: boolean; payment_amount_cents?: number | null; payment_currency?: string | null; payment_description?: string | null; payment_timing?: PaymentTiming | null;
@@ -88,7 +90,7 @@ export interface SigningRecipient {
   ip: string | null; user_agent: string | null; delivery_error: string | null; reminder_count: number;
 }
 export interface SigningRequest {
-  id: string; reference: string; title: string; state: string; status: string; category: string; signing_mode: "sequential" | "parallel"; subject_type: "student" | "employee" | "agent" | null; subject_id: string | null;
+  id: string; reference: string; title: string; state: string; status: string; category: string; signing_mode: "sequential" | "parallel"; subject_type: "student" | "employee" | "agent" | "agency" | null; subject_id: string | null;
   created_at: string; sent_at: string | null; expires_at: string | null; signed_at: string | null; completed_at: string | null; closed_reason: string | null; message: string | null;
   expiry_days: number; reminder_days: number; original_hash: string; signed_hash: string | null; certificate_hash: string | null; recipients: SigningRecipient[];
   payment?: SigningPayment | null;

@@ -109,11 +109,12 @@ export default function AccountDirectory({ create }: { create: React.ReactNode }
               <td className="px-3 py-3">{r.licences.filter((l) => l.skyline).map((l) => l.name).join(", ") || "None"}
                 {r.licences.some((l) => !l.skyline) ? <span className="block text-xs text-foreground-500">+ {r.licences.filter((l) => !l.skyline).length} other</span> : null}</td>
               <td className="relative px-3 py-3 text-right">
-                {r.licences.some((l) => l.skyline) || r.assign ? <button type="button" aria-label={`Actions for ${r.upn}`} className="rounded px-2 py-1 text-lg leading-none hover:bg-background-100" onClick={() => setMenu(menu === r.id ? null : r.id)} data-testid={`directory-menu-${r.id}`}>⋯</button> : null}
+                {/* 2026-11-21: Remove licence is offered only where it is allowed (never your own account, an admin-role account or a shared mailbox). */}
+                {r.canRemove || r.assign ? <button type="button" aria-label={`Actions for ${r.upn}`} className="rounded px-2 py-1 text-lg leading-none hover:bg-background-100" onClick={() => setMenu(menu === r.id ? null : r.id)} data-testid={`directory-menu-${r.id}`}>⋯</button> : null}
                 {menu === r.id ? <div className="absolute right-3 top-10 z-20 w-56 rounded-lg border border-background-200 bg-white py-1 text-left shadow-lg" role="menu">
-                  {r.licences.some((l) => l.skyline) ? <button type="button" role="menuitem" disabled={!r.canRemove || busy} title={r.removeBlocked ?? undefined}
+                  {r.canRemove ? <button type="button" role="menuitem" disabled={busy}
                     className="block w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-foreground-400" onClick={() => { setMenu(null); setConfirm([r]); }} data-testid={`directory-remove-${r.id}`}>
-                    Remove licence{r.removeBlocked ? <span className="block text-xs text-foreground-500">{r.removeBlocked}</span> : null}</button> : null}
+                    Remove licence</button> : null}
                   {r.assign ? <button type="button" role="menuitem" disabled={busy} className="block w-full px-3 py-2 text-left text-sm hover:bg-background-100" onClick={() => void doAssign(r)} data-testid={`directory-assign-${r.id}`}>Assign licence ({r.assign.name})</button> : null}
                 </div> : null}
               </td></tr>)}</tbody></table></div>}

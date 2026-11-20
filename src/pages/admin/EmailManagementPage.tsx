@@ -1,5 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import Microsoft365Panel, { Microsoft365Badge } from "@/pages/admin/components/Microsoft365Panel";
+import CreateEmailSection from "@/pages/admin/components/CreateEmailSection";
+import AccountDirectory from "@/pages/admin/components/AccountDirectory";
+import { fetchEmailAudit, useMicrosoft365, type EmailAuditRow } from "@/pages/admin/lib/microsoft365";
+
+/*
+ * Email Management (2026-11-20): every screen reads the ONE Microsoft 365 status (useMicrosoft365: the same check as Integrations >
+ * Connections > Microsoft 365, real Microsoft Graph calls). Create Email: CreateEmailSection (students and staff, existing mailbox first).
+ */
 
 const sections = [
   { id: "accounts", label: "Email Accounts", description: "View and manage SLIT Microsoft 365 identities." },
@@ -19,56 +28,44 @@ function Empty({ icon, title, text }: { icon: string; title: string; text: strin
     <h3 className="font-semibold text-foreground-900">{title}</h3><p className="mt-2 max-w-md text-sm text-foreground-600">{text}</p>
   </div>;
 }
-function Status() { return <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"><i className="ri-alert-line" aria-hidden="true" /> Not connected</span>; }
+/** Email Management > Audit Logs (2026-11-21): every licence assign / remove and sign-in block / allow from the Account directory (refused and failed ones too). */
+const AUDIT_ACTION: Record<string, string> = { licence_removed: "Licence removed", licence_assigned: "Licence assigned", signin_blocked: "Sign-in blocked", signin_allowed: "Sign-in allowed" };
+function AuditLog() {
+  const [rows, setRows] = useState<EmailAuditRow[] | null>(null); const [error, setError] = useState("");
+  useEffect(() => { void fetchEmailAudit().then(setRows, (e: unknown) => setError(e instanceof Error ? e.message : "The audit log could not be loaded.")); }, []);
+  const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" });
+  return <section className={panel}><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Licences assigned or removed and sign-in blocked or allowed in the Account directory, with who did them (Melbourne time).</p></div>
+    {error ? <p role="alert" className="mt-4 text-sm text-red-700">{error}</p> : !rows ? <p className="mt-4 text-sm text-foreground-500">Loading…</p> : !rows.length
+      ? <div className="mt-5"><Empty icon="ri-file-list-3-line" title="No account changes yet" text="Assigning or removing a licence, or blocking or allowing sign-in, in the Account directory is recorded here." /></div>
+      : <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm" data-testid="email-audit"><thead className="border-b border-background-200 text-foreground-600"><tr>{["Date / time", "Actor", "Action", "Account", "Licence", "Result"].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead>
+        <tbody>{rows.map((r) => <tr key={r.id} className="border-b border-background-100"><td className="px-3 py-2 whitespace-nowrap">{when(r.at)}</td><td className="px-3 py-2">{r.actor}</td>
+          <td className="px-3 py-2">{AUDIT_ACTION[r.action] ?? r.action}</td><td className="px-3 py-2 break-all">{r.account}</td><td className="px-3 py-2">{r.licence ?? r.sku ?? "—"}</td>
+          <td className={`px-3 py-2 ${r.result === "ok" ? "text-emerald-700" : "text-red-700"}`}>{r.result === "ok" ? "Done" : r.result === "refused" ? `Refused${typeof r.detail?.reason === "string" ? `: ${r.detail.reason}` : ""}` : `Failed${typeof r.detail?.reason === "string" ? `: ${r.detail.reason}` : typeof r.detail?.code === "string" ? ` (${r.detail.code})` : ""}`}</td></tr>)}</tbody></table></div>}
+  </section>;
+}
+
 export default function EmailManagementPage() {
   const [params] = useSearchParams();
   const selected = params.get("section");
   const active: Section = sections.some(s => s.id === selected) ? selected as Section : "accounts";
   const current = sections.find(s => s.id === active)!;
-  const [query, setQuery] = useState("");
-  const [personType, setPersonType] = useState("student");
-  const [username, setUsername] = useState("");
   const [rule, setRule] = useState("student-enrolled");
-  const filtered = useMemo(() => query.trim(), [query]);
+  const { status, loading } = useMicrosoft365();
   return <main className="mx-auto max-w-6xl space-y-6 pb-12">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Administration / Email Management</p>
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">{current.label}</h1>
         <p className="mt-2 text-sm text-foreground-600">{current.description}</p></div>
-      <Status />
+      <Microsoft365Badge />
     </header>
-    <div role="status" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+    {status && !status.ready ? <div role="status" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950" data-testid="m365-banner">
       <i className="ri-information-line mt-0.5 text-lg" aria-hidden="true" />
-      <div><strong>Microsoft 365 connection required.</strong> These screens are ready for configuration, but no Microsoft accounts or licences have been retrieved. Account changes are disabled until a secure server-side connection is established.</div>
-    </div>
+      <div><strong>{status.connected ? "Microsoft 365 is connected but not ready." : "Microsoft 365 is not connected."}</strong> {status.problems[0] ?? ""} <Link className="font-semibold underline" to="/admin/email-management?section=settings">See Microsoft 365 Settings</Link></div>
+    </div> : null}
 
-    {active === "accounts" && <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {[["Accounts", "—", "ri-mail-line"], ["Active mailboxes", "—", "ri-checkbox-circle-line"], ["Licences available", "—", "ri-key-2-line"]].map(([name, value, icon]) => <div key={name} className={panel}>
-          <i className={icon + " text-xl text-foreground-500"} aria-hidden="true" /><p className="mt-3 text-sm text-foreground-600">{name}</p><p className="mt-1 text-2xl font-semibold">{value}</p><p className="mt-1 text-xs text-foreground-500">Awaiting Microsoft 365 sync</p>
-        </div>)}
-      </div>
-      <section className={panel}>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">Account directory</h2><Link to="/admin/email-management?section=create" className={button}>Create email</Link></div>
-        <label htmlFor="account-search" className="sr-only">Search email accounts</label>
-        <div className="relative mb-5"><i className="ri-search-line absolute left-3 top-3 text-foreground-500" aria-hidden="true" /><input id="account-search" className={field + " pl-9"} placeholder="Search by name, email or person type" value={query} onChange={e => setQuery(e.target.value)} /></div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[540px] text-left text-sm"><thead className="border-b border-background-200 text-foreground-600"><tr>{["Person", "Email address", "Type", "Status", "Licence"].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead></table></div>
-        <Empty icon="ri-inbox-line" title="No account data available" text={filtered ? "Search results will appear after Microsoft 365 is connected." : "Connect Microsoft 365 to securely display existing accounts and their mailbox status."} />
-      </section>
-    </div>}
+    {active === "accounts" && <AccountDirectory create={<Link to="/admin/email-management?section=create" className={button}>Create email</Link>} />}
 
-    {active === "create" && <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <section className={panel}><h2 className="text-lg font-semibold">New email account</h2><p className={"mt-1 " + muted}>Select an existing CRM or HRMS record. No duplicate person records will be created.</p>
-        <div className="mt-6 space-y-5">
-          <div><label htmlFor="person-type" className="mb-2 block text-sm font-medium">Person type</label><select id="person-type" className={field} value={personType} onChange={e => setPersonType(e.target.value)}><option value="student">Student</option><option value="employee">Employee</option><option value="trainer">Trainer</option><option value="agent">Agent</option></select></div>
-          <div><label htmlFor="person-record" className="mb-2 block text-sm font-medium">Existing person</label><select id="person-record" disabled className={field + " disabled:opacity-60"}><option>Connect directory to select a record</option></select><p className="mt-2 text-xs text-foreground-500">Source: existing {personType === "student" ? "CRM student" : personType === "agent" ? "CRM agent" : "HRMS staff"} profiles</p></div>
-          <div><label htmlFor="email-name" className="mb-2 block text-sm font-medium">Requested email username</label><div className="flex min-w-0 items-center rounded-lg border border-background-300"><input id="email-name" className="min-w-0 flex-1 rounded-l-lg px-3 py-2.5 text-sm outline-none" placeholder="firstname.lastname" value={username} onChange={e => setUsername(e.target.value)} /><span className="shrink-0 border-l border-background-200 px-3 text-xs text-foreground-600">@slit.edu.au</span></div><p className="mt-2 text-xs text-foreground-500">Availability and domain verification will be checked before provisioning.</p></div>
-          <div><label className="mb-2 block text-sm font-medium">Microsoft 365 licence</label><select disabled className={field + " disabled:opacity-60"}><option>Available licences not loaded</option></select></div>
-          <button type="button" disabled className="rounded-lg bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Create Microsoft 365 account</button>
-        </div>
-      </section>
-      <aside className={panel}><h2 className="font-semibold">Provisioning checklist</h2><div className="mt-4 space-y-3 text-sm">{["Microsoft 365 connection","Verified slit.edu.au domain","Admin consent","Available licence","Existing person selected"].map(item => <div key={item} className="flex items-start gap-2"><i className="ri-checkbox-blank-circle-line text-amber-700" aria-hidden="true" />{item}</div>)}</div><p className={"mt-5 " + muted}>Mailbox readiness is verified separately after user creation and licence assignment.</p></aside>
-    </div>}
+    {active === "create" && <CreateEmailSection />}
 
     {active === "automation" && <div className="space-y-5">
       <section className={panel}><div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-lg font-semibold">Lifecycle automation</h2><p className={"mt-1 " + muted}>Review proposed triggers before enabling any workflow.</p></div><span className="rounded-full bg-background-100 px-3 py-1 text-xs font-semibold text-foreground-600">All rules inactive</span></div>
@@ -78,12 +75,14 @@ export default function EmailManagementPage() {
     </div>}
 
     {active === "settings" && <div className="grid gap-5 lg:grid-cols-2">
-      <section className={panel}><h2 className="text-lg font-semibold">Microsoft 365 connection</h2><div className="mt-5 space-y-4">{[["Tenant", "Not configured"], ["Application", "Not configured"], ["Verified email domain", "Not verified"], ["Graph API consent", "Not verified"], ["Connection status", "Not connected"]].map(([name, value]) => <div key={name} className="flex items-center justify-between gap-4 border-b border-background-100 pb-3 text-sm"><span className="text-foreground-600">{name}</span><span className="text-right font-medium">{value}</span></div>)}</div><p className={"mt-5 " + muted}>Credentials must be stored in secure server-side configuration, never in browser forms.</p><button type="button" disabled className={button + " mt-4 opacity-50"}>Test connection</button></section>
-      <section className={panel}><h2 className="text-lg font-semibold">Licence mapping</h2><p className={"mt-2 " + muted}>Assign the appropriate Microsoft 365 SKU for students, employees and trainers after the tenant licence catalogue is available.</p><Empty icon="ri-key-2-line" title="Licence catalogue unavailable" text="Connect Microsoft 365 to retrieve subscribed SKUs and available seats." /></section>
+      <section className={panel}><Microsoft365Panel compact /><p className={"mt-4 " + muted}>The same connection as <Link className="underline" to="/admin/integrations">Integrations › Connections › Microsoft 365</Link>. Credentials stay in server-side secrets, never in browser forms.</p></section>
+      <section className={panel}><h2 className="text-lg font-semibold">Licences and permissions</h2>
+        {status?.connected ? <div className="mt-3 space-y-4 text-sm">
+          <div><h3 className="font-medium">Licences</h3>{status.licences.length ? <ul className="mt-1">{status.licences.map(l => <li key={l.sku}>{l.sku}{l.student ? " (used for students)" : l.staff ? " (used for staff)" : ""}: {l.available} of {l.total} free</li>)}</ul> : <p className={muted}>No licences found.</p>}</div>
+          <div><h3 className="font-medium">Application permissions with admin consent</h3><ul className="mt-1">{status.consent.granted.map(r => <li key={r}>{r}</li>)}{status.consent.missing.map(r => <li key={r} className="text-amber-800">{r} (missing)</li>)}</ul></div>
+        </div> : <Empty icon="ri-key-2-line" title="Licence catalogue unavailable" text={loading ? "Checking Microsoft 365…" : "Connect Microsoft 365 to retrieve subscribed SKUs and available seats."} />}</section>
     </div>}
 
-    {active === "audit" && <section className={panel}><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Provisioning, licence and access events will be recorded here.</p></div><span className="text-xs text-foreground-500">No connected audit source</span></div>
-      <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[580px] text-left text-sm"><thead className="border-b border-background-200 text-foreground-600"><tr>{["Date / time", "Actor", "Action", "Account", "Result"].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead></table></div><Empty icon="ri-file-list-3-line" title="No audit events available" text="Once the backend integration is enabled, account changes and their outcomes will be recorded here." />
-    </section>}
+    {active === "audit" && <AuditLog />}
   </main>;
 }

@@ -4,6 +4,7 @@
 // A course with a master timetable (LMS > Courses > Master timetable) has no start date to choose: every intake of the course
 // follows the master's dates, so the intake is one more group on that calendar.
 import { useEffect, useMemo, useState } from "react";
+import { ruleNumber, ruleText, weekdayIndex } from "@/lib/businessRules";
 import { Button, Field, Select } from "@/pages/admin/components/ui";
 import BreakDatePicker from "@/pages/admin/components/rto/BreakDatePicker";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
@@ -12,14 +13,18 @@ import {
   addDays, intakeDefaultName, listBreaks, mondayOf, rto, setIntakeLoad, LOAD_HOURS, type StudyLoad, shortDate, todayIso, type AcademicBreak, type CourseDetail, type IntakeDetail,
 } from "@/pages/admin/lib/rto";
 
-/** The first term start (the Monday after a break) at least a week away that the course has no intake on; else next Monday. */
+/** The first term start (the start weekday after a break) at least the notice away that the course has no intake on; else the next free start weekday.
+ * Notice and weekday come from Business Rules (lms.intake_suggested_notice_days, lms.intake_suggested_start_day). */
 function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
-  const soonest = addDays(todayIso(), 7);
-  const starts = breaks.map((b) => addDays(b.endDate, 1)).map((d) => (mondayOf(d) === d ? d : addDays(mondayOf(d), 7))).filter((d) => d >= soonest && !taken.has(d)).sort();
+  const soonest = addDays(todayIso(), ruleNumber("lms.intake_suggested_notice_days", 7));
+  const dayName = ruleText("lms.intake_suggested_start_day", "Monday");
+  const offset = (Math.max(0, weekdayIndex(dayName)) + 6) % 7; // days after Monday
+  const onOrAfter = (d: string) => { let x = addDays(mondayOf(d), offset); if (x < d) x = addDays(x, 7); return x; };
+  const starts = breaks.map((b) => onOrAfter(addDays(b.endDate, 1))).filter((d) => d >= soonest && !taken.has(d)).sort();
   if (starts.length) return { date: starts[0], why: "the next term start" };
-  let d = mondayOf(soonest) < soonest ? addDays(mondayOf(soonest), 7) : mondayOf(soonest);
+  let d = onOrAfter(soonest);
   while (taken.has(d)) d = addDays(d, 7);
-  return { date: d, why: "the next free Monday" };
+  return { date: d, why: `the next free ${dayName}` };
 }
 
 export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create" }: {
@@ -116,7 +121,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
           </Select>
         </Field>
       )}
-      <Field label="Students on" required hint="CoE students have 20 class hours a week; VoE students have 40.">
+      <Field label="Students on" required hint={`CoE students have ${LOAD_HOURS.coe} class hours a week; VoE students have ${LOAD_HOURS.voe}.`}>
         <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="CoE or VoE">
           {(["coe", "voe"] as const).map((l) => (
             <button key={l} type="button" role="radio" aria-checked={load === l} onClick={() => setLoad(l)}

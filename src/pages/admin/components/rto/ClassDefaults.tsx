@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button, Select, TextInput } from "@/pages/admin/components/ui";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
-import { rto, rtoPlace, type ClassDefaults as Defaults, type SessionType } from "@/pages/admin/lib/rto";
+import { LOAD_HOURS, rto, rtoPlace, type ClassDefaults as Defaults, type SessionType } from "@/pages/admin/lib/rto";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 interface Room { id: string; name: string; campus: string | null; capacity: number | null; isActive: boolean }
@@ -38,9 +38,9 @@ export default function ClassDefaults({ courseId, canEdit }: { courseId: string;
       <div className="space-y-3 border-t border-background-200 px-4 py-3">
         <p className="text-sm text-foreground-600">A new intake without a class setup gets its classes from these (so its dated classes appear straight away). Seats are the room&apos;s physical seats; the number here applies when no room is chosen.</p>
         <ErrorNote text={error} />
-        {weeklyHours > 0 && weeklyHours < 20 ? (
+        {weeklyHours > 0 && weeklyHours < LOAD_HOURS.coe ? (
           <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="defaults-hours-warning">
-            <i className="ri-error-warning-line mr-1" aria-hidden="true" />These classes give {weeklyHours} hours a week. CoE students have 20 class hours a week (VoE 40), so an intake set up from these may not finish the course by the intake&apos;s end.
+            <i className="ri-error-warning-line mr-1" aria-hidden="true" />These classes give {weeklyHours} hours a week. CoE students have {LOAD_HOURS.coe} class hours a week (VoE {LOAD_HOURS.voe}), so an intake set up from these may not finish the course by the intake&apos;s end.
           </p>
         ) : null}
         <div className="grid gap-3 sm:grid-cols-2">

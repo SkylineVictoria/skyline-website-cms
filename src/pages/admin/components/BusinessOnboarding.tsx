@@ -3,7 +3,7 @@ import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import SubjectSigningPanel from "@/pages/admin/components/signing/SubjectSigningPanel";
 import AgentOnboardingPanel from "@/pages/admin/components/AgentOnboardingPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { listBusinessDocuments, openBusinessDocument, removeBusinessDocument, uploadBusinessDocument, type BusinessDetail, type BusinessDocument } from "@/pages/admin/lib/businessData";
+import { businessDocumentLimitMb, listBusinessDocuments, openBusinessDocument, removeBusinessDocument, uploadBusinessDocument, type BusinessDetail, type BusinessDocument } from "@/pages/admin/lib/businessData";
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
 
@@ -82,7 +82,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-heading text-base font-semibold text-foreground-950">Agent agreement (uploaded copies)</h2>
-            <p className="text-sm text-foreground-600">Signed copies uploaded for this business (PDF, image or Word, up to 15 MB). A copy stands in for the online agreement, so it needs a reason, which is kept with the document and in the onboarding history; administrators only.</p>
+            <p className="text-sm text-foreground-600">Signed copies uploaded for this business (PDF, image or Word, up to {businessDocumentLimitMb()} MB). A copy stands in for the online agreement, so it needs a reason, which is kept with the document and in the onboarding history; administrators only.</p>
           </div>
           <div className="flex items-center gap-2">
             {ready ? <Badge tone="success">Signed</Badge> : <Badge tone="warn">Not signed yet</Badge>}

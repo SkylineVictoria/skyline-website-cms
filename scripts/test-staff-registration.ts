@@ -155,7 +155,8 @@ test("signing mail: each job is sent once; a completed copy is sent only with ma
   const first = await signingCore.drainSigningMail(ports);
   assert.deepEqual(first, { sent: 2, failed: 1, requeued: 0 });
   assert.deepEqual(results, [[1, "sent"], [2, "sent"], [3, "failed"]], "a changed signed PDF is never attached");
-  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 2);
+  assert.match(sent[0].subject, /^Please sign/); assert.equal(sent[1].attachments?.length, 1, "the signed document only (2026-11-20: the audit record is never emailed)");
+  assert.ok(!JSON.stringify(sent).toLowerCase().includes("certificate"), "no certificate attachment, name or wording in any email");
   assert.deepEqual(await signingCore.drainSigningMail(ports), { sent: 0, failed: 0, requeued: 0 }, "nothing is sent twice");
   const off = await signingCore.drainSigningMail({ ...ports, mail: { ...ports.mail, provider: null } } as typeof ports);
   assert.deepEqual(off, { sent: 0, failed: 0, requeued: 0 }, "with sending off nothing is claimed");
@@ -670,6 +671,9 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       if (name === "agency_onboarding_blank_cache_put") { const have = blankCache.get(String(args.p_key)); if (have) return { ...have, mine: false }; const row = { path: String(args.p_path), sha256: String(args.p_sha256) }; blankCache.set(String(args.p_key), row); return { ...row, mine: true }; }
       if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2, slitWitness: true }; }
       if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: split.agreement };
+      // 2026-11-21: the SLIT signatory stored when the application was sent (Approve does not stamp it again).
+      if (name === "agency_onboarding_review_get") { const d = rpcs.find(([k]) => k === "agency_onboarding_presend_send")?.[1].p_data as Record<string, string> | undefined;
+        return { slitSignatory: d ? { organisation: "INDOPACIFIC GLOBAL PTY LTD", name: d.admin_name, position: d.admin_position, kind: d.slit_signature_kind, image: null, typed: d.slit_signature, signedOn: d.signed_on } : null }; }
       if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
       throw new Error(`unexpected rpc ${name}`);
     },
@@ -704,7 +708,11 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.equal((opened as unknown as { acn: string }).acn, "603584676", "Prepare application shows the business's ACN");
   // Send needs the agreement terms.
   await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
-  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
+  // 2026-11-21: GST inclusive / exclusive is required (never guessed) and must be one of the two; SLIT staff set it in Prepare application only.
+  await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25" } }), /GST inclusive or GST exclusive/);
+  await assert.rejects(call({ action: "agent_onboarding_presend_save", agencyId, data: { commissionGst: "maybe" } }), /GST inclusive or GST exclusive/);
+  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", commissionGst: "exclusive",
+    adminName: "Hari Admin", adminPosition: "Chief Executive Officer", adminSignature: { kind: "typed", name: "Hari Admin" }, witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
   assert.ok(sentApp.sent && sentApp.combined && sentApp.slitWitness && sent.length === 1, "one request, emailed to the point of contact");
   const original = stored.get(`${sentApp.id}/original.pdf`)!;
   assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the F04's 2 pages followed by the P06's 13");
@@ -720,6 +728,13 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(agreementText.some((t) => t.page === 3 && t.text.includes("51 824 753 556, ACN 603 584 676")), "the agreement's (ABN ...) line carries the business's ACN");
   const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
   assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
+  // 2026-11-21: SLIT's signatory is printed when sending (name, position, typed signature, today's date) and recorded; GST printed with Item 4.
+  const sentSig = sendData as unknown as Record<string, string>;
+  assert.deepEqual([sentSig.admin_name, sentSig.admin_position, sentSig.slit_signature_kind, sentSig.slit_signature, sentSig.signed_on], ["Hari Admin", "Chief Executive Officer", "typed", "Hari Admin", signingCore.isoToday()]);
+  const p11 = agreementText.filter((t) => t.page === 2 + 11).map((t) => t.text).join(" | ");
+  assert.ok(p11.includes("Hari Admin") && p11.includes("Chief Executive Officer") && p11.includes(signingCore.isoToday().split("-").reverse().join("/")), `the SLIT signatory block is filled on the agreement's signature page: ${p11}`);
+  assert.ok(agreementText.some((t) => t.page === 2 + 11 && t.text === "Agent's Fee (Item 4): 25% of tuition fee, GST exclusive"), "the GST choice is printed with the commission");
+  assert.ok(!JSON.stringify((created[0] as { field_values: Record<string, string> }).field_values).includes("admin_signature\""), "the SLIT signature is not kept in the request's field values");
   assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
 
   // The agency admin signs once; the witness types a name and draws.
@@ -761,6 +776,9 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.equal(d.form_base64, undefined, "no split inside the signing request");
   assert.deepEqual(queued, ["split"], "the split is queued");
   assert.equal(services.filter(([name]) => name === "agency_onboarding_referee_request_create").length, 0, "nothing else runs in the signing request");
+  const audit = signData as unknown as { certificate_path: string; certificate_hash: string };
+  assert.ok(/\/certificate-[0-9a-f-]+\.pdf$/.test(String(audit.certificate_path)) && stored.has(String(audit.certificate_path)) && /^[0-9a-f]{64}$/.test(String(audit.certificate_hash)),
+    "2026-11-20: the audit record (completion certificate) is still made and stored as evidence");
   const signedText = await pdfText(stored.get(signedRequest.path)!);
   assert.ok(signedText.some((t) => t.page > 2 && t.text.includes("India, Nepal")) && signedText.some((t) => t.page <= 2 && t.text.includes("Ravi")), "pdf.js reads the signed copy (incremental updates on the original)");
   const followup = (step: string) => signingCore.handleSigning({ body: { action: "onboarding_followup", onboardingId, step }, upload: null, ip: null, userAgent: null }, { ...ports, isServiceCaller: true } as typeof ports);
@@ -819,6 +837,48 @@ test("witness signatures (2026-11-20): a drawn signature in any field is a pictu
   }
   const text = (await pdfText(issued)).map((t) => t.text).join(" ");
   assert.ok(text.includes("Sue Witness") && text.includes("Raj Witness") && text.includes("Hari Admin"), "the witness names and the SLIT signatory still print as text");
+});
+
+test("F04 step order (2026-11-20): Business, References, Contact, Agency, Review & sign in the agency admin's form, Prepare application and the staff review; drafts and send-back follow", async () => {
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"], "the agency admin's invited view");
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", null)), ["business", "references", "contact", "agency", "review"], "the staff F04 review dialog");
+  assert.deepEqual(ids(logic.visibleSteps("admin-prefill", null)), ["business", "contact", "agency", "review"], "Prepare application: same order, the references are the agency admin's");
+  // Send back for correction: each flagged answer opens its own step, in the new order, then Review & sign.
+  const flagged = { contact_email: "wrong", ref2_phone: "missing", litigation_involved: "explain", agent_abn: "check" };
+  assert.deepEqual(ids(logic.visibleSteps("correction", flagged)), ["business", "references", "contact", "agency", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x" })), ["references", "review"], "only the references flagged");
+  assert.deepEqual(ids(logic.visibleSteps("correction", { office_address: "x", services_provided: "y" })), ["contact", "agency", "review"]);
+  for (const [key, step] of [["agent_legal_entity", "business"], ["marn", "business"], ["ref1_contact_name", "references"], ["ref2_email", "references"], ["contact_phone", "contact"],
+    ["office_suburb", "contact"], ["agent_website", "contact"], ["eatc_completed", "agency"], ["students_per_year", "agency"]] as const) {
+    assert.equal(logic.F04_STEPS[logic.stepOfKey(key)].id, step, `${key} is flagged on the ${step} step`);
+  }
+  // Each step checks its own answers at its new position.
+  const refFields = [1, 2].flatMap((n) => ["contact_name", "organisation", "email", "phone"].map((p) => ({ key: `ref${n}_${p}`, type: "text", required: true }))) as never;
+  const empty = { answers: {}, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.references };
+  assert.ok(Object.keys(logic.f04Problems(logic.F04_STEP.references, refFields, empty)).some((k) => k.startsWith("ref1_")), "the References step (second) asks for the references");
+  assert.deepEqual(logic.f04Problems(logic.F04_STEP.contact, refFields, empty), {}, "the Contact step does not ask for the references");
+  // References (2026-11-21): their own email and phone each, never the agency admin's own email; shown before the other checks pass.
+  const refs = (answers: Record<string, string>, ownEmails: string[] = []) => logic.f04Problems(logic.F04_STEP.references, refFields, { ...empty, answers }, {}, { ownEmails });
+  const two = { ref1_contact_name: "Ana Roy", ref1_organisation: "A", ref1_email: "ana@a.test", ref1_phone: "+61412345678", ref2_contact_name: "Ben Li", ref2_organisation: "B", ref2_email: "ben@b.test", ref2_phone: "+61412345679" };
+  assert.deepEqual(refs(two), {});
+  assert.deepEqual(refs({ ...two, ref2_email: "ANA@a.test", ref2_organisation: "" }), { ref2_organisation: "Enter reference 2's organisation.", ref2_email: "Each reference needs their own email." }, "shown while other answers are still missing");
+  assert.deepEqual(refs({ ...two, ref2_phone: "0412 345 678" }), { ref2_phone: "Each reference needs their own phone." });
+  assert.deepEqual(refs({ ...two, ref1_email: "me@agency.test" }, ["Me@Agency.test"]), { ref1_email: "A reference's email can't be your own email." }, "the signer's own email");
+  assert.deepEqual(refs({ ...two, contact_email: "ben@b.test" }), { ref2_email: "A reference's email can't be your own email." }, "the contact's email");
+  assert.deepEqual(refs({ ...two, ref2_contact_name: "ana roy" }), {}, "the same contact name is only a warning");
+  assert.equal(refs({ ...two, ref1_phone: "" }).ref1_phone, "Enter reference 1's phone.", "the hint beside Next");
+  // The agency admin's form: Next / Sign disabled with the missing item beside them; errors on leaving a field; Save always enabled; layout.
+  const f04 = read("src/components/signing/F04Wizard.tsx");
+  assert.ok(f04.includes(`disabled={!!busy || (gated && !!missing)} onClick={next} data-testid="f04-next"`) && f04.includes(`data-testid="f04-next-hint"`) && f04.includes("disabled={!canSubmit || !!busy}"));
+  assert.ok(f04.includes("onBlur={onBlurField}") && f04.includes("touched.has(k)") && !/data-testid="f04-save-later"[^>]*disabled|disabled=\{!!busy\} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50" data-testid="f04-save-later"/.test(f04));
+  assert.ok(f04.includes(`<EmailBox id={\`f04-\${k("email")}\`}`) && f04.includes("[overflow-wrap:anywhere]") && f04.includes('<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">'), "email on its own row and wrapping; cards side by side only on wide screens");
+  // Progress saving: a draft keeps its step by id; one saved before the change (position only, old order) reopens at the same step.
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 1 })].id, "contact", "an old draft at position 1 was on Contact");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 3 })].id, "references", "an old draft at position 3 was on References");
+  assert.equal(logic.F04_STEPS[logic.draftStep({ step: 0, stepId: "agency" })].id, "agency", "a new draft by its step id");
+  assert.equal(logic.draftStep(null), 0);
 });
 
 test("CPU budget (2026-11-20, 546 in production): each PDF step of send, sign once, split and approve stays under 1 s of CPU here; incremental updates keep the original bytes", async () => {
@@ -1033,6 +1093,8 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.match(String(abrLib.checkApplicationAnswers({ contact_title: "Pat Contact" }).error), /title from the list/);
   assert.equal(abrLib.checkApplicationAnswers({ contact_title: "Dr" }).error, null);
   assert.match(String(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }).error), /different email/);
+  // Business Rules agents.referee_emails_must_differ = "May be the same" (batch 4): the same address is accepted for both referees.
+  assert.equal(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }, { refereeEmailsDistinct: false }).error, null);
   assert.deepEqual(abrLib.checkApplicationAnswers({ ref1_email: "a@example.test", ref2_email: "b@example.test", ref1_contact_name: "Sam Lee", ref2_contact_name: "sam lee" }), { error: null, warnings: ["Both references have the same contact name. Check that they are two different people."] });
 
   // F04 wizard (2026-11-19): the public ABN Lookup page (no GUID) gives the same prefill; PURVA TECH PTY LTD (86 603 584 676) has no business name.
@@ -1079,7 +1141,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   // The source: the GUID only from the function's environment, the sign step runs the checks, the signing page has the title list.
   assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_ABR_GUID"\) \|\| Deno\.env\.get\("ABR_GUID"\)/);
   assert.ok(!/EF_ABR_GUID|ABR_GUID/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the GUID never reaches the browser");
-  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey)"), "the server refuses what the page refuses");
+  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey, "), "the server refuses what the page refuses");
   assert.ok(read("src/pages/SigningPage.tsx").includes(`f.key === "contact_title"`) && read("src/pages/SigningPage.tsx").includes("F04_TITLES.map"), "the title is a list on the signing page");
   const migration = read("supabase/migrations/20261119103517_abn_prefill.sql");
   assert.ok(["create table public.abr_lookups", "abr_raw jsonb", "abr_fetched_at timestamptz", "agency_abr_attach", "agency_onboarding_prefill_record", "'prefill_reviewed'", "after update of answers on public.agency_onboarding"].every((s) => migration.includes(s)), "cache, business record, prefill history");
@@ -1182,12 +1244,12 @@ test("F04 prefill on open (2026-11-19): an old request's blank fields are filled
   assert.deepEqual(["0412 345 678", "+91 98765 43210", "03 9123 4567", "12345", ""].map((p) => abrLib.phoneE164(p)), ["+61412345678", "+919876543210", "+61391234567", null, null]);
 
   // The short wizard: five steps since round 3 (Review & sign); chips with Other; an upload asked for on Yes; referee problems before signing.
-  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "Contact", "Agency", "References", "Review & sign"]);
+  assert.deepEqual(logic.F04_STEPS.map((s) => s.short), ["Business", "References", "Contact", "Agency", "Review & sign"], "2026-11-20: the references straight after the business");
   assert.equal(logic.writeChips(["Accommodation", "Course counselling"], "Visa reviews", logic.SERVICES), "Course counselling, Accommodation, Visa reviews");
   assert.deepEqual(logic.readChips("Course counselling, Accommodation, Visa reviews", logic.SERVICES), { picked: ["Course counselling", "Accommodation"], other: "Visa reviews" });
   assert.deepEqual(logic.readChips("Canada, Other", logic.COUNTRIES), { picked: ["Canada"], other: "" }); assert.equal(logic.readChips("Canada", logic.COUNTRIES).other, null);
   const qFields = [{ id: "q1", type: "checkbox", key: "org_chart_attached:YES", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }, { id: "q2", type: "text", key: "services_provided", label: "", page: 1, x: 0, y: 0, w: 0, h: 0, required: false, value: "" }] as unknown as Parameters<typeof logic.f04Problems>[1];
-  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(2, qFields, { answers, acn: "", marn: "", declarations: {}, step: 2 }, files);
+  const agencyStep = (answers: Record<string, string>, files = {}) => logic.f04Problems(logic.F04_STEP.agency, qFields, { answers, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.agency }, files);
   assert.match(agencyStep({ org_chart_attached: "YES" }).attach_org_chart, /Upload the organisational chart, or answer No/);
   assert.equal(agencyStep({ org_chart_attached: "YES" }, { org_chart: { name: "chart.pdf", size: 10 } }).attach_org_chart, undefined);
   assert.match(agencyStep({ services_provided: "Accommodation, Other" }).services_provided, /Name the other services/);
@@ -1215,7 +1277,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   purvaFields.find((f) => f.key === "agent_year_founded")!.value = "2015";
   const draft = { acn: "603 584 676", answers: { agent_trading_name: "PURVA TECH PTY LTD", agent_year_founded: "", contact_position: "Test", office_suburb: "Melbourne", office_postcode: "3000" }, declarations: {}, marn: "", step: 2 };
   const purva = logic.initialF04(purvaFields, purvaFacts, { agent_acn: "603 584 676", contact_given_name: "Gourav", contact_family_name: "Gupta", agent_legal_entity: "PURVA TECH PTY LTD" }, draft, "Recipient Name");
-  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", 2]);
+  assert.deepEqual([purva.answers.agent_year_founded, purva.acn, purva.answers.agent_trading_name, purva.answers.agent_legal_entity, purva.step], ["2015", "603584676", "PURVA TECH PTY LTD", "PURVA TECH PTY LTD", logic.F04_STEP.agency], "a draft saved at position 2 before 2026-11-20 was on Agency: it reopens there");
   // Page fallback with the field blank and no server fill: the card's date gives the year.
   const blankYear = logic.initialF04([field("agent_year_founded")] as unknown as WizFields, purvaFacts, null, null);
   assert.equal(blankYear.answers.agent_year_founded, "2015", "the page takes the year from the card's Active-from date when the server left it blank");
@@ -1235,8 +1297,13 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual(logic.readChoice("Test", logic.POSITIONS), { picked: null, other: "Test" }, "a position not on the list is Other with its text");
   assert.deepEqual(logic.readChoice("Other", logic.POSITIONS), { picked: null, other: "" });
   assert.deepEqual([logic.writeChoice("CEO", null), logic.writeChoice(null, ""), logic.writeChoice(null, "Head of admissions"), logic.writeChoice(null, null)], ["CEO", "Other", "Head of admissions", ""]);
+  // F04 pre-send SLIT signatory position (2026-11-21): the same chips; Other needs its text; the plain text is what is sent and printed.
+  const wizard = read("src/components/signing/F04Wizard.tsx"), presend = read("src/pages/admin/components/F04PresendDialog.tsx");
+  assert.ok(wizard.includes(`<ChoiceChips id="prefill-signatory-position" label="SLIT signatory position" required`) && !wizard.includes(`id="f04-prefill-signatory-position" name="adminPosition"`), "chips, not a text box");
+  assert.ok(presend.includes("readChoice(o.signatory.position, POSITIONS)") && presend.includes("choiceUnnamed(signatory.position)") && presend.includes("adminPosition: signatory.position.trim()"));
+  assert.deepEqual([logic.choiceUnnamed("Other"), logic.choiceUnnamed("Head of admissions"), logic.choiceUnnamed("CEO")], [true, false, false]);
   const contactFields = [field("contact_position", "", true)] as unknown as WizFields;
-  const contactStep = (position: string) => logic.f04Problems(1, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: 1 }).contact_position;
+  const contactStep = (position: string) => logic.f04Problems(logic.F04_STEP.contact, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.contact }).contact_position;
   assert.deepEqual([contactStep(""), contactStep("Other"), contactStep("Head of admissions"), contactStep("Owner")], ["Enter the contact's position.", "Type the position.", undefined, undefined]);
   const reviewFields = [field("declarant_name", "", true), field("declarant_role", "", true)] as unknown as WizFields;
   const reviewStep = (answers: Record<string, string>, declarations: Record<string, boolean> = logic.allDeclarations(true)) => logic.f04Problems(logic.REVIEW_STEP, reviewFields, { answers, acn: "", marn: "", declarations, step: logic.REVIEW_STEP });
@@ -1256,7 +1323,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.equal(signingCore.checkApplicationSubmission({ acn: "004-028-077", marn: "", declarations: all }, {}).acn, "004028077");
   assert.throws(() => signingCore.checkApplicationSubmission({ acn: "004 028 07", marn: "", declarations: all }, {}), /The ACN has 9 digits/);
   assert.equal(abrLib.printAcn("004028077"), "004 028 077", "shown in its groups");
-  assert.equal(logic.f04Problems(0, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: 0 }).acn, undefined, "the page accepts spaces too");
+  assert.equal(logic.f04Problems(logic.F04_STEP.business, [] as unknown as WizFields, { answers: {}, acn: "004 028 077", marn: "", declarations: {}, step: logic.F04_STEP.business }).acn, undefined, "the page accepts spaces too");
 
   // 6. The Suburb box never holds a postcode alone (the test F04 stored "3000").
   assert.deepEqual(onboarding.normalizeOfficeAddress({ office_suburb: "3000" }), { office_suburb: "" });
@@ -1268,7 +1335,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual([zz.answers.office_suburb, zz.answers.office_postcode], ["", ""], "a stored postcode alone opens blank for the address search");
   const suburbField = [field("office_suburb")] as unknown as WizFields;
   assert.equal(logic.f04Values(suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000" } })["f-office_suburb"], "", "never signed as a postcode alone");
-  assert.equal(logic.f04Problems(1, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
+  assert.equal(logic.f04Problems(logic.F04_STEP.contact, suburbField, { ...zz, answers: { office_suburb: "", office_postcode: "3000", office_country: "Australia" } }).office_suburb, "Enter the suburb or city for this postcode.");
   const sql = read("supabase/migrations/20261119171538_f04_round3.sql");
   assert.ok(["if v_sub ~ '^\\d{4}$' then", "p := p - 'office_suburb';", "'office_suburb', nullif(v_sub, '')", "update hr.sign_fields f set value = null", "r.state in ('sent', 'viewed', 'email_failed')"].every((s) => sql.includes(s)),
     "the send-side SQL drops a postcode-only suburb and unsigned F04s are cleaned");
@@ -1277,7 +1344,7 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.equal(logic.F04_STEPS[logic.REVIEW_STEP].id, "review");
   const page = read("src/components/signing/F04Wizard.tsx");
   assert.ok(["stickyFooter", "e.key !== \"Enter\"", "AUTOSAVE_PAUSE", "Saved ✓", "I agree to all of the above", "indeterminate", "We've emailed your 2 referees", "SLIT reviews", "You'll receive the agent agreement",
-    "Download signed PDF", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
+    "f04-download", "f04-review-edit-", "Back to review", "Dancing_Script", "f04-ethics-link"].every((s) => page.includes(s)), "the round-3 page pieces are there");
   assert.ok(read("src/index.css").replace(/\r\n/g, "\n").includes("prefers-reduced-motion: reduce) {\n  .f04-tick-circle"),"the success tick respects reduced motion");
 });
 
@@ -1342,10 +1409,11 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.equal(onboarding.correctionFlagged("office_suburb", { office_address: "Wrong suburb" }), true, "one flag covers the office address");
   assert.equal(onboarding.correctionFlagged("contact_email", { office_address: "" }), false);
   // The steps a correction shows: those with a flagged answer, then Review & sign.
-  assert.deepEqual([logic.stepOfKey("acn"), logic.stepOfKey("office_address"), logic.stepOfKey("litigation_involved"), logic.stepOfKey("ref2_phone"), logic.stepOfKey("agent_year_founded")], [0, 1, 2, 3, 0]);
-  assert.deepEqual(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" }), [0, 3, 4]);
-  assert.deepEqual(logic.visibleSteps("admin-review", { ref1_email: "x" }), [0, 1, 2, 3, 4], "staff see every step");
-  assert.deepEqual(logic.visibleSteps("agent", null), [0, 1, 2, 3, 4]);
+  const ids = (steps: number[]) => steps.map((i) => logic.F04_STEPS[i].id);
+  assert.deepEqual(["acn", "office_address", "litigation_involved", "ref2_phone", "agent_year_founded"].map((k) => logic.F04_STEPS[logic.stepOfKey(k)].id), ["business", "contact", "agency", "references", "business"]);
+  assert.deepEqual(ids(logic.visibleSteps("correction", { ref1_email: "x", agent_trading_name: "y" })), ["business", "references", "review"]);
+  assert.deepEqual(ids(logic.visibleSteps("admin-review", { ref1_email: "x" })), ["business", "references", "contact", "agency", "review"], "staff see every step");
+  assert.deepEqual(ids(logic.visibleSteps("agent", null)), ["business", "references", "contact", "agency", "review"]);
   assert.equal(logic.correctionEditable("declarant_name", {}), true, "the declaration is given again");
   assert.equal(logic.correctionEditable("contact_email", { agent_trading_name: "" }), false);
   // Server side (core.ts): a correction's unflagged fields keep the values they were sent with, whatever the page posts.
@@ -1357,6 +1425,10 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
     "only the flagged answer and the declaration change; the registration box is composed again from ACN / MARN");
   assert.equal(signingCore.F04_SYSTEM_KEY, onboarding.AGENT_ONBOARDING_DOCS.form.key);
   assert.match(signingCore.F04_NOT_HERE, /sent automatically/);
+  // 2026-11-21: every onboarding blank (F04, P06, F05) stays in the onboarding flow: hidden in New signing request and refused by create.
+  assert.deepEqual([...signingCore.ONBOARDING_SYSTEM_KEYS].sort(), Object.values(onboarding.AGENT_ONBOARDING_DOCS).map((d) => d.key).sort());
+  assert.ok(read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('!ONBOARDING_KEYS.has(t.system_key ?? "")') && read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('<option value="agency">An agency</option>'));
+  assert.ok(signing.SUBJECT_VARIABLES.agency.includes("agency.commission") && signing.SUBJECT_VARIABLES.agency.includes("agency.legal_name") && signing.SUBJECT_VARIABLES.agency.includes("agency.abn"), "agency variables");
   // Staff review: the wizard reads the answers; Save sends only what changed (in the server's answer format, ACN digits).
   const reviewed = logic.reviewFields([{ id: "a", key: "agent_trading_name", type: "text", label: "", required: false, page: 1 }, { id: "b", key: "litigation_involved:YES", type: "checkbox", label: "", required: true, page: 1 },
     { id: "c", key: "litigation_involved:NO", type: "checkbox", label: "", required: true, page: 1 }, { id: "d", key: "office_suburb", type: "text", label: "", required: false, page: 1 }],
@@ -1386,6 +1458,416 @@ test("Agency onboarding review loop (2026-11-18): one wizard in three modes, fla
   assert.ok(dialog.includes("mode=\"admin-review\"") && dialog.includes("refereePanel"));
   assert.ok(["resend-link", "Resend to referee", "review-application", "correction-history", "approveAgency"].every((s) => panel.includes(s)) && !panel.includes("SendApplicationDialog") && !panel.includes("send-agreement-anyway"));
   assert.ok(read("src/pages/admin/components/signing/SubjectSigningPanel.tsx").includes("withoutF04("));
+});
+
+const softBreakMod = await load.import<typeof import("../src/components/signing/softBreak.ts")>("../src/components/signing/softBreak.ts");
+test("review application dialog (2026-11-20): opens on Review and decide, actions on every step, staff subtitle, one reference per row, ACN, agreement card, referee status", () => {
+  const wizard = read("src/components/signing/F04Wizard.tsx").replace(/\r\n/g, "\n"), dialog = read("src/pages/admin/components/F04ReviewDialog.tsx").replace(/\r\n/g, "\n");
+  // 1. Staff start on the summary; the tabs and the Edit links still move between steps.
+  assert.ok(wizard.includes(`const firstStep = mode === "admin-review" ? REVIEW_STEP :`), "opens on Review and decide");
+  assert.ok(wizard.includes(`onSelect={(n) => goTo(order[n])}`) && wizard.includes("data-testid={`f04-review-edit-${STEPS[index].id}`}") && wizard.includes(`data-testid="f04-review-back-summary"`), "tabs, Edit links, back to the summary");
+  // 2. The three actions sit in the footer on every step (no "last step only" branch); Save only with unsaved edits.
+  const buttons = wizard.slice(wizard.indexOf("const adminButtons = admin && review ?"), wizard.indexOf("// The pre-send step: Save draft"));
+  assert.ok(buttons.includes("f04-review-send-back") && buttons.includes("f04-review-approve") && !buttons.includes("last ?") && !buttons.includes("f04-next"), "Send back and Approve on every step");
+  assert.ok(wizard.includes("disabled={!dirty || !!reviewBusy}") && wizard.includes("footerStart={admin ? adminSave :"), "Save changes in the footer, enabled only with unsaved edits");
+  // 3. The staff subtitle.
+  assert.ok(wizard.includes("· Review the application, then approve or send it back.</> :"), "staff subtitle");
+  // 4. One reference per row, the email and phone on their own lines, wrapped at sensible points.
+  assert.ok(wizard.includes("section(F04_STEP.references, [[\"Reference 1\", ref(1)], [\"Reference 2\", ref(2)]], true)") && wizard.includes("f04-review-ref-${n}-email"), "one reference per row");
+  assert.ok(wizard.includes("softBreak(a.contact_email)") && wizard.includes("softBreak(a.agent_website)") && !/break-all/.test(wizard), "emails and web addresses never split mid-word");
+  const pieces = (node: unknown) => (Array.isArray(node) ? node : [node]).map((n) => (n as { props?: { children?: unknown[] } })?.props?.children ?? n);
+  const broken = pieces(softBreakMod.softBreak("ravi.kumar@globaledu.com.au")) as unknown[][];
+  assert.deepEqual(broken.map((c) => [c[0], c[1] !== null]), [["ravi", false], [".", true], ["kumar", false], ["@", true], ["globaledu", false], [".", true], ["com", false], [".", true], ["au", false]], "breaks only after . and @");
+  assert.equal(softBreakMod.softBreak(""), "");
+  // 5. ACN on the Business card, the agreement card with pictures, the referee status with Resend.
+  assert.ok(wizard.includes(`["ACN", state.acn ? printAcn(state.acn) : admin ? "—" : ""]`) && dialog.includes("agent_acn: review.answers.agent_acn || review.acn ||"), "ACN from the answers or the business");
+  for (const id of ["f04-review-agreement", "f04-review-agreement-signature", "f04-review-agreement-agency-witness", "f04-review-agreement-slit-witness", "Signed {formatSignedAt(sig.signedAt)}"]) assert.ok(wizard.includes(id), id);
+  assert.ok(dialog.includes("data:image/png;base64,") && dialog.includes("agencySignature:") && dialog.includes("slitWitness:"), "witness pictures stored as bare base64 become images");
+  assert.ok(dialog.includes("f04-referee-status-") && dialog.includes("\"Sent, not completed\"") && dialog.includes("\"Not sent yet\"") && dialog.includes("resendReferee(ref)"), "referee status with Resend");
+  const sql = read("supabase/migrations/20261120153517_onboarding_review_summary.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("'acn', a.acn, 'acnSource', a.acn_source") && sql.includes("'image', r.signature_image, 'signedAt', r.signed_at") && sql.includes("public.agency_onboarding_review_get(uuid)"), "review data: ACN and the agency admin's signature");
+});
+
+const m365 = await load.import<typeof import("../supabase/functions/_shared/microsoft365.ts")>("../supabase/functions/_shared/microsoft365.ts");
+test("Microsoft 365 status (2026-11-20): one app-only check behind Email Management and Connections; every item a real Graph call; no secret leaves", async () => {
+  const SECRET = "s3cr3t-value-never-returned";
+  const env = (over: Record<string, string> = {}) => (n: string) => ({ EF_MICROSOFT365_CLIENT_ID: "00000000-aaaa-bbbb-cccc-000000001234", EF_MICROSOFT365_CLIENT_SECRET: SECRET,
+    EF_MICROSOFT365_TENANT_ID: "tenant-1", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", ...over } as Record<string, string>)[n];
+  const jwt = (roles: string[]) => `h.${btoa(JSON.stringify({ roles })).replace(/=+$/, "")}.sig`;
+  const ALL = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "RoleManagement.Read.Directory", "Mail.Send"];
+  const graph = (o: { roles?: string[]; token?: Response; domains?: Array<{ id: string; isVerified: boolean }>; skus?: unknown[]; domainStatus?: number }) => {
+    const calls: string[] = [];
+    const request = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input); calls.push(`${init?.method ?? "GET"} ${url.replace(/\?.*$/, "")}`);
+      if (url.includes("login.microsoftonline.com")) return o.token ?? new Response(JSON.stringify({ access_token: jwt(o.roles ?? ALL) }), { status: 200 });
+      if (url.includes("/organization")) return new Response(JSON.stringify({ value: [{ id: "tenant-1", displayName: "Skyline Institute of Technology", verifiedDomains: [{ name: "slit.edu.au" }] }] }));
+      if (url.includes("/domains")) return o.domainStatus ? new Response("{}", { status: o.domainStatus }) : new Response(JSON.stringify({ value: o.domains ?? [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: true }] }));
+      if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: o.skus ?? [{ skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 500 }, consumedUnits: 120, capabilityStatus: "Enabled" }, { skuPartNumber: "O365_BUSINESS_PREMIUM", prepaidUnits: { enabled: 10 }, consumedUnits: 10 }] }));
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    return { request, calls };
+  };
+  // Ready: connection, consent, both domains verified, student seats free; GET only, nothing created.
+  const ok = graph({});
+  const ready = await m365.microsoft365Status(env(), ok.request);
+  assert.deepEqual([ready.ready, ready.checks, ready.tenant?.name, ready.clientIdEnd, ready.consent.missing, ready.consent.welcomeEmail], [true, { connection: "ok", consent: "ok", domain: "ok", licence: "ok" }, "Skyline Institute of Technology", "1234", [], true]);
+  assert.deepEqual(ready.licences[0], { sku: "STANDARDWOFFPACK_STUDENT", total: 500, available: 380, student: true, staff: false }, "the student licence first, seats left");
+  assert.ok(ok.calls.slice(1).every((c) => c.startsWith("GET ")) && ok.calls[0].startsWith("POST https://login.microsoftonline.com/tenant-1/"), "only reads after the token");
+  assert.ok(!JSON.stringify(ready).includes(SECRET) && !JSON.stringify(ready).includes("h.ey"), "no secret or token in the result");
+  // Missing admin consent: the token's roles say exactly which application permissions to add.
+  const partial = await m365.microsoft365Status(env(), graph({ roles: ["User.ReadWrite.All", "Organization.Read.All"], domainStatus: 403 }).request);
+  assert.deepEqual([partial.ready, partial.checks.consent, partial.consent.missing], [false, "missing", ["LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "RoleManagement.Read.Directory"]]);
+  assert.match(partial.problems[0], /Admin consent is missing for: LicenseAssignment\.ReadWrite\.All, Domain\.Read\.All, User-PasswordProfile\.ReadWrite\.All, RoleManagement\.Read\.Directory\. In Entra > App registrations/);
+  assert.equal(partial.checks.domain, "missing", "without Domain.Read.All the organization's verified domains are used: the student domain is not listed there");
+  // A wrong / expired secret: plain advice, never Microsoft's text.
+  const bad = await m365.microsoft365Status(env(), graph({ token: new Response(JSON.stringify({ error: "invalid_client", error_codes: [7000215], error_description: "AADSTS7000215: Invalid client secret provided. Trace" }), { status: 401 }) }).request);
+  assert.deepEqual([bad.connected, bad.checks.connection, bad.checks.consent], [false, "failed", "not_checked"]);
+  assert.match(bad.problems[0], /client secret \(wrong or expired\)/); assert.ok(!bad.problems.join(" ").includes("Trace"));
+  // Not set up at all.
+  const none = await m365.microsoft365Status(env({ EF_MICROSOFT365_CLIENT_SECRET: "" }), graph({}).request);
+  assert.deepEqual([none.configured, none.checks.connection, none.ready], [false, "missing", false]);
+  // Domain not verified, no student seats.
+  const blocked = await m365.microsoft365Status(env(), graph({ domains: [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: false }], skus: [{ skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 5 }, consumedUnits: 5 }] }).request);
+  assert.deepEqual([blocked.checks.domain, blocked.checks.licence, blocked.domains], ["missing", "missing", [{ name: "slit.edu.au", verified: true, found: true }, { name: "student.slit.edu.au", verified: false, found: true }]]);
+  assert.ok(blocked.problems.some((p) => /student\.slit\.edu\.au is in Microsoft 365 but not verified/.test(p)) && blocked.problems.some((p) => /No STANDARDWOFFPACK_STUDENT seats are free/.test(p)));
+  // The screens: no hard-coded status; one shared check; Microsoft 365 first on Connections; named "connection verified" messages.
+  const page = read("src/pages/admin/EmailManagementPage.tsx"), connections = read("src/pages/admin/integrations/ConnectionsPage.tsx"), fn = read("supabase/functions/student-office365/index.ts"), adminFn = read("supabase/functions/integrations-admin/index.ts");
+  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind)"), "Email Management reads the live status and loads people");
+  assert.ok(connections.includes("Number(b.connector_id === M365) - Number(a.connector_id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
+  assert.ok(fn.includes("action==='m365_status'||action==='people'") && fn.includes("caller.rpc('admin_business_require')") && adminFn.includes("c.connector_id==='microsoft365'") && adminFn.includes("microsoft365Status("), "both functions use the one check");
+  const sql = read("supabase/migrations/20261120163517_email_management_people.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("perform public.admin_business_require();") && sql.includes("revoke all on function public.email_mgmt_people(text, text) from public, anon;"), "people list: SLIT administrators only");
+});
+
+const prov = await load.import<typeof import("../supabase/functions/_shared/office365-provision.ts")>("../supabase/functions/_shared/office365-provision.ts");
+const dir = await load.import<typeof import("../supabase/functions/_shared/office365-directory.ts")>("../supabase/functions/_shared/office365-directory.ts");
+test("Account directory (2026-11-21): guests out, shared apart, Skyline people linked; licence removal never for self, admins or shared; admin roles unreadable refuses all", async () => {
+  const ENV: Record<string, string> = { EF_MICROSOFT365_CLIENT_ID: "c", EF_MICROSOFT365_CLIENT_SECRET: "s", EF_MICROSOFT365_TENANT_ID: "t", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", EF_MICROSOFT365_WELCOME_SENDER: "noreply@slit.edu.au" };
+  const STU = "stu-sku", FAC = "fac-sku";
+  const u = (id: string, upn: string, o: Record<string, unknown> = {}) => ({ id, userPrincipalName: upn, mail: upn, displayName: upn.split("@")[0], accountEnabled: true, userType: "Member", assignedLicenses: [], assignedPlans: [], usageLocation: "AU", ...o });
+  const ids = Array.from({ length: 11 }, (_, i) => `aaaaaaaa-0000-4000-8000-0000000000${String(i).padStart(2, "0")}`);
+  const seed = [
+    u(ids[0], "asha.patel@student.slit.edu.au", { assignedLicenses: [{ skuId: STU }], assignedPlans: [{ service: "exchange", capabilityStatus: "Enabled" }] }),
+    u(ids[1], "sam.lee@slit.edu.au", { assignedLicenses: [{ skuId: FAC }], assignedPlans: [{ service: "exchange", capabilityStatus: "Enabled" }] }),
+    u(ids[2], "it.admin@slit.edu.au", { assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[3], "global.admin@slit.edu.au", { assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[4], "noreply@slit.edu.au", { accountEnabled: false }),
+    u(ids[5], "visitor_gmail.com#EXT#@slit.onmicrosoft.com", { userType: "Guest" }),
+    u(ids[6], "subscriptions@slit.edu.au", { accountEnabled: false, assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[7], "new.student@student.slit.edu.au", { usageLocation: null }),
+    // A former student: sign-in blocked, still licensed, nobody in Skyline: a student (blocked), never a shared mailbox.
+    u(ids[8], "old.student@student.slit.edu.au", { accountEnabled: false, assignedLicenses: [{ skuId: STU }] }),
+    // Group-based licence: cannot be removed from the user.
+    u(ids[9], "group.student@student.slit.edu.au", { assignedLicenses: [{ skuId: STU }], licenseAssignmentStates: [{ skuId: STU, assignedByGroup: "grp-1", state: "Active" }] }),
+    // Microsoft answers 200 but keeps the licence (sticky): never reported as removed.
+    u(ids[10], "sticky.student@student.slit.edu.au", { assignedLicenses: [{ skuId: STU }] }),
+  ];
+  const run = (opts: { rolesStatus?: number; skylineBlocked?: string[] } = {}) => {
+    const calls: string[] = []; const rpcs: Array<[string, Record<string, unknown>]> = [];
+    const users = seed.map((x) => structuredClone(x)) as Array<Record<string, unknown> & { id: string; assignedLicenses: Array<{ skuId: string }> }>;
+    const request = (async (input: string | URL, init?: RequestInit) => {
+      const url = decodeURIComponent(String(input)), method = init?.method ?? "GET"; calls.push(`${method} ${url.replace("https://graph.microsoft.com/v1.0", "")}`);
+      if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "tok" }));
+      if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: [{ skuId: STU, skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 425 }, consumedUnits: 333 },
+        { skuId: FAC, skuPartNumber: "STANDARDWOFFPACK_FACULTY", prepaidUnits: { enabled: 45 }, consumedUnits: 25 }, { skuId: "flow", skuPartNumber: "FLOW_FREE", prepaidUnits: { enabled: 1000000 }, consumedUnits: 2 }] }));
+      if (url.includes("/directoryRoles")) return opts.rolesStatus ? new Response("{}", { status: opts.rolesStatus }) : new Response(JSON.stringify({ value: [{ members: [{ id: ids[3] }] }] }));
+      if (url.includes("/users?$select")) return new Response(JSON.stringify({ value: users }));
+      const m = /\/users\/([^?/]+)(\/assignLicense)?/.exec(url);
+      if (m && method === "GET") { const x = users.find((y) => y.id === m[1]); return x ? new Response(JSON.stringify(x)) : new Response("{}", { status: 404 }); }
+      if (m && (method === "POST" || method === "PATCH")) {
+        // The fake tenant applies the change, as Microsoft would (except the sticky account), so the server's re-read can confirm it.
+        const x = users.find((y) => y.id === m[1]); const b = JSON.parse(String(init?.body ?? "{}"));
+        if (x && m[2] && x.id !== ids[10]) x.assignedLicenses = [...x.assignedLicenses.filter((l) => !(b.removeLicenses ?? []).includes(l.skuId)), ...(b.addLicenses ?? []).map((l: { skuId: string }) => ({ skuId: l.skuId }))];
+        if (x && !m[2]) Object.assign(x, b);
+        return new Response("{}", { status: 200 });
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    }) as typeof fetch;
+    const rpc = async (name: string, args: Record<string, unknown>) => { rpcs.push([name, args]);
+      if (name === "email_account_skyline_blocked") return { data: opts.skylineBlocked ?? [], error: null };
+      if (name === "o365_directory_people") return { data: [{ email: "asha.patel@student.slit.edu.au", kind: "student", id: "s1", name: "Asha Patel", source: "account" }, { email: "sam.lee@slit.edu.au", kind: "trainer", id: "p1", name: "Sam Lee", source: "record" }], error: null };
+      return { data: 1, error: null }; };
+    dir.resetDirectoryCache();
+    return { ports: { env: (n: string) => ENV[n], fetch: request, rpc } as unknown as import("../supabase/functions/_shared/office365-provision.ts").Ports, calls, rpcs };
+  };
+  const w = run();
+  const page = await dir.directoryList(w.ports, "IT.Admin@slit.edu.au", {});
+  const rows = page.body.rows as Array<{ upn: string; type: string; canRemove: boolean; removeBlocked: string | null; person: { id: string } | null; assign: { name: string } | null }>;
+  const byUpn = (x: string) => rows.find((r) => r.upn === x)!;
+  assert.deepEqual([page.body.counts, rows.length], [{ accounts: 10, activeMailboxes: 2, byType: { student: 5, employee: 0, trainer: 1, agent: 0, not_linked: 2, shared: 2 } }, 8], "guests left out, shared under their own filter");
+  assert.ok(!rows.some((r) => r.upn.includes("#EXT#")) && !rows.some((r) => r.type === "shared"));
+  assert.deepEqual([byUpn("asha.patel@student.slit.edu.au").person?.id, byUpn("asha.patel@student.slit.edu.au").canRemove, byUpn("sam.lee@slit.edu.au").type], ["s1", true, "trainer"]);
+  assert.deepEqual([byUpn("it.admin@slit.edu.au").removeBlocked, byUpn("global.admin@slit.edu.au").removeBlocked], ["Your own account", "Has an admin role"]);
+  assert.deepEqual([byUpn("new.student@student.slit.edu.au").type, byUpn("new.student@student.slit.edu.au").assign?.name], ["student", "A1 for students"], "student domain: the student licence only");
+  assert.deepEqual([byUpn("old.student@student.slit.edu.au").type, byUpn("old.student@student.slit.edu.au").canRemove], ["student", true], "a blocked former student is a student whose licence can be removed");
+  const shared = await dir.directoryList(run().ports, "it.admin@slit.edu.au", { type: "shared" });
+  assert.deepEqual((shared.body.rows as Array<{ upn: string; canRemove: boolean }>).map((r) => [r.upn, r.canRemove]), [["noreply@slit.edu.au", false], ["subscriptions@slit.edu.au", false]]);
+  // Remove: only the allowed one changes; every account answered and logged (refused ones too); other licences untouched.
+  const wr = run();
+  const removed = await dir.licenceRemove(wr.ports, "it.admin@slit.edu.au", [ids[0], ids[2], ids[3], ids[6]]);
+  assert.deepEqual([removed.body.removed, removed.body.refused], [1, 3]);
+  assert.deepEqual(wr.calls.filter((c) => c.startsWith("POST /users")), [`POST /users/${ids[0]}/assignLicense`]);
+  const okRow = (removed.body.results as Array<{ ok: boolean; row?: { licences: unknown[]; upn: string } }>).find((x) => x.ok)!.row!;
+  assert.deepEqual([okRow.upn, okRow.licences], ["asha.patel@student.slit.edu.au", []], "the row comes back from Microsoft's re-read: no licence");
+  assert.deepEqual(wr.rpcs.filter(([n]) => n === "email_account_audit_add").map(([, a]) => [a.p_upn, a.p_result]),
+    [["asha.patel@student.slit.edu.au", "ok"], ["it.admin@slit.edu.au", "refused"], ["global.admin@slit.edu.au", "refused"], ["subscriptions@slit.edu.au", "refused"]]);
+  assert.deepEqual(wr.rpcs.find(([n]) => n === "o365_licence_record")?.[1], { p_upn: "asha.patel@student.slit.edu.au", p_sku: null });
+  // Group-based licence: refused before any call, the group named; sticky licence: Microsoft said 200 but still lists it: not removed, not success.
+  const wg = run();
+  const group = await dir.licenceRemove(wg.ports, "it.admin@slit.edu.au", [ids[9]]);
+  assert.deepEqual([group.body.removed, wg.calls.filter((c) => c.startsWith("POST /users")).length], [0, 0]);
+  assert.match(String((group.body.results as Array<{ error: string }>)[0].error), /group-based licensing, group grp-1/);
+  const ws = run();
+  const sticky = await dir.licenceRemove(ws.ports, "it.admin@slit.edu.au", [ids[10]]);
+  assert.deepEqual([sticky.body.removed, sticky.body.refused, ws.rpcs.some(([n]) => n === "o365_licence_record")], [0, 1, false], "never success unless Microsoft confirms");
+  assert.match(String((sticky.body.results as Array<{ error: string }>)[0].error), /still lists the licence/);
+  assert.deepEqual(ws.rpcs.filter(([n]) => n === "email_account_audit_add").map(([, a]) => [a.p_action, a.p_result]), [["licence_removed", "failed"]]);
+  // Block / allow sign-in: same protections; PATCH accountEnabled; confirmed; logged.
+  const wb = run();
+  const blocked = await dir.signinSet(wb.ports, "it.admin@slit.edu.au", [ids[1], ids[2], ids[3], ids[4]], false);
+  assert.deepEqual([blocked.body.changed, blocked.body.refused], [1, 3]);
+  assert.deepEqual(wb.calls.filter((c) => c.startsWith("PATCH")), [`PATCH /users/${ids[1]}`]);
+  const bRows = blocked.body.results as Array<{ upn: string; ok: boolean; error?: string; row?: { enabled: boolean; canAllow: boolean; type: string } }>;
+  assert.deepEqual([bRows[0].row?.enabled, bRows[0].row?.canAllow, bRows[0].row?.type], [false, true, "trainer"]);
+  assert.deepEqual(bRows.slice(1).map((x) => x.error), ["Your own account", "Has an admin role", "Shared mailbox"]);
+  assert.deepEqual(wb.rpcs.filter(([n]) => n === "email_account_audit_add").map(([, a]) => [a.p_action, a.p_upn, a.p_result]),
+    [["signin_blocked", "sam.lee@slit.edu.au", "ok"], ["signin_blocked", "it.admin@slit.edu.au", "refused"], ["signin_blocked", "global.admin@slit.edu.au", "refused"], ["signin_blocked", "noreply@slit.edu.au", "refused"]]);
+  assert.equal((await dir.signinSet(run().ports, "it.admin@slit.edu.au", [ids[1]], "no")).status, 400);
+  assert.equal((await dir.signinSet(run({ rolesStatus: 403 }).ports, "it.admin@slit.edu.au", [ids[1]], false)).body.code, "admin_roles_unreadable");
+  // An unlinked account Skyline blocked is a blocked account (Allow sign-in offered), not a shared mailbox.
+  const back = await dir.directoryList(run({ skylineBlocked: ["subscriptions@slit.edu.au"] }).ports, "it.admin@slit.edu.au", { status: "blocked" });
+  const sub = (back.body.rows as Array<{ upn: string; type: string; canAllow: boolean }>).find((r) => r.upn === "subscriptions@slit.edu.au")!;
+  assert.deepEqual([sub.type, sub.canAllow], ["not_linked", true]);
+  // Admin roles unreadable (no RoleManagement.Read.Directory): nothing removed, the exact permission named.
+  const wn = run({ rolesStatus: 403 });
+  const none = await dir.licenceRemove(wn.ports, "it.admin@slit.edu.au", [ids[0]]);
+  assert.deepEqual([none.status, none.body.code, wn.calls.filter((c) => c.startsWith("POST") && !c.includes("login.")).length], [409, "admin_roles_unreadable", 0]);
+  assert.match(String(none.body.error), /RoleManagement\.Read\.Directory/);
+  // Assign: the person's type decides (student domain: student licence); usage location set first when missing.
+  const wa = run();
+  const assigned = await dir.licenceAssign(wa.ports, "it.admin@slit.edu.au", ids[7]);
+  assert.deepEqual([assigned.status, assigned.body.licence, (assigned.body.row as { licences: Array<{ name: string }> }).licences.map((l) => l.name)], [200, "A1 for students", ["A1 for students"]]);
+  assert.deepEqual(wa.calls.filter((c) => /^(POST|PATCH) /.test(c) && !c.includes("login.")), [`PATCH /users/${ids[7]}`, `POST /users/${ids[7]}/assignLicense`]);
+  assert.equal((await dir.licenceAssign(run().ports, "it.admin@slit.edu.au", ids[4])).status, 409, "a shared mailbox gets no licence");
+  // The card counts only the two Skyline licences (never FLOW_FREE and other free / trial SKUs).
+  const page2 = read("src/pages/admin/components/AccountDirectory.tsx");
+  assert.ok(page2.includes("(student?.available ?? 0) + (staff?.available ?? 0)") && page2.includes("They lose Outlook and Office apps. Their mailbox is kept for 30 days"));
+  assert.ok(page2.includes("(confirmed by Microsoft)") && page2.includes("freshNext.current = true") && page2.includes("Block sign-in") && page2.includes("Allow sign-in"), "success only from confirmed results; fresh re-read after an action");
+});
+test("Create Email for staff (2026-11-20): staff domain and faculty licence, existing mailbox found first, number only for a different person, dry run writes nothing", async () => {
+  const ENV: Record<string, string> = { EF_MICROSOFT365_CLIENT_ID: "c", EF_MICROSOFT365_CLIENT_SECRET: "s", EF_MICROSOFT365_TENANT_ID: "t", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", EF_MICROSOFT365_WELCOME_SENDER: "admin@slit.edu.au" };
+  // 1 and 2: domain and licence by person type; a staff plan can never be the student one.
+  assert.deepEqual(["student", "employee", "trainer", "agent"].map((k) => { const p = prov.planFor(k as never, (n) => ENV[n]); return [p.domain, p.sku]; }),
+    [["student.slit.edu.au", "STANDARDWOFFPACK_STUDENT"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"], ["slit.edu.au", "STANDARDWOFFPACK_FACULTY"]], "agents too get the faculty licence (owner's second brief)");
+  assert.throws(() => prov.planFor("employee", (n) => ({ ...ENV, EF_MICROSOFT365_STAFF_DOMAIN: "student.slit.edu.au" } as Record<string, string>)[n]), /staff_plan_invalid/);
+  assert.throws(() => prov.planFor("trainer", (n) => ({ ...ENV, EF_MICROSOFT365_STAFF_SKU: "STANDARDWOFFPACK_STUDENT" } as Record<string, string>)[n]), /staff_plan_invalid/);
+  assert.ok(!read("src/pages/admin/EmailManagementPage.tsx").includes("OFFICESUBSCRIPTION_FACULTY") && !read("supabase/functions/_shared/office365-provision.ts").match(/addLicenses:[^\n]*OFFICESUBSCRIPTION/), "the apps-only licence is never assigned");
+  // A fake tenant: users, seats; every call recorded.
+  type U = { id: string; userPrincipalName: string; mail: string | null; displayName: string };
+  let mailFails = false;
+  let groupMails: string[] = []; let postConflict = false; let claimKeepsOld = false; let senderExists = true;
+  const world =(users: U[], faculty = { enabled: 45, consumed: 25 }) => {
+    const calls: string[] = []; const rpcs: string[] = []; const steps: string[] = [];
+    const request = (async (input: string | URL, init?: RequestInit) => {
+      const url = decodeURIComponent(String(input)), method = init?.method ?? "GET"; calls.push(`${method} ${url.replace("https://graph.microsoft.com/v1.0", "")}`);
+      if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "tok" }));
+      if (url.includes("/domains?")) return new Response(JSON.stringify({ value: [{ id: "slit.edu.au", isVerified: true }, { id: "student.slit.edu.au", isVerified: true }, { id: "slit.onmicrosoft.com", isVerified: true }, { id: "old.slit.edu.au", isVerified: false }] }));
+      if (method === "PATCH") return new Response(null, { status: 204 });
+      if (url.includes("/members/$ref")) return new Response(null, { status: 204 });
+      if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: [{ skuId: "stu", skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 425 }, consumedUnits: 332 },
+        { skuId: "fac", skuPartNumber: "STANDARDWOFFPACK_FACULTY", prepaidUnits: { enabled: faculty.enabled }, consumedUnits: faculty.consumed }, { skuId: "apps", skuPartNumber: "OFFICESUBSCRIPTION_FACULTY", prepaidUnits: { enabled: 7 }, consumedUnits: 6 }] }));
+      if (method === "GET" && url.includes("/users/admin@slit.edu.au?$select=id")) return senderExists ? new Response(JSON.stringify({ id: "sender" })) : new Response(JSON.stringify({ error: { code: "Request_ResourceNotFound" } }), { status: 404 });
+      const m = /\/users\/([^?/]+)\?/.exec(url);
+      if (m && method === "GET") { const u = users.find((x) => x.id === m[1] || x.userPrincipalName === m[1]); return u ? new Response(JSON.stringify(u)) : new Response("{}", { status: 404 }); }
+      if (url.includes("/users?$filter=")) {
+        const name = /displayName eq '(.+?)'/.exec(url)?.[1]?.replace(/''/g, "'"); const smtp = /smtp:(.+?)'/.exec(url)?.[1];
+        return new Response(JSON.stringify({ value: users.filter((u) => (name && u.displayName === name) || (smtp && (u.mail === smtp || u.userPrincipalName === smtp))) }));
+      }
+      if (url.includes("/groups?$filter=")) { const smtp = /smtp:(.+?)'/.exec(url)?.[1]; return new Response(JSON.stringify({ value: groupMails.filter((g) => g === smtp).map((g) => ({ id: g })) })); }
+      if (method === "POST" && url.endsWith("/users")) return postConflict
+        ? new Response(JSON.stringify({ error: { code: "Request_BadRequest", message: "Another object with the same value for property userPrincipalName already exists.", details: [{ code: "ObjectConflict" }] } }), { status: 400 })
+        : new Response(JSON.stringify({ id: "new-user" }), { status: 201 });
+      if (url.includes("/licenseDetails")) return new Response(JSON.stringify({ value: [] }));
+      if (url.includes("/assignLicense")) return new Response("{}");
+      if (url.includes("/sendMail")) return mailFails ? new Response(JSON.stringify({ error: { code: "MailboxNotEnabledForRESTAPI", message: "The mailbox is either inactive, soft-deleted, or is hosted on-premise." } }), { status: 404 }) : new Response(null, { status: 202 });
+      throw new Error(`unexpected ${method} ${url}`);
+    }) as typeof fetch;
+    const person = { fullName: "Asha Patel", recordEmail: "asha.personal@example.test", trainer: true, account: null as null | Record<string, unknown> };
+    const rpc = async (name: string, args: Record<string, unknown>) => { rpcs.push(name);
+      if (name.endsWith("_prepare")) return { data: person, error: null };
+      if (name.endsWith("_claim")) return { data: { conflict: false, upn: claimKeepsOld && person.account ? person.account.email : args.p_upn, msUserId: null }, error: null };
+      if (name.endsWith("_finish") || name === "o365_link" || name === "o365_step") { steps.push(`${args.p_step ?? name}:${args.p_ok ?? ""}:${args.p_detail ?? ""}`); return { data: {}, error: null }; }
+      throw new Error(name); };
+    const ports = { env: (n: string) => ENV[n], fetch: request, rpc } as unknown as import("../supabase/functions/_shared/office365-provision.ts").Ports;
+    return { ports, calls, rpcs, person, steps };
+  };
+  const STAFF = "11111111-1111-4111-8111-111111111111";
+  const writes = (calls: string[]) => calls.filter((c) => /^(POST|PATCH|DELETE) /.test(c) && !c.includes("login.microsoftonline.com"));
+  // Dry run for an employee: slit.edu.au, faculty licence with its seats, the welcome email masked; nothing created or written.
+  const w1 = world([]);
+  const dry = await prov.provision(w1.ports, "employee", STAFF, { dryRun: true });
+  assert.equal(dry.status, 200);
+  assert.deepEqual([dry.body.email, dry.body.sku, dry.body.licence], ["asha.patel@slit.edu.au", "STANDARDWOFFPACK_FACULTY", { total: 45, available: 20 }]);
+  assert.match(String(dry.body.welcomeTo), /^as[*]+@example[.]test$/, "the welcome address masked");
+  assert.deepEqual([writes(w1.calls), w1.rpcs], [[], ["staff_o365_prepare"]], "dry run: no Microsoft write, no claim / finish");
+  // A trainer that is not a trainer is refused; the student kind uses the student domain and licence.
+  const w2 = world([]); w2.person.trainer = false;
+  assert.equal((await prov.provision(w2.ports, "trainer", STAFF, { dryRun: true })).status, 400);
+  const w3 = world([]);
+  const sdry = await prov.provision(w3.ports, "student", STAFF, { dryRun: true });
+  assert.deepEqual([sdry.body.email, sdry.body.sku], ["asha.patel@student.slit.edu.au", "STANDARDWOFFPACK_STUDENT"]);
+  // 3. Already has a mailbox: the work email on the record (or the linked account) is found; no second account, link offered.
+  const mine: U = { id: "aaaaaaaa-0000-4000-8000-000000000001", userPrincipalName: "asha.patel@slit.edu.au", mail: "asha.patel@slit.edu.au", displayName: "Asha Patel" };
+  const w4 = world([mine]); w4.person.recordEmail = "asha.patel@slit.edu.au";
+  const has = await prov.provision(w4.ports, "employee", STAFF);
+  assert.deepEqual([has.status, has.body.code, (has.body.existing as Array<{ match: string }>)[0].match], [409, "already_has", "email"]);
+  assert.match(String(has.body.error), /^Already has asha\.patel@slit\.edu\.au\. Link it/);
+  assert.deepEqual(writes(w4.calls), [], "nothing created");
+  const look = await prov.lookup(w4.ports, "employee", STAFF);
+  assert.deepEqual([look.status, look.body.address, String(look.body.blocked)], [200, null, "Already has asha.patel@slit.edu.au. Link it to this record instead of creating another."]);
+  // Same name, maybe a different person: refused until the administrator says so; then the address gets a number.
+  const namesake: U = { id: "aaaaaaaa-0000-4000-8000-000000000002", userPrincipalName: "asha.patel@slit.edu.au", mail: "asha.patel@slit.edu.au", displayName: "Asha Patel" };
+  const w5 = world([namesake]);
+  const maybe = await prov.provision(w5.ports, "employee", STAFF);
+  assert.deepEqual([maybe.status, maybe.body.code], [409, "possible_match"]); assert.deepEqual(writes(w5.calls), []);
+  const other = await prov.provision(w5.ports, "employee", STAFF, { dryRun: true, differentPerson: true });
+  assert.equal(other.body.email, "asha.patel2@slit.edu.au", "the number only for a different person");
+  // Link: the existing account (staff domain only).
+  const w6 = world([mine]);
+  assert.deepEqual((await prov.link(w6.ports, "employee", STAFF, mine.id)).body, { ok: true, linked: true, email: "asha.patel@slit.edu.au" });
+  const studentAcct: U = { id: "aaaaaaaa-0000-4000-8000-000000000003", userPrincipalName: "asha.patel@student.slit.edu.au", mail: null, displayName: "Asha Patel" };
+  const w7 = world([studentAcct]);
+  assert.match(String((await prov.link(w7.ports, "trainer", STAFF, studentAcct.id)).body.error), /staff record links only to an @slit\.edu\.au account/);
+  // No faculty seat left: blocked BEFORE any user is created.
+  const w8 = world([], { enabled: 45, consumed: 45 });
+  const full = await prov.provision(w8.ports, "employee", STAFF);
+  assert.deepEqual([full.status, full.body.code, writes(w8.calls), w8.rpcs], [409, "no_licences_available", [], ["staff_o365_prepare"]]);
+  assert.match(String(full.body.error), /No Office 365 A1 for faculty licences are free \(45 of 45 in use\)/);
+  // A real create (mocked): user, faculty licence, welcome email, recorded; the password never in the reply.
+  const w9 = world([]);
+  const made = await prov.provision(w9.ports, "employee", STAFF);
+  assert.deepEqual([made.status, made.body.email, w9.rpcs.filter((r) => r !== "o365_step")], [200, "asha.patel@slit.edu.au", ["staff_o365_prepare", "staff_o365_claim", "staff_o365_finish"]]);
+  assert.deepEqual(w9.steps.filter((x) => !x.startsWith("staff_o365_finish")), ["account:true:", "licence:true:STANDARDWOFFPACK_FACULTY", "welcome:true:"], "each step recorded (no groups until mapped)");
+  assert.deepEqual(writes(w9.calls).map((c) => c.split(" ")[1].replace(/\/users\/[^/]+/, "/users/:id")), ["/users", "/users/:id/assignLicense", "/users/:id/sendMail"]);
+  assert.ok(!JSON.stringify(made.body).toLowerCase().includes("password"));
+  // The screens: Agent gone from Create Email, the "not created from here yet" note gone, a dry run and a link button.
+  const section = read("src/pages/admin/components/CreateEmailSection.tsx"), page = read("src/pages/admin/EmailManagementPage.tsx");
+  assert.ok(![section, page].some((t) => t.includes("are not created from here yet")) && section.includes(`const KIND_LABEL: Record<MailboxKind, string> = { student: "Student", employee: "Employee", trainer: "Trainer", agent: "Agent" };`) && section.includes("lookupOffice365(") && section.includes("linkOffice365(") && page.includes("<CreateEmailSection />"), "staff types incl. agents");
+
+  // Round 2. Domains: verified, never onmicrosoft.com, only the person type's own; the server refuses anything else.
+  const wd = world([]);
+  const lk = await prov.lookup(wd.ports, "agent", STAFF);
+  assert.deepEqual([lk.body.domains, (await prov.lookup(world([]).ports, "student", STAFF)).body.domains], [["slit.edu.au"], ["student.slit.edu.au"]]);
+  for (const bad of ["student.slit.edu.au", "slit.onmicrosoft.com", "old.slit.edu.au"]) {
+    const r = await prov.provision(world([]).ports, "employee", STAFF, { dryRun: true, domain: bad });
+    assert.deepEqual([r.status, r.body.code], [400, "domain_not_allowed"], bad);
+  }
+  assert.equal((await prov.provision(world([]).ports, "student", STAFF, { dryRun: true, domain: "slit.edu.au" })).body.code, "domain_not_allowed", "no staff domain for a student");
+  // Never a second account: once the Microsoft user exists, create is refused (no parth.patel1); Resend is the way.
+  const wc = world([]); wc.person.account = { email: "asha.patel@slit.edu.au", status: "failed", lastError: "welcome_email_failed", welcomeSentAt: null, msUserId: "aaaaaaaa-0000-4000-8000-0000000000aa", steps: { accountCreatedAt: "2026-11-19T13:02:28Z", licenceAssignedAt: null, groupsAddedAt: null, groupsError: null, welcomeSentAt: null, welcomeError: "404:MailboxNotEnabledForRESTAPI" } };
+  const again = await prov.provision(wc.ports, "employee", STAFF, { differentPerson: true });
+  assert.deepEqual([again.status, again.body.code, writes(wc.calls)], [409, "already_created", []]);
+  assert.match(String((await prov.lookup(wc.ports, "employee", STAFF)).body.blocked), /^Already created asha\.patel@slit\.edu\.au\. Use Resend login email\.$/);
+  // Resend: dry run changes nothing; for real a new temporary password (PATCH), the missing licence finished, the email sent; no password returned.
+  const existingUser: U = { id: "aaaaaaaa-0000-4000-8000-0000000000aa", userPrincipalName: "asha.patel@slit.edu.au", mail: "asha.patel@slit.edu.au", displayName: "Asha Patel" };
+  const wr = world([existingUser]); wr.person.account = wc.person.account;
+  const rdry = await prov.resend(wr.ports, "employee", STAFF, { dryRun: true });
+  assert.deepEqual([rdry.status, rdry.body.licenceNeeded, writes(wr.calls), wr.steps], [200, true, [], []]);
+  const rr = await prov.resend(wr.ports, "employee", STAFF);
+  assert.deepEqual([rr.status, rr.body.email], [200, "asha.patel@slit.edu.au"]);
+  assert.deepEqual(writes(wr.calls).map((c) => c.split(" ")[0] + " " + c.split(" ")[1].replace(/\/users\/[^/]+/, "/users/:id")), ["POST /users/:id/assignLicense", "PATCH /users/:id", "POST /users/:id/sendMail"]);
+  assert.deepEqual(wr.steps, ["licence:true:STANDARDWOFFPACK_FACULTY", "welcome:true:"]);
+  assert.ok(!JSON.stringify(rr.body).toLowerCase().includes("password\""), "no password in the reply");
+  // A failed login email keeps Microsoft's error code (never its text) and marks the step failed.
+  mailFails = true;
+  const wf = world([existingUser]); wf.person.account = wc.person.account;
+  const rf = await prov.resend(wf.ports, "employee", STAFF);
+  mailFails = false;
+  assert.deepEqual([rf.status, rf.body.graphCode, wf.steps.at(-1)], [409, "404:MailboxNotEnabledForRESTAPI", "welcome:false:404:MailboxNotEnabledForRESTAPI"]);
+  assert.ok(!JSON.stringify(rf.body).includes("soft-deleted"), "Microsoft's message text is not passed on");
+  // A linked account (not made by Skyline) is not resent; groups come from the mapping (none until the owner maps them).
+  const wl = world([existingUser]); wl.person.account = { ...wc.person.account, linked: true };
+  assert.equal((await prov.resend(wl.ports, "employee", STAFF)).body.code, "linked");
+  assert.deepEqual([prov.groupIds(prov.planFor("employee", (n) => ENV[n]), (n) => ENV[n]), prov.groupIds(prov.planFor("student", (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n]), (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n])],
+    [[], ["11111111-2222-4333-8444-555555555555"]]);
+  assert.ok(section.includes('data-testid="email-resend"') && section.includes('data-testid="email-domain"') && section.includes("{created ? null : confirming"), "Resend replaces Create once the account exists; the domain dropdown");
+
+  // Editable username (2026-11-21). The format rules, identical on the screen and the server.
+  for (const bad of ["", "   ", "a b", ".asha", "asha.", "asha..patel", "x".repeat(65), "asha+patel", "asha@patel", "äsha"]) assert.ok(prov.usernameProblem(bad), `refused: ${JSON.stringify(bad)}`);
+  for (const good of ["asha.patel", "a_patel-2", "x".repeat(64), " Asha.Patel "]) assert.equal(prov.usernameProblem(good), null, good);
+  const fnText = (file: string) => /export function usernameProblem[\s\S]*?\n}\r?\n/.exec(read(file))?.[0].replace(/\r\n/g, "\n");
+  assert.ok(fnText("src/pages/admin/lib/microsoft365.ts") && fnText("src/pages/admin/lib/microsoft365.ts") === fnText("supabase/functions/_shared/office365-provision.ts"), "one rule set on screen and server");
+  // The live check: free, taken by a user (UPN / mail / proxy address), taken by a group, bad format, a domain not offered.
+  const taken: U = { id: "aaaaaaaa-0000-4000-8000-0000000000bb", userPrincipalName: "office@slit.edu.au", mail: "office@slit.edu.au", displayName: "Office" };
+  groupMails = ["staffroom@slit.edu.au"];
+  const ca = (u: string, d = "slit.edu.au", users: U[] = [taken]) => prov.checkAddress(world(users).ports, "employee", u, d);
+  assert.deepEqual((await ca("Asha.Patel")).body, { available: true, address: "asha.patel@slit.edu.au" });
+  assert.deepEqual([(await ca("office")).body.available, (await ca("office")).body.code], [false, "address_in_use"], "a user's address");
+  assert.equal((await ca("staffroom")).body.available, false, "a group's address");
+  assert.deepEqual([(await ca("asha..patel")).body.available, (await ca("asha..patel")).body.code], [false, "username_invalid"]);
+  assert.deepEqual([(await ca("asha", "student.slit.edu.au")).status, (await ca("asha", "student.slit.edu.au")).body.code], [400, "domain_not_allowed"]);
+  const checkWorld = world([taken]); await prov.checkAddress(checkWorld.ports, "employee", "asha", "slit.edu.au");
+  assert.ok(checkWorld.calls.some((c) => c.includes("userPrincipalName eq 'asha@slit.edu.au' or mail eq 'asha@slit.edu.au' or proxyAddresses/any(p:p eq 'smtp:asha@slit.edu.au')")), "one Graph filter: UPN, mail, proxy address");
+  assert.deepEqual([writes(checkWorld.calls), checkWorld.rpcs], [[], []], "the check writes nothing");
+  // Create uses the typed username exactly (never regenerated, no number even for a namesake confirmed as a different person).
+  const wu = world([namesake]);
+  assert.equal((await prov.provision(wu.ports, "employee", STAFF, { dryRun: true, differentPerson: true, username: " Asha.P " })).body.email, "asha.p@slit.edu.au");
+  const wuMade = world([]);
+  const madeU = await prov.provision(wuMade.ports, "employee", STAFF, { username: "a.patel" });
+  assert.deepEqual([madeU.status, madeU.body.email], [200, "a.patel@slit.edu.au"]);
+  // Checked again on the server: bad format, taken by a user or a group -> refused before anything is reserved or created.
+  for (const [u, code] of [["a..patel", "username_invalid"], ["office", "address_in_use"], ["staffroom", "address_in_use"]] as const) {
+    const wx = world([taken]); const r = await prov.provision(wx.ports, "employee", STAFF, { username: u });
+    assert.deepEqual([r.body.code, writes(wx.calls), wx.rpcs], [code, [], ["staff_o365_prepare"]], u);
+  }
+  // Race: free when checked, taken by the time POST /users runs -> a clear "already in use" error, the attempt recorded as failed.
+  postConflict = true;
+  const wrace = world([]); const race = await prov.provision(wrace.ports, "employee", STAFF, { username: "late.comer" });
+  postConflict = false;
+  assert.deepEqual([race.status, race.body.code, race.body.email], [409, "address_in_use", "late.comer@slit.edu.au"]);
+  assert.match(String(race.body.error), /^late\.comer@slit\.edu\.au is already in use in Microsoft 365\. Choose another username\.$/);
+  assert.ok(wrace.steps.some((s) => s.startsWith("staff_o365_finish:")), "the failed attempt recorded");
+  // A failed earlier attempt whose reserved address the database would not change: refused, nothing created under another address.
+  claimKeepsOld = true;
+  const wold = world([]); wold.person.account = { email: "asha.patel@slit.edu.au", status: "failed", lastError: "address_in_use", welcomeSentAt: null, msUserId: null };
+  const kept = await prov.provision(wold.ports, "employee", STAFF, { username: "asha.p" });
+  claimKeepsOld = false; groupMails = [];
+  assert.deepEqual([kept.body.code, writes(wold.calls)], ["address_reserved", []]);
+  // The claim takes the submitted address for a row without a Microsoft user (all three record types), never for one with a user.
+  const claimSql = read("supabase/migrations/20261121003517_o365_claim_submitted_upn.sql").replace(/\r\n/g, "\n");
+  for (const t of ["student", "staff", "agent"]) assert.ok(claimSql.includes(`create or replace function public.${t}_o365_claim(`) && claimSql.includes(`update public.${t}_office365_accounts set upn = v_upn where ${t}_id = p_${t};`), t);
+  assert.equal(claimSql.split("if a.ms_user_id is null and v_upn <> '' and v_upn <> a.upn then").length - 1, 3);
+  assert.equal(claimSql.split("check (upn ~ '^[a-z0-9_-]([a-z0-9._-]{0,62}[a-z0-9_-])?@[a-z0-9.-]+$' and strpos(split_part(upn, '@', 1), '..') = 0)").length - 1, 3,
+    "every account table holds the username rules: a-z 0-9 . _ -, no leading / trailing / double dot, at most 64 before the @");
+  // The screen: editable, live checks through the Edge Function, Use suggested, the helper text.
+  const sec2 = read("src/pages/admin/components/CreateEmailSection.tsx");
+  assert.ok(!/id="email-name" readOnly /.test(sec2) && sec2.includes("readOnly={!editable}") && sec2.includes("checkOffice365Address(") && !sec2.includes("graph.microsoft.com")
+    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username })")
+    && sec2.includes("Suggested from the person's name. You can change it. Only the tenant's verified domains are offered."), "editable username on Create Email");
+
+  // Login email sender (2026-11-21). Missing sender: nothing created, no password reset, a clear message naming it.
+  senderExists = false;
+  const ws1 = world([]); const noSend = await prov.provision(ws1.ports, "employee", STAFF);
+  assert.deepEqual([noSend.status, noSend.body.code, writes(ws1.calls), ws1.rpcs], [409, "sender_missing", [], ["staff_o365_prepare"]]);
+  assert.match(String(noSend.body.error), /^Login emails are sent from admin@slit\.edu\.au, which does not exist in Microsoft 365\..*Nothing was created or changed\.$/);
+  const ws2 = world([existingUser]); ws2.person.account = wc.person.account;
+  const noSendResend = await prov.resend(ws2.ports, "employee", STAFF);
+  assert.deepEqual([noSendResend.body.code, writes(ws2.calls), ws2.steps], ["sender_missing", [], []], "resend: no licence, group or password change without a sender");
+  senderExists = true;
+  // The sender exists but sending fails: the messages name the sender and Microsoft's code; resend says the password was reset.
+  mailFails = true;
+  const wm = world([]); const madeNoMail = await prov.provision(wm.ports, "employee", STAFF);
+  const wm2 = world([existingUser]); wm2.person.account = wc.person.account; const resendNoMail = await prov.resend(wm2.ports, "employee", STAFF);
+  mailFails = false;
+  assert.equal(madeNoMail.body.error, "asha.patel@slit.edu.au was created, but the login email could not be sent from admin@slit.edu.au (Microsoft: 404 MailboxNotEnabledForRESTAPI). Fix the sender mailbox, then use Resend login email (it sets a new temporary password).");
+  assert.deepEqual([resendNoMail.body.passwordReset, resendNoMail.body.error], [true, "A new temporary password was set for asha.patel@slit.edu.au, but the login email could not be sent from admin@slit.edu.au (Microsoft: 404 MailboxNotEnabledForRESTAPI). Fix the sender mailbox, then Resend again (it sets another new temporary password)."]);
+  assert.ok(read("supabase/functions/_shared/office365-provision.ts").includes('console.warn(JSON.stringify({ fn: "student-office365", action, step: "welcome", kind, graphCode: code }))'), "Microsoft's code in the function log, no addresses");
+  // The screens: Create / Resend blocked while the sender is missing; the student page resends (never creates) once the account exists.
+  const lib = read("src/pages/admin/lib/microsoft365.ts"), panel = read("src/pages/admin/components/StudentOffice365Panel.tsx"), sec3 = read("src/pages/admin/components/CreateEmailSection.tsx");
+  assert.ok(lib.includes('{ key: "sender", label: "Login email sender"') && lib.includes("export function senderBlock(") && sec3.includes("const noSender = senderBlock(status);")
+    && sec3.includes("!!status?.ready && !noSender &&") && sec3.includes('data-testid="email-sender-missing"'), "Create Email: sender in the checklist, Create blocked without it");
+  assert.ok(panel.includes('resendOffice365("student", studentId)') && panel.includes("const created = !!account?.msUserId && !account.linked && !active;") && panel.includes("Set a new temporary password for"), "student page: Resend login email after the account exists");
+  assert.ok(read("supabase/functions/_shared/microsoft365.ts").includes("!status.sender.exchangeLicence && status.sender.enabled"), "a shared mailbox (sign-in blocked, no licence) is not a problem");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */
@@ -2290,6 +2772,145 @@ async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
     return fonts.entries().map(([, ref]) => { const dict = doc.context.lookup(ref); return dict instanceof PdfLib.PDFDict ? String(dict.get(PdfLib.PDFName.of("BaseFont"))) : "?"; });
   });
 }
+
+test("businesses (2026-11-20): an Active business offers only Active / Inactive and never goes back to Onboarding; Delete business only for SLIT admins at Application sent, removes everything silently, the link says no longer available", async () => {
+  const del = await load.import<typeof import("../src/pages/admin/lib/businessDelete.ts")>("../src/pages/admin/lib/businessDelete.ts");
+  // 1. The dropdown: Active and Inactive only (the status catalog also has Onboarding).
+  const catalog = [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }, { value: "Onboarding", label: "Onboarding" }];
+  assert.deepEqual(del.businessDropdownStatuses(catalog).map((c) => c.value), ["Active", "Inactive"]);
+  assert.ok(read("src/pages/admin/BusinessesPage.tsx").includes("{dropdownStatuses.map((item) => ("), "the row dropdown uses the filtered list");
+  // ... and the database refuses Onboarding for a business that was ever active, by any path; direct API deletes are refused too.
+  const sql = read("supabase/migrations/20261120133517_business_status_guard_and_delete.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /if new\.status = 'Onboarding' and old\.status is distinct from 'Onboarding' and \(old\.status = 'Active' or old\.onboarding_completed_at is not null\) then/);
+  assert.match(sql, /create trigger agencies_status_guard before update of status on public\.agencies/);
+  assert.match(sql, /if current_user in \('authenticated', 'anon'\) then\n   raise exception 'Delete a business with Delete business/);
+  // 2. Who sees Delete business: a SLIT administrator, a business at Application sent, never a system business.
+  const row = (over: Record<string, unknown> = {}) => ({ status: "Onboarding", onboardingLabel: "Application sent", agencyCode: "ZZ-1", ...over });
+  assert.equal(del.canOfferBusinessDelete(row(), true), true);
+  assert.equal(del.canOfferBusinessDelete(row(), false), false, "other staff: hidden");
+  for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
+  for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
+  for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
+  // 2026-11-20 follow-up: the admin role is read whatever its case; every other row gets a reason (the greyed-out icon's tooltip).
+  assert.deepEqual(["Admin", "admin", " ADMIN ", "Editor", "", null].map((r) => del.isSlitAdmin(r as string)), [true, true, true, false, false, false]);
+  assert.equal(del.deleteBlockReason(row(), true), null);
+  assert.match(del.deleteBlockReason(row(), false)!, /Only a SLIT administrator/);
+  assert.match(del.deleteBlockReason(row({ agencyCode: "SLIT-DIRECT", status: "Active" }), true)!, /never be deleted/);
+  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Already onboarded: make it Inactive/);
+  assert.match(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true)!, /stays Inactive/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Not sent yet/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /^Awaiting referees: the application is signed/);
+  assert.match(del.deleteBlockReason(row({ students: 2 }), true)!, /students or applications/);
+  const listPage = read("src/pages/admin/BusinessesPage.tsx");
+  assert.ok(listPage.includes("const isAdmin = isSlitAdmin(user?.role);") && listPage.includes("title={reason}") && listPage.includes("border-red-300"), "red Delete where possible, a tooltip elsewhere");
+  // The tabs: Onboarding is a filter the list accepts and counts; every business is in exactly one tab, so they add up to All.
+  const listSql = read("supabase/migrations/20261120143517_business_list_onboarding_tab.sql").replace(/\r\n/g, "\n");
+  assert.ok(listSql.includes("not in ('', 'Active', 'Inactive', 'Onboarding')"), "Onboarding accepted as a filter");
+  assert.ok(listSql.includes("'onboarding', (select count(*) from searched where status = 'Onboarding' and not pending_review), 'pending', (select count(*) from searched where pending_review)"));
+  assert.ok(listSql.includes("'inactive', (select count(*) from searched where status = 'Inactive' and not pending_review)"));
+  assert.ok(listPage.includes(`: value === "Onboarding" ? counts?.onboarding`), "the Onboarding tab shows its count");
+  // The typed confirmation: the name (case and spaces ignored) or the ABN.
+  assert.equal(del.deleteConfirmMatches("  purva  tech pty ltd ", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("86 603 584 676", "PURVA TECH PTY LTD", "86603584676"), true);
+  assert.equal(del.deleteConfirmMatches("PURVA TECH", "PURVA TECH PTY LTD", "86603584676"), false);
+  assert.equal(del.deleteConfirmMatches("", "PURVA TECH PTY LTD", ""), false);
+  // The database rules (the same ones the screens use) and the complete removal.
+  for (const rule of ["'This is a system business: it cannot be deleted.'", "o.stage <> 'application_sent'", "r.state not in ('sent', 'viewed') or r.signed_at is not null",
+    "'This business has students or applications: make it Inactive instead.'", "if not public.cms_is_admin() then raise exception 'Only a SLIT administrator can delete a business.'",
+    "raise exception 'Type the business name or its ABN exactly to confirm.'"]) assert.ok(sql.includes(rule), `rule: ${rule}`);
+  for (const table of ["hr.sign_fields", "hr.sign_tokens", "hr.sign_token_history", "hr.sign_codes", "hr.sign_notifications", "hr.sign_events", "public.agency_onboarding_drafts",
+    "public.agency_onboarding_attachments", "public.agency_onboarding_corrections", "public.agency_onboarding_revisions", "public.agency_onboarding_referees", "public.agency_onboarding_events",
+    "hr.sign_recipients", "hr.sign_requests", "public.agency_onboarding", "public.comm_messages", "public.comm_conversations", "public.notification_deliveries", "public.portal_audit_log",
+    "public.agency_invitations", "public.agency_memberships", "public.agency_tenant_agents", "public.agency_tenants", "public.agents", "public.portal_profiles", "auth.users", "public.agencies"]) {
+    assert.ok(new RegExp(`delete from ${table.replace(".", "\\.")}\\b`).test(sql), `deletes ${table}`);
+  }
+  assert.match(sql, /set local session_replication_role = replica;/, "triggers off: nothing is queued or emailed");
+  assert.match(sql, /insert into public\.business_deletions\(deleted_by, deleted_by_name, business_name, abn\)/, "one minimal audit row");
+  assert.match(sql, /raise exception 'This link is no longer available\.'/, "a deleted request's link: neutral");
+  // The function: the database deletes, then the signing files it names are removed from storage; nothing is emailed.
+  const removed: string[] = []; const rpcs: string[] = [];
+  const ctx = { body: { agencyId: "11111111-1111-4111-8111-111111111111", confirm: "ZZ Test" }, admin: async () => null,
+    rpc: async (name: string) => { rpcs.push(name); return { deleted: true, name: "ZZ Test", abn: "49004028077", files: ["r1/original.pdf", "r1/signed-x.pdf"], counts: { agents: 1 } }; },
+    ports: { storage: { remove: async (paths: string[]) => { removed.push(...paths); } } } };
+  const out = await onboardingFn.deleteBusiness(ctx as never) as { deleted: boolean; filesRemoved: number; filesLeft: number };
+  assert.deepEqual([out.deleted, out.filesRemoved, out.filesLeft, rpcs, removed], [true, 2, 0, ["admin_business_delete"], ["r1/original.pdf", "r1/signed-x.pdf"]]);
+  assert.ok(!/send|mail|notify/i.test(rpcs.join(" ")), "no email call");
+  // The signing page: a deleted link shows "This link is no longer available", with nothing to request.
+  assert.match(read("supabase/functions/document-signing/core.ts"), /if \(\/no longer available\/i\.test\(e\.message\)\) throw new SigningError\(LINK_GONE, 410\);/);
+  const page = read("src/pages/SigningPage.tsx");
+  assert.ok(page.includes(`const gone = /no longer available/i.test(message);`) && page.includes(">This link is no longer available</p>"), "neutral page");
+});
+
+test("completion certificate (2026-11-20): never emailed, downloaded or shown to anyone; only the signed documents leave; the audit record stays on the signing request for staff", async () => {
+  // Emails: every completion email (to the signer, an offer with a deposit, the administrator) mentions and attaches the signed document only.
+  const base = { id: 1, title: "Contract", reference: "SLIT-1", name: "Ann", to: "a@example.test", signed_path: "r/s.pdf", signed_hash: "a".repeat(64), certificate_path: "r/c.pdf", certificate_hash: "b".repeat(64) };
+  for (const job of [{ ...base, kind: "completed", audience: "recipient" }, { ...base, kind: "completed", audience: "admin", signers: [{ name: "Ann", role: "Student", state: "signed" }] },
+    { ...base, kind: "completed", audience: "recipient", deposit: { label: "AUD 500.00", link: "https://x.example/sign#t=1" } }]) {
+    const mail = signing.renderSigningEmail(job as never, null)!;
+    assert.ok(mail && !/certificate|IP address|user agent/i.test(`${mail.subject} ${mail.text}`), `no certificate wording: ${mail.subject}`);
+    assert.match(mail.text, /signed (document|copy) is attached/);
+  }
+  // The signer's view and every download: no certificate link or kind anywhere.
+  const core = read("supabase/functions/document-signing/core.ts");
+  assert.ok(!core.includes("certificateUrl"), "the signing link's view has no certificate link");
+  assert.match(core, /const files: Array<\[string, string, string\]> = \[\[job\.signed_path, job\.signed_hash, `\$\{safeName\(job\.title\)\}-signed\.pdf`\]\];/, "the completion email attaches the signed PDF only");
+  assert.match(core, /if \(which === "certificate"\) \{/, "staff still open the audit record from the signing request (admin_url)");
+  for (const file of ["src/pages/SigningPage.tsx", "src/pages/agency/components/AgencyAgreementCard.tsx", "src/pages/agency/components/ApplicationStatusPanels.tsx", "src/pages/admin/components/AgentOnboardingPanel.tsx"]) {
+    const text = read(file);
+    assert.ok(!/certificateUrl|"certificate"\)|application_certificate"|referee_certificate:|offer-letter-certificate|\["form", "agreement", "certificate"\]/.test(text), `${file}: no certificate download`);
+  }
+  assert.ok(!read("src/pages/admin/components/AgentOnboardingPanel.tsx").includes("· IP "), "the business page shows no IP address");
+  assert.match(read("src/pages/admin/components/signing/RequestDetail.tsx"), /View audit record/, "the signing request page (staff only) keeps the audit record");
+  // The database refuses the certificate kinds in every download and lists none (portal offer letters, agency onboarding).
+  const sql = read("supabase/migrations/20261120123517_signing_certificate_private.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /if p_kind in \('certificate', 'application_certificate'\) or p_kind like 'referee_certificate:%' then\n  raise exception 'The audit record is not downloadable/);
+  assert.match(sql, /elsif p_kind = 'certificate' then\n  raise exception 'The audit record is not downloadable/);
+  for (const changed of [`'hasCertificate', false`, `'certificate', false, 'application_certificate', false)`, `'form', f.form_content is not null, 'certificate', false)`, `'agreement', o.agreement_content is not null, 'certificate', false)`]) {
+    assert.ok(sql.includes(changed), `listed as not available: ${changed}`);
+  }
+  // Staff (HR) offers: the signed copy carries the signature, not the audit details (kept in hr_svc_offer_sign).
+  const signedOffer = await offerPdf.stampSignedOffer(await makePdf(1), { signerName: "Asha Patel", signedAt: "2026-11-20T00:00:00Z", ip: "203.0.113.5", userAgent: "Mozilla/5.0 Test",
+    consent: offerPdf.OFFER_CONSENT, offerFilename: "offer.pdf", offerSha256: "ab".repeat(32) });
+  const offerText = (await pdfText(signedOffer)).map((t) => t.text).join(" ");
+  assert.ok(offerText.includes("Asha Patel") && !/203\.0\.113\.5|Mozilla|IP address|Browser|abab/.test(offerText), "no IP address, browser or hash on the staff offer's signed copy");
+});
+
+const signedTime = await load.import<typeof import("../src/lib/signedTime.ts")>("../src/lib/signedTime.ts");
+test("signing done page (2026-11-20): Melbourne time with its zone, a new download link per click, steps inside the card, no stale-link note, no certificate", async () => {
+  // 4. The signed time: SLIT's time zone, named.
+  assert.equal(signedTime.formatSignedAt("2026-11-19T05:42:00Z"), "19 Nov 2026, 4:42 pm AEDT");
+  assert.equal(signedTime.formatSignedAt("2026-07-01T02:05:00Z"), "1 Jul 2026, 12:05 pm AEST", "winter: standard time");
+  assert.equal(signedTime.formatSignedAt("2026-11-19T13:00:00Z"), "20 Nov 2026, 12:00 am AEDT", "the Melbourne date, not the UTC one");
+  assert.deepEqual([signedTime.formatSignedAt(null), signedTime.formatSignedAt("not a date")], ["", ""]);
+  // 3. "download": the same document the page shows, a new link every call; only the signed PDF once signed, never the certificate.
+  const bytes = new Uint8Array([1, 2, 3]); const hash = await signingCore.sha256Hex(bytes);
+  let n = 0; const asked: string[] = [];
+  const record = { id: "r", title: "Agent referee check", state: "signed", signed_path: "r/signed.pdf", signed_hash: hash, original_path: "r/original.pdf", original_hash: hash,
+    certificate_path: "r/certificate.pdf", certificate_hash: hash, recipient: { id: "x", state: "signed" }, fields: [] };
+  const ports = { isServiceCaller: false, later: () => undefined, service: async (name: string) => (name === "open" ? record : true),
+    storage: { download: async () => bytes, upload: async () => true, remove: async () => undefined, signedUrl: async (p: string, _s: number, name?: string) => { asked.push(`${p}|${name}`); return `https://x.example/${p}?t=${++n}`; } },
+    mail: { provider: null, config: { from: null, adminTo: [], siteUrl: "", problems: [] } } } as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const download = () => signingCore.handleSigning({ body: { action: "download", token: "a".repeat(64) }, upload: null, ip: null, userAgent: null }, ports) as Promise<{ url: string }>;
+  const first = await download(), second = await download();
+  assert.ok(first.url !== second.url && first.url.includes("r/signed.pdf"), "a fresh link per click");
+  assert.ok(asked.length === 2 && asked.every((a) => a.startsWith("r/signed.pdf|") && a.endsWith("-signed.pdf")), `the signed PDF, named as signed: ${asked.join(", ")}`);
+  assert.ok(!asked.some((a) => a.includes("certificate")), "never the completion certificate");
+  await assert.rejects(signingCore.handleSigning({ body: { action: "download", token: "../x" }, upload: null, ip: null, userAgent: null }, ports), (e: Error & { status?: number }) => e.status === 403, "a bad link is refused");
+  assert.equal(await read("src/lib/signingApi.ts").includes(`signingAction<{ url?: string }>({ action: "download", token })`), true);
+  // 1, 2 and 5. One shared done component: steps stacked on a phone and in a row from md up, the Download button in the same section, no footer bar.
+  const done = read("src/components/signing/SigningDone.tsx"), wizard = read("src/components/signing/F04Wizard.tsx"), page = read("src/pages/SigningPage.tsx");
+  assert.ok(done.includes("grid w-full max-w-sm grid-cols-1") && done.includes("md:grid-flow-col") && done.includes("break-words"), "steps wrap and stack");
+  assert.match(done, /<section className="mt-5 flex w-full flex-col items-center gap-5"[^>]*>[\s\S]*What happens next[\s\S]*<DownloadSigned[\s\S]*<\/section>/, "the download sits in the steps' section, centred");
+  assert.ok(done.includes("The download could not start.") && done.includes("Try again"), "an inline error with a retry");
+  assert.ok(wizard.includes("stepper={null} footerStart={null} footerEnd={null}>") && wizard.includes("<SigningDone "), "F04: no footer divider, the shared layout");
+  assert.ok(read("src/components/shared/wizard/WizardShell.tsx").includes("footerStart == null && footerEnd == null ? null"), "no empty footer bar");
+  assert.equal((page.match(/<SigningDone /g) ?? []).length, 3, "offer letter, completed document (referee, agreement, HR) and signed-by-me use it");
+  for (const [file, text] of [["SigningDone", done], ["F04Wizard", wizard], ["SigningPage", page]] as const) {
+    assert.ok(!/few minutes; reload|reload this page for/i.test(text), `${file}: no stale-link note`);
+    assert.ok(!/certificate/i.test(text), `${file}: no certificate anywhere`);
+  }
+  assert.ok(!page.includes("href={view.url} download") && !wizard.includes("href={view.url} download"), "no stored link offered for download");
+});
 
 test("offer PDF: signing keeps every original page and adds one signature page on the shared styling", async () => {
   const signed = await offerPdf.stampSignedOffer(await makePdf(2), { signerName: "Ann Ápplicant", signedAt: "2026-11-09T10:00:00.000Z", ip: "203.0.113.5",
@@ -3388,7 +4009,7 @@ test("staff wizard rules: a draft takes blanks, the final check needs everything
   const now = new Date("2026-11-10T03:00:00Z");
   assert.deepEqual(staffRules.staffProblems(details, staffRules.STAFF_FIELDS, false, now), [{ field: "phone", message: "Enter your mobile number." }], "only the mobile may never be blank");
   assert.deepEqual(staffRules.staffProblems({ ...details, first_name: "x".repeat(101), date_of_birth: "2020-01-01", emergency_phone: "0422", passport_number: "12" }, ["first_name", "date_of_birth", "emergency_phone", "passport_number"], false, now), [
-    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 10 and 100 years old." },
+    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 14 and 100 years old." },
     { field: "emergency_phone", message: "Enter the emergency contact's phone number." }, { field: "passport_number", message: "Enter the passport number: 6 to 12 letters and numbers." }]);
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia", address_state: "Punjab" }, false, now), "Choose the state or territory.");
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia" }, false, now), "", "blank is fine in a draft");
@@ -3448,7 +4069,11 @@ test("tax and super rules (option A): the declaration answers and the super choi
 test("onboarding save: checked with the shared rules before the database, answered with the field; stored normalised", async () => {
   let run = linkDeps();
   let r = await onboard.handleOnboarding(linkRequest("save", { patch: { date_of_birth: "2020-01-01" } }), run.deps);
-  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 10 and 100 years old.", "date_of_birth"]);
+  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 14 and 100 years old.", "date_of_birth"], "staff minimum age: Business Rule hrms.staff_minimum_age (14)");
+  staffRules.setStaffMinimumAge(16);
+  assert.equal(staffRules.staffFieldProblem("date_of_birth", { ...staffRules.EMPTY_STAFF_DETAILS, date_of_birth: "15/06/2011" }, true, new Date("2026-11-20T00:00:00Z")), "You must be between 16 and 100 years old.", "a changed rule moves the age");
+  assert.equal(staffRules.staffDateOfBirthRange(new Date("2026-11-20T00:00:00Z")).max, "2010-11-20");
+  staffRules.setStaffMinimumAge(14);
   assert.ok(!run.names().includes("hr_svc_onboarding_save"), "nothing invalid reaches the database");
   for (const [patch, field, message] of [
     [{ emergency_phone: "0422 333 444" }, "emergency_phone", "Enter the emergency contact's phone number."],

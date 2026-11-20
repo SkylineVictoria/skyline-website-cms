@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, ticketStudents, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
+import { ruleNumber } from "@/lib/businessRules";
+import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, defaultTicketPriority, ticketCategories, ticketStudents, supportAttachmentCount, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
 
 /** New ticket form for students and agents. Agents can say which student the ticket is about. */
 export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isStudent: boolean; onCreated: (id: string, ref: string) => void; onCancel: () => void }) {
-  const [category, setCategory] = useState<TicketCategory>("enrolment_documents");
-  const [priority, setPriority] = useState<TicketPriority>("normal");
+  const [category, setCategory] = useState<TicketCategory>(() => ticketCategories()[0]);
+  const [priority, setPriority] = useState<TicketPriority>(defaultTicketPriority);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [cap, setCap] = useState<number | null>(null);
+  useEffect(() => { void supportAttachmentCount().then(setCap).catch(() => setCap(null)); }, []);
   const [files, setFiles] = useState<File[]>([]);
   const [students, setStudents] = useState<{ id: string; name: string }[]>([]);
   const [studentId, setStudentId] = useState("");
@@ -38,7 +41,7 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm font-medium text-foreground-800">Category
           <select className={field} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>
-            {(Object.keys(CATEGORY_LABEL) as TicketCategory[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+            {ticketCategories().map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
           </select>
         </label>
         <label className="block text-sm font-medium text-foreground-800">Priority
@@ -61,9 +64,9 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
       <label className="block text-sm font-medium text-foreground-800">Description
         <textarea className={`${field} min-h-[140px]`} maxLength={10000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What do you need help with?" />
       </label>
-      <label className="block text-sm font-medium text-foreground-800">Attachments (optional, up to 5 files, 10 MB each)
-        <input type="file" multiple className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx"
-          onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 5))} />
+      <label className="block text-sm font-medium text-foreground-800">Attachments (optional, {cap === null ? "count unavailable" : `up to ${cap} files`}, {ruleNumber("support.ticket_attachment_limit_mib", 10)} MB each)
+        <input disabled={cap === null || cap === 0} type="file" multiple className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx"
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
       </label>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
       <div className="flex flex-wrap gap-2">

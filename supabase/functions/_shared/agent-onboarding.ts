@@ -38,6 +38,16 @@ export const AGENT_ONBOARDING_DOCS: Record<OnboardingDoc, OnboardingDocument> = 
   agreement: { key: "agent_agreement", name: "Agent Agreement", title: "Education Agent Agreement (P06)", sha256: "5ca5213f8d2e95766f7eb8df51d5f408c203ce2270bd441b3e93c08561bc9f88", pages: 13, category: "agency_agreement", file: "agent_agreement_template_blank.pdf" },
   referee: { key: "agent_referee_check_form", name: "Agent Referee Check Form", title: "Agent Referee Check Form (F05)", sha256: "afd78833c524411c1c4544e3bd19025bd5f974c941a5b8658862ce71a64377a1", pages: 1, category: "other", file: "agent_referee_check_form_template_blank.pdf" },
 };
+/** GST on the agent's commission (Item 4, 2026-11-21): chosen by SLIT staff before sending; printed with the percentage everywhere. */
+export const COMMISSION_GST = ["inclusive", "exclusive"] as const;
+export type CommissionGst = typeof COMMISSION_GST[number];
+export const isCommissionGst = (v: unknown): v is CommissionGst => typeof v === "string" && (COMMISSION_GST as readonly string[]).includes(v);
+/** "15% (GST exclusive)"; without a GST choice (onboardings sent before 2026-11-21) just "15%"; nothing at all: "". */
+export function commissionText(percent: number | string | null | undefined, gst: string | null | undefined): string {
+  const p = percent == null ? "" : String(percent).replace(/%/g, "").trim();
+  if (!p) return "";
+  return isCommissionGst(gst) ? `${p}% (GST ${gst})` : `${p}%`;
+}
 /** The agreement runs for two years from its commencement (Item 5). */
 export const AGREEMENT_TERM_YEARS = 2;
 // The signer of the F04 and the P06 is the business's point of contact (2026-11-19); the role key stays "agent" (stored on requests and templates).
@@ -200,6 +210,19 @@ export const ONBOARDING_KEY = /^[a-z][a-z0-9_]{0,60}(:[A-Z0-9]{1,10})?$/;
 
 /** The questions the agent must answer with Yes or No before signing (the form says so), and the signature. */
 export const REQUIRED_GROUPS = ["litigation_involved", "eatc_completed"];
+/** Business Rules agents.onboarding_required_answer_groups names these questions; one left out of the list may stay unanswered. */
+export const REQUIRED_GROUP_LABELS: Readonly<Record<string, string>> = { litigation_involved: "Litigation involved", eatc_completed: "EATC completed" };
+/** The question keys SLIT made optional, from the rule's list of labels (none when the list holds every label). */
+export function optionalAnswerGroups(requiredLabels: readonly string[]): Set<string> {
+  return new Set(REQUIRED_GROUPS.filter((key) => !requiredLabels.includes(REQUIRED_GROUP_LABELS[key])));
+}
+/** A signing field list with the tick boxes of optional questions no longer required. */
+export function relaxAnswerGroups<T extends { key?: string | null; required: boolean }>(fields: T[], optional: ReadonlySet<string>): T[] {
+  if (!optional.size) return fields;
+  return fields.map((f) => { const g = groupOf(f.key); return g && optional.has(g.key) ? { ...f, required: false } : f; });
+}
+/** Business Rules agents.agent_application_yes_no_fallback: the first choice (No) is what the form always did. */
+export const YES_NO_FALLBACKS = ["No", "Leave blank (the agent answers)"] as const;
 
 /**
  * F04 wizard (2026-11-19): the declaration statements of the form's page 2, each its own required tick box on the wizard's last step and

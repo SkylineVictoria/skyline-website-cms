@@ -6,7 +6,7 @@ import { Button, Card, ConfirmDialog } from "@/pages/admin/components/ui";
 import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { deleteStudentRecord, listStudents, sendStudentInvitation, setStudentStatus, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
+import { deleteStudentRecord, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { deleteApplicationDocument, listApplicationDocuments } from "@/pages/agency/lib/portalApplications";
@@ -20,6 +20,11 @@ type SortKey = "student" | "business" | "agent" | "applications" | "studentStatu
 const text = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
 const studentStatusOf = (row: StudentRow) => row.status ?? "Active";
 const inactiveBusiness = (row: StudentRow) => Boolean(row.businessStatus) && row.businessStatus !== "Active";
+const ENROLMENT_TONE: Record<string, string> = {
+  enrolled: "border-emerald-200 bg-emerald-50 text-emerald-800", deposit_paid: "border-teal-200 bg-teal-50 text-teal-800", offer_accepted: "border-sky-200 bg-sky-50 text-sky-800",
+  offer_issued: "border-violet-200 bg-violet-50 text-violet-800", applicant: "border-amber-200 bg-amber-50 text-amber-900", withdrawn: "border-background-300 bg-background-100 text-foreground-600",
+  none: "border-background-300 bg-background-100 text-foreground-600",
+};
 
 function compareStudents(a: StudentRow, b: StudentRow, key: SortKey): number {
   // Students without a name yet sort after named ones.
@@ -42,8 +47,9 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   const { push } = useToast();
   const statusCatalog = useStatusCatalog();
   const [search, setSearch] = useState("");
-  // Active is the default tab; "" is All.
-  const [status, setStatus] = useState("Active");
+  // 2026-11-21: the tabs are about portal access (never enrolment); "" is All. Enrolment is its own filter, derived from the applications.
+  const [access, setAccess] = useState<PortalAccess | "">("");
+  const [enrolment, setEnrolment] = useState<EnrolmentStage | "">("");
   const [counts, setCounts] = useState<StudentCounts | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<StudentRow[]>([]);
@@ -61,12 +67,12 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
     let active = true;
     setLoading(true);
     setError("");
-    listStudents({ search, studentStatus: status, businessId: businessId ?? null, agentId: agentId ?? null, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+    listStudents({ search, access, enrolment, businessId: businessId ?? null, agentId: agentId ?? null, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       .then((result) => { if (active) { setRows(result.rows); setTotal(result.total); setCounts(result.counts ?? null); setLoaded(true); } })
       .catch((e) => { if (active) setError(e instanceof Error ? e.message : "We could not load students."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [search, status, businessId, agentId, page, reload, refreshKey]);
+  }, [search, access, enrolment, businessId, agentId, page, reload, refreshKey]);
 
   // No sort chosen: the server's order (latest activity first).
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
@@ -157,15 +163,23 @@ This permanently deletes the student and ALL ${total} of their application${tota
     void deleteStudent(row);
   };
 
-  const filtered = Boolean(search || status !== "Active");
-  const columns = businessId ? 5 : 6;
+  const filtered = Boolean(search || access || enrolment);
+  const columns = businessId ? 6 : 7;
   return (
     <div>
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
-        {/* Filters on the student's own status, from the backend's list (the same one the Student status column uses). */}
-        <StatusTabs label="Student status" value={status || "all"} onChange={(v) => { setStatus(v === "all" ? "" : v); setPage(1); }}
-          tabs={[{ id: "all", label: "All", count: counts?.all ?? null },
-            ...statusCatalog.student.map((s) => ({ id: s.value, label: s.label, count: (s.value === "Active" ? counts?.active : s.value === "Inactive" ? counts?.inactive : undefined) ?? null }))]} />
+        {/* Portal access (2026-11-21): whether the student can use the portal; enrolment is the separate filter beside it. */}
+        <StatusTabs label="Portal access" value={access || "all"} onChange={(v) => { setAccess(v === "all" ? "" : v as PortalAccess); setPage(1); }}
+          tabs={[{ id: "all", label: "All", count: counts?.access?.all ?? counts?.all ?? null },
+            ...(["active", "invited", "not_invited", "disabled"] as const).map((a) => ({ id: a, label: PORTAL_ACCESS_LABEL[a], count: counts?.access?.[a] ?? null }))]} />
+        <label className="flex items-center gap-2 text-sm text-foreground-700">
+          <span className="whitespace-nowrap">Enrolment</span>
+          <select value={enrolment} onChange={(e) => { setEnrolment(e.target.value as EnrolmentStage | ""); setPage(1); }} data-testid="students-enrolment-filter"
+            className="rounded-md border border-background-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-primary-100">
+            <option value="">Any</option>
+            {ENROLMENT_ORDER.map((stage) => <option key={stage} value={stage}>{ENROLMENT_LABEL[stage]}{counts?.enrolment ? ` (${counts.enrolment[stage] ?? 0})` : ""}</option>)}
+          </select>
+        </label>
         <div className="flex-1"><SearchBox label="Search students" value={search} onSearch={(v) => { setSearch(v); setPage(1); }}
           placeholder={businessId ? "Search name, email, mobile, passport, agent or application reference" : "Search name, email, mobile, passport, business, agent or application reference"} /></div>
       </div>
@@ -175,18 +189,19 @@ This permanently deletes the student and ALL ${total} of their application${tota
             action={<Button variant="outline" size="sm" onClick={() => setReload((n) => n + 1)}>Try again</Button>} />
         ) : loaded && !loading && rows.length === 0 ? (
           <ListMessage icon="ri-user-line" title={filtered ? "No students match" : "No students yet"}
-            text={filtered ? "Check the spelling or choose another student status." : emptyText ?? "Students appear here when an agent adds them."} />
+            text={filtered ? "Check the spelling, or choose another portal access tab or enrolment." : emptyText ?? "Students appear here when an agent adds them."} />
         ) : (
           <div className={loading && loaded ? "opacity-60 transition-opacity" : ""}>
             <ResponsiveTable aria-busy={loading}>
               <thead>
                 <tr>
-                  {sortHeader("student", "Student", businessId ? "w-[30%]" : "w-[25%]")}
-                  {businessId ? null : sortHeader("business", "Business", "w-[16%]")}
-                  {sortHeader("agent", "Agent", "w-[13%]")}
-                  {sortHeader("studentStatus", "Student status", "w-[11%]")}
-                  <th className="w-[12%]">Sign-in</th>
-                  {sortHeader("applications", "Application status", "w-[23%]")}
+                  {sortHeader("student", "Student", businessId ? "w-[26%]" : "w-[21%]")}
+                  {businessId ? null : sortHeader("business", "Business", "w-[13%]")}
+                  {sortHeader("agent", "Agent", "w-[11%]")}
+                  {sortHeader("studentStatus", "Student status", "w-[10%]")}
+                  <th className="w-[11%]">Portal access</th>
+                  <th className="w-[13%]">Enrolment</th>
+                  {sortHeader("applications", "Application status", "w-[21%]")}
                 </tr>
               </thead>
               <tbody>
@@ -227,7 +242,15 @@ This permanently deletes the student and ALL ${total} of their application${tota
                         </select>
                       </td>
                       <td>
-                        <StudentLoginCell login={row.login} email={row.email} busy={busyId === row.id} disabled={disabled} onInvite={() => void invite(row)} />
+                        <StudentLoginCell login={row.login} access={row.portalAccess} email={row.email} busy={busyId === row.id} disabled={disabled} onInvite={() => void invite(row)} />
+                      </td>
+                      <td data-testid={`student-enrolment-${row.id}`}>
+                        {/* Derived from the applications (the most advanced one); never set by hand. */}
+                        {row.enrolment ? <div className="flex flex-col items-start gap-0.5 text-xs">
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 font-medium ${ENROLMENT_TONE[row.enrolment.stage] ?? ENROLMENT_TONE.none}`}>{row.enrolment.label}</span>
+                          {row.enrolment.applicationId ? <Link to={`/admin/applications/${row.enrolment.applicationId}`} className="text-foreground-700 hover:text-primary-700">
+                            {[row.enrolment.course, row.enrolment.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}
+                        </div> : <span className="text-xs text-foreground-500">—</span>}
                       </td>
                       <td>
                         {row.applicationRows ? (

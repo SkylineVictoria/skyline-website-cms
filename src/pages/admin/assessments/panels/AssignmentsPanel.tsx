@@ -5,6 +5,7 @@ import { Drawer } from "@/pages/admin/components/rto/shared";
 import { Empty } from "@/pages/admin/components/rto/overlay";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { fmtDateTime, fromLocalInput, STATE_LABEL, toLocalInput } from "@/lib/assessment/api";
+import { ruleNumber } from "@/lib/businessRules";
 import { asmAdmin, type AssignmentRow, type AssignmentStudent, type BatchOption, type StaffOption } from "@/pages/admin/lib/assessments";
 
 const fail = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
@@ -42,7 +43,7 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
   const [picked, setPicked] = useState<string[]>([]);
   const [trainers, setTrainers] = useState<string[]>([]);
   const [availableFrom, setAvailableFrom] = useState(toLocalInput(new Date().toISOString()));
-  const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + 14 * 86400000).toISOString()));
+  const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + ruleNumber("lms.assessment_assignment_default_days", 7) * 86400000).toISOString()));
   const [lateUntil, setLateUntil] = useState("");
   const [rule, setRule] = useState<"follow_batch" | "keep">("follow_batch");
   const [notes, setNotes] = useState("");

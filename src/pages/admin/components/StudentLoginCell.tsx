@@ -8,20 +8,23 @@ const BADGE: Record<string, string> = {
   disabled: "border-background-300 bg-background-100 text-foreground-600",
   none: "border-background-300 bg-background-100 text-foreground-600",
 };
-const SHORT: Record<string, string> = { active: "Active", invited: "Invited", expired: "Expired", disabled: "Disabled", none: "None" };
+// Portal access (2026-11-21): Not invited / Invited / Active / Disabled; an expired invitation is still "Invited" (with the date it ran out).
+const SHORT: Record<string, string> = { active: "Active", invited: "Invited", expired: "Invited (expired)", disabled: "Disabled", none: "Not invited" };
 
 /**
  * A student's sign-in state with its action: Invite to sign in (none / expired with no record), Resend invite (invited,
  * expired). Nothing to do once they can sign in. `disabled` is the student's own status: a disabled student cannot be invited.
  */
-export default function StudentLoginCell({ login, email, busy, disabled = false, onInvite }: {
+export default function StudentLoginCell({ login, access, email, busy, disabled = false, onInvite }: {
   login: StudentLogin | undefined;
+  /** The database's portal access (2026-11-21): a disabled student shows Disabled whatever the login says. */
+  access?: "not_invited" | "invited" | "active" | "disabled";
   email: string;
   busy: boolean;
   disabled?: boolean;
   onInvite: () => void;
 }) {
-  const status = login?.status ?? "none";
+  const status = access === "disabled" || disabled ? "disabled" : login?.status ?? "none";
   const canAct = status !== "active" && status !== "disabled" && !disabled && Boolean(email);
   return (
     <div className="flex flex-col items-start gap-1">

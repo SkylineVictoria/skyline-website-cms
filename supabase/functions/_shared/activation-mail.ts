@@ -24,6 +24,31 @@ export function activationSite(env: Env, redirectTo?: string): string | null {
   return null;
 }
 
+/** A short account email (same switches and sender as the activation email): the sign-in email change (2026-11-21). */
+export async function sendAccountEmail(env: Env, mail: { to: string; subject: string; heading: string; paragraphs: string[]; button?: { label: string; url: string }; note?: string },
+  request: typeof fetch = fetch): Promise<{ ok: true } | { error: string }> {
+  if ((env.EF_NOTIFICATION_EMAIL_ENABLED ?? "").trim() !== "true") return { error: "email sending is switched off" };
+  const token = (env.EF_POSTMARK_SERVER_TOKEN ?? "").trim();
+  if (!token) return { error: "EF_POSTMARK_SERVER_TOKEN is not set" };
+  const from = activationFrom(env);
+  if (!from) return { error: "EF_HR_EMAIL_FROM is not set" };
+  const text = [...mail.paragraphs, ...(mail.button ? [`${mail.button.label}: ${mail.button.url}`] : []), ...(mail.note ? [mail.note] : [])].join("\n\n");
+  const html = simpleEmailHtml({ brand: from.name, heading: mail.heading, paragraphs: mail.paragraphs, ...(mail.button ? { button: mail.button } : {}), ...(mail.note ? { note: mail.note } : {}) });
+  const display = from.name.replace(/[\u0000-\u001f\u007f<>"\\]/g, " ").trim().slice(0, 100);
+  try {
+    const response = await request("https://api.postmarkapp.com/email", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-Postmark-Server-Token": token },
+      body: JSON.stringify({ From: `"${display}" <${from.email}>`, To: mail.to, Subject: mail.subject, TextBody: text, HtmlBody: html, MessageStream: "outbound", TrackOpens: false, TrackLinks: "None" }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const result = await response.json().catch(() => null) as { ErrorCode?: number } | null;
+    return response.status === 200 && result?.ErrorCode === 0 ? { ok: true } : { error: `postmark ${response.status}/${result?.ErrorCode ?? "?"}` };
+  } catch {
+    return { error: "postmark unreachable" };
+  }
+}
+
 export async function sendActivationEmail(env: Env, mail: { to: string; name: string; link: string; role?: string; agencyName?: string | null; expiresAt?: string },
   request: typeof fetch = fetch): Promise<{ ok: true } | { error: string }> {
   if ((env.EF_NOTIFICATION_EMAIL_ENABLED ?? "").trim() !== "true") return { error: "email sending is switched off" };

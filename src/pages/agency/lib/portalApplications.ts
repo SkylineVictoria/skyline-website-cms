@@ -1,6 +1,7 @@
 import { checkedDocumentCategory } from "../../../../supabase/functions/_shared/document-category";
 import { RejectedDocumentError, uploadValidatedDocument } from "@/lib/validatedDocumentUpload";
-import { documentFileProblem } from "../../../../supabase/functions/_shared/validation/person";
+import { documentFileProblem, documentLimits, DOCUMENT_LIMITS, type DocumentLimits } from "../../../../supabase/functions/_shared/validation/person";
+import { onRules, ruleList, ruleNumber } from "@/lib/businessRules";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { countPortalMetric } from "@/pages/agency/lib/devMetrics";
 import type { ApplicationStatus } from "@/pages/agency/lib/portalData";
@@ -778,8 +779,8 @@ export const offerLetterList = (applicationId: string) =>
   rpcOrThrow<Array<{ id: string; fileName: string; sizeBytes: number; issuedAt: string; acceptedAt: string | null; recipientKind: string; recipientEmail: string; templateName?: string; templateVersion?: number | null;
     acceptedVia?: string | null; signedAt?: string | null; hasSigned?: boolean; hasCertificate?: boolean; prepaidMore?: "YES" | "NO" | null; payment?: OfferPayment | null;
     signing?: { status: string; expiresAt: string | null; viewedAt: string | null; reference: string } | null }>>("portal_offer_letter_list", { p_application: applicationId });
-/** The signed offer letter or its signing certificate (signed online), opened in a new tab. */
-export async function openOfferLetterFile(letterId: string, kind: "signed" | "certificate"): Promise<void> {
+/** The signed offer letter (signed online), opened in a new tab. The signing audit record is never downloadable (owner 2026-11-20). */
+export async function openOfferLetterFile(letterId: string, kind: "signed"): Promise<void> {
   const tab = window.open("", "_blank");
   try {
     const file = await rpcOrThrow<{ fileName: string; contentBase64: string }>("portal_offer_letter_file", { p_letter: letterId, p_kind: kind });
@@ -856,11 +857,17 @@ export async function listAssignableAgents(agencyId?: string): Promise<AgentOpti
 
 /* ------------------------------------------- Wizard: documents + drafts */
 
-export { DOCUMENT_MAX_BYTES as MAX_DOCUMENT_BYTES } from "../../../../supabase/functions/_shared/validation/person";
+/** Business Rules admissions.application_document_limit_mib / admissions.application_document_types (never above the 10 MB, PDF / JPG / PNG ceiling). */
+let documentRules: DocumentLimits = DOCUMENT_LIMITS;
+export let MAX_DOCUMENT_BYTES = DOCUMENT_LIMITS.maxBytes;
+onRules(() => {
+  documentRules = documentLimits(ruleNumber("admissions.application_document_limit_mib", 10), ruleList("admissions.application_document_types", ["JPEG", "PNG", "PDF"]));
+  MAX_DOCUMENT_BYTES = documentRules.maxBytes;
+});
 
 /** Size, declared type and content of a picked file: the shared rule (also the staff onboarding wizard's and its Edge Function's). */
 async function validateDocumentFile(file: File): Promise<void> {
-  const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
+  const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()), documentRules);
   if (problem) throw new RejectedDocumentError(problem);
 }
 

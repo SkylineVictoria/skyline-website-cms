@@ -68,8 +68,12 @@ export function dateOfBirthRange(today: Date = new Date()): { min: string; max: 
   return { min: iso(DOB_OLDEST_YEARS), max: iso(DOB_YOUNGEST_YEARS) };
 }
 
-/** DD/MM/YYYY (or YYYY-MM-DD) to an ISO date; null when it is not a real date or not 10 to 100 years ago. */
-export function parseDateOfBirth(raw: string, today: Date = new Date()): string | null {
+/** The allowed age, in whole years (an applicant's comes from Business Rules admissions.applicant_age_range). */
+export interface AgeRange { min: number; max: number }
+export const DEFAULT_AGE_RANGE: AgeRange = { min: DOB_YOUNGEST_YEARS, max: DOB_OLDEST_YEARS };
+
+/** DD/MM/YYYY (or YYYY-MM-DD) to an ISO date; null when it is not a real date or not 10 to 100 years ago (or the range given). */
+export function parseDateOfBirth(raw: string, today: Date = new Date(), range: AgeRange = DEFAULT_AGE_RANGE): string | null {
   const text = raw.trim();
   let year: number, month: number, day: number;
   const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
@@ -79,22 +83,22 @@ export function parseDateOfBirth(raw: string, today: Date = new Date()): string 
   else return null;
   const date = new Date(Date.UTC(year, month - 1, day));
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  const youngest = new Date(Date.UTC(today.getUTCFullYear() - DOB_YOUNGEST_YEARS, today.getUTCMonth(), today.getUTCDate()));
-  const oldest = new Date(Date.UTC(today.getUTCFullYear() - DOB_OLDEST_YEARS, today.getUTCMonth(), today.getUTCDate()));
+  const youngest = new Date(Date.UTC(today.getUTCFullYear() - range.min, today.getUTCMonth(), today.getUTCDate()));
+  const oldest = new Date(Date.UTC(today.getUTCFullYear() - range.max, today.getUTCMonth(), today.getUTCDate()));
   if (date > youngest || date < oldest) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export function dateOfBirthProblem(raw: string, today: Date = new Date()): string {
+export function dateOfBirthProblem(raw: string, today: Date = new Date(), range: AgeRange = DEFAULT_AGE_RANGE): string {
   const text = raw.trim();
   if (!text) return "Enter your date of birth.";
-  if (parseDateOfBirth(text, today)) return "";
+  if (parseDateOfBirth(text, today, range)) return "";
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
   const [year, month, day] = iso ? [+iso[1], +iso[2], +iso[3]] : dmy ? [+dmy[3], +dmy[2], +dmy[1]] : [0, 0, 0];
   const date = new Date(Date.UTC(year, month - 1, day));
   const real = year > 0 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-  return real ? "You must be between 10 and 100 years old." : "Enter a real date of birth.";
+  return real ? `You must be between ${range.min} and ${range.max} years old.` : "Enter a real date of birth.";
 }
 
 /* ---------------------------------------------------------- emergency contact */
@@ -168,15 +172,44 @@ export function sniffDocumentKind(header: Uint8Array): DocumentKindOfFile | null
 }
 
 /**
- * Size, then name and declared type, then content. `header` is the file's first bytes (8 are enough); without it only the
- * first two checks run (a picker can refuse early, the upload checks all three).
+ * What an application document may be (Business Rules admissions.application_document_limit_mib / admissions.application_document_types).
+ * The rules can only narrow the ceiling: never above DOCUMENT_MAX_BYTES and never beyond PDF, JPG and PNG (what extraction and storage take).
  */
-export function documentFileProblem(file: { name: string; size: number; type: string }, header?: Uint8Array): string {
-  if (!(file.size > 0) || file.size > DOCUMENT_MAX_BYTES) return DOCUMENT_SIZE_MESSAGE;
+export interface DocumentLimits { maxBytes: number; kinds: DocumentKindOfFile[] }
+const KIND_ORDER: DocumentKindOfFile[] = ["pdf", "jpg", "png"];
+const KIND_LABEL: Record<DocumentKindOfFile, string> = { pdf: "PDF", jpg: "JPG", png: "PNG" };
+export const DOCUMENT_LIMITS: DocumentLimits = { maxBytes: DOCUMENT_MAX_BYTES, kinds: KIND_ORDER };
+export function documentLimits(maxMib: number, typeLabels: readonly string[]): DocumentLimits {
+  const maxBytes = Number.isFinite(maxMib) && maxMib > 0 ? Math.min(DOCUMENT_MAX_BYTES, Math.round(maxMib * 1024 * 1024)) : DOCUMENT_MAX_BYTES;
+  const named = new Set(typeLabels.map((label) => String(label).trim().toUpperCase().replace("JPEG", "JPG")));
+  const kinds = KIND_ORDER.filter((kind) => named.has(KIND_LABEL[kind]));
+  return { maxBytes, kinds: kinds.length ? kinds : KIND_ORDER };
+}
+const kindList = (kinds: DocumentKindOfFile[], last: string) => {
+  const names = kinds.map((kind) => KIND_LABEL[kind]);
+  return names.length <= 2 ? names.join(` ${last} `) : `${names.slice(0, -1).join(", ")}, ${last} ${names[names.length - 1]}`;
+};
+const sizeMessage = (limits: DocumentLimits) => limits === DOCUMENT_LIMITS ? DOCUMENT_SIZE_MESSAGE
+  : `Each document must be a ${kindList(limits.kinds, "or")} no larger than ${Math.round(limits.maxBytes / 1024 / 1024 * 10) / 10} MB.`;
+const typeMessage = (limits: DocumentLimits) => limits === DOCUMENT_LIMITS ? DOCUMENT_TYPE_MESSAGE : `Only ${kindList(limits.kinds, "and")} documents are supported.`;
+
+/**
+ * Size, then name and declared type, then content. `header` is the file's first bytes (8 are enough); without it only the
+ * first two checks run (a picker can refuse early, the upload checks all three). `limits` narrows size and types (application documents).
+ */
+export function documentFileProblem(file: { name: string; size: number; type: string }, header?: Uint8Array, limits: DocumentLimits = DOCUMENT_LIMITS): string {
+  if (!(file.size > 0) || file.size > Math.min(DOCUMENT_MAX_BYTES, limits.maxBytes)) return sizeMessage(limits);
   const declared = KIND_OF_TYPE[String(file.type ?? "").toLowerCase()];
-  if (!/\.(pdf|png|jpe?g)$/i.test(file.name) || !declared) return DOCUMENT_TYPE_MESSAGE;
+  if (!/\.(pdf|png|jpe?g)$/i.test(file.name) || !declared || !limits.kinds.includes(declared)) return typeMessage(limits);
   if (header && sniffDocumentKind(header) !== declared) return DOCUMENT_CONTENT_MESSAGE;
   return "";
+}
+
+/** The limits check alone, for a file whose content was already checked (the guest upload page): "" when allowed. */
+export function documentLimitProblem(size: number, mime: string, limits: DocumentLimits): string {
+  if (!(size > 0) || size > Math.min(DOCUMENT_MAX_BYTES, limits.maxBytes)) return sizeMessage(limits);
+  const kind = KIND_OF_TYPE[String(mime ?? "").toLowerCase()];
+  return kind && limits.kinds.includes(kind) ? "" : typeMessage(limits);
 }
 
 /* ------------------------------------------------- staff only: identity papers */

@@ -52,7 +52,8 @@ export default function RequestDetail({ id, onClose, onChanged, startPlacing = f
       {detail.closed_reason && <p className="rounded border border-background-300 p-3">Reason: {detail.closed_reason}</p>}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={() => void openFile("document")}>{detail.state === "signed" ? "Download signed PDF" : "Open document"}</Button>
-        {detail.state === "signed" && <Button variant="outline" disabled={busy} onClick={() => void openFile("certificate")}>Completion certificate</Button>}
+        {/* Staff only (owner 2026-11-20): the completion certificate is the audit record (IP, browser, history); never emailed or given to signers. */}
+        {detail.state === "signed" && <Button variant="outline" disabled={busy} onClick={() => void openFile("certificate")} data-testid="view-audit-record">View audit record</Button>}
         {detail.state !== "draft" && <Button variant="outline" disabled={busy} onClick={() => void openFile("original")}>Original</Button>}
         {draft && <Button variant="outline" disabled={busy} data-testid="place-fields" onClick={() => void act(async () => {
           const url = (await signingAction<{ url: string }>({ action: "admin_url", id, which: "original" })).url;

@@ -4,10 +4,12 @@ export const MAX_COE_BYTES = 3 * 1024 * 1024;
 export const COE_KINDS = [{ value: "coe", label: "CoE" }, { value: "voe", label: "VoE" }] as const;
 export type CoeKind = (typeof COE_KINDS)[number]["value"];
 
-export function validatePdfFile(file: { name: string; size: number }): string | null {
+/** `maxBytes`: Business Rules admissions.registration_coe_voe_pdf_mib (never above the 3 MB the database stores). */
+export function validatePdfFile(file: { name: string; size: number }, maxBytes: number = MAX_COE_BYTES): string | null {
+  const max = Math.min(MAX_COE_BYTES, maxBytes > 0 ? maxBytes : MAX_COE_BYTES);
   if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,110}\.pdf$/i.test(file.name.trim())) return "Choose a .pdf file with a plain name (letters, digits, spaces, dots, dashes or brackets).";
   if (file.size < 8) return "That file is empty.";
-  if (file.size > MAX_COE_BYTES) return "The PDF must be 3 MB or smaller.";
+  if (file.size > max) return `The PDF must be ${Math.round(max / 1024 / 1024 * 10) / 10} MB or smaller.`;
   return null;
 }
 

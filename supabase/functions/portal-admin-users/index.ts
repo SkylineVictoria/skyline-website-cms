@@ -16,7 +16,7 @@ import { lookupAgencyAbn, validateAbn, normalizeAbn, type AgencyAbnDetails } fro
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import { emailConflictBody } from "../_shared/identity-email.ts";
-import { activationSite, sendActivationEmail } from "../_shared/activation-mail.ts";
+import { activationSite, sendAccountEmail, sendActivationEmail } from "../_shared/activation-mail.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -270,6 +270,47 @@ Deno.serve(async (req) => {
         });
         if (error) return json({ error: error.message }, 400);
         return json({ ok: true, link: (link && link.properties && link.properties.action_link) || null });
+      }
+
+      // Students > Edit student changed the email (2026-11-21): a student with a portal login moves their sign-in email through the
+      // Supabase change-email flow (never a silent change): the confirmation link goes to the new address, a notice to the old one;
+      // the login keeps the old address until the link is opened (then portal_profiles.email follows by trigger). Another login with
+      // the address is refused ("email already in use"); the student-role rule itself is the database's (identity_email_guard).
+      case "student_email_change": {
+        if (!isSlit) return json({ error: "Organization administrator access required." }, 403);
+        const studentId = String(parsed.studentId ?? "");
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(studentId)) return json({ error: "Choose a student." }, 400);
+        const { data: student } = await admin.from("enrollment_students").select("id, full_name, email").eq("id", studentId).maybeSingle();
+        if (!student) return json({ error: "Student not found." }, 404);
+        const next = cleanEmail(student.email);
+        if (!next.ok) return json({ error: next.error }, 400);
+        const { data: membership } = await admin.from("agency_memberships").select("user_id").eq("student_id", studentId).eq("role", "student").limit(1).maybeSingle();
+        const { data: profile } = membership?.user_id ? await admin.from("portal_profiles").select("auth_user_id, email").eq("id", membership.user_id).maybeSingle() : { data: null };
+        if (!profile?.auth_user_id) return json({ ok: true, login: false });
+        const { data: authUser, error: authErr } = await admin.auth.admin.getUserById(profile.auth_user_id);
+        if (authErr || !authUser?.user?.email) return json({ error: "The student's sign-in could not be read." }, 503);
+        const current = authUser.user.email.toLowerCase();
+        if (current === next.value) return json({ ok: true, login: true, changed: false });
+        const { data: taken } = await admin.from("portal_profiles").select("id").ilike("email", next.value).neq("auth_user_id", profile.auth_user_id).limit(1).maybeSingle();
+        const inUse = { error: "This email is already in use. Please use a different email address.", code: "email_taken" };
+        if (taken) return json(inUse, 409);
+        const origin = activationSite(Deno.env.toObject(), redirectTo);
+        const { data: link, error: linkErr } = await admin.auth.admin.generateLink({ type: "email_change_new", email: current, newEmail: next.value,
+          options: origin ? { redirectTo: `${origin}/agency/login` } : undefined });
+        if (linkErr) return /already|registered|exists/i.test(linkErr.message ?? "") ? json(inUse, 409) : json({ error: "The sign-in email change could not be started." }, 400);
+        const url = (link?.properties?.action_link as string | undefined) ?? "";
+        const cleaned = cleanName(student.full_name ?? "");
+        const name = cleaned.ok && cleaned.value ? cleaned.value : "there";
+        const masked = next.value.replace(/^(.{2})[^@]*/, "$1***");
+        const env = Deno.env.toObject();
+        const confirm = url ? await sendAccountEmail(env, { to: next.value, subject: "Confirm your new Skyline sign-in email", heading: "Confirm your new sign-in email",
+          paragraphs: [`Hello ${name},`, "Skyline Institute of Technology changed the email on your student record to this address. Open the link below to use it to sign in to the student portal as well."],
+          button: { label: "Confirm my new sign-in email", url }, note: "Until you confirm, you keep signing in with your previous email. If you did not expect this email, contact us." }) : { error: "no link" as const };
+        const notice = await sendAccountEmail(env, { to: current, subject: "Your Skyline sign-in email is being changed", heading: "Your sign-in email is being changed",
+          paragraphs: [`Hello ${name},`, `Skyline Institute of Technology changed the email on your student record to ${masked}. A confirmation link was sent there; once it is opened, you sign in to the student portal with that address instead of this one.`],
+          note: "If you did not ask for this change, contact us straight away." });
+        return json({ ok: true, login: true, changed: true, pending: true, confirmationSent: "ok" in confirm, noticeSent: "ok" in notice,
+          ...("ok" in confirm ? {} : { warning: "The student record was saved, but the confirmation email for the new sign-in address could not be sent." }) });
       }
 
       default:

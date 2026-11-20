@@ -40,7 +40,7 @@ function UnitPicker({ title, initial, onClose, onPick }: { title: string; initia
 }
 
 const SUBJECT = { student: "Student", employee: "Employee", agent: "Agent" } as const;
-const AUDIENCE = { any: "Anyone", student: "Students / Applications", employee: "Employees", agent: "Agents / Businesses" } as const;
+const AUDIENCE = { any: "Anyone", student: "Students / Applications", employee: "Employees", agent: "Agents", agency: "Agencies / Businesses" } as const;
 type Audience = keyof typeof AUDIENCE;
 
 /** Documents & Signatures. Shows the released first-stage page until the hosted database has the second-stage actions. */
@@ -72,7 +72,7 @@ function EnvelopeSigningPage() {
   const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string; lockCategory?: boolean } | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [presets, setPresets] = useState(false);
-  const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "unit">("");
+  const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "agency" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
   const [unitStep, setUnitStep] = useState<{ templateId: string | null; initial: { courseId: string; unitId: string } | null } | null>(null);
   const [pendingUnit, setPendingUnit] = useState<{ courseId: string; unitId: string } | null>(null);
@@ -118,7 +118,7 @@ function EnvelopeSigningPage() {
       <div className="grid gap-3 md:grid-cols-[1fr_220px_180px]">
         <Field label="Search"><TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Document, reference, recipient name or email" data-testid="request-search" /></Field>
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All types</option>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
-        <Field label="For"><Select value={subject} onChange={(e) => setSubject(e.target.value)}><option value="">Everyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option></Select></Field>
+        <Field label="For"><Select value={subject} onChange={(e) => setSubject(e.target.value)}><option value="">Everyone</option><option value="student">Students</option><option value="employee">Employees</option><option value="agent">Agents</option><option value="agency">Agencies</option></Select></Field>
       </div>
       {!loaded ? <p role="status">Loading…</p> : !shown.length ? <EmptyState icon="ri-quill-pen-line" title={context.requests.length ? "No request matches these filters" : "No signing requests yet"} description={context.requests.length ? undefined : "Create a template or upload a PDF to send your first document."} />
         : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="request-table">
@@ -132,7 +132,7 @@ function EnvelopeSigningPage() {
 
     {tab === "templates" && <div className="flex flex-wrap items-end gap-3">
       <Field label="For"><Select value={forFilter} onChange={(e) => setForFilter(e.target.value as typeof forFilter)} data-testid="template-for-filter" className="w-56">
-        <option value="">All</option><option value="employee">{AUDIENCE.employee}</option><option value="student">{AUDIENCE.student}</option><option value="agent">{AUDIENCE.agent}</option><option value="unit">Units / Assessments</option></Select></Field>
+        <option value="">All</option><option value="employee">{AUDIENCE.employee}</option><option value="student">{AUDIENCE.student}</option><option value="agent">{AUDIENCE.agent}</option><option value="agency">{AUDIENCE.agency}</option><option value="unit">Units / Assessments</option></Select></Field>
     </div>}
     {tab === "templates" && (!templates.length ? <EmptyState icon="ri-file-copy-2-line" title="No templates yet" description="A template holds the text or PDF, its variables, who signs and where." />
       : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="template-table">
@@ -150,12 +150,13 @@ function EnvelopeSigningPage() {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Delete the template “${t.name}”? Requests already made from it keep their own copy.`)) void act(() => signingAdmin("template_delete", t.id), "Template deleted."); }}>Delete</Button>
           </div></td></tr>)}</tbody></table></div>)}
 
-    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r, warning) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+    {compose && <ComposeRequest templates={context.templates} templatesLoading={!loaded} onClose={() => setCompose(false)} onOfferSent={(m) => { setCompose(false); setNotice(m); setError(""); void load(); }} onCreated={(r, warning) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {choosing && <Modal open title="New template: who is it for?" onClose={() => setChoosing(false)}>
       <div className="grid gap-3 sm:grid-cols-2" data-testid="template-audience-choice">
         {([["employee", "Employees", "Contracts, declarations and other staff documents (employee variables).", "employment_contract", "ri-user-star-line"],
           ["student", "Students / Applications", "The Letter of Offer sent from an application, and student documents (student, course, fee and institute variables).", LETTER_CATEGORY, "ri-graduation-cap-line"],
-          ["agent", AUDIENCE.agent, "Agency agreements, individual agent agreements, commission agreements and other documents for agents or business representatives.", "agency_agreement", "ri-briefcase-line"]] as const)
+          ["agent", AUDIENCE.agent, "Individual agent agreements and other documents for one agent (agent variables).", "agency_agreement", "ri-user-line"],
+          ["agency", AUDIENCE.agency, "Agreements and letters for a business: sent to its agency admin (point of contact), with the business's legal name, ABN, address and commission (with GST).", "commission_agreement", "ri-briefcase-line"]] as const)
           .map(([audience, label, hint, category, icon]) => (
             <div key={audience} className="min-w-0 rounded-lg border border-background-300">
               <button type="button" data-testid={`template-audience-${audience}`} onClick={() => { setChoosing(false); setEditing({ audience, category }); }}

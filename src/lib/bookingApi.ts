@@ -19,6 +19,8 @@ export interface BookingMe {
   identity: BookingIdentity; origin: string;
   host: { handle: string; displayName: string; headline: string; timezone: string; enabled: boolean; listed: boolean } | null;
   availability: AvailabilityRow[]; timeOff: TimeOffRow[]; types: MeetingType[]; locations: Array<{ id: string; name: string; address: string }>; bookings: BookingRow[];
+  /** Business Rules: the values a new meeting type starts with and the hours a new booking page starts with (absent before the release). */
+  newType?: Pick<MeetingType, "duration" | "buffer" | "minNoticeHours" | "maxDaysAhead" | "requiresLogin">; initialHours?: AvailabilityRow[];
 }
 export interface PublicHost {
   handle: string; name: string; headline: string; timezone: string; kind: string; isSelf: boolean; signedIn: boolean; viewer: BookingIdentity | null;

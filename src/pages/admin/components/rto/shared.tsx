@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { mayRefresh, useAutosave } from "@/pages/admin/lib/useAutosave";
 import { Badge, Button, Select, TextInput } from "@/pages/admin/components/ui";
 import {
-  DEFAULT_FEE_CENTS, DEPOSIT_LIMIT_CENTS, FEE_RANK, FEE_TYPES, STATUS_TONE, depositOf, feeGst, feeTotal, includedByDefault, initials, isIncluded, isRefundable, money, phase, progress,
+  DEFAULT_FEE_CENTS, depositLimitCents, FEE_RANK, FEE_TYPES, STATUS_TONE, depositOf, feeGst, feeTotal, includedByDefault, initials, isIncluded, isRefundable, money, phase, progress,
   refundableByDefault, shortDate, toCents, type FeeItem, type FeeType, type GstTreatment, type RtoIntake,
 } from "@/pages/admin/lib/rto";
 
@@ -68,7 +68,7 @@ export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fe
   const total = feeTotal(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
   const deposit = depositOf(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
   const gst = feeGst(parsed.map((r) => ({ ...r, amountCents: r.amountCents ?? 0 })));
-  const overLimit = parsed.some((r) => r.type === "initial_deposit" && (r.amountCents ?? 0) > DEPOSIT_LIMIT_CENTS);
+  const overLimit = parsed.some((r) => r.type === "initial_deposit" && (r.amountCents ?? 0) > depositLimitCents());
   /** A new line: the first of the letter's lines this course does not have yet, with its default amount. */
   const nextLine = () => {
     const type = (["application", "registration", "material", "tuition", "initial_deposit"] as FeeType[]).find((t) => !rows.some((r) => r.type === t)) ?? "other";
@@ -100,7 +100,7 @@ export function FeesEditor({ items, onSave, readOnly, busy, saveLabel = "Save fe
           {readOnly ? <span /> : <Button variant="ghost" size="sm" aria-label="Remove fee" icon="ri-delete-bin-line" onClick={() => setRows((list) => list.filter((_, x) => x !== i))} />}
         </div>
       ))}
-      {overLimit ? <p role="alert" className="rounded-md border border-accent-200 bg-accent-50 px-3 py-2 text-sm text-accent-900"><i className="ri-error-warning-line mr-1" aria-hidden="true" />Above the $1,500 pre-paid limit stated in the offer letter; the student must elect to pay more.</p> : null}
+      {overLimit ? <p role="alert" className="rounded-md border border-accent-200 bg-accent-50 px-3 py-2 text-sm text-accent-900"><i className="ri-error-warning-line mr-1" aria-hidden="true" />Above the {money(depositLimitCents())} pre-paid limit stated in the offer letter; the student must elect to pay more.</p> : null}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-background-200 pt-3">
         {readOnly ? <span /> : <Button variant="outline" size="sm" icon="ri-add-line" onClick={() => setRows((list) => [...list, nextLine()])}>Add line</Button>}
         <div className="text-right">

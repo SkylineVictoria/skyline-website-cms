@@ -11,7 +11,9 @@ import HoursNote from "@/pages/admin/components/rto/HoursNote";
 import { OverrideStudentDrawer, PlaceByHandDrawer } from "@/pages/admin/components/rto/OverridePlacement";
 import IntakeAssessmentsPanel from "@/pages/admin/assessments/panels/BatchAssessmentsPanel";
 import BatchCourseCalendar from "@/pages/admin/lms/BatchCourseCalendar";
+import ClassesToReschedule from "@/pages/admin/components/rto/ClassesToReschedule";
 import { Empty, MoreMenu, Section, Sheet, SkeletonLines, StatusPicker } from "@/pages/admin/components/rto/overlay";
+import IntakeGroupPanel from "@/pages/admin/components/rto/IntakeGroupPanel";
 import {
   addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoHoursCheck, shortDate, timingLines, timingShort, todayIso, weeksOf,
   type BatchStudent, type FeeItem, type HoursCheck, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
@@ -22,9 +24,9 @@ const seatText = (used: number, seats?: number | null) => (seats ? `${used} of $
 const classGroup = (d: IntakeDetail): RtoBatch | null => d.batches.find((b) => b.id === d.intake.id) ?? d.batches.find((b) => b.isActive) ?? d.batches[0] ?? null;
 const hasSetup = (g: RtoBatch) => (g.sessions ?? []).length > 0 || g.classDays.length > 0;
 
-export type SheetTab = "overview" | "timeline" | "classes" | "students" | "assessments";
+export type SheetTab = "overview" | "timeline" | "classes" | "students" | "group" | "assessments";
 const TABS: { id: SheetTab; label: string }[] = [
-  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "students", label: "Students" }, { id: "assessments", label: "Assessments" },
+  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "students", label: "Students" }, { id: "group", label: "Group" }, { id: "assessments", label: "Assessments" },
 ];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
 
@@ -144,6 +146,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
               <Students detail={detail} group={group} canEdit={canEdit} canOverride={canEnrol} onChanged={() => { void load(); onChanged(); }} notify={(m) => push(m)}
                 onSetup={() => { setTab("classes"); setSetup(true); }} />
             ) : null}
+            {tab === "group" ? <IntakeGroupPanel intakeId={intakeId} /> : null}
             {tab === "assessments" ? (group ? <IntakeAssessmentsPanel batchId={group.id} />
               : <Empty icon="ri-file-list-3-line" title="Weekly timetable not selected yet" text="Assessments are assigned to an intake once its classes are set up." />) : null}
           </div>
@@ -298,6 +301,7 @@ function ClassSetup({ detail, group: g, canEdit, hours, setupLabel, calendarKey,
         </div>
         <HoursNote check={hours} />
       </Section>
+      <ClassesToReschedule intakeId={detail.intake.id} onChanged={onReload} />
       <Section title="Class dates" helper="Every class of the course, month by month; term breaks greyed out. Made from the weekly class times.">
         <BatchCourseCalendar key={`${g.id}:${calendarKey}`} batchId={g.id} courseId={detail.intake.courseId} intakeStart={detail.intake.startDate} intakeEnd={detail.intake.endDate}
           hasSlots={(g.sessions ?? []).length > 0} canManage={canEdit} reloadKey={calendarKey} onRemoved={async () => { onReload(); }} />

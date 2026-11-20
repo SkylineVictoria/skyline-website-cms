@@ -66,6 +66,7 @@ import FormBuilderPage from "@/pages/admin/FormBuilderPage";
 import AdminContactPage from "@/pages/admin/ContactPage";
 import AdminSeoPage from "@/pages/admin/SeoPage";
 import UsersPage from "@/pages/admin/UsersPage";
+import BusinessRulesPage from "@/pages/admin/businessRules/BusinessRulesPage";
 import InstitutionPage from "@/pages/admin/InstitutionPage";
 import ActivityPage from "@/pages/admin/ActivityPage";
 import NotificationLogPage from "@/pages/admin/NotificationLogPage";
@@ -312,6 +313,7 @@ const routes: RouteObject[] = [
           { path: "staff/:id", element: <LegacyStaffDetailRedirect /> },
           { path: "notifications", element: <RequireAdmin><NotificationLogPage /></RequireAdmin> },
           { path: "users", element: <RequireAdmin><UsersPage /></RequireAdmin> },
+          { path: "business-rules", element: <RequireAdmin><BusinessRulesPage /></RequireAdmin> },
           { path: "institution", element: <RequireAdmin><InstitutionPage /></RequireAdmin> },
           { path: "activity", element: <ActivityPage /> },
           { path: "integrations", element: <IntegrationConnectionsPage /> },

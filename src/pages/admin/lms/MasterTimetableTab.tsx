@@ -4,7 +4,7 @@
 // order that puts a unit before one it needs.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { shortDate } from "@/pages/admin/lib/rto";
+import { LOAD_HOURS, shortDate } from "@/pages/admin/lib/rto";
 import MasterCyclesPanel, { FillSchoolBreaksButton } from "./MasterCyclesPanel";
 import { COE_HOURS, CyclesUnavailable, cyclesCall, fixedWeeks, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
 
@@ -181,7 +181,8 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
   const perWeek = (row: Row, index: number) => row.hours && order[index]?.weeks > 0 ? row.hours / order[index].weeks : null;
   const orderedRows = order.map(item => byId.get(item.unitId));
   const need = Math.max(0, ...orderedRows.map((row, index) => row ? perWeek(row, index) ?? 0 : 0));
-  /** Every unit's weeks from its hours at a weekly rate (20 hours a week: 40 hours = 2 weeks), rounded up to whole weeks. */
+  /** The most class hours a week an intake can have (VoE hours a week). */
+  const maxWeek = LOAD_HOURS.voe;
   const blocked = busy || !start || !order.length || order.some(row => !(row.weeks > 0)) || master.problems.length > 0;
 
   const small = "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-foreground-700 hover:bg-background-100 disabled:opacity-50";
@@ -196,7 +197,7 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
         {fact("Units", String(order.length))}
         {fact("Weeks", weeksLabel(totalWeeks))}
         {fact("Hours", totalHours.toLocaleString())}
-        {fact("Max a week", need ? need.toFixed(1).replace(/\.0$/, "") + " h" : "—", need > 40)}
+        {fact("Max a week", need ? need.toFixed(1).replace(/\.0$/, "") + " h" : "—", need > maxWeek)}
       </div>
       {canEdit ? <div className="flex items-center gap-2">
         <span className="text-xs text-foreground-500" role="status">{dirty ? "Unsaved changes" : master.saved ? "Saved" : "Not saved yet"}</span>
@@ -255,7 +256,7 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
           </td>
           <td className="px-2 py-2.5 text-right tabular-nums">{line.row.hours ?? "—"}</td>
           <td className="px-2 py-2 text-right">{weeksLabel(order[line.index]?.weeks ?? Number(line.row.weeks))}</td>
-          <td className={"px-2 py-2.5 text-right tabular-nums " + ((perWeek(line.row, line.index) ?? 0) > 40 ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
+          <td className={"px-2 py-2.5 text-right tabular-nums " + ((perWeek(line.row, line.index) ?? 0) > maxWeek ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
           <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.startDate ? shortDate(line.row.startDate) : "—"}</td>
           <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.endDate ? shortDate(line.row.endDate) : "—"}</td>
           {canEdit ? <td className="whitespace-nowrap px-2 py-2 text-right">
@@ -268,6 +269,6 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
     <MasterCyclesPanel cycles={cycles} onCycles={value => { setCycles(value); setDirty(true); setNotice(""); }} start={start} cycleEnd={master.endDate} plan={plan}
       canEdit={canEdit} busy={busy} />
     <p className="text-xs text-foreground-500">Units run one after another in whole 7-day weeks, weekends included; days inside a term break are not counted. A unit marked * needs the units in the Pre-requisite column first.
-      Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > 40 ? " (more than 40 hours a week cannot be timetabled: give the unit more weeks)" : ""}.</p>
+      Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > maxWeek ? ` (more than ${maxWeek} hours a week cannot be timetabled)` : ""}.</p>
   </div>;
 }

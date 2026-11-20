@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { addDays, generateClassSessions, listBreaks, loadClassSessions, resetClassSessions, rtoFlow, shortDate, updateClassSession, type AcademicBreak, type ClassSession, type LocationRooms } from "@/pages/admin/lib/rto";
+import { addDays, generateClassSessions, listBreaks, loadClassSessions, resetClassSessions, shortDate, type AcademicBreak, type ClassSession } from "@/pages/admin/lib/rto";
+import CantRunDialog from "@/pages/admin/components/rto/CantRunDialog";
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const parse = (s: string) => new Date(s + "T00:00:00Z");
@@ -100,7 +101,7 @@ export default function BatchCourseCalendar({ batchId, courseId, intakeStart, in
       </div>
     </div>
     {notice && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
-    {canManage && rows.length > 0 && <p className="mt-2 text-xs text-foreground-500 print:hidden">Click a class to change its date, time or room, or to cancel it. Changed classes stay as you set them when the timing is saved again.</p>}
+    {canManage && rows.length > 0 && <p className="mt-2 text-xs text-foreground-500 print:hidden">Click a class that can't run: the rescheduling rules find it a new time (no class is dropped). Changed classes stay as you set them when the timing is saved again.</p>}
     {error && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading the course calendar…</p>
     : !rows.length ? <p className="py-10 text-center text-sm text-foreground-500">{hasSlots && removed ? "The calendar was removed. Click Recreate calendar to build it again from the intake start." : hasSlots ? "No classes yet. Open Edit class timing and click Save timing to fill the calendar." : "Set the class timing to fill the calendar."}</p>
@@ -127,10 +128,10 @@ export default function BatchCourseCalendar({ batchId, courseId, intakeStart, in
                   {brk && <span className="truncate pl-1 text-[10px] text-foreground-500" title={brk.label}>{brk.label}</span>}</div>
                 <div className="mt-1 space-y-1">{(byDate.get(d) ?? []).map(s => <button type="button" key={s.id} title={`${s.unitCode ?? ""} ${s.unitName ?? ""}${canManage ? " · click to change" : ""}`}
                   disabled={!canManage} onClick={() => { setNotice(""); setEditing(s); }}
-                  className={`block w-full rounded border-l-4 px-1.5 py-1 text-left text-[11px] leading-tight ${tone[s.type] ?? ""} ${canManage ? "cursor-pointer hover:brightness-95" : "cursor-default"} ${s.status === "cancelled" ? "line-through opacity-50" : ""}`}>
+                  className={`block w-full rounded border-l-4 px-1.5 py-1 text-left text-[11px] leading-tight ${tone[s.type] ?? ""} ${canManage ? "cursor-pointer hover:brightness-95" : "cursor-default"} ${s.status === "cancelled" ? "opacity-60 ring-1 ring-amber-400" : ""}`}>
                   <span className="flex items-baseline justify-between gap-1"><strong className="text-foreground-950">{s.unitCode ?? ""}</strong><span className="shrink-0 text-foreground-600">{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}</span></span>
                   <span className="block truncate text-foreground-700">{s.room ?? "No room"} · <span className={s.trainers ? "" : "font-semibold text-red-700"}>{s.trainers || "No trainer"}</span></span>
-                  {s.manual && <span className="block text-[10px] font-semibold text-primary-700">Changed</span>}
+                  {s.status === "cancelled" ? <span className="block text-[10px] font-semibold text-amber-800">Not running · click for details</span> : s.manual && <span className="block text-[10px] font-semibold text-primary-700">Changed</span>}
                 </button>)}</div>
               </div>;
             })}
@@ -138,68 +139,7 @@ export default function BatchCourseCalendar({ batchId, courseId, intakeStart, in
         </div>;
       })}
     </div>}
-    {editing && <ClassEditor session={editing} breaks={breaks} onClose={() => setEditing(null)}
-      onSaved={msg => { setEditing(null); setNotice(msg); setVersion(v => v + 1); }} />}
+    {editing && <CantRunDialog sessionId={editing.id} onClose={() => setEditing(null)}
+      onDone={msg => { setEditing(null); setNotice(msg); setVersion(v => v + 1); }} />}
   </section>;
-}
-
-/** Change one dated class: its date, time or room, or cancel / restore it. */
-function ClassEditor({ session, breaks, onClose, onSaved }: { session: ClassSession; breaks: AcademicBreak[]; onClose: () => void; onSaved: (message: string) => void }) {
-  const [date, setDate] = useState(session.date);
-  const [start, setStart] = useState(session.startTime.slice(0, 5));
-  const [end, setEnd] = useState(session.endTime.slice(0, 5));
-  const [roomId, setRoomId] = useState(session.roomId ?? "");
-  const [locations, setLocations] = useState<LocationRooms[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => { rtoFlow<LocationRooms[]>("locations_rooms").then(setLocations).catch(() => undefined); }, []);
-  const inBreak = breaks.find(b => date >= b.startDate && date <= b.endDate);
-  const bad = !date || !start || !end || end <= start;
-  const run = async (change: Parameters<typeof updateClassSession>[1], message: string) => {
-    setBusy(true); setError("");
-    try {
-      const out = await updateClassSession(session.id, change);
-      const clash = out.clashes.find(c => c.date === (change.date ?? session.date));
-      onSaved(message + (clash ? ` Note: ${clash.room} is also booked by ${clash.otherBatch} at that time.` : ""));
-    } catch (e) {
-      const m = e instanceof Error ? e.message : "The class was not changed.";
-      setError(/duplicate|unique/i.test(m) ? "This intake already has a class starting at that date and time." : m);
-    } finally { setBusy(false); }
-  };
-  const field = "mt-1 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden" onClick={onClose}>
-    <div role="dialog" aria-modal="true" aria-label="Change class" className="w-full max-w-md rounded-2xl bg-background-50 p-5 shadow-xl" onClick={e => e.stopPropagation()}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{session.type} class</p>
-          <h3 className="font-heading text-lg font-bold text-foreground-950">{session.unitCode ?? "Class"} <span className="text-sm font-normal text-foreground-600">{session.unitName ?? ""}</span></h3>
-          <p className="text-xs text-foreground-500"><i className="ri-user-line mr-1" aria-hidden="true" />{session.trainers || "No trainer"}</p>
-        </div>
-        <button type="button" aria-label="Close" onClick={onClose} className="rounded-lg p-1.5 text-foreground-600 hover:bg-background-100"><i className="ri-close-line text-lg" aria-hidden="true" /></button>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <label className="block text-xs font-semibold text-foreground-700 sm:col-span-3">Date<input type="date" className={field} value={date} onChange={e => setDate(e.target.value)} /></label>
-        <label className="block text-xs font-semibold text-foreground-700">Starts<input type="time" className={field} value={start} onChange={e => setStart(e.target.value)} /></label>
-        <label className="block text-xs font-semibold text-foreground-700">Ends<input type="time" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label>
-        <label className="block text-xs font-semibold text-foreground-700 sm:col-span-3">Room
-          <select className={field} value={roomId} onChange={e => setRoomId(e.target.value)}>
-            <option value="">No room</option>
-            {locations.map(l => <optgroup key={l.id ?? "other"} label={l.name}>{l.rooms.filter(r => r.isActive || r.id === roomId).map(r => <option key={r.id} value={r.id}>{r.name}{r.capacity ? ` (${r.capacity})` : ""}</option>)}</optgroup>)}
-          </select></label>
-      </div>
-      {end <= start && <p className="mt-2 text-sm text-red-700">The class must end after it starts.</p>}
-      {inBreak && <p className="mt-2 text-sm text-amber-800"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{shortDate(date)} is in the {inBreak.label}.</p>}
-      {error && <p role="alert" className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
-        {session.status === "cancelled"
-          ? <button type="button" disabled={busy} onClick={() => void run({ status: "scheduled" }, "Class restored.")} className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50">Restore class</button>
-          : <button type="button" disabled={busy} onClick={() => { if (window.confirm("Cancel this class?")) void run({ status: "cancelled" }, "Class cancelled."); }} className="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">Cancel class</button>}
-        <div className="flex gap-2">
-          <button type="button" onClick={onClose} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">Close</button>
-          <button type="button" disabled={busy || bad} onClick={() => void run({ date, startTime: start, endTime: end, roomId: roomId || null }, "Class changed.")}
-            className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
-        </div>
-      </div>
-    </div>
-  </div>;
 }

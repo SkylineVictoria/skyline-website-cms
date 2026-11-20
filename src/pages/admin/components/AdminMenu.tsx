@@ -1,3 +1,4 @@
+import { emailSections } from "@/pages/admin/lib/emailMenu";
 import { LMS_MENU } from "@/pages/admin/lms/lmsConfig";
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
@@ -118,13 +119,6 @@ function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boo
 }
 
 /** Email Management subpages live in the sidebar, not a page-level tab menu. */
-const emailSections = [
-  { id: "accounts", label: "Email Accounts", icon: "ri-inbox-line" },
-  { id: "create", label: "Create Email", icon: "ri-user-add-line" },
-  { id: "automation", label: "Automation Rules", icon: "ri-git-branch-line" },
-  { id: "settings", label: "Microsoft 365 Settings", icon: "ri-settings-3-line" },
-  { id: "audit", label: "Audit Logs", icon: "ri-history-line" },
-] as const;
 function EmailManagementNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
   const { pathname, search } = useLocation();
   const active = pathname === "/admin/email-management";

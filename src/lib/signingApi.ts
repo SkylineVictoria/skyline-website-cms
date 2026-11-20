@@ -11,7 +11,9 @@ export interface SigningTemplate {
   id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null;
   /** TPL-02: header and footer repeated on every page; [Variable] tokens active (templates saved in the sectioned editor). */
   header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
-  kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent"; category: string; status: "active" | "archived";
+  kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent" | "agency"; category: string; status: "active" | "archived";
+  /** The agent onboarding blanks (agent_application_form, agent_agreement, agent_referee_check_form): never offered in New signing request. */
+  system_key?: string | null;
   version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
   /** Stripe: requests made from the template ask the signer for this payment (hr.sign_templates payment_* columns). */
   payment_enabled?: boolean; payment_amount_cents?: number | null; payment_currency?: string | null; payment_description?: string | null; payment_timing?: PaymentTiming | null;
@@ -88,7 +90,7 @@ export interface SigningRecipient {
   ip: string | null; user_agent: string | null; delivery_error: string | null; reminder_count: number;
 }
 export interface SigningRequest {
-  id: string; reference: string; title: string; state: string; status: string; category: string; signing_mode: "sequential" | "parallel"; subject_type: "student" | "employee" | "agent" | null; subject_id: string | null;
+  id: string; reference: string; title: string; state: string; status: string; category: string; signing_mode: "sequential" | "parallel"; subject_type: "student" | "employee" | "agent" | "agency" | null; subject_id: string | null;
   created_at: string; sent_at: string | null; expires_at: string | null; signed_at: string | null; completed_at: string | null; closed_reason: string | null; message: string | null;
   expiry_days: number; reminder_days: number; original_hash: string; signed_hash: string | null; certificate_hash: string | null; recipients: SigningRecipient[];
   payment?: SigningPayment | null;
@@ -109,12 +111,18 @@ export interface SigningPreview { pdfBase64: string; title: string; text: string
 export interface SigningContext { templates: SigningTemplate[]; requests: SigningRequest[] }
 export interface SigningSubject { name: string; email: string; values: Record<string, string> }
 /** The agreement's Items 3 to 5 as sent with the application (2026-11-20). */
-export interface OnboardingAgreementTerms { commencementDate: string | null; expiryDate: string | null; territory: string | null; commissionPercent: number | string | null }
+export interface OnboardingAgreementTerms { commencementDate: string | null; expiryDate: string | null; territory: string | null; commissionPercent: number | string | null;
+  /** 2026-11-21: GST on the commission, set by SLIT staff only (null on onboardings sent before). */
+  commissionGst?: "inclusive" | "exclusive" | null;
+  /** 2026-11-21: SLIT's signatory, signed when SLIT sent the application (null on one sent before: added at approval). */
+  slitSignatory?: OnboardingSlitSignatory | null }
+/** SLIT's signatory block on the agreement: organisation, name, position, signature (a picture or a typed name) and the date signed. */
+export interface OnboardingSlitSignatory { organisation: string; name: string; position: string; kind: "drawn" | "typed"; image: string | null; typed: string | null; signedOn: string }
 /** The agent's witness on the agreement: preset (printed, read-only here) or to add on the signing page (typed name, drawn signature). */
 export interface OnboardingWitnessPlan { preset: boolean; name: string | null; by: "admin" | "agent" | null; image: string | null }
 /** What a link holder gets: their own fields only, and who else is signing. */
 export interface SigningView {
-  id: string; reference: string; title: string; state: string; message: string | null; expiresAt: string | null; signedAt: string | null; consent: string; documentHash: string; url: string; certificateUrl: string | null;
+  id: string; reference: string; title: string; state: string; message: string | null; expiresAt: string | null; signedAt: string | null; consent: string; documentHash: string; url: string;
   /** Offer letters: the emailed 6-digit code confirms the signer before signing (codeTo: the masked address it goes to). */
   requireCode?: boolean; codeTo?: string | null; offer?: { studentName: string; applicationReference: string; prepaidMore: "YES" | "NO" | null } | null;
   recipient: { id: string; name: string; email: string; role: string; state: string; signed_at: string | null };
@@ -172,6 +180,12 @@ export async function signingAddressSearch(token: string, q: string): Promise<{ 
 }
 export async function signingAction<T>(body: Record<string, unknown>, file?: File): Promise<T> {
   return invokeFunction<T>("document-signing", body, "The signing request could not be completed.", file);
+}
+/** A new short-lived link to the signed document of this signing link (the Download button asks on every click). */
+export async function signingDownloadUrl(token: string): Promise<string> {
+  const r = await signingAction<{ url?: string }>({ action: "download", token });
+  if (!r?.url) throw new Error("The download could not start.");
+  return r.url;
 }
 /** The `payments` function (Stripe Checkout on a signing request): a link holder sends the signing token, an administrator their session. Errors come back as { error }. */
 export function paymentsAction<T>(body: Record<string, unknown>): Promise<T> {
@@ -271,11 +285,16 @@ export interface BusinessCreateResult { agencyId: string; businessId: string; ag
 export interface PresendField { id: string; key: string; type: string; label: string; required: boolean; page: number; value: string }
 export interface PresendOpen {
   onboardingId: string | null; agency: { id: string; name: string; abn: string | null }; contact: { id: string; name: string; email: string } | null; fields: PresendField[];
-  facts: unknown; acn: string; marn: string; message: string; terms: { commencementDate: string; territory: string; commissionPercent: string };
+  facts: unknown; acn: string; marn: string; message: string; terms: { commencementDate: string; territory: string; commissionPercent: string; commissionGst: "" | "inclusive" | "exclusive" };
   witness: { name: string; png: string | null }; savedAt: string | null; savedBy: string | null;
+  /** The SLIT signatory block (2026-11-21): the sending admin by default; their saved signature when they have one; today's date. */
+  signatory: { organisation: string; name: string; position: string; savedSignature: string | null; signedOn: string };
 }
+/** The SLIT signature given in Prepare application: the saved one, drawn here (optionally saved for next time), or the name typed. */
+export type SlitSignatureInput = { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
 export interface PresendData {
   answers: Record<string, string>; acn: string; marn: string; message: string; commencementDate: string; territory: string; commissionPercent: string; witnessName: string; witnessPng: string | null;
+  commissionGst: "" | "inclusive" | "exclusive"; adminName: string; adminPosition: string; adminSignature?: SlitSignatureInput;
 }
 export const openPresend = (agencyId: string) => onboardingAction<PresendOpen>({ action: "agent_onboarding_presend_open", agencyId });
 export const savePresend = (agencyId: string, data: PresendData) => onboardingAction<{ onboardingId: string; savedAt: string }>({ action: "agent_onboarding_presend_save", agencyId, data });

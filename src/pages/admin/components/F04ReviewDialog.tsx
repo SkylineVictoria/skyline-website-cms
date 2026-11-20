@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import F04Wizard from "@/components/signing/F04Wizard";
+import F04Wizard, { type F04ReviewAgreement } from "@/components/signing/F04Wizard";
 import { reviewFields } from "@/components/signing/f04WizardLogic";
 import { saveApplicationReview, sendApplicationBack, sendRefereeChecks, signingAction, type SigningView } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -35,12 +35,22 @@ export default function F04ReviewDialog({ onboardingId, agencyName, onClose, onD
   const view = useMemo(() => {
     if (!review) return null;
     return {
-      id: review.requestId, reference: "", title: `Agent application: ${agencyName}`, state: "signed", message: null, expiresAt: null, signedAt: review.signedAt, consent: "", documentHash: "", url: "", certificateUrl: null,
+      id: review.requestId, reference: "", title: `Agent application: ${agencyName}`, state: "signed", message: null, expiresAt: null, signedAt: review.signedAt, consent: "", documentHash: "", url: "",
       recipient: { id: review.contact.id, name: review.contact.name, email: review.contact.email, state: "signed" },
       fields: reviewFields(review.fields, review.answers), signers: [], onboarding: { id: review.onboardingId, kind: "application", agencyName },
-      application: { draft: null, facts: review.facts, savedAt: null, prefill: { agent_acn: review.answers.agent_acn ?? "", agent_marn: review.answers.agent_marn ?? "" }, filled: [], attachments: review.attachments, correction: null },
+      application: { draft: null, facts: review.facts, savedAt: null, prefill: { agent_acn: review.answers.agent_acn || review.acn || "", agent_marn: review.answers.agent_marn ?? "" }, filled: [], attachments: review.attachments, correction: null },
     } as unknown as SigningView;
   }, [review, agencyName]);
+
+  // The witnesses' pictures are kept as base64 PNG (with or without the data: prefix).
+  const picture = (png: string | null | undefined) => !png ? null : png.startsWith("data:image/") ? png : `data:image/png;base64,${png}`;
+  const agreement: F04ReviewAgreement | null = review && (review.combined || review.terms?.commencementDate || review.witness || review.slitWitness) ? {
+    commencementDate: review.terms?.commencementDate ?? null, expiryDate: review.terms?.expiryDate ?? null, territory: review.terms?.territory ?? "", commissionPercent: review.terms?.commissionPercent ?? null,
+    slitWitness: review.slitWitness ? { name: review.slitWitness.name, image: picture(review.slitWitness.png) } : null,
+    agencyWitness: review.witness ? { name: review.witness.name, image: picture(review.witness.png) } : null,
+    agencySignature: review.agencySignature ? { name: review.agencySignature.name ?? review.signerName ?? "", image: picture(review.agencySignature.image), signedAt: review.agencySignature.signedAt ?? review.signedAt } : null,
+    commissionGst: review.terms?.commissionGst ?? null, slitSignatory: review.slitSignatory ?? null,
+  } : null;
 
   if (error) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55 p-4" role="dialog" aria-modal="true">
     <div className="max-w-md rounded-xl bg-background-50 p-5 text-sm"><p role="alert" className="text-red-700">{error}</p>
@@ -80,6 +90,19 @@ export default function F04ReviewDialog({ onboardingId, agencyName, onClose, onD
     } catch (e) { push(e instanceof Error ? e.message : "The referee check could not be sent.", "error"); }
     finally { setResending(""); }
   };
+  // The summary's line per referee: where the check is up to, and Resend while it is open.
+  const refereeStatus = (position: 1 | 2) => {
+    const ref = review.referees.find((r) => r.position === position);
+    if (!ref) return <span className="text-xs text-foreground-500">Referee check not sent yet</span>;
+    const [tone, text] = ref.status === "received" ? ["bg-emerald-50 text-emerald-800 border-emerald-200", `Completed${ref.receivedAt ? ` ${new Date(ref.receivedAt).toLocaleDateString("en-AU")}` : ""}`]
+      : ref.status === "sent" ? ["bg-amber-50 text-amber-900 border-amber-200", "Sent, not completed"] : ref.status === "cancelled" ? ["bg-background-100 text-foreground-600 border-background-200", "Cancelled"]
+      : ["bg-background-100 text-foreground-700 border-background-200", "Not sent yet"];
+    return <span className="flex flex-wrap items-center gap-2 text-xs">
+      <span className={`rounded-full border px-2 py-0.5 font-medium ${tone}`} data-testid={`f04-referee-status-${position}`}>{text}</span>
+      {ref.status !== "received" && ref.status !== "cancelled" ? <button type="button" className="cursor-pointer font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50" disabled={resending === ref.id}
+        onClick={() => void resendReferee(ref)} data-testid={`f04-referee-status-resend-${position}`}>{resending === ref.id ? "Sending…" : ref.status === "sent" ? "Resend" : "Send"}</button> : null}
+    </span>;
+  };
   const save = async (changes: Record<string, string>) => {
     setBusy("save");
     try {
@@ -100,5 +123,5 @@ export default function F04ReviewDialog({ onboardingId, agencyName, onClose, onD
     finally { setBusy(""); }
   };
   return <F04Wizard key={version} token="" view={view} mode="admin-review" codeCheck={{ needed: false, session: null, render: () => null }} onSigned={() => undefined}
-    review={{ flags, onFlags: setFlags, message, onMessage: setMessage, refereePanel, busy, blocked, warning, onSave: (changes) => save(changes), onSendBack: () => void sendBack(), onApprove, onClose }} />;
+    review={{ flags, onFlags: setFlags, message, onMessage: setMessage, refereePanel, refereeStatus, agreement, busy, blocked, warning, onSave: (changes) => save(changes), onSendBack: () => void sendBack(), onApprove, onClose }} />;
 }

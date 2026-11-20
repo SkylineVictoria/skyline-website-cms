@@ -2,7 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
 import { authorizeWorker, dispatchBatch, selectEmailProvider, type ClaimedDelivery, type DeliveryPort } from "../_shared/notification/delivery.ts";
-import { dispatchSmsBatch, selectSmsProvider, type SmsDeliveryPort } from "../_shared/notification/sms.ts";
+import { MAX_SMS_BODY_CHARS, SMS_MAX_AGE_MS, dispatchSmsBatch, selectSmsProvider, type SmsDeliveryPort } from "../_shared/notification/sms.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
+import { setDocumentExpiryRules } from "../_shared/validation/document-expiry.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -20,6 +22,15 @@ async function worker() {
   const smsSelection = selectSmsProvider(providerConfig);
   if (!selection.provider && !smsSelection.provider) return reply({ error: "Edge Function configuration is unavailable.", code: selection.unavailable.code, variables: selection.unavailable.variables }, 503);
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+  // Business Rules for texts (read only when SMS is on): the longest text and how long an unsent text may wait. The database
+  // (notification_claim_sms_delivery) reads the same rules; the fixed values apply when they cannot be read.
+  const smsRules = smsSelection.provider ? await loadRules(admin, ["comms.sms_max_characters", "comms.sms_unsent_expiry_hours"]) : {};
+  const smsMaxChars = Math.min(918, Math.max(160, ruleNumber(smsRules, "comms.sms_max_characters", MAX_SMS_BODY_CHARS)));
+  const smsMaxAgeMs = Math.max(1, ruleNumber(smsRules, "comms.sms_unsent_expiry_hours", SMS_MAX_AGE_MS / 3_600_000)) * 3_600_000;
+  const smsProvider = smsSelection.provider ? selectSmsProvider(providerConfig, { maxChars: smsMaxChars }).provider : null;
+  // Business Rules for the expiry notes in the submitted-application PDF (6 months / 2 years when they cannot be read).
+  const expiryRules = selection.provider ? await loadRules(admin, ["admissions.document_expiry_warning_months", "admissions.english_result_valid_years"]) : {};
+  setDocumentExpiryRules({ warningMonths: ruleNumber(expiryRules, "admissions.document_expiry_warning_months", 6), englishValidYears: ruleNumber(expiryRules, "admissions.english_result_valid_years", 2) });
   const smsPort: SmsDeliveryPort = {
     claim: async () => {
       const { data, error } = await admin.rpc("notification_claim_sms_delivery");
@@ -80,7 +91,7 @@ async function worker() {
   };
   try {
     const email = selection.provider ? await dispatchBatch(port, selection.provider, BATCH) : null;
-    const sms = smsSelection.provider ? await dispatchSmsBatch(smsPort, smsSelection.provider, BATCH) : null;
+    const sms = smsProvider ? await dispatchSmsBatch(smsPort, smsProvider, BATCH, Date.now, smsMaxAgeMs) : null;
     return reply({ ok: true, ...(email ?? { email: "disabled" }), sms: sms ?? "disabled" });
   } catch {
     // A claimed delivery whose outcome could not be stored becomes 'unknown' when its lease expires; it is never resent.

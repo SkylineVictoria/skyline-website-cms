@@ -15,7 +15,7 @@ import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, fac
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
-import { afterCompletion, ONBOARDING_ACTIONS, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
+import { afterCompletion, ONBOARDING_ACTIONS, onboardingSignRules, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -67,9 +67,11 @@ export const sha256Hex = async (bytes: Uint8Array) => [...new Uint8Array(await c
 const TOKEN = /^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_INVALID = "This signing link is invalid or expired.";
+/** A link whose request was deleted (2026-11-20): neutral; no "request a new link". */
+export const LINK_GONE = "This link is no longer available.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
-const LINK_ACTIONS = ["open", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
+const LINK_ACTIONS = ["open", "download", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
 /** The F04 wizard's draft ("Save and continue later"): at most this many characters of JSON. */
 const DRAFT_MAX = 60000;
 const isApplication = (record: { onboarding?: unknown }) => (record.onboarding as { kind?: string } | null)?.kind === "application";
@@ -85,7 +87,10 @@ export function abrCache(ports: Pick<SigningPorts, "serviceRpc">): AbrCache | nu
 
 /** The Agent Application Form's template: sent by itself (Add business, corrections), never from "Send a document to sign". */
 export const F04_SYSTEM_KEY = "agent_application_form";
-export const F04_NOT_HERE = "The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
+/** The agent onboarding blanks (F04, P06, F05): sent by the business onboarding flow only, never from New signing request. */
+export const ONBOARDING_SYSTEM_KEYS: ReadonlySet<string> = new Set(["agent_application_form", "agent_agreement", "agent_referee_check_form"]);
+export const ONBOARDING_NOT_HERE = "This is an agent onboarding document (application form, agreement or referee check): the business onboarding sends it. Choose another document.";
+export const F04_NOT_HERE ="The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
 /** An open correction of an F04 request (agency_onboarding_correction_of): the flagged answers and the reviewed ACN / MARN. */
 export interface F04Correction { round: number; message?: string | null; flags: Record<string, string>; acn?: string; marn?: string }
 /** A correction is signed: every field staff did not flag keeps the value it was sent with (the declaration's name and role are given again). */
@@ -252,10 +257,20 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         try { return await ports.service(name, { hash, data }); }
         catch (error) {
           const e = error as RpcError; if (e.code === "SG409") throw error;
+          // The link's request no longer exists (its business was deleted at Application sent): a neutral answer, nothing else said.
+          if (/no longer available/i.test(e.message)) throw new SigningError(LINK_GONE, 410);
           throw new SigningError(/invalid or expired/.test(e.message) ? LINK_INVALID : e.message, /invalid or expired/.test(e.message) || e.code === "42501" ? 403 : e.code === "SG429" ? 429 : 400);
         }
       };
       const record = await linkCall("open", { ip: call.ip });
+      if (action === "download") {
+        // The signing page's Download button (2026-11-20): a new short-lived link on every click, so the page never holds a stale one.
+        // The same document "open" shows (the signed PDF once signed); never the completion certificate.
+        const signed = record.state === "signed";
+        const path = signed ? record.signed_path : record.current_path ?? record.original_path;
+        const expected = signed ? record.signed_hash : record.current_hash ?? record.original_hash;
+        return { url: await fileUrl(path, expected, `${safeName(record.title)}${signed ? "-signed" : ""}.pdf`) };
+      }
       if (action === "draft_save") {
         // F04 wizard "Save and continue later": the contact's answers so far, kept on the server for this link's request and signer.
         if (!isApplication(record) || !ports.serviceRpc) throw new SigningError("Only the application form can be saved as a draft.");
@@ -350,7 +365,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if (correction) lockUnflagged(fields, values, correction.flags ?? {});
           const byKey: Record<string, string> = {};
           for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
-          const checked = checkApplicationAnswers(byKey);
+          const signRules = await onboardingSignRules(ports);
+          const checked = checkApplicationAnswers(byKey, { refereeEmailsDistinct: signRules.refereeEmailsDistinct });
           if (checked.error) throw new SigningError(checked.error);
           submission = checkApplicationSubmission(body.application, collectAnswers(fields.map((f) => ({ key: f.key, type: f.type, value: String(values[f.id] ?? f.value ?? "") }))));
           // A correction (2026-11-18): only the fields staff flagged can change; the ACN and the MARN stay as reviewed unless flagged.
@@ -368,11 +384,16 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             if (!combinedPlan.witness?.preset) {
               const w = (body.application as { witness?: { name?: unknown; png?: unknown } } | undefined)?.witness ?? {};
               const witnessName = String(w.name ?? "").replace(/\s+/g, " ").trim().slice(0, 150);
-              if (witnessName.length < 2) throw new SigningError("Enter your witness's full name.");
-              if (typeof w.png !== "string" || !w.png.trim()) throw new SigningError("Ask your witness to draw their signature in the witness box (it cannot be typed).");
-              witness = { name: witnessName, png: w.png };
-              const nameField = fields.find((x) => x.key === WITNESS_NAME_KEY);
-              if (nameField) values[nameField.id] = witnessName;
+              const drawn = typeof w.png === "string" && !!w.png.trim();
+              // Business Rules (agents.agency_witness_on_agreement): an optional witness may be left out entirely; one given needs both.
+              const optional = !(await onboardingSignRules(ports)).agencyWitnessRequired;
+              if (!(optional && !witnessName && !drawn)) {
+                if (witnessName.length < 2) throw new SigningError("Enter your witness's full name.");
+                if (!drawn) throw new SigningError("Ask your witness to draw their signature in the witness box (it cannot be typed).");
+                witness = { name: witnessName, png: w.png };
+                const nameField = fields.find((x) => x.key === WITNESS_NAME_KEY);
+                if (nameField) values[nameField.id] = witnessName;
+              }
             }
           }
         }
@@ -529,8 +550,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
         recipient: record.recipient, fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
         requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
-        url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`),
-        certificateUrl: done && record.certificate_path ? await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) : null };
+        // Only the signed document: the completion certificate (audit record: IP, browser, history) never goes to a link holder (owner 2026-11-20).
+        url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`) };
     }
 
     // ------------------------------------------------------------------ an application form's follow-up (service role only, queued by the database)
@@ -687,6 +708,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
         // 2026-11-18: the Agent Application Form goes by itself when a business is added (and back to its agency admin for corrections).
         if ((template as { system_key?: string | null }).system_key === F04_SYSTEM_KEY) throw new SigningError(F04_NOT_HERE);
+        // 2026-11-21: the agreement (P06) and the referee check (F05) too: the onboarding sends them itself (its own create path).
+        if (ONBOARDING_SYSTEM_KEYS.has(String((template as { system_key?: string | null }).system_key ?? ""))) throw new SigningError(ONBOARDING_NOT_HERE);
         // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
         values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
         const made = await templateDocument(template, values, false, body.text, body.html);
@@ -779,8 +802,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
     if (action === "admin_url") {
       const record = await admin("detail", body.id);
       const which = String(body.which ?? "document");
+      // The audit record (completion certificate): staff only, opened from the signing request page (View audit record); never emailed.
       if (which === "certificate") {
-        if (!record.certificate_path) throw new SigningError("The certificate is made when everyone has signed.");
+        if (!record.certificate_path) throw new SigningError("The audit record is made when everyone has signed.");
         return { url: await fileUrl(record.certificate_path, record.certificate_hash, `${safeName(record.title)}-certificate.pdf`) };
       }
       if (which === "original") return { url: await fileUrl(record.original_path, record.original_hash, `${safeName(record.title)}.pdf`) };
@@ -848,8 +872,9 @@ export async function drainSigningMail(ports: SigningPorts, limit = 20): Promise
       if (!to || !message) { await result("failed", undefined, !to ? "no recipient address" : "no template"); continue; }
       let attachments: Array<{ name: string; contentType: string; contentBase64: string }> | undefined;
       if (job.kind === "completed") {
-        // This email exists to deliver the signed PDF: a missing or changed file is not sent (failed, visible to the administrator).
-        const files: Array<[string, string, string]> = [[job.signed_path, job.signed_hash, `${safeName(job.title)}-signed.pdf`], [job.certificate_path, job.certificate_hash, `${safeName(job.title)}-certificate.pdf`]];
+        // This email exists to deliver the signed PDF: a missing or changed file is not sent (failed, visible to the administrator). The signed
+        // document only: the completion certificate (audit record) is never emailed to anyone, staff included (owner 2026-11-20).
+        const files: Array<[string, string, string]> = [[job.signed_path, job.signed_hash, `${safeName(job.title)}-signed.pdf`]];
         attachments = [];
         for (const [path, expected, name] of files) {
           const bytes = path ? await ports.storage.download(path) : null;

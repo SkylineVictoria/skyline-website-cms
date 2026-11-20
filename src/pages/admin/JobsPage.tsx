@@ -5,7 +5,7 @@ import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
 import { HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
 import { HR_PAGE_SIZE, hrDate, listCandidatesByJob, type CandidateRow } from "@/lib/recruitmentApi";
 import WizardSteps from "@/pages/admin/components/WizardSteps";
-import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, jobPath, jobProblems, type JobForm } from "@/lib/jobs";
+import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL, EMPTY_JOB, JOB_AD_EMPLOYMENT_TYPES, jobPath, jobProblems, typeOptions, type JobForm } from "@/lib/jobs";
 import { adminListJobs, adminSaveJob, adminSetJobStatus, type AdminJob } from "@/lib/jobsApi";
 import { STAFF_CANDIDATES_PATH } from "@/pages/admin/lib/staffRoutes";
 
@@ -183,7 +183,7 @@ function JobWizard({ id, initial, onClose, onSaved }: { id: string | null; initi
           <div className="grid gap-4 sm:grid-cols-2">
             <F label="Employment type" required problem={problems.employmentType}>
               <Select value={form.employmentType} onChange={(e) => patch({ employmentType: e.target.value as JobForm["employmentType"] })} data-testid="job-type">
-                {EMPLOYMENT_TYPES.map((t) => <option key={t} value={t}>{EMPLOYMENT_TYPE_LABEL[t]}</option>)}
+                {typeOptions(JOB_AD_EMPLOYMENT_TYPES, form.employmentType).map((t) => <option key={t} value={t}>{EMPLOYMENT_TYPE_LABEL[t]}</option>)}
               </Select>
             </F>
             <F label="Location" required problem={problems.location}><TextInput value={form.location} onChange={(e) => patch({ location: e.target.value })} maxLength={150} placeholder="Melbourne, VIC" data-testid="job-location" /></F>

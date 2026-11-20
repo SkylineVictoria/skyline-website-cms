@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import NeedsActionBoard from "@/pages/admin/components/NeedsActionBoard";
 import MasterTimetableDue from "@/pages/admin/components/MasterTimetableDue";
+import ClassesToReschedule from "@/pages/admin/components/rto/ClassesToReschedule";
 import { useAdminData } from "@/pages/admin/lib/storeContext";
 import { Badge, Card, EmptyState, PageHeader, StatCard, StatusBadge } from "@/pages/admin/components/ui";
 
@@ -46,6 +47,7 @@ export default function DashboardPage() {
         }
       />
 
+      <ClassesToReschedule />
       <NeedsActionBoard />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

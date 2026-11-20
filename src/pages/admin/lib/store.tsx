@@ -7,7 +7,8 @@ import { useAuth } from "@/pages/admin/lib/authContext";
 import { cacheBrand } from "@/lib/brandCache";
 import { resolvedBrandColours } from "@/lib/tenantTheme";
 import { siteThemeFromSettings } from "@/pages/admin/lib/previewTheme";
-import { validateFooterLinks, validateNavigation, type LoaderStyle } from "@/config/cmsLimits";
+import { applyCmsLimitRules, validateFooterLinks, validateNavigation, type LoaderStyle } from "@/config/cmsLimits";
+import { onRules, ruleNumber } from "@/lib/businessRules";
 import type {
   ActivityItem,
   AdminCourse,
@@ -24,6 +25,9 @@ import type {
   RevisionEntity,
   SeoEntry,
 } from "@/pages/admin/lib/types";
+
+// Website editor limits are Business Rules (cms.*): keep the shared limit objects in step with the live values.
+onRules(() => applyCmsLimitRules(ruleNumber));
 
 const brandFields = (settings: AdminData["settings"]) => JSON.stringify([settings.name, settings.shortName, settings.logo, settings.primaryColor, settings.accentColor, settings.loaderStyle, settings.themeConfigured]);
 

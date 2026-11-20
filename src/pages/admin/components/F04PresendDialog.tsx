@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import F04Wizard from "@/components/signing/F04Wizard";
-import { answersOf, type F04Draft } from "@/components/signing/f04WizardLogic";
-import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView } from "@/lib/signingApi";
+import F04Wizard, { type F04PrefillControls } from "@/components/signing/F04Wizard";
+import { answersOf, choiceUnnamed, readChoice, POSITIONS, type F04Draft } from "@/components/signing/f04WizardLogic";
+import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView, type SlitSignatureInput } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
+import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
 
 /*
  * Prepare application (owner brief 2026-11-20): after Add business nothing is emailed. Staff open the Agent Application Form (F04) here in
@@ -22,8 +23,10 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const { push } = useToast();
   const [opened, setOpened] = useState<PresendOpen | null>(null);
   const [error, setError] = useState("");
-  const [terms, setTerms] = useState({ commencementDate: "", territory: "", commissionPercent: "" });
+  const [terms, setTerms] = useState<PresendOpen["terms"]>({ commencementDate: "", territory: "", commissionPercent: "", commissionGst: "" });
   const [witness, setWitness] = useState<{ name: string; png: string | null }>({ name: "", png: null });
+  // SLIT's signatory (2026-11-21): the sending admin by default, their saved signature when they have one (else typed), dated when sent.
+  const [signatory, setSignatory] = useState<F04PrefillControls["signatory"]>({ organisation: "", name: "", position: "", savedSignature: null, signedOn: "", method: "typed", png: null, save: true });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"" | "save" | "send">("");
   const [savedNote, setSavedNote] = useState<string | null>(null);
@@ -32,7 +35,10 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       const o = await openPresend(agencyId);
       // The merged application form + agreement blank is made ready in its own call, so Send only stamps it (CPU budget, 2026-11-20).
       void warmPresend().catch(() => undefined);
-      setOpened(o); setTerms(o.terms); setWitness(o.witness); setMessage(o.message);
+      setOpened(o); setTerms({ ...o.terms, commissionGst: o.terms.commissionGst ?? "" }); setWitness(o.witness); setMessage(o.message);
+      // Position chips (2026-11-21): the admin's saved position selects its chip when it is one (CEO / Director / Manager / Owner), else Other with that text.
+      const saved = readChoice(o.signatory.position, POSITIONS);
+      setSignatory({ ...o.signatory, position: saved.picked ?? saved.other ?? "", method: o.signatory.savedSignature ? "saved" : "typed", png: null, save: true });
       setSavedNote(o.savedAt ? `Draft saved ${new Date(o.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}${o.savedBy ? ` by ${o.savedBy}` : ""}` : null);
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be prepared."); }
@@ -42,7 +48,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const view = useMemo(() => {
     if (!opened) return null;
     return {
-      id: opened.onboardingId ?? "", reference: "", title: `Agent application: ${agencyName}`, state: "draft", message: null, expiresAt: null, signedAt: null, consent: "", documentHash: "", url: "", certificateUrl: null,
+      id: opened.onboardingId ?? "", reference: "", title: `Agent application: ${agencyName}`, state: "draft", message: null, expiresAt: null, signedAt: null, consent: "", documentHash: "", url: "",
       recipient: { id: opened.contact?.id ?? "", name: opened.contact?.name ?? "", email: opened.contact?.email ?? "", role: "Business contact", state: "draft", signed_at: null },
       fields: opened.fields.map((f) => ({ ...f, x: 0, y: 0, w: 0, h: 0 })), signers: [], onboarding: { id: opened.onboardingId ?? "", kind: "application", agencyName, agencyId, formPages: 2 },
       application: { draft: null, facts: opened.facts, savedAt: null, prefill: { agent_acn: opened.acn, agent_marn: opened.marn }, filled: [], attachments: {}, correction: null },
@@ -52,8 +58,14 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const dataOf = (state: F04Draft): PresendData => {
     const answers = Object.fromEntries(Object.entries(answersOf(view!.fields, state)).filter(([key, value]) => !REFERENCE.test(key) && key !== "agent_acn" && key !== "agent_marn" && String(value ?? "").trim()));
     return { answers, acn: state.acn, marn: state.marn.replace(/\s/g, ""), message: message.trim(), commencementDate: terms.commencementDate, territory: terms.territory.trim(),
-      commissionPercent: terms.commissionPercent.trim(), witnessName: witness.name.trim(), witnessPng: witness.png };
+      commissionPercent: terms.commissionPercent.trim(), witnessName: witness.name.trim(), witnessPng: witness.png,
+      commissionGst: terms.commissionGst, adminName: signatory.name.trim(), adminPosition: signatory.position.trim() };
   };
+  // The SLIT signature as sent: the saved picture, the drawing (saved for next time when ticked), or the signatory's name typed.
+  const signatureOf = (): SlitSignatureInput => signatory.method === "saved" ? { kind: "saved" } : signatory.method === "drawn" ? { kind: "drawn", png: signatory.png ?? "", save: signatory.save }
+    : { kind: "typed", name: signatory.name.trim() };
+  const signatoryProblem = () => signatory.name.trim().length < 2 ? "Enter the name of the SLIT signatory." : !signatory.position.trim() ? "Choose the position of the SLIT signatory." : choiceUnnamed(signatory.position) ? "Type the SLIT signatory's position (Other)."
+    : signatory.method === "drawn" && !signatory.png ? "Draw the SLIT signature, or choose another way to sign." : signatory.method === "saved" && !signatory.savedSignature ? "You have no saved signature: draw one, or type your name." : null;
   // The SLIT witness is both a typed name and a drawn signature, or nothing (the approver can then add it).
   const witnessProblem = () => (witness.name.trim() && !witness.png) ? "The SLIT witness must draw their signature (it cannot be typed), or clear the SLIT witness."
     : (!witness.name.trim() && witness.png) ? "Type the SLIT witness's full name, or clear the SLIT witness." : null;
@@ -72,11 +84,11 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const send = async (state: F04Draft) => {
     if (busy) return;
     const problem = !isDate(terms.commencementDate) ? "Enter the agreement's commencement date (Item 5)." : !terms.territory.trim() ? "Enter the territory (Item 3)."
-      : !/^\d{1,3}(\.\d{1,2})?$/.test(terms.commissionPercent.trim()) || Number(terms.commissionPercent) > 100 ? "Enter the commission as a percentage, for example 25." : witnessProblem();
+      : commissionProblem(terms.commissionPercent) || (!terms.commissionGst ? "Choose whether the commission is GST inclusive or GST exclusive (Item 4)." : null) || signatoryProblem() || witnessProblem();
     if (problem) { push(problem, "error"); return; }
     setBusy("send");
     try {
-      const r = await sendPresend(agencyId, dataOf(state));
+      const r = await sendPresend(agencyId, { ...dataOf(state), adminSignature: signatureOf() });
       await onSent(r.sent ? `Application form and agreement sent to ${r.agent?.email ?? opened?.contact?.email ?? "the point of contact"} (${r.reference}) to sign once.${r.slitWitness ? " The SLIT witness is printed on the agreement." : ""}`
         : r.warning ?? "The request was created but not emailed.");
     } catch (e) { push(e instanceof Error ? e.message : "The application could not be sent.", "error"); }
@@ -88,6 +100,6 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       <button type="button" className="mt-3 rounded-md border border-background-300 px-3 py-1.5" onClick={onClose}>Close</button></div></div>;
   if (!opened || !view) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55" role="status"><span className="rounded-md bg-background-50 px-4 py-2 text-sm">Preparing the application…</span></div>;
   return <F04Wizard token="" view={view} mode="admin-prefill" codeCheck={{ needed: false, session: null, render: () => null }} onSigned={() => undefined}
-    prefill={{ terms, onTerms: setTerms, witness, onWitness: setWitness, message, onMessage: setMessage, busy, contact: opened.contact, savedNote,
+    prefill={{ terms, onTerms: setTerms, witness, onWitness: setWitness, signatory, onSignatory: setSignatory, message, onMessage: setMessage, busy, contact: opened.contact, savedNote,
       onSaveDraft: (s) => void saveDraft(s), onSend: (s) => void send(s), onClose }} />;
 }

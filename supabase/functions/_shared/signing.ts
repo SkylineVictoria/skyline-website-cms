@@ -28,7 +28,7 @@ export const signingNameValid = (value: unknown): value is string => typeof valu
 // ---------------------------------------------------------------------------------------------------------------- second stage (SIGN-02)
 export const SIGN_FIELD_TYPES = ["signature", "initials", "date", "name", "text", "checkbox"] as const;
 export type SignFieldType = typeof SIGN_FIELD_TYPES[number];
-export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student" | "employee" | "agent" | "any" }> = {
+export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student" | "employee" | "agent" | "agency" | "any" }> = {
   enrolment_agreement: { label: "Enrolment agreement", audience: "student" }, consent_form: { label: "Consent form", audience: "student" },
   fee_agreement: { label: "Fee agreement", audience: "student" }, employment_contract: { label: "Employment contract", audience: "employee" },
   offer_letter: { label: "Offer letter", audience: "employee" }, hr_declaration: { label: "HR declaration", audience: "employee" },
@@ -39,7 +39,10 @@ export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student
   student_offer_letter: { label: "Letter of Offer (student)", audience: "student" },
 };
 /** The variables each kind of record fills by itself (hr.sign_subject); anything else is typed by the administrator. */
-export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent", string[]> = {
+export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent" | "agency", string[]> = {
+  // A business (2026-11-21, "Used for: Agency"): hr.sign_subject 'agency'; commission with its GST choice from the business's onboarding.
+  agency: ["agency.name", "agency.legal_name", "agency.abn", "agency.acn", "agency.address", "agency.email", "agency.phone", "agency.contact_name", "agency.contact_email",
+    "agency.commission", "agency.commission_percent", "agency.commission_gst", "current_date"],
   student: ["student.first_name", "student.last_name", "student.full_name", "student.email", "student.phone", "student.address", "student.date_of_birth", "student.passport_number",
     "student.nationality", "course.name", "course.code", "course.fees", "course.duration", "course.cricos", "current_date"],
   employee: ["employee.name", "employee.first_name", "employee.last_name", "employee.email", "employee.phone", "employee.address", "employee.position", "employee.department",
@@ -135,10 +138,10 @@ export function renderSigningEmail(job: SigningMailJob, link: string | null): { 
       text: `${hello}\n\n${lead}${note}\n\nOpen your personal signing link:\n${link}\n\n${until ? `The link works until ${until}. ` : ""}It is personal: please do not forward it. Reference ${ref}.${MAIL_SIGN_OFF}` };
   }
   if (job.kind === "completed") return job.audience === "admin"
-    ? { subject: mailLine(`Completed: ${title}`), text: `Everyone required has signed "${title}" (reference ${ref}). The signed document and its completion certificate are attached.\n\n${people}${MAIL_SIGN_OFF}` }
+    ? { subject: mailLine(`Completed: ${title}`), text: `Everyone required has signed "${title}" (reference ${ref}). The signed document is attached.\n\n${people}${MAIL_SIGN_OFF}` }
     : job.deposit?.link
-      ? { subject: mailLine(`Offer accepted: ${title}`), text: `${hello}\n\nThank you. Your offer is accepted: "${title}" is signed, and the signed copy and its completion certificate are attached for your records. Reference ${ref}.\n\nYour initial deposit of ${mailLine(job.deposit.label, 40)} is still to be paid. You can pay it by card in a few minutes, no sign-in needed. Pay your initial deposit: ${job.deposit.link}\n\nThis link is personal to you; please do not forward it.${MAIL_SIGN_OFF}` }
-      : { subject: mailLine(`Signed copy: ${title}`), text: `${hello}\n\n"${title}" is complete: everyone required has signed. The signed document and its completion certificate are attached for your records. Reference ${ref}.${MAIL_SIGN_OFF}` };
+      ? { subject: mailLine(`Offer accepted: ${title}`), text: `${hello}\n\nThank you. Your offer is accepted: "${title}" is signed, and the signed copy is attached for your records. Reference ${ref}.\n\nYour initial deposit of ${mailLine(job.deposit.label, 40)} is still to be paid. You can pay it by card in a few minutes, no sign-in needed. Pay your initial deposit: ${job.deposit.link}\n\nThis link is personal to you; please do not forward it.${MAIL_SIGN_OFF}` }
+      : { subject: mailLine(`Signed copy: ${title}`), text: `${hello}\n\n"${title}" is complete: everyone required has signed. The signed document is attached for your records. Reference ${ref}.${MAIL_SIGN_OFF}` };
   if (job.kind === "declined") return job.audience === "admin"
     ? { subject: mailLine(`Declined: ${title}`), text: `${mailLine(job.declined_by, 80) || "A recipient"} declined to sign "${title}" (reference ${ref}).${job.reason ? `\n\nReason given: ${mailLine(job.reason, 500)}` : ""}\n\nThe request is closed and its links no longer work.${MAIL_SIGN_OFF}` }
     : { subject: mailLine(`Signing cancelled: ${title}`), text: `${hello}\n\n"${title}" (reference ${ref}) will not be completed because another recipient declined to sign. Your signature on it has no effect. The sender will contact you if a new document is needed.${MAIL_SIGN_OFF}` };

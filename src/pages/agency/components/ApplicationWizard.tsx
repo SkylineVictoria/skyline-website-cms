@@ -15,7 +15,7 @@ import {
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
-import { portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
+import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { forgetIntakes, intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
@@ -37,6 +37,7 @@ import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/do
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
+import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsRules";
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
@@ -229,7 +230,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
             course: courses[0] ?? "", preferred_intake: pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
-            intake_id: application.courses?.[0]?.intakeId ?? "",
+            intake_id: application.courses?.[0]?.intakeId ?? "", intake_join_date: pick("intake_join_date"),
           });
         }
         // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
@@ -451,11 +452,13 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The passport is mandatory: the agent stays on the passport step until a current one is uploaded.
   const passportExpired = expiredPassport !== null || documents.some(isExpiredPassport);
   const hasPassport = documents.some((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !isExpiredPassport(doc));
-  const passportRequired = PASSPORT_STEP >= 0 && (passportExpired || !hasPassport);
+  const passportRequired = PASSPORT_STEP >= 0 && (passportExpired || (!hasPassport && WIZARD_STEPS[PASSPORT_STEP].required));
   // Every required document must be uploaded before the agent can move past its step.
   const ausStudyDocs = AUS_STUDY_STEP ? documents.filter((doc) => doc.category === AUS_STUDY_STEP.category && !isWrongDocument(doc)) : [];
   /** The English requirement met without a test result: Australian study proof uploaded, or Yes to the Cambridge English course. */
-  const englishAltMet = englishAlt && ((ausStudy === "Yes" && ausStudyDocs.length > 0) || (ausStudy === "No" && cambridge === "Yes"));
+  // Business Rules admissions.english_test_alternatives: only the ways SLIT accepts count.
+  const alternatives = englishAlternatives();
+  const englishAltMet = englishAlt && ((alternatives.ausStudy && ausStudy === "Yes" && ausStudyDocs.length > 0) || (alternatives.cambridge && ausStudy === "No" && cambridge === "Yes"));
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
     || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
@@ -514,7 +517,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
     // A new course clears the intake: intakes belong to one course.
-    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "" } : {}) }));
+    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
     if (name === "course") setIntakeList(null);
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
@@ -525,7 +528,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return institutionCourseOf(label)?.courseId || null;
   };
   const setIntake = (intake: OpenIntake | null) => {
-    setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "" }));
+    setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "", intake_join_date: intake?.joinDate ?? "" }));
     setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
   };
   const intakesLoaded = (list: OpenIntake[]) => {
@@ -557,16 +560,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       values.language_other = answers.language_home === OTHER_LANGUAGE ? filled("language_other") : "";
     } else if (target.id === "usi") {
       const usi = normalizeUsi(answers.usi_number ?? "");
-      const problem = usi ? validateUsi(usi) : "Enter the student's USI.";
+      // Business Rules admissions.usi_required: Required (today) needs a USI here; Optional lets it stay blank ("No USI yet").
+      const problem = usi ? validateUsi(usi) : usiRequired() ? "Enter the student's USI." : "";
       if (problem) errors.usi_number = problem;
-      values.has_usi = "Yes";
+      values.has_usi = usi || usiRequired() ? "Yes" : "No";
       values.usi_number = usi;
     } else if (target.id === "emergency") {
       const phone = String(new FormData(questionFormRef.current ?? undefined).get("ec_phone") ?? "").trim();
       // The shared rule (also the staff onboarding wizard's): name, phone with its country code, relationship.
       const problems = emergencyContactProblems({ name: answers.ec_name ?? "", phone, relationship: answers.ec_relationship ?? "" }, "the student");
-      if (problems.name) errors.ec_name = problems.name;
-      if (problems.phone) errors.ec_phone = problems.phone;
+      // Business Rules (admissions.emergency_contact_required_details): a detail SLIT made optional may stay blank, but what is typed is checked.
+      if (problems.name && (detailRequired("ec_name") || filled("ec_name"))) errors.ec_name = problems.name;
+      if (problems.phone && (detailRequired("ec_phone") || phone)) errors.ec_phone = problems.phone;
       if (problems.relationship) errors.ec_relationship = problems.relationship;
       values.ec_name = filled("ec_name");
       values.ec_phone = phone;
@@ -576,9 +581,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
-      const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"));
+      const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
-      else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display) === chosen))) errors.preferred_intake = "Choose the intake.";
+      else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen))) errors.preferred_intake = "Choose the intake.";
       if (filled("course")) {
         const staff = staffCourses ? staffCourseOf(answers.course) : null;
         const course: ApplicationCourseRow | null = staffCourses
@@ -589,6 +594,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       }
       values.courses_of_interest = filled("course") ? [answers.course] : [];
       values.preferred_intake = filled("preferred_intake");
+      // The start date picked (a unit start of the running class, or day one): placement starts the student there.
+      values.intake_join_date = filled("intake_join_date");
     }
     setAnswerErrors(errors);
     if (Object.values(errors).some(Boolean)) return false;
@@ -689,7 +696,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         <EnglishAlternative
           ausStudy={ausStudy}
           cambridge={cambridge}
-          onAusStudy={(value) => { setAusStudy(value); if (value === "Yes") setCambridge(""); }}
+          allowAusStudy={alternatives.ausStudy} allowCambridge={alternatives.cambridge}
+          onAusStudy={(value) => { setAusStudy(value); if (value === "Yes") setCambridge(""); if (value === "No" && !alternatives.cambridge) setEnglishNotMet(true); }}
           onCambridge={chooseCambridge}
           onBack={() => { setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError(""); }}
           error={englishSaveError || uploadRejections[AUS_STUDY_STEP.category] || ""}
@@ -728,10 +736,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               : undefined
           }
         />
-        {current.id === "english" && AUS_STUDY_STEP && !hasFile ? (
+        {current.id === "english" && AUS_STUDY_STEP && !hasFile && (alternatives.ausStudy || alternatives.cambridge) ? (
           <div className="mt-5 rounded-lg border border-dashed border-background-300 bg-background-100/60 px-4 py-3 text-sm text-foreground-700">
             No IELTS, PTE or TOEFL result?{" "}
-            <button type="button" onClick={() => { setEnglishAlt(true); setEnglishSaveError(""); }} data-testid="english-no-test"
+            <button type="button" onClick={() => { setEnglishAlt(true); setEnglishSaveError(""); if (!alternatives.ausStudy) setAusStudy("No"); }} data-testid="english-no-test"
               className="cursor-pointer font-semibold text-primary-700 underline-offset-2 hover:underline">
               See other ways to meet the English requirement
             </button>

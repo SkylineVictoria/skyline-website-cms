@@ -2,10 +2,21 @@
 // staff-onboarding Edge Function and the offline tests all call staffProblems(); the database repeats it as hr.v_staff_problem
 // (migration 20261112090000) and scripts/lab/staff-lab.mjs `wizard` compares the two on one list of inputs.
 import {
-  addressProblems, dateOfBirthProblem, emergencyContactProblems, mobileProblem, nameProblem, normalizePassportNumber, parseDateOfBirth,
+  addressProblems, DOB_OLDEST_YEARS, dateOfBirthProblem, emergencyContactProblems, mobileProblem, nameProblem, normalizePassportNumber, parseDateOfBirth,
   passportNumberProblem, phoneProblem, shortTextProblem, isAustralia, type Address,
 } from "./person.ts";
 import { normalizeAbn, validateAbn } from "./abn.ts";
+
+/** The youngest a staff member may be (Business Rule hrms.staff_minimum_age; hr.v_dob_parse and the hr.staff_profiles trigger read the
+ * same). The page and the staff-onboarding Edge Function set it from the rule; 14 until then. */
+export let staffMinimumAge = 14;
+export function setStaffMinimumAge(years: unknown) { if (typeof years === "number" && Number.isInteger(years) && years >= 1 && years < DOB_OLDEST_YEARS) staffMinimumAge = years; }
+const staffAgeRange = () => ({ min: staffMinimumAge, max: DOB_OLDEST_YEARS });
+/** The date picker's min and max for a staff member's date of birth. */
+export function staffDateOfBirthRange(today: Date = new Date()): { min: string; max: string } {
+  const iso = (years: number) => new Date(Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate())).toISOString().slice(0, 10);
+  return { min: iso(DOB_OLDEST_YEARS), max: iso(staffMinimumAge) };
+}
 
 /**
  * The wizard's fields, in the order problems are reported. Keys are the names the save action takes.
@@ -54,7 +65,7 @@ export function staffFieldProblem(field: StaffField, details: StaffDetails, fina
   switch (field) {
     case "first_name": case "last_name": return blankOk ? "" : nameProblem(value, field.replace("_", " "));
     case "middle_name": return value ? nameProblem(value, "middle name") : "";
-    case "date_of_birth": return blankOk ? "" : dateOfBirthProblem(value, today);
+    case "date_of_birth": return blankOk ? "" : dateOfBirthProblem(value, today, staffAgeRange());
     case "phone": return mobileProblem(value);
     case "address_street": case "address_line2": case "address_suburb": case "address_country": case "address_state": case "address_postcode": {
       const key = ADDRESS_KEY[field];
@@ -102,7 +113,7 @@ export function staffProblems(details: StaffDetails, fields: readonly StaffField
 /** A field's value as it is stored: trimmed; the date of birth as YYYY-MM-DD; an Australian state and the passport number in capitals. */
 export function normalizeStaffField(field: StaffTextField, details: StaffDetails, today: Date = new Date()): string {
   const value = text(details, field);
-  if (field === "date_of_birth") return value ? parseDateOfBirth(value, today) ?? value : "";
+  if (field === "date_of_birth") return value ? parseDateOfBirth(value, today, staffAgeRange()) ?? value : "";
   if (field === "address_state") return isAustralia(details.address_country) ? value.toUpperCase() : value;
   if (field === "passport_number") return normalizePassportNumber(value);
   if (field === "super_fund_abn") return normalizeAbn(value);

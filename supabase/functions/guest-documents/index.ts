@@ -5,9 +5,12 @@ import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import {
-  checkGuestFile, documentRef, GUEST_CONSENT_VERSION, isDeclarable, isGuestCategory, publicDocument, tokenHashHex, visaApplies,
+  checkGuestFile, DECLARABLE, documentRef, GUEST_CONSENT_VERSION, isDeclarable, isGuestCategory, MAX_GUEST_DOCUMENTS, MULTIPLE_CATEGORIES, publicDocument,
+  REQUIRED_CATEGORIES, ruleCategories, ruleLabels, tokenHashHex, visaApplies,
 } from "../_shared/guest-link.ts";
 import { runGuestUpload, type UploadPort } from "../_shared/guest-upload.ts";
+import { loadRules, ruleList, ruleNumber } from "../_shared/business-rules.ts";
+import { documentLimitProblem, documentLimits } from "../_shared/validation/person.ts";
 
 // Supabase's background-task API is supplied by the Edge runtime, not Deno CLI.
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
@@ -100,6 +103,18 @@ Deno.serve(async (request) => {
       body: JSON.stringify(job.tenant_id ? { jobId: job.id, tenantId: job.tenant_id } : {}),
     }).then((response) => response.body?.cancel()).catch(() => console.error(JSON.stringify({ event: "guest_extraction_dispatch_failed" }))));
   };
+  // Business Rules for the link (today's values when a rule is missing): required documents, "I don't have this", several files, most uploads.
+  const linkRules = async () => {
+    const rules = await loadRules(admin, ["admissions.guest_link_required_documents", "admissions.guest_link_skippable_documents",
+      "admissions.guest_link_multiple_files", "admissions.guest_link_upload_cap"]);
+    const required = ruleCategories(ruleList(rules, "admissions.guest_link_required_documents", ruleLabels(REQUIRED_CATEGORIES)));
+    return {
+      required: required.includes("Passport") ? required : ["Passport", ...required],
+      declarable: ruleCategories(ruleList(rules, "admissions.guest_link_skippable_documents", ruleLabels(DECLARABLE))),
+      multiple: ruleCategories(ruleList(rules, "admissions.guest_link_multiple_files", ruleLabels(MULTIPLE_CATEGORIES))),
+      maxDocuments: Math.max(1, Math.min(100, Math.round(ruleNumber(rules, "admissions.guest_link_upload_cap", MAX_GUEST_DOCUMENTS)))),
+    };
+  };
   const status = async () => {
     const documents = await loadDocuments();
     const passport = documents.find((doc) => doc.category === "Passport") ?? null;
@@ -147,6 +162,11 @@ Deno.serve(async (request) => {
         console.log(JSON.stringify({ event: "guest_upload_rejected", reason: checked.code, found: checked.found ?? null, declared: file.type.slice(0, 60), bytes: bytes.length }));
         return failed(checked.code === "too_large" ? "Each file must be 10 MB or smaller." : checked.code === "empty" ? "This file is empty." : `This file looks like ${checked.found ?? "an unsupported file"}, not a PDF, JPG or PNG.`, checked.code === "too_large" ? 413 : 415);
       }
+      // Business Rules: the application document size and types SLIT allows (never above the 10 MB, PDF / JPG / PNG ceiling).
+      const rules = await loadRules(admin, ["admissions.application_document_limit_mib", "admissions.application_document_types"]);
+      const limited = documentLimitProblem(bytes.length, checked.mime, documentLimits(ruleNumber(rules, "admissions.application_document_limit_mib", 10),
+        ruleList(rules, "admissions.application_document_types", ["JPEG", "PNG", "PDF"])));
+      if (limited) return failed(limited, 415);
       const { data: app } = await admin.from("enrollment_applications").select("tenant_id").eq("id", applicationId).maybeSingle();
       const replaced = body.replaceRef ? await findDocument(body.replaceRef) : null;
       const checkOwnership = checkDocumentOwnership(admin, "enrollment-documents", checkCategory);
@@ -175,7 +195,9 @@ Deno.serve(async (request) => {
           await admin.from("enrollment_application_documents").delete().eq("id", documentId).eq("guest_link_id", linkId);
         },
       };
+      const limits = await linkRules();
       const outcome = await runGuestUpload(port, {
+        multiple: limits.multiple, maxDocuments: limits.maxDocuments,
         category: body.category, replaceId: replaced ? String(replaced.id) : null, name: checked.name, mime: checked.mime, bytes, sha256: await sha256Hex(bytes),
         storagePath: `${applicationId}/validated-${crypto.randomUUID()}-${checked.name}`,
       });
@@ -203,7 +225,7 @@ Deno.serve(async (request) => {
 
     // "I don't have this" for Visa, English test and Academic; the agent sees it as "Student has no ...".
     if (action === "declare") {
-      if (!isDeclarable(body.category)) return failed("Request not understood.");
+      if (!isDeclarable(body.category, (await linkRules()).declarable)) return failed("Request not understood.");
       const { error } = await admin.rpc("guest_declare_missing", { p_link: linkId, p_category: body.category, p_missing: body.missing !== false && body.missing !== "false" });
       return error ? failed("Could not save. Please try again.", 503) : reply({ ok: true, ...(await status()) });
     }
@@ -211,6 +233,8 @@ Deno.serve(async (request) => {
     if (action === "finish") {
       const documents = await loadDocuments();
       if (!documents.some((doc) => doc.category === "Passport")) return failed("Please add your passport first.", 422);
+      const missingRequired = (await linkRules()).required.filter((category) => !documents.some((doc) => doc.category === category));
+      if (missingRequired.length) return failed(`Please add these documents first: ${missingRequired.join(", ")}.`, 422);
       const { error } = await admin.rpc("guest_complete", { p_link: linkId });
       return error ? failed("Could not finish. Please try again.", 503) : reply({ ok: true });
     }

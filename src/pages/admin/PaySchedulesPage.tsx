@@ -5,6 +5,19 @@ import { AdminError, AdminLoading, Badge, Button, Card, Field, Modal, PageHeader
 import { STAFF_TIMESHEETS_PATH } from "@/pages/admin/lib/staffRoutes";
 import { getHrSettings, listSchedules, saveHrSettings, saveSchedule, setPeriodStatus, type HrSettings, type PaySchedule } from "@/lib/hrmsApi";
 import { PERIOD_STATUS_LABEL, WEEKDAY_SHORT, fmtDate, fmtRange } from "@/lib/hrTime";
+import { hrList, hrObject } from "@/lib/hrRules";
+
+/** Business Rules hrms.pay_frequencies and hrms.pay_date_window (the database checks the same on save). */
+const FREQUENCIES = ["fortnightly", "monthly"] as const;
+const allowedFrequencies = (): ScheduleForm["frequency"][] => {
+  const keys = hrList("hrms.pay_frequencies", ["Fortnightly", "Monthly"]).map((x) => x.trim().toLowerCase())
+    .filter((k): k is ScheduleForm["frequency"] => (FREQUENCIES as readonly string[]).includes(k));
+  return keys.length ? [...new Set(keys)] : [...FREQUENCIES];
+};
+const payDateWindow = () => {
+  const w = hrObject<{ daysBefore: unknown; daysAfter: unknown }>("hrms.pay_date_window", { daysBefore: 14, daysAfter: 31 });
+  return { before: typeof w.daysBefore === "number" ? w.daysBefore : 14, after: typeof w.daysAfter === "number" ? w.daysAfter : 31 };
+};
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
@@ -47,7 +60,7 @@ export default function PaySchedulesPage() {
   return (
     <div>
       <PageHeader breadcrumb="HRMS" title="Pay schedules" description="Pay periods for Xero Payroll AU. Fortnightly periods run Monday to Sunday from the anchor Monday; monthly periods are calendar months. Periods are generated a year ahead and topped up daily."
-        actions={<Button onClick={() => { setEditing({ id: null, name: "", frequency: "fortnightly", anchorDate: "", payDateOffsetDays: "0", isActive: true }); setDialogError(""); }} data-testid="schedule-new">New schedule</Button>} />
+        actions={<Button onClick={() => { setEditing({ id: null, name: "", frequency: allowedFrequencies()[0], anchorDate: "", payDateOffsetDays: "0", isActive: true }); setDialogError(""); }} data-testid="schedule-new">New schedule</Button>} />
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`} data-testid="schedule-notice">{notice}</p> : null}
       <div className="space-y-6">
@@ -94,9 +107,9 @@ export default function PaySchedulesPage() {
           <div className="space-y-3" data-testid="schedule-dialog">
             <Field label="Name" required><TextInput value={editing.name} maxLength={80} onChange={(e) => setEditing({ ...editing, name: e.target.value })} data-testid="schedule-name" /></Field>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Frequency"><Select value={editing.frequency} onChange={(e) => setEditing({ ...editing, frequency: e.target.value as ScheduleForm["frequency"] })} data-testid="schedule-frequency"><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></Select></Field>
+              <Field label="Frequency"><Select value={editing.frequency} onChange={(e) => setEditing({ ...editing, frequency: e.target.value as ScheduleForm["frequency"] })} data-testid="schedule-frequency">{(allowedFrequencies().includes(editing.frequency) ? allowedFrequencies() : [...allowedFrequencies(), editing.frequency]).map((f) => <option key={f} value={f}>{f === "fortnightly" ? "Fortnightly" : "Monthly"}</option>)}</Select></Field>
               <Field label={editing.frequency === "fortnightly" ? "First period starts (a Monday)" : "First period starts (1st of a month)"} required><TextInput type="date" value={editing.anchorDate} onChange={(e) => setEditing({ ...editing, anchorDate: e.target.value })} data-testid="schedule-anchor" /></Field>
-              <Field label="Pay date: days after the period ends"><TextInput type="number" min={-14} max={31} value={editing.payDateOffsetDays} onChange={(e) => setEditing({ ...editing, payDateOffsetDays: e.target.value })} data-testid="schedule-offset" /></Field>
+              <Field label="Pay date: days after the period ends" hint={`From ${-payDateWindow().before} to ${payDateWindow().after}.`}><TextInput type="number" min={-payDateWindow().before} max={payDateWindow().after} value={editing.payDateOffsetDays} onChange={(e) => setEditing({ ...editing, payDateOffsetDays: e.target.value })} data-testid="schedule-offset" /></Field>
               <div className="flex items-end pb-2"><Toggle label="Active" checked={editing.isActive} onChange={(v) => setEditing({ ...editing, isActive: v })} /></div>
             </div>
             {editing.id ? <p className="text-xs text-foreground-600">The frequency and start date can change only while no period of this schedule is locked or exported; open periods are regenerated.</p> : null}
@@ -109,29 +122,31 @@ export default function PaySchedulesPage() {
 }
 
 function SettingsCard({ settings, onSaved }: { settings: HrSettings; onSaved: (s: HrSettings) => void }) {
-  const [form, setForm] = useState({ timezone: settings.timezone, ordinaryHoursWeek: String(settings.ordinaryHoursWeek), openShiftFlagHours: String(settings.openShiftFlagHours), usualWorkDays: settings.usualWorkDays, breaksPaid: settings.breaksPaid });
+  // Ordinary hours, open-shift flag, paid breaks and usual work days are set in Administration › Business Rules (hrms.*,
+  // written to hr.settings by hr.settings_rules_sync, migration 20261121002517); only the timezone is saved here.
+  const [timezone, setTimezone] = useState(settings.timezone);
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true); setError("");
-    try { onSaved(await saveHrSettings({ timezone: form.timezone, ordinaryHoursWeek: Number(form.ordinaryHoursWeek), openShiftFlagHours: Number(form.openShiftFlagHours), usualWorkDays: form.usualWorkDays, breaksPaid: form.breaksPaid })); }
+    try { onSaved(await saveHrSettings({ timezone })); }
     catch (e) { setError(e instanceof Error ? e.message : "The HR settings could not be saved."); }
     finally { setBusy(false); }
   };
-  const toggleDay = (d: number) => setForm((f) => ({ ...f, usualWorkDays: f.usualWorkDays.includes(d) ? f.usualWorkDays.filter((x) => x !== d) : [...f.usualWorkDays, d].sort() }));
+  const fixed = (label: string, value: string) => (
+    <div><span className="mb-1.5 block text-label font-medium text-foreground-800">{label}</span><p className="text-sm text-foreground-950">{value}</p></div>
+  );
   return (
     <Card className="p-5"><div data-testid="hr-settings">
       <h2 className="mb-1 font-heading text-base font-bold text-foreground-950">HR settings</h2>
       <p className="mb-3 text-xs text-foreground-600">Every time is stored as an instant and shown in this timezone (daylight saving follows the IANA zone, never a fixed offset).</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Timezone"><TextInput value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} data-testid="settings-timezone" /></Field>
-        <Field label="Full-time ordinary hours per week"><TextInput type="number" step="0.5" min={1} max={80} value={form.ordinaryHoursWeek} onChange={(e) => setForm({ ...form, ordinaryHoursWeek: e.target.value })} /></Field>
-        <Field label="Flag an open shift after (hours)"><TextInput type="number" min={1} max={48} value={form.openShiftFlagHours} onChange={(e) => setForm({ ...form, openShiftFlagHours: e.target.value })} /></Field>
-        <div className="flex items-end pb-2"><Toggle label="Breaks are paid" checked={form.breaksPaid} onChange={(v) => setForm({ ...form, breaksPaid: v })} /></div>
+        <Field label="Timezone"><TextInput value={timezone} onChange={(e) => setTimezone(e.target.value)} data-testid="settings-timezone" /></Field>
+        {fixed("Full-time ordinary hours per week", String(settings.ordinaryHoursWeek))}
+        {fixed("Flag an open shift after (hours)", String(settings.openShiftFlagHours))}
+        {fixed("Breaks are paid", settings.breaksPaid ? "Yes" : "No")}
       </div>
-      <div className="mt-3">
-        <span className="mb-1.5 block text-label font-medium text-foreground-800">Usual work days</span>
-        <div className="flex flex-wrap gap-2">{[1, 2, 3, 4, 5, 6, 7].map((d) => <label key={d} className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={form.usualWorkDays.includes(d)} onChange={() => toggleDay(d)} /> {WEEKDAY_SHORT[d]}</label>)}</div>
-      </div>
+      <div className="mt-3">{fixed("Usual work days", [...settings.usualWorkDays].sort().map((d) => WEEKDAY_SHORT[d]).join(", "))}</div>
+      <p className="mt-2 text-xs text-foreground-600">Hours, open-shift flag, paid breaks and work days: set in <Link to="/admin/business-rules" className="underline">Administration › Business Rules</Link>.</p>
       {error ? <p role="alert" className={`mt-3 ${ALERT}`}>{error}</p> : null}
       <div className="mt-3"><Button size="sm" disabled={busy} onClick={() => void save()} data-testid="settings-save">{busy ? "Saving…" : "Save settings"}</Button></div>
     </div></Card>

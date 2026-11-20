@@ -3,6 +3,8 @@
 // every change is logged in hr.staff_status_events. This copy only decides which buttons to offer.
 
 import { checklist, expiryState, todayIso, type ChecklistItem, type DocLike, type DocumentKind, type ExpiryRule, type ReviewState } from "@/lib/documentChecklist";
+import { hrList, hrNumber, hrObject, hrText, onHrRules } from "@/lib/hrRules";
+import { STAFF_EMPLOYMENT_TYPES } from "@/lib/jobs";
 
 export type StaffStatus = "applied" | "invited" | "documents_submitted" | "offer_sent" | "offer_signed" | "active" | "rejected" | "inactive";
 export type StaffRole = "admin" | "trainer";
@@ -16,15 +18,37 @@ export const STAFF_STATUS_LABEL: Record<StaffStatus, string> = {
   active: "Active", rejected: "Rejected", inactive: "Inactive",
 };
 
-/** Same table as hr.staff_transition_allowed() (migration 20261113031341: documents_submitted > offer_signed = signed documents received). Resending or revoking a link changes no status. */
-const MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [
-  ["applied", "invited"], ["applied", "rejected"],
-  ["invited", "documents_submitted"], ["invited", "rejected"],
-  ["documents_submitted", "invited"], ["documents_submitted", "offer_sent"], ["documents_submitted", "offer_signed"], ["documents_submitted", "rejected"],
-  ["offer_sent", "offer_signed"], ["offer_sent", "documents_submitted"], ["offer_sent", "rejected"],
-  ["offer_signed", "active"], ["offer_signed", "rejected"],
-  ["active", "inactive"], ["inactive", "active"], ["rejected", "applied"], ["inactive", "applied"],
+/**
+ * Same table as hr.staff_transition_allowed(): the moves listed in Business Rules (hrms.staff_onboarding_workflow, one
+ * "Applied → Invited" per line; migration 20261121002517) plus the moves to Active / Inactive that the activate and deactivate
+ * actions make. A list that cannot be read falls back to today's moves, as the database does. Resending or revoking a link
+ * changes no status.
+ */
+export const DEFAULT_STAFF_WORKFLOW: readonly string[] = [
+  "Applied → Invited", "Applied → Rejected", "Invited → Documents submitted", "Invited → Rejected",
+  "Documents submitted → Invited", "Documents submitted → Offer sent", "Documents submitted → Offer signed", "Documents submitted → Rejected",
+  "Offer sent → Offer signed", "Offer sent → Documents submitted", "Offer sent → Rejected", "Offer signed → Rejected",
+  "Rejected → Applied", "Inactive → Applied",
 ];
+const ACTION_MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [["offer_signed", "active"], ["active", "inactive"], ["inactive", "active"]];
+const statusKey = (label: string): StaffStatus | null => STAFF_STATUSES.find((s) => STAFF_STATUS_LABEL[s].toLowerCase() === label.trim().toLowerCase()) ?? null;
+/** The moves of a workflow list, or null when any line is not "Status → another status" (never to Active or Inactive). */
+export function workflowMoves(lines: readonly string[]): Array<readonly [StaffStatus, StaffStatus]> | null {
+  const out: Array<readonly [StaffStatus, StaffStatus]> = [];
+  for (const line of lines) {
+    const parts = line.split("→");
+    const from = parts.length === 2 ? statusKey(parts[0]) : null;
+    const to = parts.length === 2 ? statusKey(parts[1]) : null;
+    if (!from || !to || from === to || to === "active" || to === "inactive") return null;
+    out.push([from, to]);
+  }
+  return out;
+}
+let MOVES: ReadonlyArray<readonly [StaffStatus, StaffStatus]> = [];
+onHrRules(() => {
+  const moves = workflowMoves(hrList("hrms.staff_onboarding_workflow", [...DEFAULT_STAFF_WORKFLOW])) ?? workflowMoves(DEFAULT_STAFF_WORKFLOW) ?? [];
+  MOVES = [...moves, ...ACTION_MOVES];
+});
 
 export function canTransition(from: StaffStatus, to: StaffStatus): boolean {
   return MOVES.some(([a, b]) => a === from && b === to);
@@ -104,6 +128,15 @@ export const EMPLOYEE_ACTION: Record<EmployeeAction, EmployeeActionSpec> = {
   reactivate: { label: "Reactivate", confirm: "Reactivate", note: "optional", explain: "Gives back the role they had and marks them Active." },
   reopen: { label: "Reopen", confirm: "Reopen", note: "required", explain: "Moves the application back to Applications so you can send a new document link." },
 };
+// Link validity in the explanations follows hrms.staff_document_link_days / hrms.staff_account_link_days (hr.invite_create).
+onHrRules(() => {
+  const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+  const docs = days(hrNumber("hrms.staff_document_link_days", 14));
+  const login = days(hrNumber("hrms.staff_account_link_days", 7));
+  EMPLOYEE_ACTION.send_documents_link.explain = `Emails a private link (valid ${docs}) to add personal details and documents. No account is needed.`;
+  EMPLOYEE_ACTION.send_offer.explain = `Makes the offer letter from a template and emails it with the person's sign-in link (valid ${login}). They choose their own password, then read and sign the letter.`;
+  EMPLOYEE_ACTION.resend_login.explain = `Emails a new one-time link to choose a password (valid ${login}). The earlier link stops working at once.`;
+});
 
 /** Outbox and link emails as the admin sees them. */
 export const EMAIL_KIND_LABEL: Record<string, string> = {
@@ -141,18 +174,36 @@ export const STAFF_DOC_CATEGORIES: readonly StaffDocCategory[] = ["Passport", "V
 export const STAFF_DOC_LABEL: Record<StaffDocCategory, string> = {
   Passport: "Passport", Visa: "Visa", English: "English test result", Academic: "Academic results", "Driving Licence": "Driving licence", "Health Insurance": "Health insurance",
 };
-/** Expiry date per type (hr.staff_doc_needs_expiry / hr.staff_doc_takes_expiry). */
+/** Expiry date per type (hr.staff_doc_needs_expiry / hr.staff_doc_takes_expiry), set by Business Rules (hrms.staff_document_expiry_rules). */
 export const STAFF_DOC_EXPIRY: Record<StaffDocCategory, ExpiryRule> = {
   Passport: "required", Visa: "required", English: "optional", Academic: "none", "Driving Licence": "required", "Health Insurance": "required",
 };
+const isStaffDocList = (v: unknown): v is StaffDocCategory[] =>
+  Array.isArray(v) && v.every((c) => typeof c === "string" && (STAFF_DOC_CATEGORIES as readonly string[]).includes(c));
+/** A document type list from a rule: every entry must be a known type (otherwise the fixed list), each type once. */
+const docList = (v: unknown, fallback: readonly StaffDocCategory[]): StaffDocCategory[] => (isStaffDocList(v) ? [...new Set(v)] : [...fallback]);
+onHrRules(() => {
+  const rule = hrObject<Record<string, unknown>>("hrms.staff_document_expiry_rules", {
+    required: ["Passport", "Visa", "Driving Licence", "Health Insurance"], optional: ["English"], none: ["Academic"],
+  });
+  const required = docList(rule.required, ["Passport", "Visa", "Driving Licence", "Health Insurance"]);
+  const optional = docList(rule.optional, ["English"]);
+  for (const c of STAFF_DOC_CATEGORIES) STAFF_DOC_EXPIRY[c] = required.includes(c) ? "required" : optional.includes(c) ? "optional" : "none";
+});
 /** Folder under {uid}/ in the staff-documents bucket; the database checks the same slug (hr.staff_doc_slug). */
 export const staffDocSlug = (category: string): string => category.trim().toLowerCase().replace(/ /g, "-");
 export const staffDocNeedsExpiry = (category: string): boolean => STAFF_DOC_EXPIRY[category as StaffDocCategory] === "required";
 export const staffDocTakesExpiry = (category: string): boolean => (STAFF_DOC_EXPIRY[category as StaffDocCategory] ?? "none") !== "none";
-export const staffDocAllowsMany = (category: string): boolean => category === "Academic";
-/** REQUIRED types (x/N). Visa and English only for non-citizens (or while unanswered); Driving Licence is always optional. */
+/** Several academic records unless Business Rules says one (hrms.staff_multiple_academic_documents; hr.staff_doc_allows_many). */
+export const staffDocAllowsMany = (category: string): boolean =>
+  category === "Academic" && hrText("hrms.staff_multiple_academic_documents", "Several academic records allowed") !== "One academic record only";
+/** REQUIRED types (x/N), from Business Rules (hrms.applicant_document_checklist; hr.staff_required_categories). By default Visa and
+ * English only for non-citizens (or while unanswered); Driving Licence is optional. */
 export function requiredStaffCategories(isAustralianCitizen: boolean | null): StaffDocCategory[] {
-  return isAustralianCitizen === true ? ["Passport", "Academic", "Health Insurance"] : ["Passport", "Visa", "English", "Academic", "Health Insurance"];
+  const citizen: StaffDocCategory[] = ["Passport", "Academic", "Health Insurance"];
+  const other: StaffDocCategory[] = ["Passport", "Visa", "English", "Academic", "Health Insurance"];
+  const rule = hrObject<Record<string, unknown>>("hrms.applicant_document_checklist", { citizen, other });
+  return isAustralianCitizen === true ? docList(rule.citizen, citizen) : docList(rule.other, other);
 }
 
 /**
@@ -222,23 +273,45 @@ export function payDetailsProblems(input: PayDetailsInput, today = todayIso()): 
   const problems: Partial<Record<keyof PayDetailsInput, string>> = {};
   if (!input.jobTitle.trim()) problems.jobTitle = "Enter the position (job title).";
   else if (input.jobTitle.trim().length > 150) problems.jobTitle = "Keep the position under 150 characters.";
-  if (!["full_time", "part_time", "contract"].includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
+  if (!(STAFF_EMPLOYMENT_TYPES as string[]).includes(input.employmentType)) problems.employmentType = "Choose the employment type.";
   if (!input.locationId) problems.locationId = "Choose the work location.";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) || Number.isNaN(Date.parse(`${input.startDate}T00:00:00Z`))) problems.startDate = "Enter the start date.";
   else {
     const days = Math.round((Date.parse(`${input.startDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-    if (days < -365 || days > 730) problems.startDate = "The start date must be within the last year or the next two years.";
+    const { past, future } = payStartWindow();
+    if (days < -past || days > future) {
+      problems.startDate = past === 365 && future === 730 ? "The start date must be within the last year or the next two years."
+        : `The start date must be within the last ${past} days or the next ${future} days.`;
+    }
   }
   if (input.payBasis !== "hourly" && input.payBasis !== "salary") problems.payBasis = "Choose hourly or annual.";
   const rate = Number(input.rate);
   if (!/^\d{1,9}(\.\d{1,2})?$/.test(input.rate.trim()) || !(rate > 0)) problems.rate = "Enter the pay rate as a number, for example 38.50.";
-  else if (input.payBasis === "hourly" && rate > 1000) problems.rate = "That hourly rate looks too high. Check the pay basis.";
-  else if (input.payBasis === "salary" && rate < 1000) problems.rate = "That annual salary looks too low. Check the pay basis.";
+  else if (input.payBasis === "hourly" && rate > payBound("maximumHourly")) problems.rate = "That hourly rate looks too high. Check the pay basis.";
+  else if (input.payBasis === "salary" && rate < payBound("minimumAnnual")) problems.rate = "That annual salary looks too low. Check the pay basis.";
   if (!input.payScheduleId) problems.payScheduleId = "Choose the pay schedule.";
   const hours = Number(input.hoursPerWeek);
-  if (!input.hoursPerWeek.trim()) { if (input.employmentType !== "contract") problems.hoursPerWeek = "Enter the hours per week."; }
-  else if (!/^\d{1,2}(\.\d{1,2})?$/.test(input.hoursPerWeek.trim()) || !(hours > 0) || hours > 80) problems.hoursPerWeek = "The hours per week must be between 1 and 80.";
+  const cap = hrNumber("hrms.staff_weekly_hours_cap", 80);
+  if (!input.hoursPerWeek.trim()) { if (weeklyHoursRequired(input.employmentType)) problems.hoursPerWeek = "Enter the hours per week."; }
+  else if (!/^\d{1,2}(\.\d{1,2})?$/.test(input.hoursPerWeek.trim()) || !(hours > 0) || hours > cap) problems.hoursPerWeek = `The hours per week must be between 1 and ${cap}.`;
   return problems;
+}
+
+/* Business Rules behind the pay details checks (the database reads the same: hr.staff_pay_start_days, hr.staff_pay_bound,
+   hr.staff_weekly_hours_required, migration 20261121002517). */
+function payStartWindow(): { past: number; future: number } {
+  const rule = hrObject<Record<string, unknown>>("hrms.staff_pay_start_date_range", { pastDays: 365, futureDays: 730 });
+  const days = (v: unknown, fallback: number) => (typeof v === "number" && v >= 0 && v <= 3650 ? Math.round(v) : fallback);
+  return { past: days(rule.pastDays, 365), future: days(rule.futureDays, 730) };
+}
+function payBound(part: "maximumHourly" | "minimumAnnual"): number {
+  const v = hrObject<Record<string, unknown>>("hrms.staff_pay_validation_bounds", { maximumHourly: 1000, minimumAnnual: 1000 })[part];
+  return typeof v === "number" && v > 0 ? v : 1000;
+}
+/** Whether the hours per week must be entered for this employment type. */
+export function weeklyHoursRequired(employmentType: string): boolean {
+  const mode = hrText("hrms.staff_weekly_hours_required", "Required except for contractors");
+  return mode === "Required for everyone" ? true : mode === "Optional for everyone" ? false : employmentType !== "contract";
 }
 
 /** HRMS > Employees > Onboarding table: the document link a row can send: the first one (Applied) or a new one replacing the current link (Invited). */

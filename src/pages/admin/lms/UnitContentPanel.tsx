@@ -9,7 +9,6 @@ const KINDS: { id: Kind; label: string; icon: string }[] = [
 ];
 const ICON: Record<Kind, string> = Object.fromEntries(KINDS.map(k => [k.id, k.icon])) as Record<Kind, string>;
 const ACCEPT = ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt";
-const MAX_BYTES = 25 * 1024 * 1024;
 const input = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
 const safeName = (name: string) => name.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(-120) || "file";
 const size = (n: number | null) => n == null ? "" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -55,8 +54,12 @@ export default function UnitContentPanel({ unitId, canEdit }: { unitId: string; 
     let path: string | null = null;
     if (kind === "file") {
       if (!file) throw new Error("Choose a file.");
-      if (file.size > MAX_BYTES) throw new Error("Files can be up to 25 MB.");
-      path = `${unitId}/${crypto.randomUUID().slice(0, 8)}-${safeName(file.name)}`;
+      const filename = safeName(file.name);
+      const extension = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? null;
+      const limit = await supabase.rpc("unit_learning_file_limit", { p_unit_id: unitId, p_extension: extension });
+      if (limit.error || typeof limit.data !== "number") throw new Error("The learning file limit could not be verified. Try again or ask an administrator to review the rule.");
+      if (file.size > limit.data) throw new Error(`The learning file exceeds the current limit of ${size(limit.data)}.`);
+      path = `${unitId}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
       const up = await supabase.storage.from("unit-content").upload(path, file, { contentType: file.type || undefined, upsert: false });
       if (up.error) throw new Error(`The file could not be uploaded: ${up.error.message}`);
     }
@@ -116,7 +119,7 @@ export default function UnitContentPanel({ unitId, canEdit }: { unitId: string; 
           <label className="block text-xs font-medium text-foreground-500">Title<input className={input + " mt-1"} value={title} onChange={e => setTitle(e.target.value)} maxLength={200} placeholder="e.g. Week 1: Introduction" /></label>
           {kind === "link" || kind === "video" ? <label className="block text-xs font-medium text-foreground-500">{kind === "video" ? "Video address (YouTube, Vimeo, Stream…)" : "Web address"}
             <input className={input + " mt-1"} type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://" /></label> : null}
-          {kind === "file" && !editing ? <label className="block text-xs font-medium text-foreground-500">File (PDF, Word, PowerPoint, Excel, image; up to 25 MB)
+          {kind === "file" && !editing ? <label className="block text-xs font-medium text-foreground-500">File (PDF, Word, PowerPoint, Excel, image)
             <input className={input + " mt-1"} type="file" accept={ACCEPT} onChange={e => setFile(e.currentTarget.files?.[0] ?? null)} /></label> : null}
           <label className="block text-xs font-medium text-foreground-500">{kind === "text" ? "Notes" : "Description (optional)"}
             <textarea className={input + " mt-1"} rows={kind === "text" ? 8 : 3} value={body} onChange={e => setBody(e.target.value)} maxLength={20000} /></label>

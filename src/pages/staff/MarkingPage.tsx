@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleNumber } from "@/lib/businessRules";
 import { Badge, Button, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import MarkingView, { type ElementRef, type MarkingPayload } from "@/components/assessment/MarkingView";
 import { asmTrainer, evidenceUrl, fmtDateTime, fromLocalInput, OUTCOME_LABEL, STATE_LABEL, uploadEvidence } from "@/lib/assessment/api";
@@ -53,7 +54,7 @@ export default function MarkingPage() {
           <div className="mt-6 space-y-6">
             {data.canAssess === false ? <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">You can read this submission but not mark it: marking needs the Trainer role on your staff record, a named-assessor place on the assignment, or an administrator (Assessments › Settings › Who may mark).</p> : null}
             <MarkingView definition={data.definition} attempt={data} keys={data.keys} mappings={data.mappings} busy={busy} openEvidence={(f) => void openEvidence(f)} onSave={save} onReturn={ret} onUploadAssessorEvidence={uploadAssessor}
-              maxAttempts={Number(data.settings.max_attempts ?? 3)} reassessmentDays={Number(data.settings.reassessment_days ?? 5)} />
+              maxAttempts={Number(data.settings.max_attempts ?? ruleNumber("assessment.attempts_default", 3))} reassessmentDays={Number(data.settings.reassessment_days ?? ruleNumber("assessment.reassessment_window_default", 5))} />
             <div className="rounded-card border border-background-200 bg-background-50 p-4">
               <h3 className="font-heading text-base font-semibold text-foreground-950">Messages with the student</h3>
               {data.feedback.length ? <ul className="mt-2 space-y-1 text-sm">{data.feedback.map((f) => <li key={f.id} className="rounded-md bg-background-100 px-3 py-1.5"><span className="text-xs text-foreground-500">{f.role} · {fmtDateTime(f.createdAt)}</span><br />{f.body}</li>)}</ul> : <p className="mt-1 text-sm text-foreground-600">No messages yet.</p>}

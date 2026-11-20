@@ -13,8 +13,16 @@ export interface DocumentExpiry {
 export const EXPIRY_FIELDS: Record<ExpiryDocument, string> = { passport: "passport_expiry", visa: "visa_stay_until", english: "english_date" };
 
 const NOUN: Record<ExpiryDocument, string> = { passport: "passport", visa: "visa", english: "English test result" };
-const SOON_MONTHS = 6;
-const ENGLISH_VALID_YEARS = 2;
+// Business Rules admissions.document_expiry_warning_months / admissions.english_result_valid_years (setDocumentExpiryRules);
+// these are the values until the rules have loaded.
+let SOON_MONTHS = 6;
+let ENGLISH_VALID_YEARS = 2;
+/** Applies the live Business Rules values; anything that is not a whole number in range keeps the current value. */
+export function setDocumentExpiryRules(rules: { warningMonths?: unknown; englishValidYears?: unknown }): void {
+  const whole = (v: unknown, lo: number, hi: number) => typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : null;
+  SOON_MONTHS = whole(rules.warningMonths, 1, 24) ?? SOON_MONTHS;
+  ENGLISH_VALID_YEARS = whole(rules.englishValidYears, 1, 10) ?? ENGLISH_VALID_YEARS;
+}
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const DAY_MS = 86_400_000;
@@ -35,7 +43,7 @@ function parseDate(value: unknown): { year: number; month: number; day: number }
 
 /**
  * Is a document expired? Dates only, compared with today's date in the user's local timezone.
- * An expiry of today is still valid. English results are valid for two years from the test date;
+ * An expiry of today is still valid. English results are valid for ENGLISH_VALID_YEARS years (two by default) from the test date;
  * a printed valid-until (`english_valid_until` / `english_expiry`) wins when present.
  */
 export function getDocumentExpiryStatus(type: ExpiryDocument, values: Record<string, unknown>, today: Date = new Date()): DocumentExpiry {

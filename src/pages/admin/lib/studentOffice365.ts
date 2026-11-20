@@ -8,6 +8,9 @@ export type StudentOffice365Account = {
   message: string | null;
   welcomeSentAt: string | null;
   createdAt: string;
+  /** The Microsoft user exists (created by Skyline unless linked): from then on only Resend login email, never a second account. */
+  msUserId?: string | null;
+  linked?: boolean;
 };
 export type StudentOffice365State = { configured: boolean; account: StudentOffice365Account | null };
 export type StudentOffice365Created = { ok: true; email: string; welcomeSent: boolean; warning?: string };

@@ -60,10 +60,8 @@ export async function stampSignedOffer(original: Uint8Array, sig: Signature, let
   const rows: Row[] = [
     { label: "Signed by (typed name)", paras: [{ spans: [{ text: sig.signerName }], bold: true }] },
     { label: "Signed at", paras: [{ spans: [{ text: `${signed} (Australia/Sydney)` }] }, { spans: [{ text: `${sig.signedAt} UTC`, tone: "muted" }] }] },
-    { label: "IP address", paras: [{ spans: [{ text: sig.ip ?? "not available" }] }] },
-    { label: "Browser", paras: [{ spans: [{ text: sig.userAgent ?? "not available" }] }] },
+    // No IP address, browser or file hash on the signed copy (owner 2026-11-20): they are kept in the database (hr_svc_offer_sign) as evidence.
     { label: "Offer letter", paras: [{ spans: [{ text: sig.offerFilename }] }] },
-    { label: "Offer letter SHA-256", paras: [{ spans: [{ text: sig.offerSha256 }] }] },
     { label: "Agreement", paras: [{ spans: [{ text: sig.consent }], check: true }] },
   ];
   writer.section("Signature details", rows);

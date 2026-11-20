@@ -1,6 +1,7 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatDate } from "@/pages/agency/lib/portalData";
+import { ruleList, ruleNumber } from "@/lib/businessRules";
 import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import CoeVoePanel from "@/pages/agency/components/CoeVoePanel";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading, PortalModal, StatusBadge } from "@/pages/agency/components/PortalUI";
@@ -9,7 +10,7 @@ import {
   type ExceptionRow, type RegistrationDetail, type WorkbenchRow,
 } from "@/pages/agency/lib/portalRegistrations";
 import {
-  availableActions, EXCEPTION_TEXT, exportCsv, normaliseCoeNumber, registrationChecklist, validateCorrection, verifyBlockers, type RegistrationAction,
+  availableActions, EXCEPTION_TEXT, exportCsv, normaliseCoeNumber, registrationChecklist, validateCorrection, verifyBlockers, VERIFY_PREREQUISITES, type RegistrationAction,
 } from "@/pages/agency/lib/registrationWorkbench";
 
 const EVIDENCE_KINDS = [
@@ -82,8 +83,11 @@ export default function RegistrationWorkbenchPage() {
 
   const reg = open?.registration && open.registration.state !== "cancelled" ? open.registration : null;
   const checklist = open ? registrationChecklist({ applicationStatus: open.status, state: reg?.state, evidenceCount: detail?.evidence.length ?? reg?.evidenceCount ?? 0, coeNumber: reg?.coeNumber }) : [];
-  const actions = availableActions(reg?.state);
-  const blockers = open && reg ? verifyBlockers({ applicationStatus: open.status, state: reg.state, evidenceCount: detail?.evidence.length ?? reg.evidenceCount, coeNumber: reg.coeNumber, coeInput: coe }) : [];
+  // Business Rules admissions.registration_verification_prerequisites: without "Registration lodged" a draft can be verified directly.
+  const verifyNeeds = ruleList("admissions.registration_verification_prerequisites", [...VERIFY_PREREQUISITES]);
+  const actions: RegistrationAction[] = [...availableActions(reg?.state), ...(reg?.state === "draft" && !verifyNeeds.includes("Registration lodged") ? ["verify" as const] : [])];
+  const blockers = open && reg ? verifyBlockers({ applicationStatus: open.status, state: reg.state, evidenceCount: detail?.evidence.length ?? reg.evidenceCount, coeNumber: reg.coeNumber, coeInput: coe }, verifyNeeds) : [];
+  const staleDays = ruleNumber("admissions.registration_stale_lodgement_days", 14);
   const coeCheck = coe ? normaliseCoeNumber(coe) : null;
 
   return (
@@ -115,7 +119,7 @@ export default function RegistrationWorkbenchPage() {
                     <div>
                       <p className="font-semibold text-foreground-950">{EXCEPTION_TEXT[x.kind].label} · {x.reference}</p>
                       <p className="text-foreground-600">{x.studentName || "Student"} · application {statusInfo(workflow, x.status).label}{x.registration ? ` · registration ${STATE_LABEL[x.registration.state]}` : ""}</p>
-                      <p className="mt-1 text-foreground-600">{EXCEPTION_TEXT[x.kind].explanation}</p>
+                      <p className="mt-1 text-foreground-600">{EXCEPTION_TEXT[x.kind].explanation.replace("more than 14 days", `more than ${staleDays} days`)}</p>
                       {x.accepted ? <p className="mt-1 text-foreground-800">Accepted by {x.accepted.by} on {formatDate(x.accepted.at)}: {x.accepted.note}</p> : null}
                     </div>
                     <div className="flex gap-2">

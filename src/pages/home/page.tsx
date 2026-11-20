@@ -5,8 +5,12 @@ import CoursesCarousel from "@/components/feature/CoursesCarousel";
 import LatestNews from "@/components/feature/LatestNews";
 import Seo from "@/components/feature/Seo";
 import { defaultOgImage, siteDescription } from "@/data/seo";
-import { HOME_COURSE_LIMIT } from "@/config/cmsLimits";
+import { applyCmsLimitRules, HOME_COURSE_LIMIT } from "@/config/cmsLimits";
+import { onRules, ruleNumber } from "@/lib/businessRules";
 import { usePublicSite } from "@/hooks/publicSiteContext";
+
+// Homepage course limit: Business Rule cms.homepage_course_cap.
+onRules(() => applyCmsLimitRules(ruleNumber));
 
 
 const services = [

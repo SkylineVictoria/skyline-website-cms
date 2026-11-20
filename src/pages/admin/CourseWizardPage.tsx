@@ -9,7 +9,7 @@ import { CourseFacts, UnitsTab, WebsiteTab } from "@/pages/admin/components/rto/
 import IntakesStep from "@/pages/admin/components/rto/IntakesStep";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import CourseAssessmentsStep from "@/pages/admin/components/rto/CourseAssessmentsStep";
-import { DEPOSIT_LIMIT_CENTS, money, rto, shortDate, stepPath, todayIso, type CourseDetail, type CourseStep, type RtoCourse } from "@/pages/admin/lib/rto";
+import { depositLimitCents, money, rto, shortDate, stepPath, todayIso, type CourseDetail, type CourseStep, type RtoCourse } from "@/pages/admin/lib/rto";
 
 const STEPS: { id: CourseStep; short: string; title: string; icon: string; hint: string }[] = [
   { id: "details", short: "Details", title: "Course details", icon: "ri-information-line", hint: "Name, codes, category, duration and campus." },
@@ -29,7 +29,7 @@ function attention(d: CourseDetail): Record<CourseStep, string[]> {
   return {
     details: [!c.name.trim() && "Add a name", !c.code.trim() && "Add the course code", !c.category && "Choose a category"].filter(Boolean) as string[],
     timetable: [active.length === 0 && "Add the units", active.some((u) => !(u.defaultWeeks >= 0.5)) && "Units missing weeks", noHours > 0 && `${noHours} unit${noHours === 1 ? " has" : "s have"} no hours`].filter(Boolean) as string[],
-    fees: [!d.fees.some((f) => f.type === "tuition") && "No tuition fee", deposit > DEPOSIT_LIMIT_CENTS && `Deposit ${money(deposit)} is above $1,500`].filter(Boolean) as string[],
+    fees: [!d.fees.some((f) => f.type === "tuition") && "No tuition fee", deposit > depositLimitCents() && `Deposit ${money(deposit)} is above ${money(depositLimitCents())}`].filter(Boolean) as string[],
     intakes: [!d.intakes.some((i) => i.status === "open" && i.startDate >= today) && "No open intake"].filter(Boolean) as string[],
     assessments: [],
     website: [c.status !== "Published" && "Unpublished"].filter(Boolean) as string[],

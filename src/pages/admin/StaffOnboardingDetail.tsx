@@ -19,7 +19,7 @@ import { PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template"
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
 import {
-  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EMPLOYEE_ACTION_TARGET, ONBOARDING_STAGE_HINT, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist, staffDocSlug,
+  EMAIL_KIND_LABEL, EMPLOYEE_ACTION, EXPIRING_SOON_DAYS, EMPLOYEE_ACTION_TARGET, ONBOARDING_STAGE_HINT, STAFF_DOC_LABEL, STAFF_STATUS_LABEL, STAFF_STATUS_TONE, employeeActions, expiryState, staffChecklist, staffDocSlug,
   type EmployeeAction, type StaffDocCategory, type StaffRole,
 } from "@/lib/staffStatus";
 
@@ -316,7 +316,7 @@ export default function StaffOnboardingDetail() {
         </p>
       ) : null}
       {application.files_purged_at ? <p className={`mb-4 ${NOTICE}`} data-testid="staff-files-purged">The resume, documents and offer files were deleted on {new Date(application.files_purged_at).toLocaleDateString()} under the retention rule. The record stays.</p> : null}
-      {summary.expiringSoon ? <p className={`mb-4 ${ALERT}`} data-testid="staff-detail-expiring">A document expires within 30 days or has expired. Check the dates below.</p> : null}
+      {summary.expiringSoon ? <p className={`mb-4 ${ALERT}`} data-testid="staff-detail-expiring">A document expires within {EXPIRING_SOON_DAYS} days or has expired. Check the dates below.</p> : null}
 
       <div className="grid gap-6 lg:grid-cols-5">
         <Card className="p-5 lg:col-span-2">

@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleNumber } from "@/lib/businessRules";
 import { invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 
@@ -35,7 +36,8 @@ export async function resendInvitation(agent: { invitationId: string | null; ema
 /** Stored status; "Onboarding" is a business made by staff whose agent agreement is not signed yet (migration 20261117220000). */
 export type BusinessStatus = "Active" | "Inactive" | "Onboarding";
 export type StatusCounts = Record<string, number>;
-export interface ListCounts { all: number; active: number; inactive: number }
+/** The tabs (2026-11-20): each business in exactly one of active / onboarding / inactive / pending (waiting for review); they add up to all. */
+export interface ListCounts { all: number; active: number; inactive: number; onboarding?: number; pending?: number }
 
 /** A business an agent registered from the sign-in page, waiting for a SLIT decision (migration 119). */
 export interface PendingRegistration {
@@ -122,7 +124,19 @@ export interface ApplicationRow {
 }
 
 /** Migration 116: students per student status (the search and business/agent filters apply; the status tab does not). */
-export interface StudentCounts { all: number; active: number; inactive: number }
+export interface StudentCounts { all: number; active: number; inactive: number;
+  /** 2026-11-21: by portal access (within the enrolment filter) and by enrolment stage (within the access filter). */
+  access?: Record<"all" | PortalAccess, number>; enrolment?: Partial<Record<EnrolmentStage, number>> }
+
+/** Portal access (2026-11-21): whether the student can use the portal, never whether they are enrolled. */
+export type PortalAccess = "not_invited" | "invited" | "active" | "disabled";
+export const PORTAL_ACCESS_LABEL: Record<PortalAccess, string> = { not_invited: "Not invited", invited: "Invited", active: "Active", disabled: "Disabled" };
+/** Enrolment, derived from the student's applications (the most advanced one); nothing is set by hand. */
+export type EnrolmentStage = "none" | "applicant" | "offer_issued" | "offer_accepted" | "deposit_paid" | "enrolled" | "withdrawn";
+export const ENROLMENT_LABEL: Record<EnrolmentStage, string> = { none: "No application", applicant: "Applicant", offer_issued: "Offer issued", offer_accepted: "Offer accepted",
+  deposit_paid: "Deposit paid", enrolled: "Enrolled (CoE issued)", withdrawn: "Withdrawn / rejected" };
+export const ENROLMENT_ORDER: EnrolmentStage[] = ["applicant", "offer_issued", "offer_accepted", "deposit_paid", "enrolled", "withdrawn", "none"];
+export interface StudentEnrolment { stage: EnrolmentStage; label: string; applicationId: string | null; reference: string | null; status: string | null; course: string | null }
 
 /** A student's sign-in (migration 118): none, invited (expired after 7 days), active, or disabled. */
 export interface StudentLogin {
@@ -158,6 +172,8 @@ export interface StudentRow {
   login?: StudentLogin;
   /** Migration 112: Active, or Inactive (Disabled: every application of the student is locked). */
   status?: "Active" | "Inactive";
+  /** 2026-11-21: portal access and enrolment, derived by the database. */
+  portalAccess?: PortalAccess; enrolment?: StudentEnrolment;
 }
 
 export interface StudentApplication {
@@ -221,10 +237,12 @@ export const createBusiness = (agency: Record<string, string>, contactEmail: str
 export const listBusinessDocuments = (id: string) => call<BusinessDocument[]>("admin_business_documents", { p_business: id }, "We could not load this business’s documents.");
 
 const DOCUMENT_BUCKET = "business-documents";
+/** Business Rules agents.signed_copy_upload_max_mb (15 before the rule; 15 MB is also the bucket's ceiling). The database checks it too. */
+export const businessDocumentLimitMb = () => Math.min(15, Math.max(1, Math.round(ruleNumber("agents.signed_copy_upload_max_mb", 15))));
 
 /** Uploads a signed agreement (or other document) to the private bucket and records it against the business. */
 export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement", reason = "") {
-  if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
+  if (file.size > businessDocumentLimitMb() * 1024 * 1024) throw new Error(`The file is larger than ${businessDocumentLimitMb()} MB.`);
   // A signed copy instead of the online agreement needs a reason (kept on the record and in the onboarding history); the server checks it too.
   if (kind === "agent_agreement" && reason.trim().length < 5) throw new Error("Give the reason for recording a signed copy instead of the online agreement.");
   const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
@@ -243,6 +261,16 @@ export async function openBusinessDocument(path: string) {
 }
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");
+
+export { businessDropdownStatuses, canOfferBusinessDelete, deleteBlockReason, deleteConfirmMatches, isSlitAdmin, SYSTEM_BUSINESS_CODES } from "@/pages/admin/lib/businessDelete";
+/** Whether this administrator can delete the business now, and if not why (public.admin_business_delete_check). */
+export const businessDeleteCheck = (id: string) =>
+  call<{ deletable: boolean; reason: string | null; name: string; abn: string | null }>("admin_business_delete_check", { p_business: id }, "We could not check this business.");
+/** Delete business (document-signing agent_onboarding_business_delete): every row and file of the business, nobody emailed. */
+export async function deleteBusiness(id: string, confirm: string): Promise<{ deleted: boolean; name: string; abn: string | null; filesRemoved: number; filesLeft: number }> {
+  const { signingAction } = await import("@/lib/signingApi");
+  return await signingAction({ action: "agent_onboarding_business_delete", agencyId: id, confirm });
+}
 
 export const setBusinessStatus = (id: string, status: BusinessStatus) =>
   call<{ businessId: string; status: BusinessStatus; agencyId: string; workspaceCreated: boolean; reviewed?: boolean; pendingInvitation?: { id: string; email: string; name: string } | null }>(
@@ -272,10 +300,10 @@ export const listPendingRegistrations = () =>
   call<PendingRegistration[]>("admin_registration_list", {}, "We could not load the registrations waiting for review.");
 
 /** Students, optionally filtered by the student's own status (a value from the backend's student status list). */
-export const listStudents = (f: { search?: string; status?: string; studentStatus?: string; businessId?: string | null; agentId?: string | null; limit: number; offset: number }) =>
+export const listStudents = (f: { search?: string; status?: string; studentStatus?: string; access?: PortalAccess | ""; enrolment?: EnrolmentStage | ""; businessId?: string | null; agentId?: string | null; limit: number; offset: number }) =>
   call<{ total: number; counts?: StudentCounts; rows: StudentRow[] }>("admin_students_list", {
     p_search: f.search ?? "", p_status: f.status ?? "", p_business: f.businessId ?? null, p_agent: f.agentId ?? null, p_limit: f.limit, p_offset: f.offset,
-    p_student_status: f.studentStatus ?? "",
+    p_student_status: f.studentStatus ?? "", p_access: f.access ?? "", p_enrolment: f.enrolment ?? "",
   }, "We could not load students. Please try again.");
 
 export const getStudent = (id: string) => call<StudentDetail | null>("admin_student_detail", { p_student: id }, "We could not load this student.");

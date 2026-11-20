@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import {
-  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, replyTicket, ticketRequesterPhone, updateTicket, uploadTicketFiles,
+  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, requesterCanClose, replyTicket, ticketRequesterPhone, updateTicket, supportAttachmentCount, uploadTicketFiles,
   type TicketDetail, type TicketPriority, type TicketStatus,
 } from "@/lib/supportTickets";
 
@@ -12,6 +12,8 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
   const [error, setError] = useState("");
   const [body, setBody] = useState("");
   const [internal, setInternal] = useState(false);
+  const [cap, setCap] = useState<number | null>(null);
+  useEffect(() => { void supportAttachmentCount().then(setCap).catch(() => setCap(null)); }, []);
   const [files, setFiles] = useState<File[]>([]);
   const [fileKey, setFileKey] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -77,7 +79,7 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
               ? <button type="button" disabled={busy} className="rounded-md border border-background-300 px-3 py-1.5 text-sm" onClick={() => void run(() => updateTicket(id, { assign: "none" }))}>Unassign</button>
               : <button type="button" disabled={busy} className="rounded-md border border-background-300 px-3 py-1.5 text-sm" onClick={() => void run(() => updateTicket(id, { assign: "me" }))}>Assign to me</button>}
           </div>
-        ) : data.isRequester && !["resolved", "closed"].includes(t.status) ? (
+        ) : data.isRequester && requesterCanClose() && !["resolved", "closed"].includes(t.status) ? (
           <button type="button" disabled={busy} className="mt-4 rounded-md border border-background-300 px-3 py-1.5 text-sm font-semibold"
             onClick={() => void run(() => updateTicket(id, { status: "resolved" }))}>Mark as resolved</button>
         ) : null}
@@ -111,8 +113,8 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
           <label className="block text-sm font-medium text-foreground-800">Reply
             <textarea className="mt-1 block min-h-[110px] w-full rounded-md border border-background-300 px-3 py-2 text-sm" maxLength={10000} value={body} onChange={(e) => setBody(e.target.value)} />
           </label>
-          <input key={fileKey} type="file" multiple aria-label="Attach files" className="block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx"
-            onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 5))} />
+          <input key={fileKey} disabled={cap === null || cap === 0} type="file" multiple aria-label="Attach files" className="block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx"
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
           {data.isHandler ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />Internal note (not shown to the requester)</label> : null}
           <button type="submit" disabled={busy || !body.trim()} className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
             {busy ? "Sending…" : internal ? "Add note" : "Send reply"}

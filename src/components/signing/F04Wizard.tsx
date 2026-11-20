@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardNotice } from "@/components/shared/wizard/WizardShell";
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { FieldError, WIZARD_INPUT, WizardLabel, WizardTextField } from "@/components/shared/wizard/fields";
 import AddressAutocomplete, { type AddressPick } from "@/components/shared/application-form/AddressAutocomplete";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import SignaturePad from "@/components/signing/SignaturePad";
+import SigningDone, { type NextStep } from "@/components/signing/SigningDone";
+import { softBreak } from "@/components/signing/softBreak";
+import { formatSignedAt } from "@/lib/signedTime";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type SigningView } from "@/lib/signingApi";
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
-import { correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
-import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
+import { commissionText, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice, choiceUnnamed,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
+import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
 /*
  * The Agent Application Form (F04) as a short step-by-step wizard (owner briefs 2026-11-19; round 3 "less typing, nicer finish"), built
@@ -96,6 +101,24 @@ function ChoiceChips({ id, label, value, error, required, onChange }: { id: stri
   );
 }
 
+/**
+ * A reference's email (2026-11-21): one line that grows and wraps at any point, so a long address is always fully visible in the box
+ * (an input would scroll it out of sight). Enter never adds a line; pasted line breaks are dropped.
+ */
+function EmailBox({ id, name, label, value, error, required, onChange }: { id: string; name: string; label: string; value: string; error?: string; required: boolean; onChange: (v: string) => void }) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => { const t = box.current; if (!t) return; t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; }, [value]);
+  return (
+    <div>
+      <WizardLabel htmlFor={id} required={required}>{label}</WizardLabel>
+      <textarea ref={box} id={id} name={name} rows={1} value={value} maxLength={320} inputMode="email" autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={Boolean(error)}
+        className={`${WIZARD_INPUT} resize-none overflow-hidden [overflow-wrap:anywhere]`} data-testid={id}
+        onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} onChange={(e) => onChange(e.target.value.replace(/[\r\n]+/g, ""))} />
+      <FieldError text={error} />
+    </div>
+  );
+}
+
 /** A Yes answer's upload (organisation chart, business profile): kept with the application on the server, opened by staff. */
 function Upload({ token, kind, file, error, onChange }: { token: string; kind: F04AttachmentKind; file: Attachments[F04AttachmentKind]; error?: string; onChange: (file: Attachments[F04AttachmentKind] | null) => void }) {
   const [busy, setBusy] = useState(false);
@@ -117,13 +140,13 @@ function Upload({ token, kind, file, error, onChange }: { token: string; kind: F
     <div data-testid={`f04-attach-${kind}`}>
       {file ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <i className="ri-attachment-2 text-primary-600" aria-hidden="true" /><span className="min-w-0 break-all font-medium text-foreground-900">{file.name}</span>
+          <i className="ri-attachment-2 text-primary-600" aria-hidden="true" /><span className="min-w-0 break-words font-medium text-foreground-900">{softBreak(file.name)}</span>
           <span className="text-xs text-foreground-500">{Math.max(1, Math.round(file.size / 1024))} KB</span>
           <button type="button" disabled={busy} onClick={() => void remove()} className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50">Remove</button>
         </div>
       ) : (
         <label className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-background-300 px-3 py-1.5 text-xs font-semibold text-foreground-700 hover:bg-background-100 ${busy ? "opacity-50" : ""}`}>
-          <i className="ri-upload-2-line" aria-hidden="true" />{busy ? "Uploading…" : `Upload the ${F04_ATTACHMENTS[kind].toLowerCase()} (PDF, PNG or JPEG, up to 5 MB)`}
+          <i className="ri-upload-2-line" aria-hidden="true" />{busy ? "Uploading…" : `Upload the ${F04_ATTACHMENTS[kind].toLowerCase()} (PDF, PNG or JPEG, up to ${Math.min(5, ruleNumber("agents.agent_application_attachment_cap_mib", 5))} MB)`}
           <input type="file" accept="application/pdf,image/png,image/jpeg" className="sr-only" disabled={busy} onChange={(e) => { void send(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
       )}
@@ -165,12 +188,53 @@ export interface F04ReviewControls {
   onSendBack: () => void;
   onApprove: () => void;
   onClose: () => void;
+  /** 2026-11-20: one line per referee in the summary (sent / completed / not completed) with Resend. */
+  refereeStatus?: (position: 1 | 2) => ReactNode;
+  /** 2026-11-20: the agreement signed with the form, shown as a card in the summary. */
+  agreement?: F04ReviewAgreement | null;
 }
+
+/** A signature shown in the review: a drawn picture (PNG data URL), or the typed name in the signing script. */
+export interface F04ReviewSignature { name: string; image: string | null; signedAt?: string | null }
+/** The agreement (P06) signed with the form: terms, the SLIT witness, the agency's witness, the agency admin's signature. */
+export interface F04ReviewAgreement {
+  commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | string | null;
+  slitWitness: F04ReviewSignature | null; agencyWitness: F04ReviewSignature | null; agencySignature: F04ReviewSignature | null;
+  /** 2026-11-21: GST on the commission and SLIT's signatory (signed when SLIT sent the application). */
+  commissionGst?: string | null; slitSignatory?: SlitSignatoryView | null;
+}
+/** SLIT's signatory block as shown (read-only): organisation, signature (picture or typed name), name, position, date. */
+export interface SlitSignatoryView { organisation: string; name: string; position: string; image: string | null; typed: string | null; signedOn: string | null }
+
+/** SLIT's signatory block on the agreement (2026-11-21), read-only: the same block in the pre-send preview, on the signing page and in the review. */
+export function SlitSignatoryBlock({ s, testId, note }: { s: SlitSignatoryView; testId: string; note?: string }) {
+  const day = s.signedOn ? String(s.signedOn).slice(0, 10).split("-").reverse().join("/") : "—";
+  return <div className="min-w-0 rounded-md border border-background-200 bg-background-50 p-3 text-sm" data-testid={testId}>
+    <p className="text-xs text-foreground-500">Signed for and on behalf of</p>
+    <p className="break-words font-semibold text-foreground-900" data-testid={`${testId}-organisation`}>{s.organisation}</p>
+    <div className="mt-2 min-h-12" data-testid={`${testId}-signature`}>
+      {s.image ? <img src={s.image} alt={`SLIT signature: ${s.name}`} className="max-h-16 max-w-full rounded border border-background-300 bg-white p-1" />
+        : s.typed ? <p className={`text-2xl leading-tight text-[#0d1a4d] ${SCRIPT_FONT}`}>{s.typed}</p>
+        : <p className="text-foreground-500">Signature not added yet</p>}
+    </div>
+    <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-3">
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Name</dt><dd className="break-words text-foreground-900" data-testid={`${testId}-name`}>{s.name || "—"}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Position</dt><dd className="break-words text-foreground-900" data-testid={`${testId}-position`}>{s.position || "—"}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Date</dt><dd className="text-foreground-900" data-testid={`${testId}-date`}>{day}</dd></div>
+    </dl>
+    {note ? <p className="mt-2 text-xs text-foreground-500">{note}</p> : null}
+  </div>;
+}
+/** The GST choice for the commission: radio buttons, so it is never left ambiguous (SLIT staff only, in Prepare application). */
+const GST_OPTIONS = [["exclusive", "GST exclusive"], ["inclusive", "GST inclusive"]] as const;
 
 /** The pre-send step (2026-11-20): staff fill the F04 before it goes; the agreement terms, the witness and the buttons live with the dialog. */
 export interface F04PrefillControls {
-  terms: { commencementDate: string; territory: string; commissionPercent: string }; onTerms: (terms: F04PrefillControls["terms"]) => void;
+  terms: { commencementDate: string; territory: string; commissionPercent: string; commissionGst: "" | "inclusive" | "exclusive" }; onTerms: (terms: F04PrefillControls["terms"]) => void;
   witness: { name: string; png: string | null }; onWitness: (witness: F04PrefillControls["witness"]) => void;
+  /** SLIT's signatory (2026-11-21): the sending admin's name and position, their signature (saved / drawn / typed) and the send date. */
+  signatory: { organisation: string; name: string; position: string; savedSignature: string | null; signedOn: string; method: "saved" | "drawn" | "typed"; png: string | null; save: boolean };
+  onSignatory: (signatory: F04PrefillControls["signatory"]) => void;
   message: string; onMessage: (message: string) => void;
   busy: "" | "save" | "send"; contact: { name: string; email: string } | null; savedNote: string | null;
   onSaveDraft: (state: F04Draft) => void; onSend: (state: F04Draft) => void; onClose: () => void;
@@ -195,22 +259,29 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
   const flags = useMemo(() => (admin ? reviewFlags : correctionFlags) ?? {}, [admin, reviewFlags, correctionFlags]);
   const order = useMemo(() => visibleSteps(mode, flags), [mode, flags]);
-  const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name, mode === "agent" || mode === "admin-prefill"),
+  const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name, (mode === "agent" || mode === "admin-prefill") && ruleText("agents.agent_application_yes_no_fallback", "No") === "No"),
     [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name, mode]);
   // F04 + P06 signed once (2026-11-20): the agreement's terms and the witness (preset by staff, or typed + drawn here).
   const combined = view.onboarding?.combined === true && !staff;
   const terms = view.onboarding?.agreement ?? null;
   const witnessPlan = view.onboarding?.witness ?? null;
   const needWitness = combined && !witnessPlan?.preset;
+  // Business Rules (agents.agency_witness_on_agreement): the agency's witness may be optional; one given still needs a name and a drawing.
+  const witnessOptional = ruleText("agents.agency_witness_on_agreement", "Required") === "Optional";
+  const witnessRequired = needWitness && !witnessOptional;
+  const rulesF04 = { refereeEmailsDistinct: ruleText("agents.referee_emails_must_differ", "Must be different") !== "May be the same", ownEmails: mode === "agent" || mode === "correction" ? [view.recipient.email] : [] };
+  const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [state, setState] = useState<F04Draft>(opening);
   // What the review opened with: staff changes are the difference from it.
   const [reviewBase, setReviewBase] = useState<F04Draft>(opening);
-  const firstStep = order.includes(opening.step) ? opening.step : order[0];
+  const firstStep = mode === "admin-review" ? REVIEW_STEP : order.includes(opening.step) ? opening.step : order[0];
   const [step, setStep] = useState(firstStep);
   const [furthest, setFurthest] = useState(firstStep);
   const [returnTo, setReturnTo] = useState<number | null>(null);
   const [tried, setTried] = useState<Set<number>>(new Set());
+  // Fields left at least once (2026-11-21): their errors show at once, before Next.
+  const [touched, setTouched] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachments>(() => (view.application?.attachments ?? {}) as Attachments);
   // The register's values are shown as text to confirm; Edit turns the same values into inputs. Nothing to show: inputs at once.
   // Staff and a correction see every answer as an input (each one can be flagged / is marked); the agent gets the confirm cards.
@@ -241,7 +312,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const persist = useCallback(async (at: number, force = false) => {
     // Staff review keeps no draft: Save changes writes the answers themselves.
     if (closed.current || staff) return true;
-    const draft = { ...stateRef.current, step: at };
+    const draft = { ...stateRef.current, step: at, stepId: STEPS[at]?.id };
     const json = JSON.stringify(draft);
     if (!force && json === lastSaved.current) return true;
     setSaved("saving");
@@ -258,19 +329,30 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     return () => window.clearTimeout(timer);
   }, [state, persist, staff]);
 
-  const problems = f04Problems(step, fields, state, attachments);
-  const shown = tried.has(step) ? problems : {};
-  const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments));
+  const problems = f04Problems(step, fields, state, attachments, rulesF04);
+  const shown = tried.has(step) ? problems : Object.fromEntries(Object.entries(problems).filter(([k]) => touched.has(k)));
+  // The agency admin's form (2026-11-21): Next / Sign and submit stay disabled until the step is complete, with what is missing beside them.
+  const gated = mode === "agent" || mode === "correction";
+  const missing = Object.values(problems)[0] ?? "";
+  const onBlurField = (e: FocusEvent<HTMLDivElement>) => {
+    const id = (e.target as HTMLElement).id ?? "";
+    if (!id.startsWith("f04-")) return;
+    const key = id.slice(4);
+    setTouched((t) => t.has(key) ? t : new Set(t).add(key));
+  };
+  const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments, rulesF04));
   const set = (key: string, value: string) => setState((s) => ({ ...s, answers: { ...s.answers, [key]: value } }));
   const setMany = (values: Record<string, string>) => setState((s) => ({ ...s, answers: { ...s.answers, ...values } }));
-  const warnings = step === 3 ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];
+  const warnings = step === F04_STEP.references ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];
   const signatureReady = method === "typed" ? (a.declarant_name ?? "").trim().length >= 2 : !!picture;
   // The witness (2026-11-20): a full name and a drawn signature, unless staff gave the witness before sending.
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
-  const witnessReady = !needWitness || (witnessName.length >= 2 && !!witnessPng);
+  const witnessReady = !needWitness || (witnessOptional && !witnessName && !witnessPng) || (witnessName.length >= 2 && !!witnessPng);
   const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && (!codeCheck.needed || !!codeCheck.session);
+  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
 
   const save = async () => {
+    if (busy === "save") return;
     setBusy("save");
     const ok = await persist(step, true);
     setNotice(ok ? { tone: "info", text: "Saved. Use the link in your email to come back and carry on; your answers will be filled in." } : { tone: "error", text: "Your answers could not be saved. Please try again." });
@@ -337,8 +419,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     setTried((t) => new Set(t).add(step));
     if (Object.keys(problems).length && !prefilling) {
       // A missing value hidden in a summary card opens its inputs.
-      if (step === 0) setEditCompany(true);
-      if (step === 1) { if (["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].some((k) => problems[k])) setEditContact(true); if (problems.office_street_address || problems.office_country || problems.office_postcode || problems.office_suburb) setEditAddress(true); }
+      if (step === F04_STEP.business) setEditCompany(true);
+      if (step === F04_STEP.contact) { if (["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].some((k) => problems[k])) setEditContact(true); if (problems.office_street_address || problems.office_country || problems.office_postcode || problems.office_suburb) setEditAddress(true); }
       setNotice({ tone: "error", text: "Some answers are missing or need a fix. They are marked below." }); return;
     }
     const target = returnTo ?? nextOf(step);
@@ -392,34 +474,76 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const officeLine = [a.office_street_address, [a.office_suburb, australian ? a.office_state : a.office_province, a.office_postcode].filter(Boolean).join(" "), a.office_country].filter((s) => (s ?? "").trim()).join(", ");
   const contactName = [a.contact_title, a.contact_given_name, a.contact_family_name].filter(Boolean).join(" ");
 
+  /** Long values (emails, the office address, web addresses) take the card's full width, so they wrap at "@", "." or "/" rather than mid-word. */
+  const WIDE_ROWS = new Set(["Email", "Office", "Website"]);
   const reviewSummary = () => {
-    const section = (index: number, rows: Array<[string, ReactNode]>) => !order.includes(index) ? null : (
-      <section key={index} className="rounded-lg border border-background-200 p-4" data-testid={`f04-review-${STEPS[index].id}`}>
+    const section = (index: number, rows: Array<[string, ReactNode]>, oneColumn = false) => !order.includes(index) ? null : (
+      <section key={index} className="min-w-0 rounded-lg border border-background-200 p-4" data-testid={`f04-review-${STEPS[index].id}`}>
         <div className="mb-2 flex items-center justify-between gap-3">
           <h4 className="text-sm font-semibold text-foreground-900">{STEPS[index].short}</h4>
           <button type="button" onClick={() => editStep(index)} className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid={`f04-review-edit-${STEPS[index].id}`}>Edit</button>
         </div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
-          {rows.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([label, v]) => <div key={label} className="min-w-0"><dt className="text-xs text-foreground-500">{label}</dt><dd className="break-words text-foreground-900">{v}</dd></div>)}
+        <dl className={`grid grid-cols-1 gap-x-6 text-sm ${oneColumn ? "gap-y-3" : "gap-y-1.5 sm:grid-cols-2"}`}>
+          {rows.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([label, v]) => <div key={label} className={`min-w-0 ${WIDE_ROWS.has(label) ? "sm:col-span-2" : ""}`}><dt className="text-xs text-foreground-500">{label}</dt><dd className="break-words text-foreground-900">{v}</dd></div>)}
         </dl>
       </section>);
     const yn = (k: string) => (yesNo(a[k]) === "YES" ? "Yes" : yesNo(a[k]) === "NO" ? "No" : "");
-    const ref = (n: number) => [a[`ref${n}_contact_name`], a[`ref${n}_position`], a[`ref${n}_organisation`]].filter((s) => (s ?? "").trim()).join(", ") + ((a[`ref${n}_email`] ?? "").trim() ? ` · ${a[`ref${n}_email`]}` : "") + ((a[`ref${n}_phone`] ?? "").trim() ? ` · ${formatPhone(a[`ref${n}_phone`])}` : "");
+    // One reference per row: name (position, organisation), then the email and the phone on lines of their own; staff see the referee's status.
+    const ref = (n: number): ReactNode => {
+      const v = (part: string) => (a[`ref${n}_${part}`] ?? "").trim();
+      if (!v("contact_name") && !v("email") && !v("phone")) return "";
+      const role = [v("position"), v("organisation")].filter(Boolean).join(", ");
+      return <div className="space-y-0.5" data-testid={`f04-review-ref-${n}`}>
+        <p className="font-medium">{v("contact_name") || "—"}{role ? <span className="font-normal text-foreground-600"> · {role}</span> : null}</p>
+        {v("email") ? <p className="text-foreground-800" data-testid={`f04-review-ref-${n}-email`}>{softBreak(v("email"))}</p> : null}
+        {v("phone") ? <p className="text-foreground-800">{formatPhone(v("phone"))}</p> : null}
+        {admin && review?.refereeStatus ? <div className="pt-1" data-testid={`f04-review-ref-${n}-status`}>{review.refereeStatus(n as 1 | 2)}</div> : null}
+      </div>;
+    };
+    const signatureCell = (label: string, sig: F04ReviewSignature | null, testId: string) => (
+      <div className="min-w-0 rounded-md border border-background-200 bg-background-50 p-3" data-testid={testId}>
+        <p className="text-xs text-foreground-500">{label}</p>
+        {sig ? <>
+          <p className="font-medium text-foreground-900">{sig.name || "—"}</p>
+          {sig.image ? <img src={sig.image} alt={`${label}: ${sig.name}`} className="mt-1 max-h-16 max-w-full rounded border border-background-300 bg-white p-1" data-testid={`${testId}-image`} />
+            : <p className={`mt-1 text-2xl leading-tight text-[#0d1a4d] ${SCRIPT_FONT}`} data-testid={`${testId}-typed`}>{sig.name}</p>}
+          {sig.signedAt ? <p className="mt-1 text-xs text-foreground-600" data-testid={`${testId}-date`}>Signed {formatSignedAt(sig.signedAt)}</p> : null}
+        </> : <p className="text-sm text-foreground-500">Not given</p>}
+      </div>);
+    const ag = admin ? review?.agreement ?? null : null;
+    const auDay = (iso: string | null | undefined) => iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "—";
+    const agreementCard = ag ? (
+      <section className="min-w-0 rounded-lg border border-background-200 p-4 lg:col-span-2" data-testid="f04-review-agreement">
+        <h4 className="mb-2 text-sm font-semibold text-foreground-900">Agreement (P06)</h4>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-4">
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commencement</dt><dd className="text-foreground-900" data-testid="f04-review-agreement-commencement">{auDay(ag.commencementDate)}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Ends</dt><dd className="text-foreground-900">{auDay(ag.expiryDate)}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Territory</dt><dd className="break-words text-foreground-900">{ag.territory || "—"}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commission</dt><dd className="text-foreground-900" data-testid="f04-review-agreement-commission">{commissionText(ag.commissionPercent, ag.commissionGst) || "—"}</dd></div>
+        </dl>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {signatureCell("Agency admin's signature", ag.agencySignature, "f04-review-agreement-signature")}
+          {signatureCell("Agency's witness", ag.agencyWitness, "f04-review-agreement-agency-witness")}
+          {signatureCell("SLIT witness", ag.slitWitness, "f04-review-agreement-slit-witness")}
+        </div>
+        {ag.slitSignatory ? <div className="mt-3"><SlitSignatoryBlock testId="f04-review-agreement-slit-signatory" s={ag.slitSignatory} /></div> : null}
+      </section>) : null;
     return (
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" data-testid="f04-review">
-        {section(0, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : ""],
+        {section(F04_STEP.business, [["Legal name", a.agent_legal_entity], ["Trading name", a.agent_trading_name], ["ABN", a.agent_abn ? printAbn(a.agent_abn) : ""], ["ACN", state.acn ? printAcn(state.acn) : admin ? "—" : ""],
           ["Year founded", a.agent_year_founded], ["MARN", state.marn]])}
-        {section(1, [["Contact", contactName], ["Position", a.contact_position], ["Email", a.contact_email], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", a.agent_website]])}
-        {section(2, [...QUESTIONS.filter((q) => asks(q.key)).map((q): [string, ReactNode] => [q.short, yn(q.key) + (yesNo(a[q.key]) === "YES" && q.attach && attachments[q.attach] ? ` · ${attachments[q.attach]!.name}` : "")]),
+        {section(F04_STEP.references, [["Reference 1", ref(1)], ["Reference 2", ref(2)]], true)}
+        {section(F04_STEP.contact, [["Contact", contactName], ["Position", a.contact_position], ["Email", softBreak(a.contact_email)], ["Phone", a.contact_phone ? formatPhone(a.contact_phone) : ""], ["Office", officeLine], ["Website", softBreak(a.agent_website)]])}
+        {section(F04_STEP.agency, [...QUESTIONS.filter((q) => asks(q.key)).map((q): [string, ReactNode] => [q.short, yn(q.key) + (yesNo(a[q.key]) === "YES" && q.attach && attachments[q.attach] ? ` · ${attachments[q.attach]!.name}` : "")]),
           ["Services", a.services_provided], ["Other countries", a.other_countries_recruited],
           ["Numbers", NUMBERS.filter(([k]) => (a[k] ?? "").trim()).map(([k, label]) => `${label}: ${a[k]}`).join(" · ")]])}
-        {section(3, [["Reference 1", ref(1)], ["Reference 2", ref(2)]])}
+        {agreementCard}
       </div>
     );
   };
 
   const body = (() => {
-    if (step === 0) {
+    if (step === F04_STEP.business) {
       const noBox = COMPANY_KEYS.filter((k) => !has(k) && (a[k] ?? "").trim());
       return (
         <div className="space-y-5">
@@ -460,7 +584,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               <div><dt className="text-foreground-500">ABN status</dt><dd className="text-foreground-800">{facts?.abnStatus ? `${facts.abnStatus}${facts.statusFrom ? ` from ${abrDateWords(facts.statusFrom)}` : ""}` : "—"}</dd></div>
               <div><dt className="text-foreground-500">GST</dt><dd className="text-foreground-800">{gst === "YES" ? `Registered${facts?.gstRegistered && facts.gstFrom ? ` from ${abrDateWords(facts.gstFrom)}` : ""}` : gst === "NO" ? "Not registered" : "—"}</dd></div>
             </dl>
-            {Object.keys(shown).some((k) => COMPANY_KEYS.includes(k as never) || k === "acn") && !editCompany ? <FieldError text="Some details are missing: select Edit." /> : null}
+            {Object.keys(gated ? problems : shown).some((k) => COMPANY_KEYS.includes(k as never) || k === "acn") && !editCompany ? <FieldError text="Some details are missing: select Edit." /> : null}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {frame(["marn"], <WizardTextField id="f04-marn" name="marn" label="MARA number (MARN), if registered" required={false} value={state.marn} error={shown.marn} inputMode="numeric" maxLength={10} testId="f04-marn"
@@ -472,7 +596,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         </div>
       );
     }
-    if (step === 1) {
+    if (step === F04_STEP.contact) {
       const pick = (p: AddressPick) => { setMany({ office_street_address: streetOf(p), office_suburb: p.suburb, office_state: p.state, office_postcode: p.postcode, office_province: "", office_country: "Australia" }); setEditAddress(false); };
       return (
         <div className="space-y-5">
@@ -491,7 +615,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 {text("contact_email", "Email", { type: "email", autoComplete: "email" })}
                 {phone("contact_phone", "Phone")}
               </div>
-            ) : ["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].map((k) => shown[k] ? <FieldError key={k} text={shown[k]} /> : null)}
+            ) : ["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].map((k) => (gated ? problems : shown)[k] ? <FieldError key={k} text={(gated ? problems : shown)[k]} /> : null)}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {has("contact_title") ? frame(["contact_title"], <div>
@@ -525,13 +649,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 <div className="sm:col-span-6">{text("office_country", "Country", { autoComplete: "country-name", noFrame: true })}</div>
               </div>
             )}
-            {!editAddress ? [shown.office_street_address, shown.office_country, shown.office_postcode, shown.office_suburb].map((t, i) => <FieldError key={i} text={t} />) : null}
+            {!editAddress ? (() => { const s = gated ? problems : shown; return [s.office_street_address, s.office_country, s.office_postcode, s.office_suburb].map((t, i) => <FieldError key={i} text={t} />); })() : null}
           </fieldset>, "the office address")}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{text("agent_website", "Website", { autoComplete: "url", required: false, placeholder: "https://" })}</div>
         </div>
       );
     }
-    if (step === 2) return (
+    if (step === F04_STEP.agency) return (
       <div className="space-y-4">
         <div className="space-y-2">
           {QUESTIONS.filter((q) => asks(q.key)).map((q) => {
@@ -565,7 +689,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         </details>
       </div>
     );
-    if (step === 3) return (
+    if (step === F04_STEP.references) return (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {[1, 2].map((n) => {
           const k = (part: string) => `ref${n}_${part}`;
@@ -573,7 +697,10 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             <section key={n} className="rounded-lg border border-background-200 p-4" data-testid={`f04-reference-${n}`}>
               <h3 className="mb-3 text-sm font-semibold text-foreground-900">Reference {n}</h3>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {REF_PARTS.filter(([part]) => ["contact_name", "organisation", "position", "email"].includes(part)).map(([part, label, must]) => text(k(part), label, { required: must, type: part === "email" ? "email" : undefined }))}
+                {/* 2026-11-21: Contact name + Organisation, then Position, Email and Phone each on their own full-width row. */}
+                {REF_PARTS.filter(([part]) => part === "contact_name" || part === "organisation").map(([part, label, must]) => text(k(part), label, { required: must }))}
+                {has(k("position")) ? <div className="sm:col-span-2">{text(k("position"), "Position", { required: REF_PARTS.find(([p]) => p === "position")?.[2] ?? false })}</div> : null}
+                {has(k("email")) ? <div className="sm:col-span-2">{frame([k("email")], <EmailBox id={`f04-${k("email")}`} name={k("email")} label="Email" value={a[k("email")] ?? ""} error={shown[k("email")]} required onChange={(v) => set(k("email"), v)} />, `reference ${n}'s email`)}</div> : null}
                 <div className="sm:col-span-2">{phone(k("phone"), "Phone")}</div>
                 {has(k("address")) ? <div className="sm:col-span-2">{frame([k("address")], <div>
                   {manualRef[n] || (a[k("address")] ?? "").trim() ? (
@@ -602,14 +729,50 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           {reviewSummary()}
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-agreement">
             <h3 className="text-sm font-semibold text-foreground-900">Education Agent Agreement (P06): the terms</h3>
-            <p className="text-sm text-foreground-600">Printed on the agreement the agency admin signs together with this form (one signature on both). SLIT countersigns when you approve the application.</p>
+            <p className="text-sm text-foreground-600">Printed on the agreement the agency admin signs together with this form (one signature on both). You sign it for SLIT below; your signature is printed when you send.</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <WizardTextField id="f04-prefill-commencement" name="commencementDate" type="date" label="Commencement date (Item 5)" required value={t.commencementDate} onChange={(v) => prefill.onTerms({ ...t, commencementDate: v })} testId="f04-prefill-commencement" />
               <WizardTextField id="f04-prefill-territory" name="territory" label="Territory (Item 3)" required value={t.territory} maxLength={200} placeholder="e.g. India, Nepal" onChange={(v) => prefill.onTerms({ ...t, territory: v })} testId="f04-prefill-territory" />
-              <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder="25" onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
+              <div className="min-w-0">
+                <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder={commissionSuggested()} onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
+                {/* GST on the commission (2026-11-21): required, SLIT staff only; radio buttons so it is never ambiguous. */}
+                <fieldset className="mt-2" data-testid="f04-prefill-gst">
+                  <legend className="text-label font-medium text-foreground-800">GST on the commission<span className="text-primary-600"> *</span></legend>
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">{GST_OPTIONS.map(([value, label]) =>
+                    <label key={value} className="flex cursor-pointer items-center gap-2 text-sm"><input type="radio" name="f04-prefill-gst" value={value} checked={t.commissionGst === value}
+                      onChange={() => prefill.onTerms({ ...t, commissionGst: value })} className="h-4 w-4" data-testid={`f04-prefill-gst-${value}`} />{label}</label>)}</div>
+                  {!t.commissionGst ? <p className="mt-1 text-xs text-amber-800" data-testid="f04-prefill-gst-missing">Choose one before sending.</p> : null}
+                </fieldset>
+              </div>
             </div>
-            <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date.</p>
+            {t.commissionPercent ? <p className="text-sm text-foreground-800" data-testid="f04-prefill-commission-text">Commission printed: <strong>{commissionText(t.commissionPercent, t.commissionGst) || "—"}</strong>{t.commissionGst ? "" : " (choose GST inclusive or exclusive)"}</p> : null}
+            <p className="text-xs text-foreground-500">The agreement runs {termYears === 1 ? "one year" : `${termYears} years`} from the commencement date.</p>
           </section>
+          {(() => {
+            const s = prefill.signatory;
+            const set = (patch: Partial<F04PrefillControls["signatory"]>) => prefill.onSignatory({ ...s, ...patch });
+            const image = s.method === "saved" ? s.savedSignature : s.method === "drawn" ? s.png : null;
+            return <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-signatory">
+              <h3 className="text-sm font-semibold text-foreground-900">SLIT signatory on the agreement</h3>
+              <p className="text-sm text-foreground-600">Signed for {s.organisation}. Printed on the agreement when you send, dated the day you send; the agency admin sees it and cannot change it.</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <WizardTextField id="f04-prefill-signatory-name" name="adminName" label="SLIT signatory name" required value={s.name} maxLength={150} onChange={(v) => set({ name: v })} testId="f04-prefill-signatory-name" />
+                {/* 2026-11-21: the same position chips as the agency contact (CEO / Director / Manager / Owner / Other + text); the value is the printed text. */}
+                <ChoiceChips id="prefill-signatory-position" label="SLIT signatory position" required value={s.position} error={choiceUnnamed(s.position) ? "Type the position." : undefined} onChange={(v) => set({ position: v })} />
+              </div>
+              <div>
+                <p className="mb-2 text-label font-medium text-foreground-800">SLIT signature<span className="text-primary-600"> *</span></p>
+                <div role="tablist" className="mb-3 flex flex-wrap gap-2">{([["saved", "My saved signature"], ["drawn", "Draw"], ["typed", "Type my name"]] as const).filter(([id]) => id !== "saved" || s.savedSignature).map(([id, label]) =>
+                  <button key={id} type="button" role="tab" aria-selected={s.method === id} onClick={() => set({ method: id, png: null })} data-testid={`f04-prefill-signature-${id}`}
+                    className={`cursor-pointer rounded-full border px-4 py-1.5 text-sm font-medium ${s.method === id ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-white"}`}>{label}</button>)}</div>
+                {s.method === "drawn" && !s.png ? <div className="space-y-2"><SignaturePad onChange={(png) => set({ png })} />
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.save} onChange={(e) => set({ save: e.target.checked })} className="h-4 w-4" />Save as my signature for next time</label></div> : null}
+                {s.method === "drawn" && s.png ? <button type="button" className="mb-2 cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => set({ png: null })} data-testid="f04-prefill-signature-redraw">Draw again</button> : null}
+              </div>
+              <SlitSignatoryBlock testId="f04-prefill-signatory-preview" note="Preview: this is how SLIT's block prints on the agreement."
+                s={{ organisation: s.organisation, name: s.name.trim(), position: choiceUnnamed(s.position) ? "" : s.position.trim(), image, typed: s.method === "typed" ? s.name.trim() || null : null, signedOn: s.signedOn }} />
+            </section>;
+          })()}
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-witness">
             <h3 className="text-sm font-semibold text-foreground-900">SLIT witness on the agreement (optional)</h3>
             <p className="text-sm text-foreground-600">{PREFILL_WITNESS_HINT}</p>
@@ -636,17 +799,20 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     const agreementSection = combined ? (
       <section className="space-y-4 border-t border-background-200 pt-5" data-testid="f04-agreement">
         <h3 className="text-sm font-semibold text-foreground-900">Education Agent Agreement (P06)</h3>
-        <p className="text-sm text-foreground-800">Your application and the agent agreement are signed together: <strong>your one signature below signs both documents.</strong> SLIT countersigns the agreement when your application is approved and emails you the completed copy.</p>
+        <p className="text-sm text-foreground-800">Your application and the agent agreement are signed together: <strong>your one signature below signs both documents.</strong> {terms?.slitSignatory
+          ? "SLIT has already signed the agreement (below). When your application is approved you receive the completed copy."
+          : "SLIT countersigns the agreement when your application is approved and emails you the completed copy."}</p>
         {terms ? <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg border border-background-200 p-4 text-sm sm:grid-cols-4" data-testid="f04-agreement-terms">
           <div><dt className="text-xs text-foreground-500">Commencement (Item 5)</dt><dd className="font-medium text-foreground-900">{auDate(terms.commencementDate)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Ends</dt><dd className="font-medium text-foreground-900">{auDate(terms.expiryDate)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Territory (Item 3)</dt><dd className="font-medium text-foreground-900">{terms.territory || "—"}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Commission (Item 4)</dt><dd className="font-medium text-foreground-900">{terms.commissionPercent != null && terms.commissionPercent !== "" ? `${terms.commissionPercent}%` : "—"}</dd></div>
+          <div><dt className="text-xs text-foreground-500">Commission (Item 4)</dt><dd className="font-medium text-foreground-900" data-testid="f04-agreement-commission">{commissionText(terms.commissionPercent, terms.commissionGst) || "—"}</dd></div>
         </dl> : null}
+        {terms?.slitSignatory ? <SlitSignatoryBlock testId="f04-agreement-slit-signatory" s={terms.slitSignatory} note="Signed by SLIT before sending; it cannot be changed here." /> : null}
         {view.url ? <a href={view.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary-700 underline underline-offset-2" data-testid="f04-agreement-read">
           <i className="ri-file-text-line" aria-hidden="true" />Read the full agreement (PDF: the application form, then the agreement)</a> : null}
         <div className="space-y-3 rounded-lg border border-background-200 p-4" data-testid="f04-witness">
-          <h4 className="text-sm font-semibold text-foreground-900">Witness to your signature{needWitness ? <span className="text-primary-600"> *</span> : null}</h4>
+          <h4 className="text-sm font-semibold text-foreground-900">Witness to your signature{witnessRequired ? <span className="text-primary-600"> *</span> : needWitness ? <span className="text-xs font-normal text-foreground-500"> (optional)</span> : null}</h4>
           {witnessPlan?.preset ? <div className="flex flex-wrap items-center gap-4 text-sm" data-testid="f04-witness-preset">
             <span><span className="text-xs text-foreground-500">Witness</span><br /><strong>{witnessPlan.name}</strong></span>
             {witnessPlan.image ? <img src={witnessPlan.image} alt="The witness's signature" className="max-h-16 rounded border border-background-300 bg-white p-1" /> : null}
@@ -654,11 +820,11 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           </div> : <>
             <p className="text-sm text-foreground-600">Someone who watches you sign types their full name and draws their signature here. A typed signature is not accepted.</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <WizardTextField id="f04-witness-name" name={WITNESS_NAME_KEY} label="Witness full name" required value={a[WITNESS_NAME_KEY] ?? ""} maxLength={150} autoComplete="off"
-                error={tried.has(REVIEW_STEP) && witnessName.length < 2 ? "Enter your witness's full name." : undefined} onChange={(v) => set(WITNESS_NAME_KEY, v)} testId="f04-witness-name" />
+              <WizardTextField id="f04-witness-name" name={WITNESS_NAME_KEY} label="Witness full name" required={witnessRequired} value={a[WITNESS_NAME_KEY] ?? ""} maxLength={150} autoComplete="off"
+                error={tried.has(REVIEW_STEP) && !witnessReady && witnessName.length < 2 ? "Enter your witness's full name." : undefined} onChange={(v) => set(WITNESS_NAME_KEY, v)} testId="f04-witness-name" />
             </div>
             <div>
-              <p className="mb-2 text-label font-medium text-foreground-800">Witness signature (drawn) <span className="text-primary-600">*</span></p>
+              <p className="mb-2 text-label font-medium text-foreground-800">Witness signature (drawn){witnessRequired ? <span className="text-primary-600"> *</span> : null}</p>
               <SignaturePad onChange={setWitnessPng} />
             </div>
           </>}
@@ -727,16 +893,20 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const last = step === REVIEW_STEP;
   const stepNumber = order.indexOf(step) + 1;
   const reviewBusy = review?.busy ?? "";
+  const changeCount = Object.keys(changes).length;
+  const adminSave = admin && review ? (
+    <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={!dirty || !!reviewBusy} title={dirty ? `${changeCount} unsaved change${changeCount === 1 ? "" : "s"}` : "No unsaved changes"} onClick={() => void saveReview()} data-testid="f04-review-save">
+      <i className="ri-save-line" aria-hidden="true" />{reviewBusy === "save" ? "Saving…" : "Save changes"}
+      {dirty && reviewBusy !== "save" ? <span className="rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-900" data-testid="f04-review-dirty">{changeCount}</span> : null}</button>) : null;
   const adminButtons = admin && review ? (
     <span className="flex flex-wrap items-center justify-end gap-2">
-      <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-background-300 bg-background-50 px-4 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={!dirty || !!reviewBusy} onClick={() => void saveReview()} data-testid="f04-review-save"><i className="ri-save-line" aria-hidden="true" />{reviewBusy === "save" ? "Saving…" : "Save changes"}</button>
-      {last ? <>
+      <>
         <button type="button" className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} onClick={review.onSendBack} data-testid="f04-review-send-back"><i className="ri-arrow-go-back-line" aria-hidden="true" />{reviewBusy === "back" ? "Sending…" : "Send back for correction"}</button>
         <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!Object.keys(flags).length || dirty || !!review.blocked || !!reviewBusy} title={Object.keys(flags).length ? "Remove the flags, or send the application back" : undefined}
           onClick={review.onApprove} data-testid="f04-review-approve">{reviewBusy === "approve" ? "Approving…" : "Approve and activate agency"}<i className="ri-check-double-line" aria-hidden="true" /></button>
-      </> : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!reviewBusy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}
+      </>
     </span>) : null;
   // The pre-send step: Save draft at any step; Send to point of contact on the last one (the dialog checks the terms and the witness).
   const prefillBusy = prefill?.busy ?? "";
@@ -751,31 +921,35 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const savedNote = saved === "saving" ? "Saving…" : saved === "saved" ? "Saved ✓" : saved === "error" ? "Not saved" : "";
   const saveLater = (
     <span className="flex items-center gap-2 whitespace-nowrap">
-      <button type="button" onClick={() => void save()} disabled={!!busy} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50" data-testid="f04-save-later">
+      <button type="button" onClick={() => void save()} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid="f04-save-later">
         {busy === "save" ? "Saving…" : "Save and continue later"}</button>
       {savedNote && busy !== "save" ? <span role="status" aria-live="polite" className={`text-xs ${saved === "error" ? "text-red-700" : "text-foreground-500"}`} data-testid="f04-saved">{savedNote}</span> : null}
     </span>);
   return (
-    <div ref={top} className="scroll-mt-4" onKeyDown={onKey}>
+    <div ref={top} className="scroll-mt-4" onKeyDown={onKey} onBlur={onBlurField}>
       <WizardShell variant={staff ? "modal" : "page"} stickyFooter={!staff} icon="ri-file-user-line" title={admin ? "Review application" : prefilling ? "Prepare the application" : correcting ? "Correct your application" : combined ? "Agent application and agreement" : "Agent application form"}
         onClose={admin ? review?.onClose : prefilling ? prefill?.onClose : undefined}
-        subtitle={<>{admin ? "Agent application of" : prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
+        subtitle={admin ? <>Agent application of <strong>{view.onboarding?.agencyName ?? "the agency"}</strong> · Review the application, then approve or send it back.</> : <>{prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
         stepper={<div data-testid="f04-stepper"><WizardStepper items={order.map((i) => ({ id: STEPS[i].id, short: STEPS[i].short, icon: STEPS[i].icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={order.indexOf(step)} onSelect={(n) => goTo(order[n])} /></div>}
-        footerStart={<>
+        footerStart={admin ? adminSave : <>
           {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
-          {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : admin ? (dirty ? <span className="text-xs text-amber-800" data-testid="f04-review-dirty">{Object.keys(changes).length} unsaved change{Object.keys(changes).length === 1 ? "" : "s"}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
+          {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
-        footerEnd={adminButtons ?? prefillButtons ?? (last
+        footerEnd={adminButtons ?? prefillButtons ?? <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          {(last ? submitHint && !staff : gated && missing) && !busy ? <span className="max-w-[18rem] text-right text-xs text-foreground-600" role="status" aria-live="polite" data-testid="f04-next-hint">
+            <i className="ri-information-line mr-1 text-amber-600" aria-hidden="true" />{last ? submitHint : missing}</span> : null}
+          {last
           ? <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!canSubmit || !!busy} onClick={() => void submit()} data-testid="f04-submit">{busy === "sign" ? "Submitting…" : "Sign and submit"}<i className="ri-check-line" aria-hidden="true" /></button>
-          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>)}
+          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy || (gated && !!missing)} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}</span>}
         notices={<>
           {notice ? <WizardNotice tone={notice.tone}>{notice.text}</WizardNotice> : null}
-          {last && !staff && !canSubmit && !busy ? <WizardNotice tone="info">{Object.keys(problems).length ? "Tick every statement and give your name and role." : !signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code."}</WizardNotice> : null}
         </>}>
         {correcting && correction ? <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" data-testid="f04-correction-banner">
           <p className="font-semibold"><i className="ri-flag-2-fill mr-1" aria-hidden="true" />SLIT has asked you to correct {Object.keys(flags).length} answer{Object.keys(flags).length === 1 ? "" : "s"} (highlighted). Everything else stays as you signed it.</p>
           {correction.message ? <p className="mt-1 whitespace-pre-line" data-testid="f04-correction-message">{correction.message}</p> : null}
         </div> : null}
+        {admin && step !== REVIEW_STEP ? <button type="button" onClick={() => { setReturnTo(null); show(REVIEW_STEP); }} className="mb-3 inline-flex cursor-pointer items-center gap-1 text-sm font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid="f04-review-back-summary">
+          <i className="ri-arrow-left-line" aria-hidden="true" />Back to Review and decide</button> : null}
         <h3 className="mb-4 font-heading text-base font-semibold text-foreground-950">{admin && step === REVIEW_STEP ? "Review and decide" : prefilling && step === REVIEW_STEP ? "Check and send" : STEPS[step].title}</h3>
         {body}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-500">
@@ -787,43 +961,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   );
 }
 
-/** The tick drawn once after signing (no motion when the reader asks for less: index.css). */
-function SuccessTick() {
-  return (
-    <svg viewBox="0 0 52 52" className="f04-tick-pop h-16 w-16 text-primary-600" aria-hidden="true" data-testid="f04-success-tick">
-      <circle className="f04-tick-circle" cx="26" cy="26" r="24" fill="none" stroke="currentColor" strokeWidth="3" />
-      <path className="f04-tick-check" d="M15 27 l7 7 l15 -16" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/** After submit: a tick, what happens next, and the signed application to download. */
-export function F04Done({ view, justSigned }: { view: SigningView; justSigned: boolean }) {
+/** After submit: a tick, what happens next, and the signed application to download (SigningDone, shared by every signing link). */
+export function F04Done({ view, justSigned, fetchUrl }: { view: SigningView; justSigned: boolean; fetchUrl: () => Promise<string> }) {
   // 2026-11-20: the agreement was signed with the form; SLIT countersigns it on approval (no second signature).
-  const steps: Array<[string, string]> = [["ri-mail-send-line", "We've emailed your 2 referees"], ["ri-search-eye-line", "SLIT reviews"],
+  const steps: NextStep[] = [["ri-mail-send-line", "We've emailed your 2 referees"], ["ri-search-eye-line", "SLIT reviews"],
     ["ri-file-text-line", view.onboarding?.combined ? "You'll receive the countersigned agreement" : "You'll receive the agent agreement"]];
   return (
     <WizardShell variant="page" icon="ri-checkbox-circle-line" title="Application submitted" subtitle={view.onboarding?.agencyName ? `Agent application for ${view.onboarding.agencyName}` : "Agent application"}
-      stepper={null} footerStart={null}
-      footerEnd={<a href={view.url} download className={WIZARD_PRIMARY_CLASS} data-testid="f04-download"><i className="ri-download-line" aria-hidden="true" />Download signed PDF</a>}>
-      <div role="status" className="flex flex-col items-center gap-3 py-2 text-center text-sm text-foreground-800" data-testid={justSigned ? "f04-submitted" : "f04-already-submitted"}>
-        <SuccessTick />
-        <p className="text-base font-semibold text-foreground-950">{justSigned ? "Thank you. Your application has been submitted." : "This application has been signed and submitted."}</p>
-        {view.signedAt ? <p className="text-xs text-foreground-500">Signed {new Date(view.signedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}</p> : null}
-      </div>
-      <section className="mt-5" data-testid="f04-next-steps">
-        <h3 className="mb-3 text-center text-sm font-semibold text-foreground-900">What happens next</h3>
-        <ol className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-center">
-          {steps.map(([icon, label], i) => (
-            <li key={label} className="flex items-center gap-2 sm:contents">
-              <span className="flex flex-1 items-center gap-2 rounded-lg border border-background-200 bg-background-100/60 px-3 py-2 text-sm text-foreground-900 sm:flex-none">
-                <i className={`${icon} text-primary-600`} aria-hidden="true" />{label}</span>
-              {i < steps.length - 1 ? <i className="ri-arrow-right-line hidden text-foreground-400 sm:inline" aria-hidden="true" /> : null}
-            </li>
-          ))}
-        </ol>
-        <p className="mt-4 text-center text-xs text-foreground-500">The download link works for a few minutes; reload this page for a new one.</p>
-      </section>
+      stepper={null} footerStart={null} footerEnd={null}>
+      <SigningDone message={justSigned ? "Thank you. Your application has been submitted." : "This application has been signed and submitted."}
+        testId={justSigned ? "f04-submitted" : "f04-already-submitted"} signedAt={view.signedAt} steps={steps} fetchUrl={fetchUrl} downloadTestId="f04-download" />
     </WizardShell>
   );
 }

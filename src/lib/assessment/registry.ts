@@ -156,6 +156,11 @@ export const QUESTION_TYPES: QuestionType[] = [
 
 export const TYPE_BY_ID: Record<string, QuestionType> = Object.fromEntries(QUESTION_TYPES.map((t) => [t.id, t]));
 export const questionType = (id: string): QuestionType | undefined => TYPE_BY_ID[id];
+/** Changes the starting config of a type's new questions (the screens set it from Business Rules). */
+export function setQuestionDefaults(typeId: string, patch: Record<string, unknown>) {
+  const t = TYPE_BY_ID[typeId];
+  if (t) t.defaultConfig = { ...t.defaultConfig, ...patch };
+}
 export const GROUP_LABEL: Record<TypeGroup, string> = { content: "Content", text: "Text & numbers", choice: "Choices", structured: "Structured", evidence: "Evidence", assessor: "Assessor records" };
 export const MARKING_LABEL: Record<MarkingMode, string> = { none: "No marking", auto: "Auto-check (suggests)", criteria: "Criteria (manual)", rubric: "Rubric", observation: "Observation" };
 

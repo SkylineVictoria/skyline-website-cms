@@ -561,7 +561,8 @@ export function stepTimer(action: string) {
  * Prepare application dialog asks for it when it opens, agent_onboarding_presend_warm, so a send rarely builds it).
  */
 export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTemplate, agreement: OnboardingTemplate): Promise<Uint8Array> {
-  const key = `combined:${form.id}:${form.sourceHash.slice(0, 16)}:${agreement.id}:${agreement.sourceHash.slice(0, 16)}`;
+  // ":i4r1" (2026-11-21): the cached blank has the P06 Item 4 GST words removed (redacted), so blanks cached before are not reused.
+  const key = `combined:${form.id}:${form.sourceHash.slice(0, 16)}:${agreement.id}:${agreement.sourceHash.slice(0, 16)}:i4r1`;
   const cached = await ctx.rpc("agency_onboarding_blank_cache_get", { p_key: key }) as { path: string; sha256: string } | null;
   if (cached?.path) {
     try { return await ctx.fileBytes(cached.path, cached.sha256); } catch { /* a missing or changed file: built again below */ }
@@ -569,7 +570,16 @@ export async function mergedBlank(ctx: OnboardingContext, form: OnboardingTempla
   const timer = stepTimer("onboarding_merge_blanks");
   const [formSource, agreementSource] = await Promise.all([ctx.fileBytes(form.sourcePath, form.sourceHash), ctx.fileBytes(agreement.sourcePath, agreement.sourceHash)]);
   timer.lap("io_download");
-  const merged = await (await onboardingPdfModule()).mergePdfs([formSource, agreementSource]);
+  // P06 Item 4 (2026-11-21): "Including/Excluding GST. This applies to eligible onshore and offshore" is removed from the blank's text
+  // (true redaction) once, here; every send prints that tail again with the chosen basis (commissionGstWords).
+  const { redactLineFrom } = await import("../_shared/pdf-redact.ts");
+  const formPages = Number(form.sourcePages) || AGENT_ONBOARDING_DOCS.form.pages;
+  let redacted = false;
+  const merged = await (await onboardingPdfModule()).mergePdfs([formSource, agreementSource], (doc) => {
+    const page = doc.getPages()[formPages + ITEM4_PAGE - 1];
+    if (page) redacted = redactLineFrom(doc, page, { baseline: ITEM4_BASELINE, from: ITEM4_REDACT_FROM });
+  });
+  if (!redacted) console.warn(JSON.stringify({ event: "onboarding_item4_not_redacted", agreement: agreement.id })); // the send still removes it (stamp)
   timer.lap("merge");
   const sha = await sha256Hex(merged);
   const path = `templates/${form.id}/combined-${agreement.id}-${ctx.ports.uuid()}.pdf`;
@@ -640,6 +650,8 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
 
 /** The rest of the P06 Item 4 line after "Percentage of tuition fee ", as the blank prints it with the GST basis left open. */
 export const ITEM4_LINE_TAIL = "GST. This applies to eligible onshore and offshore";
+/** Where the GST words are on the P06 blank (v2, A4): agreement page 11, baseline 444.11 pt; removed from "Including/Excluding" on. */
+export const ITEM4_PAGE = 11, ITEM4_BASELINE = 444.11, ITEM4_REDACT_FROM = "Including/Excluding";
 /**
  * Item 4 with its GST choice on the agreement (2026-11-21, owner): the sentence reads "10% Percentage of tuition fee Including GST." (or
  * Excluding); "Including/Excluding" is never printed on a generated agreement. The words from "Including/Excluding" to the end of that
@@ -651,12 +663,13 @@ export const ITEM4_LINE_TAIL = "GST. This applies to eligible onshore and offsho
  */
 export function commissionGstWords(placed: PlacedField[], terms: { commissionPercent: string; commissionGst?: string | null }): PlacedField | null {
   const box = placed.find((f) => f.key === "agent_commission_percent");
-  const pct = String(terms.commissionPercent ?? "").replace(/%/g, "").trim();
-  if (!box || !pct || !isCommissionGst(terms.commissionGst)) return null;
-  const W = 595.28, H = 841.89, boxTop = 454.28, coverTop = 453.4, coverBottom = 441.2, baseline = 444.11;
+  if (!box) return null;
+  // No GST choice (an onboarding sent before 2026-11-21, corrected now): the blank's own words, since the blank no longer has them.
+  const word = terms.commissionGst === "inclusive" ? "Including" : terms.commissionGst === "exclusive" ? "Excluding" : ITEM4_REDACT_FROM;
+  const W = 595.28, H = 841.89, boxTop = 454.28, coverTop = 453.4, coverBottom = 441.2;
   return { ...box, key: "agent_commission_gst", type: "text", role: "sender", required: false, label: "Commission GST basis",
     x: 270.49 / W, w: (561.8 - 270.49) / W, y: box.y + (boxTop - coverTop) / H, h: (coverTop - coverBottom) / H,
-    value: `${terms.commissionGst === "inclusive" ? "Including" : "Excluding"} ${ITEM4_LINE_TAIL}`, inline: { font: "Calibri", size: 9.96, baseline: baseline - coverBottom } };
+    value: `${word} ${ITEM4_LINE_TAIL}`, inline: { font: "Calibri", size: 9.96, baseline: ITEM4_BASELINE - coverBottom, redactFrom: ITEM4_REDACT_FROM } };
 }
 
 /** Send to point of contact: the draft is saved, the combined request made and emailed. */

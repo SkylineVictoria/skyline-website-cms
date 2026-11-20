@@ -283,13 +283,14 @@ const personName = (value: unknown) => str(value).toLowerCase().replace(/[^a-zÀ
 /**
  * Signing-time checks of a signed F04 (owner brief, 2026-11-19): the title is one of the list; each referee's phone is a full number with
  * its country code; the two referees have different emails and phones; neither referee is the applicant (their contact email, phone or
- * name). The same name on both referees is only a warning.
+ * name). The same name on both referees is only a warning. refereeEmailsDistinct (Business Rules agents.referee_emails_must_differ, default
+ * true) false lets both referees share one email address.
  */
-export function checkApplicationAnswers(answers: Record<string, string>): { error: string | null; warnings: string[] } {
+export function checkApplicationAnswers(answers: Record<string, string>, options: { refereeEmailsDistinct?: boolean } = {}): { error: string | null; warnings: string[] } {
   const title = str(answers.contact_title);
   if (title && !(F04_TITLES as readonly string[]).includes(title)) return { error: `Choose the contact's title from the list (${F04_TITLES.join(", ")}).`, warnings: [] };
   const e1 = str(answers.ref1_email).toLowerCase(), e2 = str(answers.ref2_email).toLowerCase();
-  if (e1 && e2 && e1 === e2) return { error: "The two references need different email addresses: each referee gets their own form.", warnings: [] };
+  if (e1 && e2 && e1 === e2 && options.refereeEmailsDistinct !== false) return { error: "The two references need different email addresses: each referee gets their own form.", warnings: [] };
   const phones: Array<string | null> = [];
   for (const n of [1, 2]) {
     const raw = str(answers[`ref${n}_phone`]);

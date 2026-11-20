@@ -45,25 +45,47 @@ const serviceRpc = async (ports: SigningPorts, name: string, args: Record<string
  * Business Rules for agent onboarding, read once per action (the fallbacks are the values used before):
  *   agents.onboarding_document_expiry_default / _reminder_default: a template without its own expiry / reminder days;
  *   agents.agent_application_yes_no_fallback: an unanswered Yes / No question starts at No, or stays blank;
- *   agents.onboarding_required_answer_groups: which Yes / No questions must be answered before signing.
+ *   agents.onboarding_required_answer_groups: which Yes / No questions must be answered before signing;
+ *   agents.agency_witness_on_agreement / agents.slit_witness_on_agreement: whether each witness on the agreement is required;
+ *   agents.referee_emails_must_differ: the two referees need different email addresses;
+ *   agents.business_approval_waits_for_referees: approve / send back only once every referee replied (the database refuses too);
+ *   agents.review_email_recipients: who the staff emails about an application go to.
  */
-interface OnboardingRules { expiryDays: number; reminderDays: number; yesNoDefault: boolean; optionalGroups: Set<string> }
+interface OnboardingRules {
+  expiryDays: number; reminderDays: number; yesNoDefault: boolean; optionalGroups: Set<string>;
+  agencyWitnessRequired: boolean; slitWitnessRequired: boolean; refereeEmailsDistinct: boolean; waitForReferees: boolean; reviewRecipients: Set<string>;
+}
+/** The three sources of the staff emails (agents.review_email_recipients); all three before the rule existed. */
+export const REVIEW_RECIPIENTS = { starter: "Staff member who started it", admins: "Active CMS administrators", contacts: "Admissions and office contacts" } as const;
 const rulesRead = new WeakMap<object, Promise<OnboardingRules>>();
 function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<OnboardingContext, "rpc">>): Promise<OnboardingRules> {
   let read = rulesRead.get(ctx);
   if (!read) {
     const call = ctx.ports.serviceRpc ? ctx.ports.serviceRpc.bind(ctx.ports) : ctx.rpc ? ctx.rpc.bind(ctx) : null;
     read = loadRules({ rpc: async (fn, args) => { try { if (!call) throw new Error("no rpc"); return { data: await call(fn, args), error: null }; } catch (error) { return { data: null, error }; } } },
-      ["agents.onboarding_document_expiry_default", "agents.onboarding_document_reminder_default", "agents.agent_application_yes_no_fallback", "agents.onboarding_required_answer_groups"])
+      ["agents.onboarding_document_expiry_default", "agents.onboarding_document_reminder_default", "agents.agent_application_yes_no_fallback", "agents.onboarding_required_answer_groups",
+        "agents.agency_witness_on_agreement", "agents.slit_witness_on_agreement", "agents.referee_emails_must_differ", "agents.business_approval_waits_for_referees", "agents.review_email_recipients"])
       .then((values) => ({
         expiryDays: Math.max(1, Math.round(ruleNumber(values, "agents.onboarding_document_expiry_default", 30))),
         reminderDays: Math.max(0, Math.round(ruleNumber(values, "agents.onboarding_document_reminder_default", 3))),
         yesNoDefault: ruleText(values, "agents.agent_application_yes_no_fallback", "No") === "No",
         optionalGroups: optionalAnswerGroups(ruleList(values, "agents.onboarding_required_answer_groups", Object.values(REQUIRED_GROUP_LABELS))),
+        agencyWitnessRequired: ruleText(values, "agents.agency_witness_on_agreement", "Required") !== "Optional",
+        slitWitnessRequired: ruleText(values, "agents.slit_witness_on_agreement", "Optional") === "Required",
+        refereeEmailsDistinct: ruleText(values, "agents.referee_emails_must_differ", "Must be different") !== "May be the same",
+        waitForReferees: ruleText(values, "agents.business_approval_waits_for_referees", "Approve without waiting") === "Wait for every referee",
+        reviewRecipients: new Set(ruleList(values, "agents.review_email_recipients", Object.values(REVIEW_RECIPIENTS))),
       }));
     rulesRead.set(ctx, read);
   }
   return read;
+}
+/** The onboarding rules for the signing page (core.ts): the agency's witness and the referee emails. */
+const signRulesCtx = new WeakMap<SigningPorts, Pick<OnboardingContext, "ports">>();
+export function onboardingSignRules(ports: SigningPorts): Promise<OnboardingRules> {
+  let ctx = signRulesCtx.get(ports);
+  if (!ctx) { ctx = { ports } as Pick<OnboardingContext, "ports">; signRulesCtx.set(ports, ctx); }
+  return onboardingRules(ctx);
 }
 const numbered = (fields: PlacedField[], offset = 0) => fields.map((f) => ({ ...f, page: Number(f.page) + offset, x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h) }));
 
@@ -297,6 +319,7 @@ async function drawnWitness(raw: unknown, legacyName?: unknown): Promise<{ name:
   try { bytes = (await signingPdfModule()).signatureImageBytes(drawn); } catch { throw new SigningError("The witness signature could not be read. Draw it again."); }
   return { name, png: toBase64(bytes) };
 }
+const SLIT_WITNESS_REQUIRED = "A SLIT witness is required on the agreement: the witness types their name and draws their signature.";
 const witnessValues = (w: { name: string; png: string } | null): Record<string, string> => w ? { admin_witness_name: w.name, admin_witness_signature: `data:image/png;base64,${w.png}` } : {};
 
 /** Stage 3: the agreement (P06) to the agent, at References received or earlier with a typed reason. */
@@ -313,6 +336,7 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   if (!/^\d{1,3}(\.\d{1,2})?$/.test(commission) || Number(commission) > 100) throw new SigningError("Enter the commission as a percentage, for example 25.");
   const { adminName, adminPosition, adminSignature } = await signatoryOf(ctx, prepared);
   const witness = await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
+  if (!witness && (await onboardingRules(ctx)).slitWitnessRequired) throw new SigningError(SLIT_WITNESS_REQUIRED);
   const values = await recordValues(ctx, prepared);
   Object.assign(values, { agreement_commencement_date: commencement, agent_territory: territory, agent_commission_percent: commission, admin_name: adminName, admin_position: adminPosition,
     admin_signed_date: isoToday(), admin_signature: adminSignature, ...witnessValues(witness) });
@@ -569,9 +593,11 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
     if (nameBox) print.push({ ...nameBox, value: input.agentWitness.name });
     if (signatureBox) print.push({ ...signatureBox, type: "signature", value: `data:image/png;base64,${input.agentWitness.png}` });
   }
-  // The agent's witness signature is never a field to type into; its name is the agency admin's to give (required).
+  // The agent's witness signature is never a field to type into; its name is the agency admin's to give (required unless Business Rules
+  // make the agency's witness optional: agents.agency_witness_on_agreement).
+  const witnessRequired = (await onboardingRules(ctx)).agencyWitnessRequired;
   const theirs = recipient.filter((f) => f.key !== WITNESS_SIGNATURE_KEY && !(input.agentWitness && f.key === WITNESS_NAME_KEY))
-    .map((f) => f.key === WITNESS_NAME_KEY ? { ...f, required: true } : f);
+    .map((f) => f.key === WITNESS_NAME_KEY ? { ...f, required: witnessRequired } : f);
   const stamped = [...formPart.printed, ...print.map((f) => ({ ...f, page: f.page + formPages }))];
   const timer = stepTimer("onboarding_build_combined");
   const pdf = await signingPdfModule(); timer.lap("pdf_modules");
@@ -673,11 +699,13 @@ export async function notifyApplicationSigned(ctx: Pick<OnboardingContext, "port
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
   if (!follow.combined || !["application_signed", "references_pending", "references_received"].includes(follow.stage)) return { notified: false };
   const { provider, config } = ports.mail;
-  const to = staffRecipients(follow, config.adminTo);
+  const rules = await onboardingRules(ctx);
+  const to = staffRecipients(follow, config.adminTo, rules.reviewRecipients);
   if (!provider || !config.from || !to.length) return { notified: false };
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-signed-${onboardingId}`, from: config.from, to: to.join(", "), subject: `Ready for review: ${text(follow.agency.name, 120)}`,
     textBody: `${text(follow.agent.name, 80)} has signed the Agent Application Form and the Education Agent Agreement for ${text(follow.agency.name, 120)} (one signature on both).\n\n`
-      + "Both referees have been sent a referee check. You do not need to wait for them: the review shows each referee's status.\n\n"
+      + (rules.waitForReferees ? "Both referees have been sent a referee check. You can approve the application, or send it back, once both have replied: the review shows each referee's status.\n\n"
+        : "Both referees have been sent a referee check. You do not need to wait for them: the review shows each referee's status.\n\n")
       + `Open the business in the CMS (Businesses > ${text(follow.agency.name, 120)}) and choose Review application: approve it (the agreement is countersigned and issued), or send it back for correction.` + SIGN_OFF }));
   return { notified: outcome.state === "sent" };
 }
@@ -791,7 +819,7 @@ export async function notifyReferencesReceived(ctx: Pick<OnboardingContext, "por
   const again = follow.stage === "resubmitted" && follow.total > 0 && follow.received >= follow.total;
   if (!again && (follow.stage !== "references_received" || follow.notified.staffReferences)) return { notified: false };
   const { provider, config } = ports.mail;
-  const to = staffRecipients(follow, config.adminTo);
+  const to = staffRecipients(follow, config.adminTo, (await onboardingRules(ctx)).reviewRecipients);
   if (!provider || !config.from || !to.length) return { notified: false };
   const lines = (follow.referees ?? []).map((r) => `- ${r.name || r.email}${r.organisation ? `, ${r.organisation}` : ""}: ${r.status === "received" ? "received" : r.status}`).join("\n");
   const agent = follow.kind === "agent";
@@ -988,8 +1016,11 @@ export async function correctionSend(ctx: OnboardingContext): Promise<Json> {
 export async function approveAndActivate(ctx: OnboardingContext): Promise<Json> {
   const onboardingId = String(ctx.body.onboardingId ?? "");
   if (!UUID.test(onboardingId)) throw new SigningError("Choose an onboarding.");
-  // A witness named without a drawn signature is refused before anything is approved.
-  await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
+  // A witness named without a drawn signature is refused before anything is approved; so is a missing SLIT witness when Business Rules
+  // require one (agents.slit_witness_on_agreement) and none was given before sending.
+  const approveWitness = await drawnWitness(ctx.body.adminWitness, ctx.body.adminWitnessName);
+  if (!approveWitness && (await onboardingRules(ctx)).slitWitnessRequired
+    && await ctx.rpc("agency_onboarding_slit_witness_needed", { p_onboarding: onboardingId }).catch(() => false) === true) throw new SigningError(SLIT_WITNESS_REQUIRED);
   // The signed documents not split yet (the follow-up call failed or is still running): it is asked for again, nothing is approved yet.
   if (ctx.ports.serviceRpc) {
     const split = await ctx.ports.serviceRpc("agency_onboarding_split_source", { p_onboarding: onboardingId }).catch(() => null) as { pending?: boolean; state?: string } | null;
@@ -1026,7 +1057,7 @@ export async function releaseAfterAgreement(ctx: Pick<OnboardingContext, "ports"
   }
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
   const { provider, config } = ports.mail;
-  const to = staffRecipients(follow, config.adminTo);
+  const to = staffRecipients(follow, config.adminTo, (await onboardingRules(ctx)).reviewRecipients);
   if (provider && config.from && to.length) {
     await provider.send({ deliveryId: `onboarding-released-${onboardingId}`, from: config.from, to: to.join(", "), subject: `Agreement signed: ${text(result.name, 120)} can sign in`,
       textBody: `${text(follow.agent.name, 80)} has signed the Agent Agreement for ${text(result.name, 120)}.\n\nThe sign-in emails went out: ${emailed.length ? emailed.join(", ") : "none needed"}.` + SIGN_OFF }).catch(() => undefined);
@@ -1034,10 +1065,18 @@ export async function releaseAfterAgreement(ctx: Pick<OnboardingContext, "ports"
   return { released: true, emailed };
 }
 
-/** Staff to tell: whoever started the onboarding, the admissions contacts and every active CMS administrator (or the configured admin inbox). */
-const staffRecipients = (follow: Followup, fallback: string[]) =>
-  [...new Set([follow.sentBy?.email, ...(follow.contacts ?? []), ...(follow.admins ?? []), ...(follow.sentBy?.email || follow.admins?.length ? [] : fallback)]
-    .filter((e): e is string => !!e && /@/.test(e)).map((e) => e.toLowerCase()))];
+/**
+ * Staff to tell, as Business Rules choose (agents.review_email_recipients; before the rule: all three): whoever started the onboarding, the
+ * admissions contacts, every active CMS administrator. The configured admin inbox stands in when the chosen people give no address.
+ */
+function staffRecipients(follow: Followup, fallback: string[], chosen: Set<string>): string[] {
+  const valid = (e: string | null | undefined): e is string => !!e && /@/.test(e);
+  const wantPeople = chosen.has(REVIEW_RECIPIENTS.starter) || chosen.has(REVIEW_RECIPIENTS.admins);
+  const people = [...(chosen.has(REVIEW_RECIPIENTS.starter) ? [follow.sentBy?.email] : []), ...(chosen.has(REVIEW_RECIPIENTS.admins) ? follow.admins ?? [] : [])].filter(valid);
+  const contacts = (chosen.has(REVIEW_RECIPIENTS.contacts) ? follow.contacts ?? [] : []).filter(valid);
+  const backup = !people.length && (wantPeople || !contacts.length) ? fallback : [];
+  return [...new Set([...people.slice(0, 1), ...contacts, ...people.slice(1), ...backup].filter(valid).map((e) => e.toLowerCase()))];
+}
 
 /** The corrected application is signed again: staff are told (once per round). */
 export async function notifyResubmitted(ctx: Pick<OnboardingContext, "ports">, onboardingId: string): Promise<{ notified: boolean }> {
@@ -1045,7 +1084,7 @@ export async function notifyResubmitted(ctx: Pick<OnboardingContext, "ports">, o
   const follow = await serviceRpc(ports, "agency_onboarding_followup", { p_onboarding: onboardingId }) as Followup;
   if (follow.stage !== "resubmitted") return { notified: false };
   const { provider, config } = ports.mail;
-  const to = staffRecipients(follow, config.adminTo);
+  const to = staffRecipients(follow, config.adminTo, (await onboardingRules(ctx)).reviewRecipients);
   if (!provider || !config.from || !to.length) return { notified: false };
   const waiting = follow.label === "Awaiting referees";
   const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-resubmitted-${onboardingId}-r${follow.round ?? 0}`, from: config.from, to: to.join(", "),

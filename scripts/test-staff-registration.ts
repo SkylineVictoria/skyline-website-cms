@@ -1064,6 +1064,8 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.match(String(abrLib.checkApplicationAnswers({ contact_title: "Pat Contact" }).error), /title from the list/);
   assert.equal(abrLib.checkApplicationAnswers({ contact_title: "Dr" }).error, null);
   assert.match(String(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }).error), /different email/);
+  // Business Rules agents.referee_emails_must_differ = "May be the same" (batch 4): the same address is accepted for both referees.
+  assert.equal(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }, { refereeEmailsDistinct: false }).error, null);
   assert.deepEqual(abrLib.checkApplicationAnswers({ ref1_email: "a@example.test", ref2_email: "b@example.test", ref1_contact_name: "Sam Lee", ref2_contact_name: "sam lee" }), { error: null, warnings: ["Both references have the same contact name. Check that they are two different people."] });
 
   // F04 wizard (2026-11-19): the public ABN Lookup page (no GUID) gives the same prefill; PURVA TECH PTY LTD (86 603 584 676) has no business name.
@@ -1110,7 +1112,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   // The source: the GUID only from the function's environment, the sign step runs the checks, the signing page has the title list.
   assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_ABR_GUID"\) \|\| Deno\.env\.get\("ABR_GUID"\)/);
   assert.ok(!/EF_ABR_GUID|ABR_GUID/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the GUID never reaches the browser");
-  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey)"), "the server refuses what the page refuses");
+  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey, "), "the server refuses what the page refuses");
   assert.ok(read("src/pages/SigningPage.tsx").includes(`f.key === "contact_title"`) && read("src/pages/SigningPage.tsx").includes("F04_TITLES.map"), "the title is a list on the signing page");
   const migration = read("supabase/migrations/20261119103517_abn_prefill.sql");
   assert.ok(["create table public.abr_lookups", "abr_raw jsonb", "abr_fetched_at timestamptz", "agency_abr_attach", "agency_onboarding_prefill_record", "'prefill_reviewed'", "after update of answers on public.agency_onboarding"].every((s) => migration.includes(s)), "cache, business record, prefill history");

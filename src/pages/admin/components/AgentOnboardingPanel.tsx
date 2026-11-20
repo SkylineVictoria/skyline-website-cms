@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
 import SignaturePad from "@/components/signing/SignaturePad";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sendRefereeChecks, signingAction, signingStatus, uploadRefereeForm, type AgentAgreementSendInput } from "@/lib/signingApi";
 import F04ReviewDialog from "@/pages/admin/components/F04ReviewDialog";
@@ -12,6 +13,7 @@ import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
 import { abrFactLines, type AbrFacts } from "../../../../supabase/functions/_shared/validation/abr";
+import { commissionProblem, commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
 /**
  * Businesses > {name}: agent onboarding in stages. The application form (F04) goes to the agent; when signed, a referee check (F05) goes
@@ -77,7 +79,7 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
           <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding</h2>
           <p className="text-sm text-foreground-600">Once per business with its agency admin. You prepare the application (business details, the agreement's terms, optionally the witness) and send it; the agency admin signs the application form and the agent agreement once. Both referees get a referee check at once, but you do not wait for them: review the application (edit, send back for correction, or approve). Approving activates the business, countersigns and issues the signed agreement, and sends the sign-in emails.</p>
           <p className="mt-1 text-sm font-medium text-foreground-900" data-testid="onboarding-status-line">{statusLine}</p>
-          {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (two years, Item 5).</p> : null}
+          {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (Item 5).</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {badge}
@@ -313,9 +315,15 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
   const [method, setMethod] = useState<SignatureMethod>("typed"); const [png, setPng] = useState<string | null>(null); const [save, setSave] = useState(true);
   const [message, setMessage] = useState(""); const [reason, setReason] = useState("");
   const combined = !!row.combined;
+  const approving = approve || combined;
   // Approve and activate agency (2026-11-18) sends the agreement in the same step; a plain send is only the retry after Approve.
   const override = !approve && !combined && row.stage !== "references_approved";
   const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || 2;
+  // Business Rules: whether approval waits for every referee (agents.business_approval_waits_for_referees), whether a SLIT witness is
+  // required (agents.slit_witness_on_agreement) and how long the agreement runs (agents.agreement_term_years). The server checks the first two.
+  const waitReferees = ruleText("agents.business_approval_waits_for_referees", "Approve without waiting") === "Wait for every referee";
+  const slitWitnessRequired = ruleText("agents.slit_witness_on_agreement", "Optional") === "Required";
+  const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   useEffect(() => {
     let live = true;
     prepareOnboarding(agencyId, row.agent.id).then((p) => {
@@ -325,10 +333,11 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
     }).catch((e: Error) => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [agencyId, row.agent.id]);
-  const termsReady = combined || (/^\d{4}-\d{2}-\d{2}$/.test(commencement) && territory.trim().length > 0 && /^\d{1,3}(\.\d{1,2})?$/.test(commission.trim().replace("%", "")));
-  const witnessReady = (!witness.trim() && !witnessPng) || (witness.trim().length >= 2 && !!witnessPng);
+  const termsReady = combined || (/^\d{4}-\d{2}-\d{2}$/.test(commencement) && territory.trim().length > 0 && !commissionProblem(commission));
+  const witnessPreset = combined && !!row.slitWitness;
+  const witnessReady = (!witness.trim() && !witnessPng && (!slitWitnessRequired || witnessPreset)) || (witness.trim().length >= 2 && !!witnessPng);
   const ready = !!prepared && termsReady && adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng))
-    && (!override || reason.trim().length >= 5) && witnessReady;
+    && (!override || reason.trim().length >= 5) && witnessReady && !(approving && waitReferees && received < total);
   const send = async () => {
     if (!ready || busy) return;
     setBusy(combined ? "Issuing the agreement…" : "Preparing the agreement…"); setError("");
@@ -351,7 +360,6 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
       await onSent(r.sent ? `Agreement sent to ${row.agent.name} (${row.agent.email}), reference ${r.reference}${r.override ? " (sent before both references were back; the reason is on the record)" : ""}.` : r.warning ?? "The request was created but not emailed.");
     } catch (e) { setError(e instanceof Error ? e.message : "The agreement could not be sent."); } finally { setBusy(""); }
   };
-  const approving = approve || combined;
   return <Modal open title={`${approving ? "Approve and activate agency" : override ? "Send agreement anyway" : "Send agreement"}: ${agencyName}`} onClose={() => { if (!busy) onClose(); }} width="max-w-2xl"
     footer={<div className="flex flex-wrap items-center justify-end gap-2">
       <Button variant="outline" disabled={!!busy} onClick={onClose}>Cancel</Button>
@@ -361,7 +369,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
       {combined ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). {row.agent.name} ({row.agent.email}) already signed the Agent Agreement with the application, so nothing is sent for a second signature: your signature below countersigns it, the completed agreement is emailed to them, and the agency admin and every agent already added get their sign-in email.</p>
         : approve ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). The agency admin, {row.agent.name} ({row.agent.email}), receives the Agent Agreement (P06) to sign, with your signature filled in. When it is signed, the agency admin and every agent already added get their sign-in email.</p> : null}
       {approving && received < total ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="approve-referees-warning">
-        <i className="ri-error-warning-line mr-1" aria-hidden="true" />Only {received} of {total} referees have replied. You can still approve; replies that arrive later are kept on the business record.</p> : null}
+        <i className="ri-error-warning-line mr-1" aria-hidden="true" />Only {received} of {total} referees have replied. {waitReferees ? "SLIT's Business Rules say to wait for every referee: you can approve once all have replied." : "You can still approve; replies that arrive later are kept on the business record."}</p> : null}
       {combined ? null : <p className="text-sm text-foreground-600">The agent receives the Agent Agreement (P06) with a personal signing link, prefilled with Items 1 to 4 and the signatory from the application form.</p>}
       {override ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
         <p className="font-medium">{row.stage === "references_received" ? "Both references are back but not approved yet." : `Only ${received} of ${total} references ${received === 1 ? "is" : "are"} back.`} Sending now is logged on the record with your reason.</p>
@@ -373,9 +381,9 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Commencement date (Item 5)" required><TextInput type="date" value={commencement} onChange={(e) => setCommencement(e.target.value)} data-testid="onboarding-commencement" /></Field>
             <Field label="Territory (Item 3)" required><TextInput value={territory} onChange={(e) => setTerritory(e.target.value)} placeholder="e.g. India, Nepal" maxLength={200} data-testid="onboarding-territory" /></Field>
-            <Field label="Commission % (Item 4)" required><TextInput inputMode="decimal" value={commission} onChange={(e) => setCommission(e.target.value)} placeholder="25" maxLength={6} data-testid="onboarding-commission" /></Field>
+            <Field label="Commission % (Item 4)" required><TextInput inputMode="decimal" value={commission} onChange={(e) => setCommission(e.target.value)} placeholder={commissionSuggested()} maxLength={6} data-testid="onboarding-commission" /></Field>
           </div>
-          <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date; the expiry is recorded on the business when it is signed.</p>
+          <p className="text-xs text-foreground-500">The agreement runs {termYears === 1 ? "one year" : `${termYears} years`} from the commencement date; the expiry is recorded on the business when it is signed.</p>
         </>}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="SLIT signatory name" required><TextInput value={adminName} onChange={(e) => setAdminName(e.target.value)} maxLength={150} /></Field>
@@ -392,10 +400,10 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
           {method === "typed" ? <p className="min-h-14 rounded-md border border-background-300 bg-background-50 px-4 py-3 text-2xl italic text-[#0d1a4d]">{adminName || "Your name appears here as the signature"}</p> : null}
         </div>
         {combined && row.slitWitness ? <p className="rounded-md border border-background-200 p-3 text-sm text-foreground-700" data-testid="slit-witness-preset">SLIT witness: <strong>{row.slitWitness.name}</strong>, already on the agreement (added before sending).</p> : <div className="space-y-2 rounded-md border border-background-200 p-3" data-testid="slit-witness">
-          <Field label="SLIT witness name" hint="Optional. The witness types their name and draws their signature below (a typed signature is not accepted).">
+          <Field label="SLIT witness name" required={slitWitnessRequired} hint={`${slitWitnessRequired ? "Required." : "Optional."} The witness types their name and draws their signature below (a typed signature is not accepted).`}>
             <TextInput value={witness} onChange={(e) => setWitness(e.target.value)} maxLength={150} data-testid="slit-witness-name" /></Field>
           {witness.trim() ? <div><p className="mb-1 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p><SignaturePad onChange={setWitnessPng} /></div> : null}
-          {!witnessReady ? <p className="text-xs text-amber-800">The witness must draw their signature, or clear the witness's name.</p> : null}
+          {!witnessReady ? <p className="text-xs text-amber-800">{slitWitnessRequired && !witness.trim() ? "A SLIT witness is required: the witness types their name and draws their signature." : "The witness must draw their signature, or clear the witness's name."}</p> : null}
         </div>}
         {combined ? null : <Field label="Message to the agent" hint="Optional; goes in the email."><TextArea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} /></Field>}
       </>}

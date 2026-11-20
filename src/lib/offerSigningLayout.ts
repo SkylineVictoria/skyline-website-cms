@@ -106,7 +106,11 @@ export async function findOfferSigningLayout(bytes: Uint8Array, placed?: LetterP
       const elect = last(items.filter((it) => /elect\s+to\s+pay\s+more/i.test(it.str) && (it.page < page || (it.page === page && it.top < label.top))));
       if (elect) {
         const line = items.filter((it) => sameRow(it, elect));
-        const end = Math.max(...line.map((it) => it.right));
+        // Tick boxes on the line ("YES ☐ NO ☐") are drawn shapes, not text: the answer goes after the last one. Without their places (a
+        // resend reads the PDF only) one em is left for a box after the last word.
+        const boxes = (placed?.boxes ?? []).filter((b) => b.page === elect.page && b.y * elect.H < elect.bottom && (b.y + b.h) * elect.H > elect.top);
+        const textEnd = Math.max(...line.map((it) => it.right));
+        const end = boxes.length ? Math.max(textEnd, ...boxes.map((b) => (b.x + b.w) * elect.W)) : textEnd + (placed ? 0 : elect.bottom - elect.top);
         fields.push(box("choice", elect.page, elect.W, elect.H, Math.min(end + 8, elect.W * 0.93 - 70), elect.top - 3, 70, 16, CHOICE_LABEL));
       } else fields.push(box("choice", page, W, H, column, Math.max(sigTop - 22, 20), 70, 16, CHOICE_LABEL));
     } else {

@@ -41,6 +41,6 @@ jobs:
             flags=""
             if [ "$f" = "staff-register" ]; then flags="--no-verify-jwt"; fi
             echo "::group::Deploy $f"
-            supabase functions deploy "$f" --project-ref "${PROJECT_REF}" --use-api ${flags}
+            supabase functions deploy "$f" --project-ref "${PROJECT_REF}" --use-api --yes ${flags}
             echo "::endgroup::"
           done

@@ -90,7 +90,7 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
         {backStep ? <Button variant="outline" icon="ri-arrow-left-line" onClick={backStep.onClick}>{backStep.label}</Button> : null}
         {missing && nextStep ? <Button variant="outline" onClick={nextStep.onClick}>Finish without saving VoE</Button> : null}
         {nextStep && dailyStep ? <Button variant="outline" icon="ri-calendar-check-line" disabled={busy || !!bad.length || !plan || missing}
-          onClick={() => void save().then(ok => { if (ok) dailyStep.onClick(); })}>Save and next: daily timetables</Button> : null}
+          onClick={() => void save().then(ok => { if (ok) dailyStep.onClick(); })}>{dailyStep.label}</Button> : null}
         {!nextStep && dailyStep ? <Button variant="outline" icon="ri-calendar-check-line" disabled={busy || !savedAt || dirty}
           title={!savedAt || dirty ? "Save the VoE calendar first" : undefined} onClick={dailyStep.onClick}>{dailyStep.label}</Button> : null}
         {nextStep

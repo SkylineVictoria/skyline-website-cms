@@ -293,7 +293,14 @@ export default function LmsCoursesPage() {
   const classesDone = (detail?.batches ?? []).some(b => b.classDays.length > 0);
   const setupStep: "units" | "hours" | "master" | "classes" | "done" | null = !detail || detail.course.id !== selectedId || masterSaved === null ? null
     : !units.length ? "units" : slit.some(h => !h?.confirmed) ? "hours" : !masterSaved ? "master" : !classesDone ? "classes" : "done";
-  const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "Rooms, trainers and weekly class times" } as const;
+  const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "CoE and VoE daily timetables" } as const;
+  /** The setup screens after the wizard, in order: the two weekly calendars, then the two daily timetables. */
+  const setupSteps = selected ? [
+    { key: "master", label: "CoE weekly calendar", done: !!masterSaved, ready: true, open: () => { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); } },
+    { key: "voe", label: "VoE weekly calendar", done: !!voeSaved, ready: !!masterSaved, open: () => { setTab("voe"); setWizard({ courseId: selected.id, step: "voe" }); } },
+    { key: "coeDaily", label: "CoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "coe") },
+    { key: "voeDaily", label: "VoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "voe") },
+  ] : [];
   /** A weekly calendar tab opens the weekly calendar wizard until that calendar is saved (owner, 2026-11-21): CoE, then VoE. */
   const openTab = (id: Tab) => {
     setTab(id);
@@ -360,9 +367,9 @@ export default function LmsCoursesPage() {
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
         backStep={{ label: "Back: CoE weekly calendar", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }}
         // The last step: the wizard ends; rooms, trainers and class times are set later from the course ("Continue setup").
-        nextStep={{ label: "Save VoE calendar and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }}
-        // Or straight on to the daily timetables: the CoE intake's weekly classes, then the VoE intake's (owner, 2026-11-21).
-        dailyStep={{ label: "Save and next: daily timetables", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }} /> : null}
+        // Next: the daily timetables, the CoE intake's weekly classes then the VoE intake's (owner, 2026-11-21); or finish here.
+        nextStep={{ label: "Save and next: CoE daily timetable", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }}
+        dailyStep={{ label: "Save and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
       allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
       onClose={() => setWizard(null)}
@@ -370,10 +377,10 @@ export default function LmsCoursesPage() {
     {/* Last step, in the wizard itself: the intake's class timetable (the same form as Timetable › Create timetable). */}
     {/* Weekly classes, one screen for CoE then one for VoE: kind, room, trainer and times on one row, booked together. */}
     {wizard?.step === "classes" && wizard.intakeId && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId}
-      title={`Course setup · ${wizard.load === "voe" ? "VoE" : "CoE"} weekly classes · ${courses.find(c => c.id === wizard.courseId)?.code ?? ""}`}
+      title={`Course setup · ${wizard.load === "voe" ? "VoE" : "CoE"} daily timetable · ${courses.find(c => c.id === wizard.courseId)?.code ?? ""}`}
       intakeId={wizard.intakeId} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
-      saveLabel={wizard.load === "voe" ? "Book VoE week and finish" : "Book CoE week and next: VoE classes"}
-      backLabel={wizard.load === "voe" ? "Back: CoE classes" : "Back: VoE calendar"}
+      saveLabel={wizard.load === "voe" ? "Book VoE week and finish" : "Book CoE week and next: VoE daily timetable"}
+      backLabel={wizard.load === "voe" ? "Back: CoE daily timetable" : "Back: VoE weekly calendar"}
       onBack={() => { if (wizard.load === "voe") void openClasses(wizard.courseId, "coe"); else { setWizard({ courseId: wizard.courseId, step: "voe" }); setTab("voe"); } setReloadKey(k => k + 1); }}
       // Closed before the week is booked: the course stays unfinished and says so.
       onClose={() => { setWizard(null); setReloadKey(k => k + 1); }}
@@ -443,6 +450,13 @@ export default function LmsCoursesPage() {
               {menuOpen ? <div className="absolute right-0 top-11 z-20 w-64 overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
                 <button type="button" className={menuItem} disabled={syncing || saving} onClick={() => { setMenuOpen(false); void sync(); }}>
                   <i className="ri-refresh-line" aria-hidden="true" />Sync with Training.gov.au and CRICOS</button>
+                {/* The daily timetables (weekly classes of the CoE and the VoE intake), any time after the CoE weekly calendar. */}
+                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
+                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "coe"); }}>
+                  <i className="ri-calendar-schedule-line" aria-hidden="true" />CoE daily timetable</button>
+                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
+                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "voe"); }}>
+                  <i className="ri-calendar-schedule-line" aria-hidden="true" />VoE daily timetable</button>
                 <button type="button" className={menuItem} disabled={saving || !detail || (!selected.isActive && setupStep !== "done")}
                   title={!selected.isActive && setupStep !== "done" ? "Finish the new course wizard first." : undefined}
                   onClick={() => { setMenuOpen(false); void save("course_save", { isActive: !selected.isActive }); }}>
@@ -465,7 +479,15 @@ export default function LmsCoursesPage() {
             <button type="button" aria-label="Dismiss" onClick={() => setSyncNote([])}><i className="ri-close-line" aria-hidden="true" /></button></div> : null}
           {detailError ? <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{detailError}</div> : null}
           {selected && !selected.isActive && setupStep && setupStep !== "done" ? <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-            <span className="min-w-0 flex-1"><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> The course can be made active only after the new course wizard is finished.</span>
+            <span className="min-w-0 flex-1"><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> The course can be made active only after the new course wizard is finished.
+              {/* The four setup screens after the wizard (owner, 2026-11-21), each opened from here. */}
+              {setupStep === "master" || setupStep === "classes" ? <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                {setupSteps.map((st, i) => <span key={st.key} className="inline-flex items-center gap-1.5">
+                  {i ? <i className="ri-arrow-right-s-line text-amber-700" aria-hidden="true" /> : null}
+                  <button type="button" disabled={!canEdit || !st.ready} onClick={st.open} title={st.ready ? undefined : "Save the CoE weekly calendar first"}
+                    className={"rounded-full border px-2.5 py-0.5 text-xs font-semibold disabled:opacity-50 " + (st.done ? "border-green-300 bg-green-50 text-green-800" : "border-amber-400 bg-background-50 text-amber-950 hover:bg-amber-100")}>
+                    {st.done ? <i className="ri-check-line mr-0.5" aria-hidden="true" /> : null}{st.label}</button></span>)}
+              </span> : null}</span>
             {canEdit ? <button type="button" onClick={continueSetup} className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700">Continue setup</button> : null}
           </div> : null}
 

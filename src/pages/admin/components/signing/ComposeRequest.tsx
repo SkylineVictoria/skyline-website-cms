@@ -10,20 +10,32 @@ import RichTextEditor from "@/pages/admin/components/hrms/TemplateEditor";
 import DocRichTextEditor from "@/pages/admin/components/RichTextEditor";
 import { richPlainText } from "../../../../../supabase/functions/_shared/rich-html";
 import { tokenReport, variableKeys } from "../../../../../supabase/functions/_shared/template-variables";
+import OfferLetterDrawer from "@/components/shared/application-status/OfferLetterDrawer";
+import { getStudent, type ApplicationRow } from "@/pages/admin/lib/businessData";
+import { LETTER_CATEGORY } from "@/lib/offerLetters";
 
 export interface SubjectPreset { type: "student" | "employee" | "agent"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
 const person = (n: number): Person => ({ role: `signer${n}`, label: n === 1 ? "Signer" : `Signer ${n}`, name: "", email: "", order: n, required: true });
 const SUBJECT_LABEL = { student: "Student", employee: "Employee", agent: "Agent" } as const;
+const SUBJECT_PLURAL = { student: "students", employee: "employees", agent: "agents" } as const;
+/**
+ * A template that is filled from one of the student's applications (2026-11-21): the student offer letter (its course, fee and
+ * intake variables and {{#each courses}} blocks come from the application). It is prepared and sent by the Applications offer
+ * builder (OfferLetterDrawer), opened here for the chosen application, so the offer is recorded exactly as from Applications.
+ */
+const needsApplication = (t: SigningTemplate) => t.category === LETTER_CATEGORY;
 
 /**
  * Prepare a signing request: a template (its variables filled from the chosen student, employee or agent) or a ready-made PDF, one or more
  * recipients in order, the signing order, expiry, reminders and a message. It is saved as a draft; nothing is emailed until it is sent.
  */
-export default function ComposeRequest({ templates, preset, onClose, onCreated }: {
+export default function ComposeRequest({ templates, preset, onClose, onCreated, onOfferSent }: {
   templates: SigningTemplate[]; preset?: SubjectPreset; onClose: () => void;
   /** `warning`: the request exists, but something after it (changing its payment) failed. */
   onCreated: (request: SigningRequest, warning?: string) => void;
+  /** An offer letter prepared from an application was sent (the offer flow made the request); without it the dialog just closes. */
+  onOfferSent?: (message: string) => void;
 }) {
   const [source, setSource] = useState<"template" | "upload">("template");
   const [templateId, setTemplateId] = useState(""); const [file, setFile] = useState<File | undefined>(); const [title, setTitle] = useState("");
@@ -40,9 +52,24 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   const [copyIsHtml, setCopyIsHtml] = useState(false);
   /** Stripe: the payment this request will ask for (the template's to start with, when it has one; added, changed or removed here). */
   const [payment, setPayment] = useState<PaymentInput | null>(null);
-  // Emails are not signed; everything else of the one template table is offered.
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && t.category !== "student_offer_letter" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
+  // Emails are not signed; every other active template whose "Used for" matches the person type is offered (its current version is what
+  // "create" uses). 2026-11-21: the student offer letter is offered too (it was left out, so "A student" had an empty list): it needs
+  // one of the student's applications and is prepared from it below.
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
+  const fromApplication = source === "template" && !!template && needsApplication(template);
+  // The chosen student's applications, for a template filled from an application.
+  const [applications, setApplications] = useState<ApplicationRow[] | null>(null);
+  const [applicationId, setApplicationId] = useState("");
+  const [offerOpen, setOfferOpen] = useState(false);
+  useEffect(() => {
+    setApplicationId(""); setApplications(null);
+    if (subjectType !== "student" || !subjectId) return;
+    let live = true;
+    void getStudent(subjectId).then((s) => { if (live) setApplications(s?.applications ?? []); }, () => { if (live) setApplications([]); });
+    return () => { live = false; };
+  }, [subjectType, subjectId]);
+  const application = applications?.find((a) => a.id === applicationId) ?? null;
 
   // The record's own values (name, address, course…) and the first recipient.
   useEffect(() => {
@@ -77,7 +104,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   // TPL-02: the [Variables] of a sectioned template (by their record key) and the [tokens] the signer fills in.
   let bracketVariables: Array<{ name: string; key: string }> = [];
   let signerTokens: string[] = [];
-  if (source === "template" && template) {
+  if (source === "template" && template && !fromApplication) {
     try { variables = templateVariables(template).filter((v) => !["full_name", "email"].includes(v)); } catch { variables = []; }
     if (template.bracket_variables) {
       const texts = [template.title, richPlainText(template.header_html ?? ""), richPlainText(template.body_html ?? template.body ?? ""), richPlainText(template.footer_html ?? "")];
@@ -110,8 +137,15 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
   });
 
   if (preview) return <Modal open title="Preview with these values" width="max-w-4xl" onClose={() => setPreview(null)}><p className="mb-3 text-sm text-foreground-600">[name] marks a variable that still has no value.</p><PdfPages source={preview} /></Modal>;
+  // A template filled from an application: the Applications offer builder, for this application, with this template chosen.
+  if (offerOpen && fromApplication && application) return <OfferLetterDrawer initialTemplateId={templateId}
+    application={{ id: application.id, reference: application.reference, studentName: subject?.name ?? preset?.name ?? "", studentId: subjectId,
+      course: application.courses[0] ? { title: application.courses[0].title, code: application.courses[0].code } : null, intake: application.intake }}
+    onClose={() => setOfferOpen(false)} onSent={() => { if (onOfferSent) onOfferSent(`Offer letter for ${application.reference || "the application"} sent.`); else onClose(); }} />;
+  const noTemplates = source === "template" && usable.length === 0;
   return <Modal open title="New signing request" width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
-    footer={<>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes(copyText !== null
+    footer={fromApplication ? <Button disabled={!application} data-testid="compose-from-application" onClick={() => setOfferOpen(true)}>Prepare the letter from this application</Button>
+      : <>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes(copyText !== null
         ? (await signingAction<{ pdfBase64: string }>({ action: "preview", templateId, values, ...body() })).pdfBase64
         : (await signingAction<{ pdfBase64: string }>({ action: "template_preview", id: templateId, values, ...(subjectType && subjectId ? { subjectType, subjectId } : {}) })).pdfBase64)))}>Preview document</Button>}
       {source === "template" && template?.kind === "text" && copyText === null && <Button variant="outline" disabled={busy} data-testid="edit-copy" onClick={() => void run(async () => { const p = await signingAction<{ text: string; isHtml?: boolean }>({ action: "preview", templateId, values, ...body() }); setCopyIsHtml(Boolean(p.isHtml)); setCopyText(p.text); })}>Edit the text of this copy</Button>}
@@ -130,7 +164,19 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
       <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="radio" checked={source === "template"} onChange={() => setSource("template")} /> Use existing template</label>
         <label className="flex items-center gap-2"><input type="radio" checked={source === "upload"} onChange={() => { setSource("upload"); setPeople(people.length ? people : [person(1)]); }} /> One-time sign (upload PDF)</label></div>
       {source === "template" ? <>
-        <Field label="Template" required><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template"><option value="">Choose a template</option>{usable.map((t) => <option key={t.id} value={t.id}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category})</option>)}</Select></Field>
+        <Field label="Template" required><Select value={templateId} disabled={noTemplates} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template">
+          <option value="">{noTemplates ? "No active templates" : "Choose a template"}</option>
+          {usable.map((t) => { const locked = needsApplication(t) && !(subjectType === "student" && subjectId);
+            return <option key={t.id} value={t.id} disabled={locked}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category}){locked ? " — Choose a student first" : ""}</option>; })}</Select></Field>
+        {noTemplates ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="compose-no-templates">
+          No active templates for {subjectType ? SUBJECT_PLURAL[subjectType] : "signing"} — create one in <a href="/admin/signing/templates" className="font-semibold underline">Templates</a>.</p> : null}
+        {fromApplication && <section className="space-y-2 rounded-md border border-background-300 p-3" data-testid="compose-application">
+          <p className="text-sm text-foreground-700">{template!.name} is filled from one of {subject?.name ?? "the student"}&apos;s applications (course, intake, fees). It is prepared and sent as an offer letter, exactly as from Applications › Send offer letter.</p>
+          <Field label="Application" required>{applications === null ? <p className="text-sm text-foreground-500">Loading the student&apos;s applications…</p>
+            : applications.length === 0 ? <p className="text-sm text-amber-800" data-testid="compose-no-applications">This student has no application yet. Start one in Applications first.</p>
+            : <Select value={applicationId} onChange={(e) => setApplicationId(e.target.value)} data-testid="compose-application-select"><option value="">Choose an application</option>
+              {applications.map((a) => <option key={a.id} value={a.id}>{[a.reference || "Draft", a.courses.map((c) => c.code || c.title).filter(Boolean).join(", "), a.intake ? `Intake ${a.intake}` : "", a.status.replace(/_/g, " ")].filter(Boolean).join(" · ")}</option>)}</Select>}</Field>
+        </section>}
         {copyText !== null && <section className="space-y-2"><h3 className="font-semibold">Text of this copy</h3>
           <p className="text-sm text-foreground-600">Changes apply to this request only; the template is not changed. The history records that this copy was edited.</p>
           {copyIsHtml && template?.bracket_variables ? <DocRichTextEditor mode="document" value={copyText} onChange={setCopyText} minHeight={260} label="Body of this copy" />
@@ -147,6 +193,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
         <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
       </div>}
+      {!fromApplication && <>
       <section className="space-y-3"><h3 className="font-semibold">Recipients</h3>
         {people.map((p, i) => <div key={p.role} className="grid items-end gap-2 rounded-md border border-background-300 p-3 md:grid-cols-[1fr_1fr_1fr_auto]">
           <Field label={source === "template" ? `${p.label}: full name` : "Full name"} required><TextInput value={p.name} maxLength={150} onChange={(e) => setPerson(i, { name: e.target.value })} data-testid={`recipient-name-${i}`} /></Field>
@@ -167,6 +214,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated }
       <PaymentPanel key={`${source}:${templateId}`} testId="compose-payment" current={payment} title={(source === "template" ? template?.title : title) || "Payment"} editable busy={busy} onSave={setPayment}>
         <p className="text-foreground-600">{asked ? `This template asks for ${describePayment(asked)}; a change here applies to this request only.` : "The signer pays by card through Stripe (Integrations › Stripe must be connected)."}</p>
       </PaymentPanel>
+      </>}
     </div>
   </Modal>;
 }

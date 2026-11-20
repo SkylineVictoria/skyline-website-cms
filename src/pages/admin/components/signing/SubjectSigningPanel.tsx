@@ -32,7 +32,7 @@ export default function SubjectSigningPanel({ type, id, name }: { type: "student
         <button type="button" className="text-left" onClick={() => setOpenId(r.id)}><span className="font-medium text-primary-700 underline-offset-2 hover:underline">{r.title}</span>
           <span className="block text-xs text-foreground-500">{r.reference} · {SIGN_CATEGORIES[r.category]?.label ?? r.category} · {new Date(r.created_at).toLocaleDateString()}</span></button>
         <span className="flex flex-wrap items-center gap-2"><span className="text-xs text-foreground-600">{r.state === "draft" ? "Not sent" : signedCount(r)}</span>{r.payment && <PaymentBadge payment={r.payment} />}<Badge tone={s.tone}>{s.label}</Badge></span></li>; })}</ul>}
-    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onCreated={(r, warning) => { setTemplates(null); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+    {templates && <ComposeRequest templates={templates} preset={{ type, id, name }} onClose={() => setTemplates(null)} onOfferSent={() => { setTemplates(null); setError(""); void load(); }} onCreated={(r, warning) => { setTemplates(null); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </Card>;
 }

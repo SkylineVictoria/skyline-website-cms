@@ -150,7 +150,7 @@ function EnvelopeSigningPage() {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Delete the template “${t.name}”? Requests already made from it keep their own copy.`)) void act(() => signingAdmin("template_delete", t.id), "Template deleted."); }}>Delete</Button>
           </div></td></tr>)}</tbody></table></div>)}
 
-    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onCreated={(r, warning) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
+    {compose && <ComposeRequest templates={context.templates} onClose={() => setCompose(false)} onOfferSent={(m) => { setCompose(false); setNotice(m); setError(""); void load(); }} onCreated={(r, warning) => { setCompose(false); setNotice("Draft saved. Place the fields, then review and send it for signature."); setError(warning ?? ""); void load(); setPlaceAfterCreateId(r.id); setOpenId(r.id); }} />}
     {choosing && <Modal open title="New template: who is it for?" onClose={() => setChoosing(false)}>
       <div className="grid gap-3 sm:grid-cols-2" data-testid="template-audience-choice">
         {([["employee", "Employees", "Contracts, declarations and other staff documents (employee variables).", "employment_contract", "ri-user-star-line"],

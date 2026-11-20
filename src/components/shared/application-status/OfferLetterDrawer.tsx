@@ -67,12 +67,14 @@ function sameAsSource(variable: Pick<LetterVariable, "format" | "inputType">, in
  * yellow marks in the preview focus the input. Send stays disabled ("Send (2 details missing)") until nothing blocks; a final check
  * lists what was filled by hand, and the database checks it all again. Or upload a ready-made PDF.
  */
-export default function OfferLetterDrawer({ application, onClose, onSent, reviewIssues = 0 }: { application: OfferApplication; onClose: () => void; onSent: () => void; reviewIssues?: number }) {
+export default function OfferLetterDrawer({ application, onClose, onSent, reviewIssues = 0, initialTemplateId }: { application: OfferApplication; onClose: () => void; onSent: () => void; reviewIssues?: number;
+  /** Document signing › New signing request (2026-11-21): the offer letter template chosen there is preselected. Applications omit it. */
+  initialTemplateId?: string }) {
   const [mode, setMode] = useState<"template" | "upload">("template");
   const [recipient, setRecipient] = useState<OfferRecipient | null>(null);
   const [registry, setRegistry] = useState<LetterVariable[] | null>(null);
   const [templates, setTemplates] = useState<LetterTemplate[] | null>(null);
-  const [templateId, setTemplateId] = useState("");
+  const [templateId, setTemplateId] = useState(initialTemplateId ?? "");
   const [values, setValues] = useState<LetterValues | null>(null);
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [conditions, setConditions] = useState("");

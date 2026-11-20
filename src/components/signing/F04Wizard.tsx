@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardNotice } from "@/components/shared/wizard/WizardShell";
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { FieldError, WIZARD_INPUT, WizardLabel, WizardTextField } from "@/components/shared/wizard/fields";
@@ -98,6 +98,24 @@ function ChoiceChips({ id, label, value, error, required, onChange }: { id: stri
         onChange={(e) => onChange(writeChoice(null, e.target.value))} /> : null}
       <FieldError text={error} />
     </fieldset>
+  );
+}
+
+/**
+ * A reference's email (2026-11-21): one line that grows and wraps at any point, so a long address is always fully visible in the box
+ * (an input would scroll it out of sight). Enter never adds a line; pasted line breaks are dropped.
+ */
+function EmailBox({ id, name, label, value, error, required, onChange }: { id: string; name: string; label: string; value: string; error?: string; required: boolean; onChange: (v: string) => void }) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => { const t = box.current; if (!t) return; t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; }, [value]);
+  return (
+    <div>
+      <WizardLabel htmlFor={id} required={required}>{label}</WizardLabel>
+      <textarea ref={box} id={id} name={name} rows={1} value={value} maxLength={320} inputMode="email" autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={Boolean(error)}
+        className={`${WIZARD_INPUT} resize-none overflow-hidden [overflow-wrap:anywhere]`} data-testid={id}
+        onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} onChange={(e) => onChange(e.target.value.replace(/[\r\n]+/g, ""))} />
+      <FieldError text={error} />
+    </div>
   );
 }
 
@@ -251,7 +269,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   // Business Rules (agents.agency_witness_on_agreement): the agency's witness may be optional; one given still needs a name and a drawing.
   const witnessOptional = ruleText("agents.agency_witness_on_agreement", "Required") === "Optional";
   const witnessRequired = needWitness && !witnessOptional;
-  const rulesF04 = { refereeEmailsDistinct: ruleText("agents.referee_emails_must_differ", "Must be different") !== "May be the same" };
+  const rulesF04 = { refereeEmailsDistinct: ruleText("agents.referee_emails_must_differ", "Must be different") !== "May be the same", ownEmails: mode === "agent" || mode === "correction" ? [view.recipient.email] : [] };
   const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [state, setState] = useState<F04Draft>(opening);
@@ -262,6 +280,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const [furthest, setFurthest] = useState(firstStep);
   const [returnTo, setReturnTo] = useState<number | null>(null);
   const [tried, setTried] = useState<Set<number>>(new Set());
+  // Fields left at least once (2026-11-21): their errors show at once, before Next.
+  const [touched, setTouched] = useState<Set<string>>(new Set());
   const [attachments, setAttachments] = useState<Attachments>(() => (view.application?.attachments ?? {}) as Attachments);
   // The register's values are shown as text to confirm; Edit turns the same values into inputs. Nothing to show: inputs at once.
   // Staff and a correction see every answer as an input (each one can be flagged / is marked); the agent gets the confirm cards.
@@ -310,7 +330,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   }, [state, persist, staff]);
 
   const problems = f04Problems(step, fields, state, attachments, rulesF04);
-  const shown = tried.has(step) ? problems : {};
+  const shown = tried.has(step) ? problems : Object.fromEntries(Object.entries(problems).filter(([k]) => touched.has(k)));
+  // The agency admin's form (2026-11-21): Next / Sign and submit stay disabled until the step is complete, with what is missing beside them.
+  const gated = mode === "agent" || mode === "correction";
+  const missing = Object.values(problems)[0] ?? "";
+  const onBlurField = (e: FocusEvent<HTMLDivElement>) => {
+    const id = (e.target as HTMLElement).id ?? "";
+    if (!id.startsWith("f04-")) return;
+    const key = id.slice(4);
+    setTouched((t) => t.has(key) ? t : new Set(t).add(key));
+  };
   const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments, rulesF04));
   const set = (key: string, value: string) => setState((s) => ({ ...s, answers: { ...s.answers, [key]: value } }));
   const setMany = (values: Record<string, string>) => setState((s) => ({ ...s, answers: { ...s.answers, ...values } }));
@@ -320,8 +349,10 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
   const witnessReady = !needWitness || (witnessOptional && !witnessName && !witnessPng) || (witnessName.length >= 2 && !!witnessPng);
   const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && (!codeCheck.needed || !!codeCheck.session);
+  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
 
   const save = async () => {
+    if (busy === "save") return;
     setBusy("save");
     const ok = await persist(step, true);
     setNotice(ok ? { tone: "info", text: "Saved. Use the link in your email to come back and carry on; your answers will be filled in." } : { tone: "error", text: "Your answers could not be saved. Please try again." });
@@ -553,7 +584,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               <div><dt className="text-foreground-500">ABN status</dt><dd className="text-foreground-800">{facts?.abnStatus ? `${facts.abnStatus}${facts.statusFrom ? ` from ${abrDateWords(facts.statusFrom)}` : ""}` : "—"}</dd></div>
               <div><dt className="text-foreground-500">GST</dt><dd className="text-foreground-800">{gst === "YES" ? `Registered${facts?.gstRegistered && facts.gstFrom ? ` from ${abrDateWords(facts.gstFrom)}` : ""}` : gst === "NO" ? "Not registered" : "—"}</dd></div>
             </dl>
-            {Object.keys(shown).some((k) => COMPANY_KEYS.includes(k as never) || k === "acn") && !editCompany ? <FieldError text="Some details are missing: select Edit." /> : null}
+            {Object.keys(gated ? problems : shown).some((k) => COMPANY_KEYS.includes(k as never) || k === "acn") && !editCompany ? <FieldError text="Some details are missing: select Edit." /> : null}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {frame(["marn"], <WizardTextField id="f04-marn" name="marn" label="MARA number (MARN), if registered" required={false} value={state.marn} error={shown.marn} inputMode="numeric" maxLength={10} testId="f04-marn"
@@ -584,7 +615,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 {text("contact_email", "Email", { type: "email", autoComplete: "email" })}
                 {phone("contact_phone", "Phone")}
               </div>
-            ) : ["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].map((k) => shown[k] ? <FieldError key={k} text={shown[k]} /> : null)}
+            ) : ["contact_given_name", "contact_family_name", "contact_email", "contact_phone"].map((k) => (gated ? problems : shown)[k] ? <FieldError key={k} text={(gated ? problems : shown)[k]} /> : null)}
           </section>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {has("contact_title") ? frame(["contact_title"], <div>
@@ -618,7 +649,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 <div className="sm:col-span-6">{text("office_country", "Country", { autoComplete: "country-name", noFrame: true })}</div>
               </div>
             )}
-            {!editAddress ? [shown.office_street_address, shown.office_country, shown.office_postcode, shown.office_suburb].map((t, i) => <FieldError key={i} text={t} />) : null}
+            {!editAddress ? (() => { const s = gated ? problems : shown; return [s.office_street_address, s.office_country, s.office_postcode, s.office_suburb].map((t, i) => <FieldError key={i} text={t} />); })() : null}
           </fieldset>, "the office address")}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{text("agent_website", "Website", { autoComplete: "url", required: false, placeholder: "https://" })}</div>
         </div>
@@ -666,7 +697,10 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             <section key={n} className="rounded-lg border border-background-200 p-4" data-testid={`f04-reference-${n}`}>
               <h3 className="mb-3 text-sm font-semibold text-foreground-900">Reference {n}</h3>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {REF_PARTS.filter(([part]) => ["contact_name", "organisation", "position", "email"].includes(part)).map(([part, label, must]) => text(k(part), label, { required: must, type: part === "email" ? "email" : undefined }))}
+                {/* 2026-11-21: Contact name + Organisation, then Position, Email and Phone each on their own full-width row. */}
+                {REF_PARTS.filter(([part]) => part === "contact_name" || part === "organisation").map(([part, label, must]) => text(k(part), label, { required: must }))}
+                {has(k("position")) ? <div className="sm:col-span-2">{text(k("position"), "Position", { required: REF_PARTS.find(([p]) => p === "position")?.[2] ?? false })}</div> : null}
+                {has(k("email")) ? <div className="sm:col-span-2">{frame([k("email")], <EmailBox id={`f04-${k("email")}`} name={k("email")} label="Email" value={a[k("email")] ?? ""} error={shown[k("email")]} required onChange={(v) => set(k("email"), v)} />, `reference ${n}'s email`)}</div> : null}
                 <div className="sm:col-span-2">{phone(k("phone"), "Phone")}</div>
                 {has(k("address")) ? <div className="sm:col-span-2">{frame([k("address")], <div>
                   {manualRef[n] || (a[k("address")] ?? "").trim() ? (
@@ -887,12 +921,12 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const savedNote = saved === "saving" ? "Saving…" : saved === "saved" ? "Saved ✓" : saved === "error" ? "Not saved" : "";
   const saveLater = (
     <span className="flex items-center gap-2 whitespace-nowrap">
-      <button type="button" onClick={() => void save()} disabled={!!busy} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50" data-testid="f04-save-later">
+      <button type="button" onClick={() => void save()} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline" data-testid="f04-save-later">
         {busy === "save" ? "Saving…" : "Save and continue later"}</button>
       {savedNote && busy !== "save" ? <span role="status" aria-live="polite" className={`text-xs ${saved === "error" ? "text-red-700" : "text-foreground-500"}`} data-testid="f04-saved">{savedNote}</span> : null}
     </span>);
   return (
-    <div ref={top} className="scroll-mt-4" onKeyDown={onKey}>
+    <div ref={top} className="scroll-mt-4" onKeyDown={onKey} onBlur={onBlurField}>
       <WizardShell variant={staff ? "modal" : "page"} stickyFooter={!staff} icon="ri-file-user-line" title={admin ? "Review application" : prefilling ? "Prepare the application" : correcting ? "Correct your application" : combined ? "Agent application and agreement" : "Agent application form"}
         onClose={admin ? review?.onClose : prefilling ? prefill?.onClose : undefined}
         subtitle={admin ? <>Agent application of <strong>{view.onboarding?.agencyName ?? "the agency"}</strong> · Review the application, then approve or send it back.</> : <>{prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
@@ -901,12 +935,14 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
           {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
-        footerEnd={adminButtons ?? prefillButtons ?? (last
+        footerEnd={adminButtons ?? prefillButtons ?? <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          {(last ? submitHint && !staff : gated && missing) && !busy ? <span className="max-w-[18rem] text-right text-xs text-foreground-600" role="status" aria-live="polite" data-testid="f04-next-hint">
+            <i className="ri-information-line mr-1 text-amber-600" aria-hidden="true" />{last ? submitHint : missing}</span> : null}
+          {last
           ? <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!canSubmit || !!busy} onClick={() => void submit()} data-testid="f04-submit">{busy === "sign" ? "Submitting…" : "Sign and submit"}<i className="ri-check-line" aria-hidden="true" /></button>
-          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>)}
+          : <button type="button" className={WIZARD_PRIMARY_CLASS} disabled={!!busy || (gated && !!missing)} onClick={next} data-testid="f04-next">{returnTo !== null ? "Back to review" : "Next"}<i className="ri-arrow-right-line" aria-hidden="true" /></button>}</span>}
         notices={<>
           {notice ? <WizardNotice tone={notice.tone}>{notice.text}</WizardNotice> : null}
-          {last && !staff && !canSubmit && !busy ? <WizardNotice tone="info">{Object.keys(problems).length ? "Tick every statement and give your name and role." : !signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code."}</WizardNotice> : null}
         </>}>
         {correcting && correction ? <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" data-testid="f04-correction-banner">
           <p className="font-semibold"><i className="ri-flag-2-fill mr-1" aria-hidden="true" />SLIT has asked you to correct {Object.keys(flags).length} answer{Object.keys(flags).length === 1 ? "" : "s"} (highlighted). Everything else stays as you signed it.</p>

@@ -859,6 +859,21 @@ test("F04 step order (2026-11-20): Business, References, Contact, Agency, Review
   const empty = { answers: {}, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.references };
   assert.ok(Object.keys(logic.f04Problems(logic.F04_STEP.references, refFields, empty)).some((k) => k.startsWith("ref1_")), "the References step (second) asks for the references");
   assert.deepEqual(logic.f04Problems(logic.F04_STEP.contact, refFields, empty), {}, "the Contact step does not ask for the references");
+  // References (2026-11-21): their own email and phone each, never the agency admin's own email; shown before the other checks pass.
+  const refs = (answers: Record<string, string>, ownEmails: string[] = []) => logic.f04Problems(logic.F04_STEP.references, refFields, { ...empty, answers }, {}, { ownEmails });
+  const two = { ref1_contact_name: "Ana Roy", ref1_organisation: "A", ref1_email: "ana@a.test", ref1_phone: "+61412345678", ref2_contact_name: "Ben Li", ref2_organisation: "B", ref2_email: "ben@b.test", ref2_phone: "+61412345679" };
+  assert.deepEqual(refs(two), {});
+  assert.deepEqual(refs({ ...two, ref2_email: "ANA@a.test", ref2_organisation: "" }), { ref2_organisation: "Enter reference 2's organisation.", ref2_email: "Each reference needs their own email." }, "shown while other answers are still missing");
+  assert.deepEqual(refs({ ...two, ref2_phone: "0412 345 678" }), { ref2_phone: "Each reference needs their own phone." });
+  assert.deepEqual(refs({ ...two, ref1_email: "me@agency.test" }, ["Me@Agency.test"]), { ref1_email: "A reference's email can't be your own email." }, "the signer's own email");
+  assert.deepEqual(refs({ ...two, contact_email: "ben@b.test" }), { ref2_email: "A reference's email can't be your own email." }, "the contact's email");
+  assert.deepEqual(refs({ ...two, ref2_contact_name: "ana roy" }), {}, "the same contact name is only a warning");
+  assert.equal(refs({ ...two, ref1_phone: "" }).ref1_phone, "Enter reference 1's phone.", "the hint beside Next");
+  // The agency admin's form: Next / Sign disabled with the missing item beside them; errors on leaving a field; Save always enabled; layout.
+  const f04 = read("src/components/signing/F04Wizard.tsx");
+  assert.ok(f04.includes(`disabled={!!busy || (gated && !!missing)} onClick={next} data-testid="f04-next"`) && f04.includes(`data-testid="f04-next-hint"`) && f04.includes("disabled={!canSubmit || !!busy}"));
+  assert.ok(f04.includes("onBlur={onBlurField}") && f04.includes("touched.has(k)") && !/data-testid="f04-save-later"[^>]*disabled|disabled=\{!!busy\} className="cursor-pointer text-sm font-semibold text-primary-700 underline-offset-2 hover:underline disabled:opacity-50" data-testid="f04-save-later"/.test(f04));
+  assert.ok(f04.includes(`<EmailBox id={\`f04-\${k("email")}\`}`) && f04.includes("[overflow-wrap:anywhere]") && f04.includes('<div className="grid grid-cols-1 gap-4 lg:grid-cols-2">'), "email on its own row and wrapping; cards side by side only on wide screens");
   // Progress saving: a draft keeps its step by id; one saved before the change (position only, old order) reopens at the same step.
   assert.equal(logic.F04_STEPS[logic.draftStep({ step: 1 })].id, "contact", "an old draft at position 1 was on Contact");
   assert.equal(logic.F04_STEPS[logic.draftStep({ step: 3 })].id, "references", "an old draft at position 3 was on References");

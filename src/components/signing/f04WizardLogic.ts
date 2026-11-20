@@ -179,7 +179,7 @@ export function f04Values(fields: readonly Field[], state: F04Draft): Record<str
 
 /** The problems of one step (key -> message). Required fields come from the form's own fields; follow-ups only when their answer is Yes. */
 export function f04Problems(step: number, fields: readonly Field[], state: F04Draft, attachments: Partial<Record<F04AttachmentKind, unknown>> = {},
-  options: { refereeEmailsDistinct?: boolean } = {}): Record<string, string> {
+  options: { refereeEmailsDistinct?: boolean; ownEmails?: readonly string[] } = {}): Record<string, string> {
   const p: Record<string, string> = {};
   const a = state.answers;
   const field = (key: string) => fields.some((f) => keyOf(f) === key);
@@ -225,6 +225,14 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
       if (!blank(`ref${n}_email`) && !EMAIL.test(a[`ref${n}_email`].trim())) p[`ref${n}_email`] = "Enter a valid email address.";
       if (!blank(`ref${n}_phone`) && !phoneE164(a[`ref${n}_phone`])) p[`ref${n}_phone`] = "Enter a full phone number with its country code.";
     }
+    // 2026-11-21 (owner): each reference their own email and phone, and never the agency admin's own email (the signer and the contact);
+    // shown as the fields are filled, not only at the end. The same contact name stays a warning. The server keeps its own checks.
+    const email = (n: number) => (a[`ref${n}_email`] ?? "").trim().toLowerCase();
+    const own = new Set([...(options.ownEmails ?? []), a.contact_email ?? ""].map((x) => String(x).trim().toLowerCase()).filter(Boolean));
+    for (const n of [1, 2]) if (!p[`ref${n}_email`] && email(n) && own.has(email(n))) p[`ref${n}_email`] = "A reference's email can't be your own email.";
+    if (!p.ref1_email && !p.ref2_email && email(1) && email(1) === email(2) && options.refereeEmailsDistinct !== false) p.ref2_email = "Each reference needs their own email.";
+    const ph1 = phoneE164(a.ref1_phone), ph2 = phoneE164(a.ref2_phone);
+    if (!p.ref1_phone && !p.ref2_phone && ph1 && ph1 === ph2) p.ref2_phone = "Each reference needs their own phone.";
     if (!Object.keys(p).length) {
       const checked = checkApplicationAnswers({ ...a }, options);
       if (checked.error) {

@@ -19,7 +19,7 @@ import { VoeTab } from "@/pages/admin/lms/VoeCalendarEditor";
 import { DailyTimetableTab } from "@/pages/admin/lms/CourseWeeklyTimetable";
 import IntakeGroupPanel from "@/pages/admin/components/rto/IntakeGroupPanel";
 import {
-  addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoHoursCheck, shortDate, timingLines, timingShort, todayIso, weeksOf,
+  loadIntakeLoads, type StudyLoad, addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoHoursCheck, shortDate, timingLines, timingShort, todayIso, weeksOf,
   type BatchStudent, type FeeItem, type HoursCheck, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
 } from "@/pages/admin/lib/rto";
 
@@ -30,7 +30,7 @@ const hasSetup = (g: RtoBatch) => (g.sessions ?? []).length > 0 || g.classDays.l
 
 export type SheetTab = "overview" | "timeline" | "classes" | "students" | "group" | "assessments" | "timetables";
 const TABS: { id: SheetTab; label: string }[] = [
-  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "timetables", label: "CoE / VoE timetables" }, { id: "students", label: "Students" }, { id: "group", label: "Group" }, { id: "assessments", label: "Assessments" },
+  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "timetables", label: "Weekly and daily calendars" }, { id: "students", label: "Students" }, { id: "group", label: "Group" }, { id: "assessments", label: "Assessments" },
 ];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
 
@@ -156,7 +156,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
               <Students detail={detail} group={group} canEdit={canEdit} canOverride={canEnrol} onChanged={() => { void load(); onChanged(); }} notify={(m) => push(m)}
                 onSetup={() => { setTab("classes"); setSetup(true); }} />
             ) : null}
-            {tab === "timetables" ? <TimetablesPanel courseId={detail.intake.courseId} courseCode={detail.intake.courseCode} canEdit={canEdit} /> : null}
+            {tab === "timetables" ? <TimetablesPanel intakeId={detail.intake.id} courseId={detail.intake.courseId} courseCode={detail.intake.courseCode} canEdit={canEdit} /> : null}
             {tab === "group" ? <IntakeGroupPanel intakeId={intakeId} /> : null}
             {tab === "assessments" ? (group ? <IntakeAssessmentsPanel batchId={group.id} />
               : <Empty icon="ri-file-list-3-line" title="Weekly timetable not selected yet" text="Assessments are assigned to an intake once its classes are set up." />) : null}
@@ -385,25 +385,28 @@ function Students({ detail, group: g, canEdit, canOverride, onChanged, notify, o
   );
 }
 
-/** The course's four timetables, as the course wizard builds them: CoE and VoE weekly calendars, CoE and VoE daily timetables. */
-function TimetablesPanel({ courseId, courseCode, canEdit }: { courseId: string; courseCode: string; canEdit: boolean }) {
+/** This intake's own timetables: a CoE intake shows the CoE weekly calendar and CoE daily timetable, a VoE intake the VoE ones. */
+function TimetablesPanel({ intakeId, courseId, courseCode, canEdit }: { intakeId: string; courseId: string; courseCode: string; canEdit: boolean }) {
   const [intakes, setIntakes] = useState<RtoIntake[] | null>(null);
+  const [load, setLoad] = useState<StudyLoad | null>(null);
   useEffect(() => {
     let live = true;
-    void rto<{ intakes: RtoIntake[] }>("course_get", { courseId }).then(c => { if (live) setIntakes(c.intakes); }).catch(() => { if (live) setIntakes([]); });
+    void Promise.all([rto<{ intakes: RtoIntake[] }>("course_get", { courseId }), loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>))])
+      .then(([c, loads]) => { if (live) { setIntakes(c.intakes); setLoad(loads[intakeId] === "voe" ? "voe" : "coe"); } })
+      .catch(() => { if (live) { setIntakes([]); setLoad("coe"); } });
     return () => { live = false; };
-  }, [courseId]);
+  }, [courseId, intakeId]);
   const box = (title: string, body: React.ReactNode, open = false) => (
     <details open={open} className="rounded-xl border border-background-200 bg-background-50">
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground-900">{title}</summary>
       <div className="border-t border-background-200 p-4">{body}</div>
     </details>);
+  if (!intakes || !load) return <p className="text-sm text-foreground-500">Loading the timetables…</p>;
+  const label = load === "voe" ? "VoE" : "CoE";
   return <div className="space-y-3">
-    {box("CoE weekly calendar", <MasterTimetableTab courseId={courseId} courseCode={courseCode} />, true)}
-    {box("VoE weekly calendar", <VoeTab course={{ id: courseId, code: courseCode }} canEdit={canEdit} />)}
-    {intakes ? <>
-      {box("CoE daily timetable", <DailyTimetableTab courseId={courseId} intakes={intakes} canEdit={canEdit} load="coe" />)}
-      {box("VoE daily timetable", <DailyTimetableTab courseId={courseId} intakes={intakes} canEdit={canEdit} load="voe" />)}
-    </> : <p className="text-sm text-foreground-500">Loading the daily timetables…</p>}
+    {load === "voe"
+      ? box("VoE weekly calendar", <VoeTab course={{ id: courseId, code: courseCode }} canEdit={canEdit} />, true)
+      : box("CoE weekly calendar", <MasterTimetableTab courseId={courseId} courseCode={courseCode} />, true)}
+    {box(`${label} daily timetable`, <DailyTimetableTab courseId={courseId} intakes={intakes.filter(i => i.id === intakeId)} canEdit={canEdit} load={load} />)}
   </div>;
 }

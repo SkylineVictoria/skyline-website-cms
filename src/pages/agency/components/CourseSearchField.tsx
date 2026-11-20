@@ -63,10 +63,16 @@ export default function CourseSearchField({ name, options, disabled, single, leg
     setChecked(option, true);
     setQuery("");
     setActive(0);
+    setOpen(false);
   };
 
   return (
-    <div ref={boxRef} className="relative">
+    <div
+      ref={boxRef}
+      className="relative"
+      // Close when focus leaves the picker (Tab away, a save or sync moving focus), not only on an outside click.
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}
+    >
       {selected.length ? (
         <ul className="mb-2 flex flex-wrap gap-2" aria-label="Selected courses">
           {selected.map((option) => (
@@ -104,7 +110,9 @@ export default function CourseSearchField({ name, options, disabled, single, leg
             aria-controls={`${name}-results`}
             aria-autocomplete="list"
             onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); }}
-            onFocus={() => setOpen(true)}
+            // Open only on a deliberate click, typing or arrow key: focus alone (restored by the browser when the
+            // window regains focus, or during a save/sync re-render) must not pop the list open.
+            onClick={() => setOpen(true)}
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setActive((i) => Math.min(matches.length - 1, i + 1)); }
               else if (event.key === "ArrowUp") { event.preventDefault(); setActive((i) => Math.max(0, i - 1)); }

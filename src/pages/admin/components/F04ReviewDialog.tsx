@@ -49,6 +49,7 @@ export default function F04ReviewDialog({ onboardingId, agencyName, onClose, onD
     slitWitness: review.slitWitness ? { name: review.slitWitness.name, image: picture(review.slitWitness.png) } : null,
     agencyWitness: review.witness ? { name: review.witness.name, image: picture(review.witness.png) } : null,
     agencySignature: review.agencySignature ? { name: review.agencySignature.name ?? review.signerName ?? "", image: picture(review.agencySignature.image), signedAt: review.agencySignature.signedAt ?? review.signedAt } : null,
+    commissionGst: review.terms?.commissionGst ?? null, slitSignatory: review.slitSignatory ?? null,
   } : null;
 
   if (error) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55 p-4" role="dialog" aria-modal="true">

@@ -13,7 +13,7 @@ import { fieldGroup, signingAction, signingAddressSearch, signWithRetry, type Si
 import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFORE_ABN_HINT, yearMayPredateAbn, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
-import { correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
+import { commissionText, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
@@ -182,12 +182,41 @@ export interface F04ReviewSignature { name: string; image: string | null; signed
 export interface F04ReviewAgreement {
   commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | string | null;
   slitWitness: F04ReviewSignature | null; agencyWitness: F04ReviewSignature | null; agencySignature: F04ReviewSignature | null;
+  /** 2026-11-21: GST on the commission and SLIT's signatory (signed when SLIT sent the application). */
+  commissionGst?: string | null; slitSignatory?: SlitSignatoryView | null;
 }
+/** SLIT's signatory block as shown (read-only): organisation, signature (picture or typed name), name, position, date. */
+export interface SlitSignatoryView { organisation: string; name: string; position: string; image: string | null; typed: string | null; signedOn: string | null }
+
+/** SLIT's signatory block on the agreement (2026-11-21), read-only: the same block in the pre-send preview, on the signing page and in the review. */
+export function SlitSignatoryBlock({ s, testId, note }: { s: SlitSignatoryView; testId: string; note?: string }) {
+  const day = s.signedOn ? String(s.signedOn).slice(0, 10).split("-").reverse().join("/") : "—";
+  return <div className="min-w-0 rounded-md border border-background-200 bg-background-50 p-3 text-sm" data-testid={testId}>
+    <p className="text-xs text-foreground-500">Signed for and on behalf of</p>
+    <p className="break-words font-semibold text-foreground-900" data-testid={`${testId}-organisation`}>{s.organisation}</p>
+    <div className="mt-2 min-h-12" data-testid={`${testId}-signature`}>
+      {s.image ? <img src={s.image} alt={`SLIT signature: ${s.name}`} className="max-h-16 max-w-full rounded border border-background-300 bg-white p-1" />
+        : s.typed ? <p className={`text-2xl leading-tight text-[#0d1a4d] ${SCRIPT_FONT}`}>{s.typed}</p>
+        : <p className="text-foreground-500">Signature not added yet</p>}
+    </div>
+    <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-3">
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Name</dt><dd className="break-words text-foreground-900" data-testid={`${testId}-name`}>{s.name || "—"}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Position</dt><dd className="break-words text-foreground-900" data-testid={`${testId}-position`}>{s.position || "—"}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-foreground-500">Date</dt><dd className="text-foreground-900" data-testid={`${testId}-date`}>{day}</dd></div>
+    </dl>
+    {note ? <p className="mt-2 text-xs text-foreground-500">{note}</p> : null}
+  </div>;
+}
+/** The GST choice for the commission: radio buttons, so it is never left ambiguous (SLIT staff only, in Prepare application). */
+const GST_OPTIONS = [["exclusive", "GST exclusive"], ["inclusive", "GST inclusive"]] as const;
 
 /** The pre-send step (2026-11-20): staff fill the F04 before it goes; the agreement terms, the witness and the buttons live with the dialog. */
 export interface F04PrefillControls {
-  terms: { commencementDate: string; territory: string; commissionPercent: string }; onTerms: (terms: F04PrefillControls["terms"]) => void;
+  terms: { commencementDate: string; territory: string; commissionPercent: string; commissionGst: "" | "inclusive" | "exclusive" }; onTerms: (terms: F04PrefillControls["terms"]) => void;
   witness: { name: string; png: string | null }; onWitness: (witness: F04PrefillControls["witness"]) => void;
+  /** SLIT's signatory (2026-11-21): the sending admin's name and position, their signature (saved / drawn / typed) and the send date. */
+  signatory: { organisation: string; name: string; position: string; savedSignature: string | null; signedOn: string; method: "saved" | "drawn" | "typed"; png: string | null; save: boolean };
+  onSignatory: (signatory: F04PrefillControls["signatory"]) => void;
   message: string; onMessage: (message: string) => void;
   busy: "" | "save" | "send"; contact: { name: string; email: string } | null; savedNote: string | null;
   onSaveDraft: (state: F04Draft) => void; onSend: (state: F04Draft) => void; onClose: () => void;
@@ -459,13 +488,14 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           <div className="min-w-0"><dt className="text-xs text-foreground-500">Commencement</dt><dd className="text-foreground-900" data-testid="f04-review-agreement-commencement">{auDay(ag.commencementDate)}</dd></div>
           <div className="min-w-0"><dt className="text-xs text-foreground-500">Ends</dt><dd className="text-foreground-900">{auDay(ag.expiryDate)}</dd></div>
           <div className="min-w-0"><dt className="text-xs text-foreground-500">Territory</dt><dd className="break-words text-foreground-900">{ag.territory || "—"}</dd></div>
-          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commission</dt><dd className="text-foreground-900">{ag.commissionPercent != null && ag.commissionPercent !== "" ? `${ag.commissionPercent}%` : "—"}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-foreground-500">Commission</dt><dd className="text-foreground-900" data-testid="f04-review-agreement-commission">{commissionText(ag.commissionPercent, ag.commissionGst) || "—"}</dd></div>
         </dl>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           {signatureCell("Agency admin's signature", ag.agencySignature, "f04-review-agreement-signature")}
           {signatureCell("Agency's witness", ag.agencyWitness, "f04-review-agreement-agency-witness")}
           {signatureCell("SLIT witness", ag.slitWitness, "f04-review-agreement-slit-witness")}
         </div>
+        {ag.slitSignatory ? <div className="mt-3"><SlitSignatoryBlock testId="f04-review-agreement-slit-signatory" s={ag.slitSignatory} /></div> : null}
       </section>) : null;
     return (
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" data-testid="f04-review">
@@ -665,14 +695,49 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           {reviewSummary()}
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-agreement">
             <h3 className="text-sm font-semibold text-foreground-900">Education Agent Agreement (P06): the terms</h3>
-            <p className="text-sm text-foreground-600">Printed on the agreement the agency admin signs together with this form (one signature on both). SLIT countersigns when you approve the application.</p>
+            <p className="text-sm text-foreground-600">Printed on the agreement the agency admin signs together with this form (one signature on both). You sign it for SLIT below; your signature is printed when you send.</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <WizardTextField id="f04-prefill-commencement" name="commencementDate" type="date" label="Commencement date (Item 5)" required value={t.commencementDate} onChange={(v) => prefill.onTerms({ ...t, commencementDate: v })} testId="f04-prefill-commencement" />
               <WizardTextField id="f04-prefill-territory" name="territory" label="Territory (Item 3)" required value={t.territory} maxLength={200} placeholder="e.g. India, Nepal" onChange={(v) => prefill.onTerms({ ...t, territory: v })} testId="f04-prefill-territory" />
-              <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder={commissionSuggested()} onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
+              <div className="min-w-0">
+                <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder={commissionSuggested()} onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
+                {/* GST on the commission (2026-11-21): required, SLIT staff only; radio buttons so it is never ambiguous. */}
+                <fieldset className="mt-2" data-testid="f04-prefill-gst">
+                  <legend className="text-label font-medium text-foreground-800">GST on the commission<span className="text-primary-600"> *</span></legend>
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">{GST_OPTIONS.map(([value, label]) =>
+                    <label key={value} className="flex cursor-pointer items-center gap-2 text-sm"><input type="radio" name="f04-prefill-gst" value={value} checked={t.commissionGst === value}
+                      onChange={() => prefill.onTerms({ ...t, commissionGst: value })} className="h-4 w-4" data-testid={`f04-prefill-gst-${value}`} />{label}</label>)}</div>
+                  {!t.commissionGst ? <p className="mt-1 text-xs text-amber-800" data-testid="f04-prefill-gst-missing">Choose one before sending.</p> : null}
+                </fieldset>
+              </div>
             </div>
+            {t.commissionPercent ? <p className="text-sm text-foreground-800" data-testid="f04-prefill-commission-text">Commission printed: <strong>{commissionText(t.commissionPercent, t.commissionGst) || "—"}</strong>{t.commissionGst ? "" : " (choose GST inclusive or exclusive)"}</p> : null}
             <p className="text-xs text-foreground-500">The agreement runs {termYears === 1 ? "one year" : `${termYears} years`} from the commencement date.</p>
           </section>
+          {(() => {
+            const s = prefill.signatory;
+            const set = (patch: Partial<F04PrefillControls["signatory"]>) => prefill.onSignatory({ ...s, ...patch });
+            const image = s.method === "saved" ? s.savedSignature : s.method === "drawn" ? s.png : null;
+            return <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-signatory">
+              <h3 className="text-sm font-semibold text-foreground-900">SLIT signatory on the agreement</h3>
+              <p className="text-sm text-foreground-600">Signed for {s.organisation}. Printed on the agreement when you send, dated the day you send; the agency admin sees it and cannot change it.</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <WizardTextField id="f04-prefill-signatory-name" name="adminName" label="SLIT signatory name" required value={s.name} maxLength={150} onChange={(v) => set({ name: v })} testId="f04-prefill-signatory-name" />
+                <WizardTextField id="f04-prefill-signatory-position" name="adminPosition" label="SLIT signatory position" required value={s.position} maxLength={150} placeholder="e.g. Chief Executive Officer" onChange={(v) => set({ position: v })} testId="f04-prefill-signatory-position" />
+              </div>
+              <div>
+                <p className="mb-2 text-label font-medium text-foreground-800">SLIT signature<span className="text-primary-600"> *</span></p>
+                <div role="tablist" className="mb-3 flex flex-wrap gap-2">{([["saved", "My saved signature"], ["drawn", "Draw"], ["typed", "Type my name"]] as const).filter(([id]) => id !== "saved" || s.savedSignature).map(([id, label]) =>
+                  <button key={id} type="button" role="tab" aria-selected={s.method === id} onClick={() => set({ method: id, png: null })} data-testid={`f04-prefill-signature-${id}`}
+                    className={`cursor-pointer rounded-full border px-4 py-1.5 text-sm font-medium ${s.method === id ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-white"}`}>{label}</button>)}</div>
+                {s.method === "drawn" && !s.png ? <div className="space-y-2"><SignaturePad onChange={(png) => set({ png })} />
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.save} onChange={(e) => set({ save: e.target.checked })} className="h-4 w-4" />Save as my signature for next time</label></div> : null}
+                {s.method === "drawn" && s.png ? <button type="button" className="mb-2 cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => set({ png: null })} data-testid="f04-prefill-signature-redraw">Draw again</button> : null}
+              </div>
+              <SlitSignatoryBlock testId="f04-prefill-signatory-preview" note="Preview: this is how SLIT's block prints on the agreement."
+                s={{ organisation: s.organisation, name: s.name.trim(), position: s.position.trim(), image, typed: s.method === "typed" ? s.name.trim() || null : null, signedOn: s.signedOn }} />
+            </section>;
+          })()}
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-witness">
             <h3 className="text-sm font-semibold text-foreground-900">SLIT witness on the agreement (optional)</h3>
             <p className="text-sm text-foreground-600">{PREFILL_WITNESS_HINT}</p>
@@ -699,13 +764,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     const agreementSection = combined ? (
       <section className="space-y-4 border-t border-background-200 pt-5" data-testid="f04-agreement">
         <h3 className="text-sm font-semibold text-foreground-900">Education Agent Agreement (P06)</h3>
-        <p className="text-sm text-foreground-800">Your application and the agent agreement are signed together: <strong>your one signature below signs both documents.</strong> SLIT countersigns the agreement when your application is approved and emails you the completed copy.</p>
+        <p className="text-sm text-foreground-800">Your application and the agent agreement are signed together: <strong>your one signature below signs both documents.</strong> {terms?.slitSignatory
+          ? "SLIT has already signed the agreement (below). When your application is approved you receive the completed copy."
+          : "SLIT countersigns the agreement when your application is approved and emails you the completed copy."}</p>
         {terms ? <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg border border-background-200 p-4 text-sm sm:grid-cols-4" data-testid="f04-agreement-terms">
           <div><dt className="text-xs text-foreground-500">Commencement (Item 5)</dt><dd className="font-medium text-foreground-900">{auDate(terms.commencementDate)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Ends</dt><dd className="font-medium text-foreground-900">{auDate(terms.expiryDate)}</dd></div>
           <div><dt className="text-xs text-foreground-500">Territory (Item 3)</dt><dd className="font-medium text-foreground-900">{terms.territory || "—"}</dd></div>
-          <div><dt className="text-xs text-foreground-500">Commission (Item 4)</dt><dd className="font-medium text-foreground-900">{terms.commissionPercent != null && terms.commissionPercent !== "" ? `${terms.commissionPercent}%` : "—"}</dd></div>
+          <div><dt className="text-xs text-foreground-500">Commission (Item 4)</dt><dd className="font-medium text-foreground-900" data-testid="f04-agreement-commission">{commissionText(terms.commissionPercent, terms.commissionGst) || "—"}</dd></div>
         </dl> : null}
+        {terms?.slitSignatory ? <SlitSignatoryBlock testId="f04-agreement-slit-signatory" s={terms.slitSignatory} note="Signed by SLIT before sending; it cannot be changed here." /> : null}
         {view.url ? <a href={view.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary-700 underline underline-offset-2" data-testid="f04-agreement-read">
           <i className="ri-file-text-line" aria-hidden="true" />Read the full agreement (PDF: the application form, then the agreement)</a> : null}
         <div className="space-y-3 rounded-lg border border-background-200 p-4" data-testid="f04-witness">

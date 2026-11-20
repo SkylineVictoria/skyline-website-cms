@@ -32,6 +32,8 @@ export interface OnboardingRow {
   id: string; status: "sent" | "signed" | "closed"; stage: OnboardingStage; createdAt: string; signedAt: string | null; signerName: string | null; closedReason: string | null;
   applicationSignedAt: string | null; referencesReceivedAt: string | null; message: string | null;
   commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null; adminName: string; adminPosition: string;
+  /** 2026-11-21: GST on the commission (null on onboardings sent before) and SLIT's signatory when it signed at send (Approve then skips it). */
+  commissionGst?: "inclusive" | "exclusive" | null; slitSignatory?: { name: string; position: string; signedOn: string } | null;
   override: { reason: string; at: string; by: string | null } | null;
   /** Staff approval of the references (2026-11-17), the decline (its reason is for staff only) and the activation after the signed agreement. */
   approval?: { at: string; by: string | null } | null;
@@ -65,7 +67,9 @@ export interface ApplicationReview {
   attachments: Record<string, { name: string; size: number; at: string }>;
   referees: Array<{ id: string; position: number; name: string; organisation: string; positionTitle: string; email: string; phone: string; status: string; receivedAt: string | null; receivedVia: string | null; answers: Record<string, string>; request?: RequestSummary | null }>;
   correction: { round: number; message: string | null; flags: Record<string, string>; requestedAt: string; by: string | null } | null;
-  combined?: boolean; terms?: { commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null } | null;
+  combined?: boolean; terms?: { commencementDate: string | null; expiryDate: string | null; territory: string; commissionPercent: number | null; commissionGst?: "inclusive" | "exclusive" | null } | null;
+  /** 2026-11-21: SLIT's signatory, signed when SLIT sent the application (null for one sent before). */
+  slitSignatory?: { organisation: string; name: string; position: string; kind: "drawn" | "typed"; image: string | null; typed: string | null; signedOn: string } | null;
   witness?: { name: string; by: string | null; png?: string | null } | null; signatureEvent?: SignatureEvent | null;
   /** 2026-11-20: the SLIT witness (preset by staff), the business's ACN, the agency admin's signature on the application request. */
   slitWitness?: { name: string; png: string | null } | null; acn?: string | null; acnSource?: string | null;

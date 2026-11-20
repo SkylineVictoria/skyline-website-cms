@@ -11,7 +11,7 @@ import { OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
 import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
-import { AGENT_ONBOARDING_FIELDS, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
+import { AGENT_ONBOARDING_FIELDS, commissionText, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
 import { abrFactLines, type AbrFacts } from "../../../../supabase/functions/_shared/validation/abr";
 import { commissionProblem, commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
@@ -260,7 +260,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
         {!compact && row.combined && row.stage === "references_approved" ? <Button size="sm" icon="ri-quill-pen-line" disabled={!!busy} onClick={onSendAgreement} data-testid="issue-agreement">Issue agreement</Button> : null}
       </div>
       {row.combined ? <div className="space-y-0.5 text-xs text-foreground-700" data-testid="agreement-combined">
-        <p>Commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}</p>
+        <p>Commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {commissionText(row.commissionPercent, row.commissionGst) || "—"}</p>
         {row.signatureEvent ? <p data-testid="signature-event">Signed once by {row.signatureEvent.signer ?? row.agent.name} on {new Date(row.signatureEvent.at).toLocaleString()} (application form and agreement).</p>
           : row.stage === "application_sent" ? <p>Waiting for {row.agent.name} to sign the application form and the agreement (one signature).</p> : null}
         {row.slitWitness ? <p data-testid="slit-witness-note">SLIT witness: {row.slitWitness.name} (added before sending; drawn signature).</p> : null}
@@ -269,7 +269,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
       </div> : <RequestLine request={row.agreement} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />}
       {!row.activation && row.stage === "agreement_signed" ? <p className="text-xs font-medium text-emerald-800" data-testid="ready-to-activate-note">Signed: the business is ready to activate. Press Activate at the top of the page; the point of contact and every agent added meanwhile then get their sign-in email.</p> : null}
       {row.activation ? <p className="text-xs text-emerald-800" data-testid="activation-note">Business activated on {new Date(row.activation.at).toLocaleDateString()}{row.activation.invitationId ? `; set-password email sent (${row.activation.invitationStatus === "accepted" ? "password set, signed in" : row.activation.invitationStatus === "pending" ? "waiting for the password" : "invitation withdrawn"})` : "; the agent already signs in"}.</p> : null}
-      {row.agreement ? <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}{row.signedAt && row.stage === "agreement_signed" ? ` · signed ${new Date(row.signedAt).toLocaleDateString()}` : ""}</p> : null}
+      {row.agreement ? <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {commissionText(row.commissionPercent, row.commissionGst) || "—"}{row.signedAt && row.stage === "agreement_signed" ? ` · signed ${new Date(row.signedAt).toLocaleDateString()}` : ""}</p> : null}
       {row.override ? <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="override-note">Sent before both references were back{row.override.by ? ` by ${row.override.by}` : ""} on {new Date(row.override.at).toLocaleDateString()}: “{row.override.reason}”</p> : null}
       <div className="flex flex-wrap gap-1.5">{row.files.agreement ? dl("agreement", ONBOARDING_FILE_LABEL.agreement) : null}</div>
     </div>
@@ -291,7 +291,7 @@ function LegacyRow({ row, busy, onOpen, onRemind, onDownload }: { row: Onboardin
       <span className="text-xs text-foreground-500">Sent as one document (application form + agreement) to {row.agent.name} ({row.agent.email}) · {new Date(row.createdAt).toLocaleDateString()} by {row.adminName || "SLIT"}</span>
       <RequestLine request={row.request} who={row.agent.email} busy={busy} onOpen={onOpen} onRemind={onRemind} />
     </div>
-    <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}
+    <p className="text-xs text-foreground-600">Commencement {formatAuDate(row.commencementDate)} · expires {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {commissionText(row.commissionPercent, row.commissionGst) || "—"}
       {row.status === "signed" && row.signedAt ? ` · signed ${new Date(row.signedAt).toLocaleDateString()} by ${row.signerName ?? row.agent.name}` : ""}{row.status === "closed" ? ` · closed (${row.closedReason ?? "cancelled"})` : ""}</p>
     <div className="flex flex-wrap gap-1.5">{(["form", "agreement"] as const).filter((k) => row.files[k]).map((k) =>
       <Button key={k} size="sm" variant="ghost" icon="ri-file-pdf-2-line" disabled={busy === `${row.id}:${k}`} onClick={() => onDownload(row, k, ONBOARDING_FILE_LABEL[k])} data-testid={`download-${k}`}>{ONBOARDING_FILE_LABEL[k]}</Button>)}</div>
@@ -336,7 +336,9 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
   const termsReady = combined || (/^\d{4}-\d{2}-\d{2}$/.test(commencement) && territory.trim().length > 0 && !commissionProblem(commission));
   const witnessPreset = combined && !!row.slitWitness;
   const witnessReady = (!witness.trim() && !witnessPng && (!slitWitnessRequired || witnessPreset)) || (witness.trim().length >= 2 && !!witnessPng);
-  const ready = !!prepared && termsReady && adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng))
+  // 2026-11-21: SLIT signed the agreement when the application was sent: Approve issues it without asking for the signatory again.
+  const presigned = combined && !!row.slitSignatory;
+  const ready = !!prepared && termsReady && (presigned || (adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng))))
     && (!override || reason.trim().length >= 5) && witnessReady && !(approving && waitReferees && received < total);
   const send = async () => {
     if (!ready || busy) return;
@@ -366,7 +368,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
       <Button disabled={!ready || !!busy} onClick={() => void send()} data-testid={approving ? "approve-agency-confirm" : "send-agreement-confirm"}>{busy || (approving ? (combined ? "Approve, countersign and issue" : "Approve and activate agency") : override ? "Send agreement anyway" : "Send agreement for signature")}</Button>
     </div>}>
     <div className="space-y-4" data-testid="send-agreement-dialog">
-      {combined ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). {row.agent.name} ({row.agent.email}) already signed the Agent Agreement with the application, so nothing is sent for a second signature: your signature below countersigns it, the completed agreement is emailed to them, and the agency admin and every agent already added get their sign-in email.</p>
+      {combined ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). {row.agent.name} ({row.agent.email}) already signed the Agent Agreement with the application, so nothing is sent for a second signature: {presigned ? "SLIT's signature is already on it (signed when the application was sent)" : "your signature below countersigns it"}, the completed agreement is emailed to them, and the agency admin and every agent already added get their sign-in email.</p>
         : approve ? <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="approve-note">The business becomes <strong>active</strong> now (its agents do not). The agency admin, {row.agent.name} ({row.agent.email}), receives the Agent Agreement (P06) to sign, with your signature filled in. When it is signed, the agency admin and every agent already added get their sign-in email.</p> : null}
       {approving && received < total ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="approve-referees-warning">
         <i className="ri-error-warning-line mr-1" aria-hidden="true" />Only {received} of {total} referees have replied. {waitReferees ? "SLIT's Business Rules say to wait for every referee: you can approve once all have replied." : "You can still approve; replies that arrive later are kept on the business record."}</p> : null}
@@ -377,7 +379,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
       </div> : null}
       {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}
       {!prepared ? !error && <p className="text-sm">Loading…</p> : <>
-        {combined ? <p className="text-sm text-foreground-700" data-testid="approve-terms">Signed terms: commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {row.commissionPercent != null ? `${row.commissionPercent}%` : "—"}.</p> : <>
+        {combined ? <p className="text-sm text-foreground-700" data-testid="approve-terms">Signed terms: commencement {formatAuDate(row.commencementDate)} · ends {formatAuDate(row.expiryDate)} · territory {row.territory || "—"} · commission {commissionText(row.commissionPercent, row.commissionGst) || "—"}.</p> : <>
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Commencement date (Item 5)" required><TextInput type="date" value={commencement} onChange={(e) => setCommencement(e.target.value)} data-testid="onboarding-commencement" /></Field>
             <Field label="Territory (Item 3)" required><TextInput value={territory} onChange={(e) => setTerritory(e.target.value)} placeholder="e.g. India, Nepal" maxLength={200} data-testid="onboarding-territory" /></Field>
@@ -385,6 +387,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
           </div>
           <p className="text-xs text-foreground-500">The agreement runs {termYears === 1 ? "one year" : `${termYears} years`} from the commencement date; the expiry is recorded on the business when it is signed.</p>
         </>}
+        {presigned && row.slitSignatory ? <p className="rounded-md border border-background-200 p-3 text-sm text-foreground-700" data-testid="slit-signatory-presigned">SLIT signatory: <strong>{row.slitSignatory.name}</strong>, {row.slitSignatory.position}, signed {formatAuDate(row.slitSignatory.signedOn)} when the application was sent; already on the agreement.</p> : <>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="SLIT signatory name" required><TextInput value={adminName} onChange={(e) => setAdminName(e.target.value)} maxLength={150} /></Field>
           <Field label="SLIT signatory position" required><TextInput value={adminPosition} onChange={(e) => setAdminPosition(e.target.value)} maxLength={150} placeholder="e.g. Chief Executive Officer" /></Field>
@@ -398,7 +401,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
           {method === "drawn" ? <div className="space-y-2"><SignaturePad onChange={setPng} />
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} className="h-4 w-4" />Save as my signature for next time</label></div> : null}
           {method === "typed" ? <p className="min-h-14 rounded-md border border-background-300 bg-background-50 px-4 py-3 text-2xl italic text-[#0d1a4d]">{adminName || "Your name appears here as the signature"}</p> : null}
-        </div>
+        </div></>}
         {combined && row.slitWitness ? <p className="rounded-md border border-background-200 p-3 text-sm text-foreground-700" data-testid="slit-witness-preset">SLIT witness: <strong>{row.slitWitness.name}</strong>, already on the agreement (added before sending).</p> : <div className="space-y-2 rounded-md border border-background-200 p-3" data-testid="slit-witness">
           <Field label="SLIT witness name" required={slitWitnessRequired} hint={`${slitWitnessRequired ? "Required." : "Optional."} The witness types their name and draws their signature below (a typed signature is not accepted).`}>
             <TextInput value={witness} onChange={(e) => setWitness(e.target.value)} maxLength={150} data-testid="slit-witness-name" /></Field>

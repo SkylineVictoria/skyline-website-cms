@@ -671,6 +671,9 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
       if (name === "agency_onboarding_blank_cache_put") { const have = blankCache.get(String(args.p_key)); if (have) return { ...have, mine: false }; const row = { path: String(args.p_path), sha256: String(args.p_sha256) }; blankCache.set(String(args.p_key), row); return { ...row, mine: true }; }
       if (name === "agency_onboarding_approve") { state.stage = "references_approved"; return { id: onboardingId, stage: state.stage, agencyStatus: "Active", combined: true, refereesPending: 2, slitWitness: true }; }
       if (name === "agency_onboarding_file") return { name: "Acme - Agent Agreement (signed).pdf", base64: split.agreement };
+      // 2026-11-21: the SLIT signatory stored when the application was sent (Approve does not stamp it again).
+      if (name === "agency_onboarding_review_get") { const d = rpcs.find(([k]) => k === "agency_onboarding_presend_send")?.[1].p_data as Record<string, string> | undefined;
+        return { slitSignatory: d ? { organisation: "INDOPACIFIC GLOBAL PTY LTD", name: d.admin_name, position: d.admin_position, kind: d.slit_signature_kind, image: null, typed: d.slit_signature, signedOn: d.signed_on } : null }; }
       if (name === "agency_onboarding_agreement_issue") { state.stage = "agreement_signed"; return { stage: "agreement_signed", name: "Acme Education Pty Ltd", commencementDate: "2026-12-01", expiryDate: "2028-11-30", contact }; }
       throw new Error(`unexpected rpc ${name}`);
     },
@@ -705,7 +708,11 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.equal((opened as unknown as { acn: string }).acn, "603584676", "Prepare application shows the business's ACN");
   // Send needs the agreement terms.
   await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", commissionPercent: "25" } }), /territory/);
-  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
+  // 2026-11-21: GST inclusive / exclusive is required (never guessed) and must be one of the two; SLIT staff set it in Prepare application only.
+  await assert.rejects(call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: {}, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25" } }), /GST inclusive or GST exclusive/);
+  await assert.rejects(call({ action: "agent_onboarding_presend_save", agencyId, data: { commissionGst: "maybe" } }), /GST inclusive or GST exclusive/);
+  const sentApp = await call({ action: "agent_onboarding_presend_send", agencyId, data: { answers: { contact_title: "Mr", contact_position: "Director" }, commencementDate: "2026-12-01", territory: "India, Nepal", commissionPercent: "25", commissionGst: "exclusive",
+    adminName: "Hari Admin", adminPosition: "Chief Executive Officer", adminSignature: { kind: "typed", name: "Hari Admin" }, witnessName: "Sue Witness", witnessPng: PNG_1PX } }) as { id: string; sent: boolean; combined: boolean; slitWitness: boolean };
   assert.ok(sentApp.sent && sentApp.combined && sentApp.slitWitness && sent.length === 1, "one request, emailed to the point of contact");
   const original = stored.get(`${sentApp.id}/original.pdf`)!;
   assert.equal((await PdfLib.PDFDocument.load(original)).getPageCount(), 15, "the F04's 2 pages followed by the P06's 13");
@@ -721,6 +728,13 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(agreementText.some((t) => t.page === 3 && t.text.includes("51 824 753 556, ACN 603 584 676")), "the agreement's (ABN ...) line carries the business's ACN");
   const sendData = rpcs.find(([name]) => name === "agency_onboarding_presend_send")![1].p_data as { form_pages: number; witness_box: { page: number } | null };
   assert.ok(sendData.form_pages === 2 && sendData.witness_box && sendData.witness_box.page > 2, "where the witness will draw is kept");
+  // 2026-11-21: SLIT's signatory is printed when sending (name, position, typed signature, today's date) and recorded; GST printed with Item 4.
+  const sentSig = sendData as unknown as Record<string, string>;
+  assert.deepEqual([sentSig.admin_name, sentSig.admin_position, sentSig.slit_signature_kind, sentSig.slit_signature, sentSig.signed_on], ["Hari Admin", "Chief Executive Officer", "typed", "Hari Admin", signingCore.isoToday()]);
+  const p11 = agreementText.filter((t) => t.page === 2 + 11).map((t) => t.text).join(" | ");
+  assert.ok(p11.includes("Hari Admin") && p11.includes("Chief Executive Officer") && p11.includes(signingCore.isoToday().split("-").reverse().join("/")), `the SLIT signatory block is filled on the agreement's signature page: ${p11}`);
+  assert.ok(agreementText.some((t) => t.page === 2 + 11 && t.text === "Agent's Fee (Item 4): 25% of tuition fee, GST exclusive"), "the GST choice is printed with the commission");
+  assert.ok(!JSON.stringify((created[0] as { field_values: Record<string, string> }).field_values).includes("admin_signature\""), "the SLIT signature is not kept in the request's field values");
   assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
 
   // The agency admin signs once; the witness types a name and draws.

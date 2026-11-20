@@ -109,7 +109,13 @@ export interface SigningPreview { pdfBase64: string; title: string; text: string
 export interface SigningContext { templates: SigningTemplate[]; requests: SigningRequest[] }
 export interface SigningSubject { name: string; email: string; values: Record<string, string> }
 /** The agreement's Items 3 to 5 as sent with the application (2026-11-20). */
-export interface OnboardingAgreementTerms { commencementDate: string | null; expiryDate: string | null; territory: string | null; commissionPercent: number | string | null }
+export interface OnboardingAgreementTerms { commencementDate: string | null; expiryDate: string | null; territory: string | null; commissionPercent: number | string | null;
+  /** 2026-11-21: GST on the commission, set by SLIT staff only (null on onboardings sent before). */
+  commissionGst?: "inclusive" | "exclusive" | null;
+  /** 2026-11-21: SLIT's signatory, signed when SLIT sent the application (null on one sent before: added at approval). */
+  slitSignatory?: OnboardingSlitSignatory | null }
+/** SLIT's signatory block on the agreement: organisation, name, position, signature (a picture or a typed name) and the date signed. */
+export interface OnboardingSlitSignatory { organisation: string; name: string; position: string; kind: "drawn" | "typed"; image: string | null; typed: string | null; signedOn: string }
 /** The agent's witness on the agreement: preset (printed, read-only here) or to add on the signing page (typed name, drawn signature). */
 export interface OnboardingWitnessPlan { preset: boolean; name: string | null; by: "admin" | "agent" | null; image: string | null }
 /** What a link holder gets: their own fields only, and who else is signing. */
@@ -277,11 +283,16 @@ export interface BusinessCreateResult { agencyId: string; businessId: string; ag
 export interface PresendField { id: string; key: string; type: string; label: string; required: boolean; page: number; value: string }
 export interface PresendOpen {
   onboardingId: string | null; agency: { id: string; name: string; abn: string | null }; contact: { id: string; name: string; email: string } | null; fields: PresendField[];
-  facts: unknown; acn: string; marn: string; message: string; terms: { commencementDate: string; territory: string; commissionPercent: string };
+  facts: unknown; acn: string; marn: string; message: string; terms: { commencementDate: string; territory: string; commissionPercent: string; commissionGst: "" | "inclusive" | "exclusive" };
   witness: { name: string; png: string | null }; savedAt: string | null; savedBy: string | null;
+  /** The SLIT signatory block (2026-11-21): the sending admin by default; their saved signature when they have one; today's date. */
+  signatory: { organisation: string; name: string; position: string; savedSignature: string | null; signedOn: string };
 }
+/** The SLIT signature given in Prepare application: the saved one, drawn here (optionally saved for next time), or the name typed. */
+export type SlitSignatureInput = { kind: "saved" } | { kind: "drawn"; png: string; save?: boolean } | { kind: "typed"; name: string };
 export interface PresendData {
   answers: Record<string, string>; acn: string; marn: string; message: string; commencementDate: string; territory: string; commissionPercent: string; witnessName: string; witnessPng: string | null;
+  commissionGst: "" | "inclusive" | "exclusive"; adminName: string; adminPosition: string; adminSignature?: SlitSignatureInput;
 }
 export const openPresend = (agencyId: string) => onboardingAction<PresendOpen>({ action: "agent_onboarding_presend_open", agencyId });
 export const savePresend = (agencyId: string, data: PresendData) => onboardingAction<{ onboardingId: string; savedAt: string }>({ action: "agent_onboarding_presend_save", agencyId, data });

@@ -3,7 +3,6 @@ import type { AppField, FieldCondition } from "@/data/applicationForms";
 import { PhoneInput, UsiInput, YearSelect } from "./applicationInputs";
 import { fitsSegments } from "@/components/shared/application-form/segments";
 import { SegmentedRadios } from "@/components/shared/application-form/SegmentedControl";
-import { englishMinimumScores, formatEnglishScore } from "@/pages/agency/lib/admissionsRules";
 
 export function ApplicationFieldControl({
   field,
@@ -131,13 +130,7 @@ export function ApplicationFieldControl({
 
   if (field.type === "table") {
     const headers = field.headers ?? [];
-    // The English requirements table prints the minimum overall scores of Business Rules admissions.english_minimum_scores.
-    const minimum = field.name === "english_table" ? englishMinimumScores() : null;
-    const test = (name: string) => (/^ielts/i.test(name) ? "IELTS" : /^pte/i.test(name) ? "PTE" : /^toefl/i.test(name) ? "TOEFL" : null);
-    const rows = (field.rows ?? []).map((row) => {
-      const which = minimum ? test(row[0] ?? "") : null;
-      return which && minimum ? [row[0], formatEnglishScore(which, minimum[which]), ...row.slice(2)] : row;
-    });
+    const rows = field.rows ?? [];
     return (
       <div className="overflow-x-auto rounded-md border border-background-200">
         <table className="w-full border-collapse text-left text-xs">

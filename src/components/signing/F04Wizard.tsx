@@ -16,7 +16,6 @@ import { formatPhone } from "../../../supabase/functions/_shared/validation/iden
 import { correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
-import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
 /*
  * The Agent Application Form (F04) as a short step-by-step wizard (owner briefs 2026-11-19; round 3 "less typing, nicer finish"), built
@@ -219,11 +218,6 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const terms = view.onboarding?.agreement ?? null;
   const witnessPlan = view.onboarding?.witness ?? null;
   const needWitness = combined && !witnessPlan?.preset;
-  // Business Rules (agents.agency_witness_on_agreement): the agency's witness may be optional; one given still needs a name and a drawing.
-  const witnessOptional = ruleText("agents.agency_witness_on_agreement", "Required") === "Optional";
-  const witnessRequired = needWitness && !witnessOptional;
-  const rulesF04 = { refereeEmailsDistinct: ruleText("agents.referee_emails_must_differ", "Must be different") !== "May be the same" };
-  const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [state, setState] = useState<F04Draft>(opening);
   // What the review opened with: staff changes are the difference from it.
@@ -280,16 +274,16 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     return () => window.clearTimeout(timer);
   }, [state, persist, staff]);
 
-  const problems = f04Problems(step, fields, state, attachments, rulesF04);
+  const problems = f04Problems(step, fields, state, attachments);
   const shown = tried.has(step) ? problems : {};
-  const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments, rulesF04));
+  const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments));
   const set = (key: string, value: string) => setState((s) => ({ ...s, answers: { ...s.answers, [key]: value } }));
   const setMany = (values: Record<string, string>) => setState((s) => ({ ...s, answers: { ...s.answers, ...values } }));
   const warnings = step === F04_STEP.references ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];
   const signatureReady = method === "typed" ? (a.declarant_name ?? "").trim().length >= 2 : !!picture;
   // The witness (2026-11-20): a full name and a drawn signature, unless staff gave the witness before sending.
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
-  const witnessReady = !needWitness || (witnessOptional && !witnessName && !witnessPng) || (witnessName.length >= 2 && !!witnessPng);
+  const witnessReady = !needWitness || (witnessName.length >= 2 && !!witnessPng);
   const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && (!codeCheck.needed || !!codeCheck.session);
 
   const save = async () => {
@@ -669,9 +663,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <WizardTextField id="f04-prefill-commencement" name="commencementDate" type="date" label="Commencement date (Item 5)" required value={t.commencementDate} onChange={(v) => prefill.onTerms({ ...t, commencementDate: v })} testId="f04-prefill-commencement" />
               <WizardTextField id="f04-prefill-territory" name="territory" label="Territory (Item 3)" required value={t.territory} maxLength={200} placeholder="e.g. India, Nepal" onChange={(v) => prefill.onTerms({ ...t, territory: v })} testId="f04-prefill-territory" />
-              <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder={commissionSuggested()} onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
+              <WizardTextField id="f04-prefill-commission" name="commissionPercent" label="Commission % (Item 4)" required inputMode="text" value={t.commissionPercent} maxLength={6} placeholder="25" onChange={(v) => prefill.onTerms({ ...t, commissionPercent: v.replace(/[^\d.]/g, "") })} testId="f04-prefill-commission" />
             </div>
-            <p className="text-xs text-foreground-500">The agreement runs {termYears === 1 ? "one year" : `${termYears} years`} from the commencement date.</p>
+            <p className="text-xs text-foreground-500">The agreement runs two years from the commencement date.</p>
           </section>
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-witness">
             <h3 className="text-sm font-semibold text-foreground-900">SLIT witness on the agreement (optional)</h3>
@@ -709,7 +703,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         {view.url ? <a href={view.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary-700 underline underline-offset-2" data-testid="f04-agreement-read">
           <i className="ri-file-text-line" aria-hidden="true" />Read the full agreement (PDF: the application form, then the agreement)</a> : null}
         <div className="space-y-3 rounded-lg border border-background-200 p-4" data-testid="f04-witness">
-          <h4 className="text-sm font-semibold text-foreground-900">Witness to your signature{witnessRequired ? <span className="text-primary-600"> *</span> : needWitness ? <span className="text-xs font-normal text-foreground-500"> (optional)</span> : null}</h4>
+          <h4 className="text-sm font-semibold text-foreground-900">Witness to your signature{needWitness ? <span className="text-primary-600"> *</span> : null}</h4>
           {witnessPlan?.preset ? <div className="flex flex-wrap items-center gap-4 text-sm" data-testid="f04-witness-preset">
             <span><span className="text-xs text-foreground-500">Witness</span><br /><strong>{witnessPlan.name}</strong></span>
             {witnessPlan.image ? <img src={witnessPlan.image} alt="The witness's signature" className="max-h-16 rounded border border-background-300 bg-white p-1" /> : null}
@@ -717,11 +711,11 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           </div> : <>
             <p className="text-sm text-foreground-600">Someone who watches you sign types their full name and draws their signature here. A typed signature is not accepted.</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <WizardTextField id="f04-witness-name" name={WITNESS_NAME_KEY} label="Witness full name" required={witnessRequired} value={a[WITNESS_NAME_KEY] ?? ""} maxLength={150} autoComplete="off"
-                error={tried.has(REVIEW_STEP) && !witnessReady && witnessName.length < 2 ? "Enter your witness's full name." : undefined} onChange={(v) => set(WITNESS_NAME_KEY, v)} testId="f04-witness-name" />
+              <WizardTextField id="f04-witness-name" name={WITNESS_NAME_KEY} label="Witness full name" required value={a[WITNESS_NAME_KEY] ?? ""} maxLength={150} autoComplete="off"
+                error={tried.has(REVIEW_STEP) && witnessName.length < 2 ? "Enter your witness's full name." : undefined} onChange={(v) => set(WITNESS_NAME_KEY, v)} testId="f04-witness-name" />
             </div>
             <div>
-              <p className="mb-2 text-label font-medium text-foreground-800">Witness signature (drawn){witnessRequired ? <span className="text-primary-600"> *</span> : null}</p>
+              <p className="mb-2 text-label font-medium text-foreground-800">Witness signature (drawn) <span className="text-primary-600">*</span></p>
               <SignaturePad onChange={setWitnessPng} />
             </div>
           </>}

@@ -1,5 +1,4 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { hrNumber } from "@/lib/hrRules";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button } from "@/pages/admin/components/ui";
@@ -34,7 +33,7 @@ function expiryState(date: string | null): { label: string; tone: "ok" | "soon" 
   const days = Math.floor((new Date(`${date}T00:00:00`).getTime() - Date.now()) / DAY);
   const when = new Date(`${date}T00:00:00`).toLocaleDateString();
   if (days < 0) return { label: `Expired ${when}`, tone: "expired" };
-  if (days <= hrNumber("hrms.document_expiring_soon_days", 30)) return { label: `Expires ${when}`, tone: "soon" };
+  if (days <= 60) return { label: `Expires ${when}`, tone: "soon" };
   return { label: `Expires ${when}`, tone: "ok" };
 }
 const TONE = { ok: "bg-secondary-50 text-secondary-900", soon: "bg-amber-50 text-amber-900", expired: "bg-primary-50 text-primary-900", none: "bg-background-200 text-foreground-700" };

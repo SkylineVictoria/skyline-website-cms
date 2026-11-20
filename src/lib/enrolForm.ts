@@ -4,7 +4,7 @@
  */
 
 import { validateAbn } from "../../supabase/functions/_shared/validation/abn";
-import { CONTROL, dateOfBirthProblem, emailProblem, mobileProblem, nameProblem, parseDateOfBirth, type AgeRange } from "../../supabase/functions/_shared/validation/person";
+import { CONTROL, dateOfBirthProblem, emailProblem, mobileProblem, nameProblem, parseDateOfBirth } from "../../supabase/functions/_shared/validation/person";
 import { passwordProblem } from "./passwords";
 
 // Email, name, mobile and date-of-birth rules are the shared ones (also used by the staff onboarding wizard).
@@ -45,8 +45,7 @@ export function formatAbn(raw: string): string {
 
 export type EnrolErrors<T> = Partial<Record<keyof T | "form", string>>;
 
-/** `ageRange`: Business Rules admissions.applicant_age_range (the caller reads it; 10 to 100 years when not given). */
-export function validateStudentEnrol(form: StudentEnrolForm, today?: Date, ageRange?: AgeRange): EnrolErrors<StudentEnrolForm> {
+export function validateStudentEnrol(form: StudentEnrolForm, today?: Date): EnrolErrors<StudentEnrolForm> {
   const errors: EnrolErrors<StudentEnrolForm> = {};
   // Email and mobile only, like an application; a name or date of birth is checked only when given.
   const first = form.firstName.trim() ? nameProblem(form.firstName, "first name") : ""; if (first) errors.firstName = first;
@@ -54,7 +53,7 @@ export function validateStudentEnrol(form: StudentEnrolForm, today?: Date, ageRa
   const email = emailProblem(form.email); if (email) errors.email = email;
   const mobile = mobileProblem(form.mobile); if (mobile) errors.mobile = mobile;
   const password = passwordProblem(form.password); if (password) errors.password = password;
-  const dob = form.dateOfBirth.trim() ? dateOfBirthProblem(form.dateOfBirth, today, ageRange) : ""; if (dob) errors.dateOfBirth = dob;
+  const dob = form.dateOfBirth.trim() ? dateOfBirthProblem(form.dateOfBirth, today) : ""; if (dob) errors.dateOfBirth = dob;
   if (form.referralCode.trim().length > 40 || CONTROL.test(form.referralCode)) errors.referralCode = "Check the referral code.";
   if (!form.agreed) errors.agreed = "Please agree to the terms and privacy policy.";
   return errors;
@@ -75,11 +74,11 @@ export function validateAgentEnrol(form: AgentEnrolForm): EnrolErrors<AgentEnrol
 }
 
 /** What the Edge Function receives for a student. */
-export function studentEnrolPayload(form: StudentEnrolForm, today?: Date, ageRange?: AgeRange) {
+export function studentEnrolPayload(form: StudentEnrolForm, today?: Date) {
   return {
     kind: "student" as const,
     firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(),
-    phone: form.mobile.trim(), dateOfBirth: parseDateOfBirth(form.dateOfBirth, today, ageRange) ?? "",
+    phone: form.mobile.trim(), dateOfBirth: parseDateOfBirth(form.dateOfBirth, today) ?? "",
     course: form.course.trim(), referralCode: form.referralCode.trim(),
   };
 }

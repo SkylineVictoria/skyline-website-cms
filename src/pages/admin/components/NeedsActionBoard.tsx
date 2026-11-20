@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleNumber } from "@/lib/businessRules";
 
 type Item = { id: string; title: string; detail: string; at?: string | null; to: string };
 type Area = { count: number; items: Item[] };
@@ -11,7 +10,7 @@ const AREAS: { key: string; label: string; icon: string; to: string; tone: strin
   { key: "references", label: "Agent applications to review", icon: "ri-shield-check-line", to: "/admin/businesses?status=Onboarding", tone: "text-amber-700 bg-amber-50", empty: "No agent application is ready for review." },
   { key: "applications", label: "Applications to review", icon: "ri-file-list-3-line", to: "/admin/applications", tone: "text-primary-700 bg-primary-50", empty: "No applications waiting." },
   { key: "documents", label: "Documents to check", icon: "ri-file-search-line", to: "/admin/applications", tone: "text-primary-700 bg-primary-50", empty: "No documents waiting." },
-  { key: "unsignedOffers", get label() { return `Offers not signed (${ruleNumber("admissions.offer_unanswered_days", 3)}+ days)`; }, icon: "ri-quill-pen-line", to: "/admin/applications", tone: "text-amber-700 bg-amber-50", empty: "No offers waiting on students." },
+  { key: "unsignedOffers", label: "Offers not signed (3+ days)", icon: "ri-quill-pen-line", to: "/admin/applications", tone: "text-amber-700 bg-amber-50", empty: "No offers waiting on students." },
   { key: "unpaidDeposits", label: "Deposits not paid", icon: "ri-bank-card-line", to: "/admin/finance/payments", tone: "text-amber-700 bg-amber-50", empty: "Every signed offer is paid." },
   { key: "lowAttendance", label: "Attendance below 80%", icon: "ri-error-warning-line", to: "/admin/lms/attendance", tone: "text-red-700 bg-red-50", empty: "No one below 80%." },
   { key: "marking", label: "Assessments to mark", icon: "ri-edit-box-line", to: "/admin/lms/assessments", tone: "text-indigo-700 bg-indigo-50", empty: "Nothing waiting for marking." },

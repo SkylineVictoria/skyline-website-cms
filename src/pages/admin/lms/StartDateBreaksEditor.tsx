@@ -10,7 +10,6 @@ import { Button, Modal } from "@/pages/admin/components/ui";
 import { BreakDateField } from "@/pages/admin/components/rto/BreakDatePicker";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { LOAD_HOURS, intakeDefaultName, shortDate, type StudyLoad } from "@/pages/admin/lib/rto";
-import { ruleNumber } from "@/lib/businessRules";
 
 interface Row { unitId: string; code: string; name: string; hours: number | null; weeks: number; startDate: string | null; endDate: string | null; prerequisites: string[] }
 interface Break { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
@@ -72,10 +71,10 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
       if (!live) return;
       setMaster(data); setStart(data.startDate ?? "");
       setOrder(data.rows.map(r => ({ unitId: r.unitId, weeks: Number(r.weeks) })));
-      // A saved master tells its rate: more class hours a week than the VoE threshold (Business Rules, 30 today) is VoE, else CoE.
+      // A saved master tells its rate: about 40 hours a week of classes is VoE, else CoE.
       if (onStudyLoad && !studyLoad && data.saved) {
         const hrs = data.rows.reduce((t, r) => t + (r.hours ?? 0), 0), wks = data.rows.reduce((t, r) => t + Number(r.weeks || 0), 0);
-        if (hrs > 0 && wks > 0) onStudyLoad(hrs / wks > ruleNumber("lms.voe_threshold_weekly_hours", 30) ? "voe" : "coe");
+        if (hrs > 0 && wks > 0) onStudyLoad(hrs / wks > 30 ? "voe" : "coe");
       }
     }).catch(e => { if (live) setError(e instanceof Error ? e.message : "The units could not be loaded."); });
     return () => { live = false; };

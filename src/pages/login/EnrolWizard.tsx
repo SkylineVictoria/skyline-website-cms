@@ -16,7 +16,6 @@ import {
 } from "@/lib/enrolForm";
 import { claimStudentAccount, enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
 import { applyAsStaff } from "@/lib/staffApi";
-import { applicantAgeRange } from "@/pages/agency/lib/admissionsRules";
 import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
 import { toE164 } from "@/lib/staffPhone";
 import EmailField from "@/components/identity/EmailField";
@@ -186,7 +185,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     // The phone field keeps its value (E.164, with the country code) in a hidden input named "mobile".
     const current = { ...form, mobile: String(new FormData(event.currentTarget).get("mobile") ?? "") };
     setForm(current);
-    const checked = validateStudentEnrol(current, undefined, applicantAgeRange());
+    const checked = validateStudentEnrol(current);
     setErrors(checked);
     setEmailError(null);
     if (Object.keys(checked).length) return;

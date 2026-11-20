@@ -34,11 +34,8 @@ const TYPE_LOOK: Record<SessionType, string> = {
   practical: "border-orange-300 bg-orange-100 text-orange-900",
   assessment: "border-violet-300 bg-violet-100 text-violet-900",
 };
-/** Earliest and latest class times (Business Rules lms.class_suggestion_hours, 7 am and 10 pm today), in minutes. */
-let EARLIEST = 7 * 60, LATEST = 22 * 60;
-/** The grid: 9 am (or the earliest time when later) to the latest time; suggestions never end after it. */
-let FIRST_HOUR = 9, LAST_HOUR = 22;
-let HOURS = Array.from({ length: LAST_HOUR - FIRST_HOUR }, (_, i) => FIRST_HOUR + i);
+const FIRST_HOUR = 9, LAST_HOUR = 22; // the grid: 9 am to 10 pm
+const HOURS = Array.from({ length: LAST_HOUR - FIRST_HOUR }, (_, i) => FIRST_HOUR + i);
 /** A trainer with no hours in Bookings is free Monday to Sunday, 9 am – 10 pm. */
 let TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, start: "09:00", end: "22:00" }));
 onRules(() => {
@@ -86,17 +83,7 @@ function hoursText(rows: AvailabilityRow[]) {
     return `${run} ${clock(toMin(s))} – ${clock(toMin(e))}`;
   }).join("; ");
 }
-let TIME_OPTIONS = Array.from({ length: 31 }, (_, i) => toTime(7 * 60 + i * 30)); // earliest – latest (7 am – 10 pm today), half hours
-onRules(() => {
-  const h = ruleObject("lms.class_suggestion_hours", { earliest: "07:00" as unknown, latest: "22:00" as unknown });
-  const time = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):(00|30)$|^24:00$/.test(v) ? toMin(v) : null);
-  const e = time(h.earliest), l = time(h.latest);
-  [EARLIEST, LATEST] = e !== null && l !== null && e < l ? [e, l] : [7 * 60, 22 * 60];
-  FIRST_HOUR = Math.max(9, Math.ceil(EARLIEST / 60));
-  LAST_HOUR = Math.max(FIRST_HOUR + 1, Math.floor(LATEST / 60));
-  HOURS = Array.from({ length: LAST_HOUR - FIRST_HOUR }, (_, i) => FIRST_HOUR + i);
-  TIME_OPTIONS = Array.from({ length: Math.floor((LATEST - EARLIEST) / 30) + 1 }, (_, i) => toTime(EARLIEST + i * 30));
-});
+const TIME_OPTIONS = Array.from({ length: 31 }, (_, i) => toTime(7 * 60 + i * 30)); // 7 am – 10 pm, half hours
 /** The days and times a room or trainer is booked for this course, inside its Bookings hours (`avail`; none = any time). */
 function SlotEditor({ value, onChange, avail, disabled, label, limit, taken = [] }: {
   value: Window; onChange: (w: Window) => void; avail: AvailabilityRow[] | null; disabled?: boolean; label: string;
@@ -108,7 +95,7 @@ function SlotEditor({ value, onChange, avail, disabled, label, limit, taken = []
   const over = (w: Window) => limit.others + slotHours(w) > limit.max + 1e-9;
   const openOn = (day: number) => !avail || !avail.length || avail.some((r) => r.weekday === day % 7);
   const rows = (avail ?? []).filter((r) => value.days.some((d) => r.weekday === d % 7));
-  const lo = rows.length ? Math.min(...rows.map((r) => toMin(r.start))) : EARLIEST, hi = rows.length ? Math.max(...rows.map((r) => toMin(r.end))) : LATEST;
+  const lo = rows.length ? Math.min(...rows.map((r) => toMin(r.start))) : 7 * 60, hi = rows.length ? Math.max(...rows.map((r) => toMin(r.end))) : 22 * 60;
   const options = TIME_OPTIONS.filter((t) => toMin(t) >= lo && toMin(t) <= hi);
   const outside = avail?.length ? value.days.filter((d) => !covers(avail, d, toMin(value.from), toMin(value.to))) : [];
   const bad = !value.days.length ? "Pick at least one day." : toMin(value.to) <= toMin(value.from) ? "The end must be after the start." : "";
@@ -148,13 +135,12 @@ const doubleBooked = (l: Pick[]) => l.some((p) => l.some((x) => x.key !== p.key 
 /** Hours a week a slot books: days × (to − from). */
 const slotHours = (w: Window) => w.days.length * Math.max(0, (toMin(w.to) - toMin(w.from)) / 60);
 /** A slot of at most `h` hours a week from `start` (minutes), the same times each day, Monday first: the day count that books
- *  the most hours without going over (Business Rules: 5 days preferred, up to 8 hours a day and never past 10 pm today). */
+ *  the most hours without going over (5 days preferred), up to 8 hours a day and never past 10 pm. */
 function fitSlot(h: number, start: number): Window {
   let best: Window = { days: [], from: toTime(start), to: toTime(start) };
   let bestTotal = 0;
-  const preferred = Math.min(7, Math.max(1, Math.round(ruleNumber("lms.class_suggestion_preferred_days", 5))));
-  for (const d of [preferred, ...[5, 4, 3, 6, 2, 7, 1].filter((x) => x !== preferred)]) {
-    const perDay = Math.min(ruleNumber("lms.class_suggested_day_cap", 8), Math.floor((h * 2) / d) / 2, (LATEST - start) / 60);
+  for (const d of [5, 4, 3, 6, 2, 7, 1]) {
+    const perDay = Math.min(8, Math.floor((h * 2) / d) / 2, (LAST_HOUR * 60 - start) / 60);
     if (perDay < 0.5 || d * perDay <= bestTotal) continue;
     bestTotal = d * perDay;
     best = { days: Array.from({ length: d }, (_, i) => i + 1), from: toTime(start), to: toTime(start + perDay * 60) };

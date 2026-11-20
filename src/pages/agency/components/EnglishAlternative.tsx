@@ -36,7 +36,7 @@ function YesNo({ name, value, onChange, legend, hint }: { name: string; value: s
   );
 }
 
-export default function EnglishAlternative({ ausStudy, cambridge, onAusStudy, onCambridge, onBack, upload, error, allowAusStudy = true, allowCambridge = true }: {
+export default function EnglishAlternative({ ausStudy, cambridge, onAusStudy, onCambridge, onBack, upload, error }: {
   ausStudy: AusStudyAnswer;
   cambridge: CambridgeAnswer;
   onAusStudy: (value: "Yes" | "No") => void;
@@ -46,26 +46,20 @@ export default function EnglishAlternative({ ausStudy, cambridge, onAusStudy, on
   /** The upload area for the Australian study proof, shown after "Yes". */
   upload: ReactNode;
   error?: string;
-  /** Business Rules admissions.english_test_alternatives: the ways SLIT accepts instead of a test result (both today). */
-  allowAusStudy?: boolean;
-  allowCambridge?: boolean;
 }) {
   return (
     <div className="space-y-6" data-testid="english-alternative">
       <div>
         <h3 className="font-heading text-lg font-semibold text-foreground-950">No IELTS, PTE or TOEFL result</h3>
         <p className="mt-1 text-sm text-foreground-600">
-          You can still meet our English requirement {allowAusStudy && allowCambridge
-            ? "with at least 2 years of study in Australia, or by completing a Cambridge English course with Skyline."
-            : allowAusStudy ? "with at least 2 years of study in Australia." : "by completing a Cambridge English course with Skyline."}
+          You can still meet our English requirement with at least 2 years of study in Australia, or by completing a Cambridge
+          English course with Skyline.
         </p>
       </div>
 
-      {allowAusStudy ? (
-        <YesNo name="aus_study_2yrs" value={ausStudy} onChange={onAusStudy}
-          legend="Do you have proof of at least 2 years of study in Australia?"
-          hint="For example a completion letter, certificate or transcripts from an Australian school, college or university." />
-      ) : null}
+      <YesNo name="aus_study_2yrs" value={ausStudy} onChange={onAusStudy}
+        legend="Do you have proof of at least 2 years of study in Australia?"
+        hint="For example a completion letter, certificate or transcripts from an Australian school, college or university." />
 
       {ausStudy === "Yes" ? (
         <div className="rounded-lg border border-background-200 bg-background-100/60 p-4">
@@ -74,7 +68,7 @@ export default function EnglishAlternative({ ausStudy, cambridge, onAusStudy, on
         </div>
       ) : null}
 
-      {ausStudy === "No" && allowCambridge ? (
+      {ausStudy === "No" ? (
         <YesNo name="cambridge_course" value={cambridge} onChange={onCambridge}
           legend="Are you willing to complete a Cambridge English course with Skyline?"
           hint="You will study the Cambridge English course with us before or alongside your main course." />

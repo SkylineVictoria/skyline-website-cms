@@ -3,7 +3,6 @@ import F04Wizard from "@/components/signing/F04Wizard";
 import { answersOf, type F04Draft } from "@/components/signing/f04WizardLogic";
 import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
 
 /*
  * Prepare application (owner brief 2026-11-20): after Add business nothing is emailed. Staff open the Agent Application Form (F04) here in
@@ -73,7 +72,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   const send = async (state: F04Draft) => {
     if (busy) return;
     const problem = !isDate(terms.commencementDate) ? "Enter the agreement's commencement date (Item 5)." : !terms.territory.trim() ? "Enter the territory (Item 3)."
-      : commissionProblem(terms.commissionPercent) || witnessProblem();
+      : !/^\d{1,3}(\.\d{1,2})?$/.test(terms.commissionPercent.trim()) || Number(terms.commissionPercent) > 100 ? "Enter the commission as a percentage, for example 25." : witnessProblem();
     if (problem) { push(problem, "error"); return; }
     setBusy("send");
     try {

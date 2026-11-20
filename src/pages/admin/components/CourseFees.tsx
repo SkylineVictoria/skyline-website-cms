@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { listCourseIntakes, type CourseIntake } from "@/pages/admin/lib/courseIntakes";
-import { LOAD_HOURS } from "@/pages/admin/lib/rto";
 
 interface FeeRow { id: string; intakeId: string | null; tuition: number | null; enrolment: number | null; material: number | null; oshc: number | null; deposit: number | null; paymentPlan: string | null; campus: string | null; orientation: string | null; orientationDate: string | null; hoursPerWeek: string | null }
 const MONEY = [["tuition", "Tuition fee"], ["enrolment", "Enrolment fee"], ["material", "Material fee"], ["oshc", "OSHC"], ["deposit", "Initial deposit"]] as const;
@@ -80,7 +79,7 @@ export default function CourseFees({ courseId }: { courseId: string }) {
           ))}
           <Field label="Campus" hint="Empty: the head office address"><TextInput value={form.campus} maxLength={300} onChange={(e) => setForm({ ...form, campus: e.target.value })} data-testid="fee-campus" /></Field>
           <Field label="Orientation day" hint="Printed as a date on the offer letter; the intake's own fee setup overrides the course's."><TextInput type="date" value={form.orientationDate} onChange={(e) => setForm({ ...form, orientationDate: e.target.value })} data-testid="fee-orientation" /></Field>
-          <Field label="Hours per week" hint={`Normally from the intake: CoE ${LOAD_HOURS.coe}, VoE ${LOAD_HOURS.voe}. Used only for an intake without a study load.`}><TextInput value={form.hoursPerWeek} maxLength={20} placeholder={`e.g. ${LOAD_HOURS.coe}`} onChange={(e) => setForm({ ...form, hoursPerWeek: e.target.value })} data-testid="fee-hours" /></Field>
+          <Field label="Hours per week" hint="Normally from the intake: CoE 20, VoE 40. Used only for an intake without a study load."><TextInput value={form.hoursPerWeek} maxLength={20} placeholder="e.g. 20" onChange={(e) => setForm({ ...form, hoursPerWeek: e.target.value })} data-testid="fee-hours" /></Field>
         </div>
         <Field label="Payment plan" hint="Printed as written, line by line">
           <textarea rows={3} maxLength={2000} value={form.paymentPlan} onChange={(e) => setForm({ ...form, paymentPlan: e.target.value })} className="w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" />

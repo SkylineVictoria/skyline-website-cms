@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { hrNumber } from "@/lib/hrRules";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
@@ -163,7 +162,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
           <div className="space-y-2 text-sm text-foreground-800">
             <p>This emails <strong>{employee.email}</strong> one personal link to choose a password for My HR (punch in / out, timesheet, leave).</p>
             <ul className="list-disc space-y-1 pl-5 text-foreground-700">
-              <li>A login is created for them if they do not have one. The link works once, for {hrNumber("hrms.staff_account_link_days", 7)} days. No password is emailed.</li>
+              <li>A login is created for them if they do not have one. The link works once, for 7 days. No password is emailed.</li>
               <li>If they already sign in to Skyline (as an administrator, agent or student) that same login is linked and they use their existing password.</li>
               <li>If the email cannot be sent, the link is cancelled and you can send it again.</li>
             </ul>

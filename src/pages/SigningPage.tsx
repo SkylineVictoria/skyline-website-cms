@@ -14,7 +14,6 @@ const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 import { checkApplicationAnswers, F04_TITLES } from "../../supabase/functions/_shared/validation/abr";
-import { ruleText } from "@/lib/businessRules";
 
 /*
  * The signing page a link holder opens (/sign#t=token): the offer letter a student signs, or any other document sent for signature.
@@ -295,8 +294,7 @@ export default function SigningPage() {
   const choices = canSign ? view.fields.filter((f) => f.type === "choice") : [];
   const setChoice = (id: string, answer: "YES" | "NO") => setValues((current) => ({ ...current, [id]: answer }));
   // Agent Application Form: the title comes from the list; the two referees need different emails (refused); the same contact name is a warning.
-  const application = canSign && view.onboarding?.kind === "application" ? checkApplicationAnswers(Object.fromEntries(view.fields.filter((f) => f.type === "text" && f.key).map((f) => [f.key!, values[f.id] ?? ""])),
-    { refereeEmailsDistinct: ruleText("agents.referee_emails_must_differ", "Must be different") !== "May be the same" }) : { error: null, warnings: [] };
+  const application = canSign && view.onboarding?.kind === "application" ? checkApplicationAnswers(Object.fromEntries(view.fields.filter((f) => f.type === "text" && f.key).map((f) => [f.key!, values[f.id] ?? ""]))) : { error: null, warnings: [] };
   const ready = canSign && agreed && name.trim().length >= 2 && signatureReady && !missing.length && !application.error && (!view.requireCode || !!codeSession) && !payFirst;
   const goTo = (id: string) => document.querySelector(`[data-field="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   // TPL-02: a [token] of the template is one question, however often it appears; its answer fills every copy of it.

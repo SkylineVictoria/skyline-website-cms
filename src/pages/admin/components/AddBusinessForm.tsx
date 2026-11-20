@@ -10,7 +10,6 @@ import { createBusinessWithOnboarding, lookupAbnDetails, type AbnLookupResult, t
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
 import EmailField from "@/components/identity/EmailField";
-import { ruleText } from "@/lib/businessRules";
 import { isEmailTakenError } from "@/lib/identity/email";
 
 type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string };
@@ -147,9 +146,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const legacyReady = Boolean(details && details.abn === abn && !existing && !abnInactive);
   // ABR: an active ABN, a cancelled one with a reason, or the register not answering (details typed by hand).
   const abrManual = mode === "abr" && abrFailure?.reason === "unavailable";
-  // Business Rules (agents.cancelled_abn_business): a cancelled ABN is added with a reason, or not at all (the server refuses it too).
-  const cancelledAllowed = ruleText("agents.cancelled_abn_business", "Allowed with a reason") !== "Not allowed";
-  const abrReady = mode === "abr" && !existing && ((abr !== null && abr.abn === abn && (abr.active || (cancelledAllowed && confirmed.override))) || abrManual);
+  const abrReady = mode === "abr" && !existing && ((abr !== null && abr.abn === abn && (abr.active || confirmed.override)) || abrManual);
   const ready = mode === "abr" ? abrReady : legacyReady;
 
   const pickExisting = async () => {
@@ -166,7 +163,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     if (!ready) {
       setAbnTouched(true);
       setErrors({ registrationNumber: abnProblem || (abnInactive ? "This ABN is not active on the government register."
-        : mode === "abr" && abr && !abr.active ? (cancelledAllowed ? "This ABN is cancelled: tick Add it anyway and give the reason." : "This ABN is cancelled, and a business with a cancelled ABN cannot be added.") : abrFailure?.message || "Look up this ABN successfully before creating the business.") });
+        : mode === "abr" && abr && !abr.active ? "This ABN is cancelled: tick Add it anyway and give the reason." : abrFailure?.message || "Look up this ABN successfully before creating the business.") });
       return;
     }
     const contactName = mode === "abr" ? `${givenName.trim()} ${familyName.trim()}`.trim() : form.primaryContact.trim();
@@ -260,9 +257,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       </p>
       {!abr.active ? <div className="mt-3 rounded-md border border-amber-300 bg-white p-3 text-sm" role="alert">
         <p className="font-medium text-amber-900">This ABN is {abr.abnStatus.toLowerCase() || "not active"} on the government register.</p>
-        {cancelledAllowed ? <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={confirmed.override} disabled={saving} onChange={e => setConfirmed(prev => ({ ...prev, override: e.target.checked }))} data-testid="abr-override" />Add it anyway</label>
-          : <p className="mt-1 text-amber-900" data-testid="abr-cancelled-blocked">A business with a cancelled ABN cannot be added (Business Rules).</p>}
-        {cancelledAllowed && confirmed.override ? <Field label="Reason" required hint="Kept on the business's history."><TextArea rows={2} value={confirmed.reason} disabled={saving} maxLength={500} onChange={e => setConfirmed(prev => ({ ...prev, reason: e.target.value }))} /></Field> : null}
+        <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={confirmed.override} disabled={saving} onChange={e => setConfirmed(prev => ({ ...prev, override: e.target.checked }))} data-testid="abr-override" />Add it anyway</label>
+        {confirmed.override ? <Field label="Reason" required hint="Kept on the business's history."><TextArea rows={2} value={confirmed.reason} disabled={saving} maxLength={500} onChange={e => setConfirmed(prev => ({ ...prev, reason: e.target.value }))} /></Field> : null}
         {error("override")}
       </div> : null}
       <p className="mt-3 text-xs text-foreground-600">These values prefill the Agent Application Form. Change any of them if the register is out of date; the contact can also correct them before signing.</p>

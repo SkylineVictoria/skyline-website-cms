@@ -6,8 +6,6 @@ import { ConfirmDialog } from "@/components/shared/application-status/ActionDraw
 import { actionsFor, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import { acceptOffer, currentOfferLetter, offerAcceptanceLine, offerDepositState, offerLetterList, offerPaymentState, openOfferLetter, sendDepositReminder, setDepositAutoRemind, openOfferLetterFile, resubmitApplication, type AgentOption, type ApplicationDetail, type OfferLetter, type StatusHistoryRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
-import { depositReminderText, portalOfferAcceptAllowed } from "@/pages/agency/lib/admissionsRules";
-import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 
 /** The reason the latest Action required was sent with (from the status history). */
@@ -58,10 +56,6 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
   const actions = actionsFor(workflow, application.status, "applicant");
   const accept = actions.find((x) => x.kind === "accept_offer");
   const resubmit = actions.find((x) => x.kind === "resubmit");
-  // Business Rules admissions.offer_accept_in_portal / admissions.offer_accept_portal_roles: whether this person may press
-  // Accept offer here (the database checks it again). Without it the letter is still shown; it is accepted by signing it.
-  const { role } = usePortalAuth();
-  const mayAccept = portalOfferAcceptAllowed(role);
   const [letter, setLetter] = useState<OfferLetter | null>(null);
   const [confirming, setConfirming] = useState<"accept" | "resubmit" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,12 +93,10 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
               <i className="ri-file-pdf-2-line" aria-hidden="true" />View letter
             </button>
           ) : null}
-          {mayAccept ? (
-            <button type="button" onClick={() => setConfirming("accept")} data-testid="accept-offer"
-              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
-              <i className="ri-check-line" aria-hidden="true" />{accept.label}
-            </button>
-          ) : <p className="w-full text-xs text-foreground-600" data-testid="accept-offer-by-signing">The offer is accepted by signing the letter from the email it came with.</p>}
+          <button type="button" onClick={() => setConfirming("accept")} data-testid="accept-offer"
+            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
+            <i className="ri-check-line" aria-hidden="true" />{accept.label}
+          </button>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
@@ -184,8 +176,8 @@ const signingState = (signing: { status: string; expiresAt: string | null; viewe
 /**
  * OFFER-DEPOSIT: the latest letter's acceptance and initial deposit on the application page, for staff, agents and the student:
  * "Offer accepted: Yes · Deposit: Pending / Paid (date) / Not required". Staff and the agent send a payment reminder (the student's
- * personal link again; one per finance.deposit_manual_reminder_cooldown hours (24) unless confirmed), see "Last reminder sent <date> (n sent)", and staff switch the automatic
- * reminders (every finance.deposit_automatic_reminder_interval days, at most finance.deposit_automatic_reminder_cap) on per offer.
+ * personal link again; one per 24 hours unless confirmed), see "Last reminder sent <date> (n sent)", and staff switch the automatic
+ * reminders (every 3 days, at most 3) on per offer.
  */
 export function OfferDepositCard({ applicationId, canRemind, canConfigure, refreshKey }: { applicationId: string; canRemind: boolean; canConfigure: boolean; refreshKey?: unknown }) {
   const [letter, setLetter] = useState<OfferLetter | null>(null);
@@ -201,7 +193,7 @@ export function OfferDepositCard({ applicationId, canRemind, canConfigure, refre
     try { const r = await sendDepositReminder(applicationId, force); setNote({ tone: "ok", text: `Reminder emailed to the student (${r.reminderCount} sent).` }); await load(); }
     catch (e) {
       const err = e as Error & { code?: string };
-      if (err.code === "P0024" || /less than \d+ hours?/i.test(err.message)) setConfirmForce(true); else setNote({ tone: "warn", text: err.message || "The reminder could not be sent." });
+      if (err.code === "P0024" || /less than 24 hours/i.test(err.message)) setConfirmForce(true); else setNote({ tone: "warn", text: err.message || "The reminder could not be sent." });
     } finally { setBusy(false); }
   };
   const toggleAuto = async (on: boolean) => {
@@ -230,13 +222,13 @@ export function OfferDepositCard({ applicationId, canRemind, canConfigure, refre
         {deposit.tone !== "paid" && canConfigure ? (
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground-800">
             <input type="checkbox" className="h-4 w-4" checked={!!letter.payment.autoRemind} disabled={busy} onChange={(e) => void toggleAuto(e.target.checked)} data-testid="deposit-auto-remind" />
-            Auto-remind every {depositReminderText().everyDays} days (max {depositReminderText().cap})
+            Auto-remind every 3 days (max 3)
           </label>
         ) : null}
       </div>
       {confirmForce ? (
         <ConfirmDialog busy={busy} onClose={() => setConfirmForce(false)} onConfirm={() => void remind(true)} title="Send another reminder?" confirmLabel="Send anyway"
-          body={`A reminder was sent less than ${depositReminderText().cooldownHours} hours ago${last ? ` (${formatDate(last)})` : ""}. Send another one now?`} />
+          body={`A reminder was sent less than 24 hours ago${last ? ` (${formatDate(last)})` : ""}. Send another one now?`} />
       ) : null}
     </section>
   );

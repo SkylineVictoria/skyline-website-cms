@@ -11,14 +11,6 @@ import {
 } from "@/lib/offerLetters";
 import { baseKey, blockingDetails, courseIndexOf, formatTyped, letterKeys, missingDetails, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 import { formatMoney } from "@/lib/signingApi";
-import { includedByDefault, type FeeType } from "@/pages/admin/lib/rto";
-import { offerDiscountRange, offerLetterMaxMib } from "@/pages/agency/lib/admissionsRules";
-
-/** The course fee type behind each letter fee variable (for the total rule). */
-const LETTER_FEE_TYPE: Record<string, FeeType> = {
-  "fees.application": "application", "fees.enrolment": "enrolment", "fees.registration": "registration", "fees.material": "material",
-  "fees.oshc": "oshc", "fees.tuition": "tuition", "fees.deposit": "initial_deposit",
-};
 
 /** The fee variables of the Fees section, in the letter's order (the total and the discount lines are calculated, never typed). */
 const FEE_ORDER = ["fees.application", "fees.enrolment", "fees.registration", "fees.material", "fees.oshc", "fees.tuition", "fees.deposit"] as const;
@@ -27,6 +19,7 @@ import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
 import { issueOfferLetter, offerLetterRecipient, type OfferRecipient } from "@/pages/agency/lib/portalApplications";
 
+const MAX_BYTES = 3 * 1024 * 1024;
 const INPUT = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 
 export interface OfferApplication {
@@ -112,8 +105,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     const typed = discountDraft[row.id];
     if (typed === undefined) return;
     const percent = Number(typed);
-    const range = offerDiscountRange(); // Business Rules finance.offer_discount_range (0 to 100 % today); the database checks it too.
-    if (!typed.trim() || !Number.isFinite(percent) || percent < range.min || percent > range.max) { setError(`Enter a discount between ${range.min} and ${range.max} percent.`); return; }
+    if (!typed.trim() || !Number.isFinite(percent) || percent < 0 || percent > 100) { setError("Enter a discount between 0 and 100 percent."); return; }
     if (Math.abs(percent - row.discountPercent) < 0.001) { setDiscountDraft((d) => { const next = { ...d }; delete next[row.id]; return next; }); return; }
     setBusy(`discount-${row.id}`); setError("");
     try {
@@ -169,10 +161,8 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   /** What the letter prints for a fee: typed for this letter, else the LMS value (a blank left on purpose prints nothing). */
   const feeCents = (key: string): number | null => (entries[key]?.mode === "blank" ? null : typedCents(key) ?? rawCents(key));
   const discountPct = Number(String(values?.courses?.[0]?.["fees.discount_percent"]?.raw ?? values?.values["fees.discount_percent"]?.raw ?? "0").replace("%", "")) || 0;
-  // The lines in the total, as LMS counts them: Business Rules finance.course_total_excluded_default decides which fee types stay out
-  // (the initial deposit and OSHC today); tuition always counts (the discount is taken off it). Application or enrolment, whichever the letter uses.
-  const totalKeys = (["fees.registration", "fees.material", "fees.oshc", "fees.deposit", usedKeys.has("fees.application") || !usedKeys.has("fees.enrolment") ? "fees.application" : "fees.enrolment"] as const)
-    .filter((key) => includedByDefault(LETTER_FEE_TYPE[key])).map(String).concat("fees.tuition");
+  // The lines in the total, as LMS counts them: application (or enrolment), registration, material and tuition; the deposit and OSHC are not.
+  const totalKeys = ["fees.registration", "fees.material", "fees.tuition", usedKeys.has("fees.application") || !usedKeys.has("fees.enrolment") ? "fees.application" : "fees.enrolment"];
   const discountOf = (tuition: number | null) => (tuition != null && discountPct > 0 ? Math.round(tuition * discountPct / 100) : 0);
   const sumOf = (get: (k: string) => number | null): number | null => { const tuition = get("fees.tuition"); if (tuition == null) return null; return totalKeys.reduce((s, k) => s + (get(k) ?? 0), 0) - discountOf(tuition); };
   // Other fee lines LMS counts (e.g. "other" lines) that this section does not show: the LMS total less the lines it does show.
@@ -242,7 +232,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     setError("");
     if (!picked) return;
     if (!/\.pdf$/i.test(picked.name) && picked.type !== "application/pdf") { setError("Upload the letter as a PDF."); return; }
-    if (picked.size > offerLetterMaxMib() * 1024 * 1024) { setError(`The letter must be ${offerLetterMaxMib()} MB or smaller.`); return; }
+    if (picked.size > MAX_BYTES) { setError("The letter must be 3 MB or smaller."); return; }
     setFile(picked);
   };
 
@@ -372,7 +362,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
                             <p className="text-xs text-foreground-600">Total {course["fees.total"]?.value || "not set"}{meta._discount === true ? <span className="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-2xs font-semibold text-emerald-800" data-testid="offer-course-discount">{percent || `${row?.discountPercent ?? 0}%`} discount</span> : null}</p>
                           </div>
                           <label className="flex items-center gap-1.5 text-xs text-foreground-700">Discount %
-                            <input type="number" min={offerDiscountRange().min} max={offerDiscountRange().max} step={0.5} inputMode="decimal" disabled={!row || busy.startsWith("discount")} data-testid={`course-discount-${n}`}
+                            <input type="number" min={0} max={100} step={0.5} inputMode="decimal" disabled={!row || busy.startsWith("discount")} data-testid={`course-discount-${n}`}
                               value={row ? discountDraft[row.id] ?? String(row.discountPercent) : ""}
                               onChange={(e) => { if (row) setDiscountDraft((d) => ({ ...d, [row.id]: e.target.value })); }}
                               onBlur={() => { if (row) void saveDiscount(row); }}
@@ -533,7 +523,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
               {file ? (
                 <DocumentRow filename={file.name} pill={{ text: "Ready to send", tone: "ready" }}
                   actions={<RowAction title="Remove" icon="ri-delete-bin-line" label={`Remove ${file.name}`} onClick={() => setFile(null)} />} />
-              ) : <Dropzone id="offer-upload" label="Choose the signed letter or drop it here" hint={`PDF · max ${offerLetterMaxMib()} MB`} accept=".pdf,application/pdf" onFiles={pickFile} testId="offer-dropzone" />}
+              ) : <Dropzone id="offer-upload" label="Choose the signed letter or drop it here" hint="PDF · max 3 MB" accept=".pdf,application/pdf" onFiles={pickFile} testId="offer-dropzone" />}
             </div>
           )}
 

@@ -1,5 +1,4 @@
 import type { ScanType } from "@/lib/docScan";
-import { requiredDocumentSteps, usiRequired } from "@/pages/agency/lib/admissionsRules";
 
 /**
  * Configuration for the Add New Form document-upload wizard.
@@ -87,14 +86,6 @@ export const WIZARD_STEPS: WizardStep[] = [
   },
 ];
 
-// Business Rules admissions.application_required_documents: which document steps the agent cannot skip (the passport always;
-// English, academic results and visa today). The step's "Required." / "Optional." subtitle follows the same rule.
-for (const step of WIZARD_STEPS) {
-  const detail = step.subtitle.replace(/^(Required|Optional)\. /, "");
-  Object.defineProperty(step, "required", { get: () => step.id === "passport" || requiredDocumentSteps().has(step.id), enumerable: true, configurable: true });
-  Object.defineProperty(step, "subtitle", { get: () => `${step.required ? "Required" : "Optional"}. ${detail}`, enumerable: true, configurable: true });
-}
-
 /** The answer screens that follow the document screens of the wizard. */
 export type WizardQuestionId = "language" | "usi" | "emergency" | "course";
 
@@ -112,12 +103,6 @@ export const WIZARD_QUESTIONS: WizardQuestion[] = [
   { id: "emergency", title: "Emergency contact", short: "Emergency", subtitle: "Required. Who to contact in an emergency.", icon: "ri-phone-line" },
   { id: "course", title: "Course and intake", short: "Course", subtitle: "Required. The course the student is applying for and when they want to start.", icon: "ri-book-open-line" },
 ];
-
-// Business Rules admissions.usi_required: the USI screen says Required (today) or Optional.
-const USI_QUESTION = WIZARD_QUESTIONS.find((q) => q.id === "usi");
-if (USI_QUESTION) Object.defineProperty(USI_QUESTION, "subtitle", {
-  get: () => `${usiRequired() ? "Required" : "Optional"}. The student's 10-character USI from usi.gov.au.`, enumerable: true, configurable: true,
-});
 
 export const ENGLISH_ONLY = "No, English only - 1201";
 export const OTHER_LANGUAGE = "Yes, language other than English";

@@ -4,7 +4,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
 import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import {
-  MAX_EVENT_RECIPIENTS, NOTIFICATION_EVENTS, NOTIFICATION_EVENT_LABELS, configWithEvent, eventErrorMessage, hasAnyRecipient, validateEventForm,
+  NOTIFICATION_EVENTS, NOTIFICATION_EVENT_LABELS, configWithEvent, eventErrorMessage, hasAnyRecipient, validateEventForm,
   type EventSettings, type NotificationEventKey,
 } from "@/lib/notificationEvents";
 
@@ -97,7 +97,7 @@ export default function EventRecipients({ tenantId }: { tenantId: string | null 
             <fieldset key={event} className="rounded-md border border-background-200 p-4">
               <legend className="px-1 text-sm font-semibold">{label.title}</legend>
               <p className="text-xs text-background-600">{label.when}</p>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-background-700" htmlFor={`recipients-${event}`}>Internal recipients (one per line, up to {MAX_EVENT_RECIPIENTS})</label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-background-700" htmlFor={`recipients-${event}`}>Internal recipients (one per line, up to 20)</label>
               <textarea id={`recipients-${event}`} rows={3} value={form.recipientsText} onChange={(e) => update(event, { recipientsText: e.target.value })} aria-invalid={Boolean(errors[event])} aria-describedby={errors[event] ? `recipients-${event}-error` : undefined}
                 className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="admissions@example.edu.au" />
               <div className="mt-2 flex flex-wrap gap-4 text-sm">

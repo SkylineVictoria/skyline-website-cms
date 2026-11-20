@@ -1,5 +1,4 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleNumber } from "@/lib/businessRules";
 import { invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 
@@ -223,12 +222,10 @@ export const createBusiness = (agency: Record<string, string>, contactEmail: str
 export const listBusinessDocuments = (id: string) => call<BusinessDocument[]>("admin_business_documents", { p_business: id }, "We could not load this business’s documents.");
 
 const DOCUMENT_BUCKET = "business-documents";
-/** Business Rules agents.signed_copy_upload_max_mb (15 before the rule; 15 MB is also the bucket's ceiling). The database checks it too. */
-export const businessDocumentLimitMb = () => Math.min(15, Math.max(1, Math.round(ruleNumber("agents.signed_copy_upload_max_mb", 15))));
 
 /** Uploads a signed agreement (or other document) to the private bucket and records it against the business. */
 export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement", reason = "") {
-  if (file.size > businessDocumentLimitMb() * 1024 * 1024) throw new Error(`The file is larger than ${businessDocumentLimitMb()} MB.`);
+  if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
   // A signed copy instead of the online agreement needs a reason (kept on the record and in the onboarding history); the server checks it too.
   if (kind === "agent_agreement" && reason.trim().length < 5) throw new Error("Give the reason for recording a signed copy instead of the online agreement.");
   const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";

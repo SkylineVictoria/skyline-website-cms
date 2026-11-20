@@ -1064,8 +1064,6 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   assert.match(String(abrLib.checkApplicationAnswers({ contact_title: "Pat Contact" }).error), /title from the list/);
   assert.equal(abrLib.checkApplicationAnswers({ contact_title: "Dr" }).error, null);
   assert.match(String(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }).error), /different email/);
-  // Business Rules agents.referee_emails_must_differ = "May be the same" (batch 4): the same address is accepted for both referees.
-  assert.equal(abrLib.checkApplicationAnswers({ ref1_email: "Ref@Example.test", ref2_email: "ref@example.test " }, { refereeEmailsDistinct: false }).error, null);
   assert.deepEqual(abrLib.checkApplicationAnswers({ ref1_email: "a@example.test", ref2_email: "b@example.test", ref1_contact_name: "Sam Lee", ref2_contact_name: "sam lee" }), { error: null, warnings: ["Both references have the same contact name. Check that they are two different people."] });
 
   // F04 wizard (2026-11-19): the public ABN Lookup page (no GUID) gives the same prefill; PURVA TECH PTY LTD (86 603 584 676) has no business name.
@@ -1112,7 +1110,7 @@ test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs 
   // The source: the GUID only from the function's environment, the sign step runs the checks, the signing page has the title list.
   assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_ABR_GUID"\) \|\| Deno\.env\.get\("ABR_GUID"\)/);
   assert.ok(!/EF_ABR_GUID|ABR_GUID/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the GUID never reaches the browser");
-  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey, "), "the server refuses what the page refuses");
+  assert.ok(read("supabase/functions/document-signing/core.ts").includes("checkApplicationAnswers(byKey)"), "the server refuses what the page refuses");
   assert.ok(read("src/pages/SigningPage.tsx").includes(`f.key === "contact_title"`) && read("src/pages/SigningPage.tsx").includes("F04_TITLES.map"), "the title is a list on the signing page");
   const migration = read("supabase/migrations/20261119103517_abn_prefill.sql");
   assert.ok(["create table public.abr_lookups", "abr_raw jsonb", "abr_fetched_at timestamptz", "agency_abr_attach", "agency_onboarding_prefill_record", "'prefill_reviewed'", "after update of answers on public.agency_onboarding"].every((s) => migration.includes(s)), "cache, business record, prefill history");
@@ -3775,7 +3773,7 @@ test("staff wizard rules: a draft takes blanks, the final check needs everything
   const now = new Date("2026-11-10T03:00:00Z");
   assert.deepEqual(staffRules.staffProblems(details, staffRules.STAFF_FIELDS, false, now), [{ field: "phone", message: "Enter your mobile number." }], "only the mobile may never be blank");
   assert.deepEqual(staffRules.staffProblems({ ...details, first_name: "x".repeat(101), date_of_birth: "2020-01-01", emergency_phone: "0422", passport_number: "12" }, ["first_name", "date_of_birth", "emergency_phone", "passport_number"], false, now), [
-    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 14 and 100 years old." },
+    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 10 and 100 years old." },
     { field: "emergency_phone", message: "Enter the emergency contact's phone number." }, { field: "passport_number", message: "Enter the passport number: 6 to 12 letters and numbers." }]);
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia", address_state: "Punjab" }, false, now), "Choose the state or territory.");
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia" }, false, now), "", "blank is fine in a draft");
@@ -3835,11 +3833,7 @@ test("tax and super rules (option A): the declaration answers and the super choi
 test("onboarding save: checked with the shared rules before the database, answered with the field; stored normalised", async () => {
   let run = linkDeps();
   let r = await onboard.handleOnboarding(linkRequest("save", { patch: { date_of_birth: "2020-01-01" } }), run.deps);
-  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 14 and 100 years old.", "date_of_birth"], "staff minimum age: Business Rule hrms.staff_minimum_age (14)");
-  staffRules.setStaffMinimumAge(16);
-  assert.equal(staffRules.staffFieldProblem("date_of_birth", { ...staffRules.EMPTY_STAFF_DETAILS, date_of_birth: "15/06/2011" }, true, new Date("2026-11-20T00:00:00Z")), "You must be between 16 and 100 years old.", "a changed rule moves the age");
-  assert.equal(staffRules.staffDateOfBirthRange(new Date("2026-11-20T00:00:00Z")).max, "2010-11-20");
-  staffRules.setStaffMinimumAge(14);
+  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 10 and 100 years old.", "date_of_birth"]);
   assert.ok(!run.names().includes("hr_svc_onboarding_save"), "nothing invalid reaches the database");
   for (const [patch, field, message] of [
     [{ emergency_phone: "0422 333 444" }, "emergency_phone", "Enter the emergency contact's phone number."],

@@ -1,6 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { passwordRecoveryUrl } from "@/lib/siteUrl";
-import { applicantAgeRange } from "@/pages/agency/lib/admissionsRules";
 import { agentEnrolPayload, studentEnrolPayload, type AgentEnrolForm, type StudentEnrolForm } from "@/lib/enrolForm";
 
 export interface AbnDetails { abn: string; legalName: string; businessNames: string[]; entityType: string; abnStatus: string; gstStatus: string; state: string; postcode: string }
@@ -62,7 +61,7 @@ function result(data: Record<string, unknown>, kind: "student" | "agent"): Enrol
 }
 
 export async function enrolStudent(form: StudentEnrolForm, website = ""): Promise<EnrolResult> {
-  return result(await invoke({ action: "register", ...studentEnrolPayload(form, undefined, applicantAgeRange()), password: form.password, agreed: form.agreed, redirectTo: passwordRecoveryUrl(), website }), "student");
+  return result(await invoke({ action: "register", ...studentEnrolPayload(form), password: form.password, agreed: form.agreed, redirectTo: passwordRecoveryUrl(), website }), "student");
 }
 
 export async function enrolAgent(form: AgentEnrolForm, website = ""): Promise<EnrolResult> {

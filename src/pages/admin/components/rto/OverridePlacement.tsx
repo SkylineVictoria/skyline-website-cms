@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Button, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { Drawer, ErrorNote } from "@/pages/admin/components/rto/shared";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleText } from "@/lib/businessRules";
 import { friendlyDbError, rto, todayIso, type EnrolmentType, type StudentOption } from "@/pages/admin/lib/rto";
 
 interface BatchOption { id: string; name: string; full?: boolean }
@@ -18,7 +17,7 @@ export function PlaceByHandDrawer({ open, courseId, batches, batchId, intakeStar
   const [student, setStudent] = useState<StudentOption | null>(null);
   const firstOpen = () => batchId ?? (batches.find((x) => !x.full) ?? batches[0])?.id ?? "";
   const [batch, setBatch] = useState(firstOpen());
-  const [type, setType] = useState<EnrolmentType>(() => { const t = ruleText("lms.manual_placement_default_type", "CoE"); return t === "VoE" || t === "Domestic" ? t : "CoE"; });
+  const [type, setType] = useState<EnrolmentType>("CoE");
   const [on, setOn] = useState(todayIso() < intakeStart ? intakeStart : todayIso());
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);

@@ -6,7 +6,6 @@ import { downloadCsv } from "@/pages/admin/lib/assessments";
 import { financeOptions, financePayments, financeStatus, stripeDashboardUrl, type FinanceFilters, type FinanceOptions, type FinancePage, type FinancePaymentRow } from "@/pages/admin/lib/finance";
 import { formatMoney } from "@/lib/signingApi";
 import { sendDepositReminder } from "@/pages/agency/lib/portalApplications";
-import { depositReminderText } from "@/pages/agency/lib/admissionsRules";
 
 type Preset = "today" | "7d" | "month" | "custom" | "all";
 const PAGE_SIZE = 25;
@@ -37,7 +36,7 @@ export default function PaymentsPage() {
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<FinancePaymentRow | null>(null);
   const [search, setSearch] = useState("");
-  /** OFFER-DEPOSIT: Send reminder on a pending deposit; one per finance.deposit_manual_reminder_cooldown hours (24) unless confirmed (P0024). */
+  /** OFFER-DEPOSIT: Send reminder on a pending deposit; one per 24 hours unless confirmed (P0024). */
   const [reminding, setReminding] = useState<string | null>(null); const [forceFor, setForceFor] = useState<FinancePaymentRow | null>(null);
   const [reminderNote, setReminderNote] = useState<{ id: string; text: string; tone: "ok" | "warn" } | null>(null);
   const remind = async (row: FinancePaymentRow, force: boolean) => {
@@ -46,7 +45,7 @@ export default function PaymentsPage() {
     try { const r = await sendDepositReminder(row.application_id, force); setReminderNote({ id: row.id, tone: "ok", text: `Reminder sent (${r.reminderCount})` }); await load(); }
     catch (e) {
       const err = e as Error & { code?: string };
-      if (err.code === "P0024" || /less than \d+ hours?/i.test(err.message)) setForceFor(row); else setReminderNote({ id: row.id, tone: "warn", text: err.message || "The reminder could not be sent." });
+      if (err.code === "P0024" || /less than 24 hours/i.test(err.message)) setForceFor(row); else setReminderNote({ id: row.id, tone: "warn", text: err.message || "The reminder could not be sent." });
     } finally { setReminding(null); }
   };
   const filters = useMemo<FinanceFilters>(() => ({ ...presetRange(preset, custom), status: status || undefined, courseId: courseId || undefined, agencyId: agencyId || undefined, q: q || undefined, sort, dir, page, pageSize: PAGE_SIZE }),
@@ -134,7 +133,7 @@ export default function PaymentsPage() {
           </td>
         </tr>; })}</tbody></table></div>}
     {forceFor ? <div role="dialog" aria-label="Send another reminder?" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm" data-testid="finance-reminder-confirm">
-      A reminder for {forceFor.student_name || "this student"} was sent less than {depositReminderText().cooldownHours} hours ago{forceFor.last_reminder_at ? ` (${when(forceFor.last_reminder_at)})` : ""}. Send another one now?
+      A reminder for {forceFor.student_name || "this student"} was sent less than 24 hours ago{forceFor.last_reminder_at ? ` (${when(forceFor.last_reminder_at)})` : ""}. Send another one now?
       <span className="ml-3 inline-flex gap-2"><Button size="sm" onClick={() => void remind(forceFor, true)}>Send anyway</Button><Button size="sm" variant="outline" onClick={() => setForceFor(null)}>Cancel</Button></span>
     </div> : null}
     {data && data.total > data.pageSize ? <div className="flex items-center justify-between text-sm"><span>{data.total} payments · page {data.page} of {pages}</span>

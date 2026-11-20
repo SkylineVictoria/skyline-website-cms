@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import {
-  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, requesterCanClose, replyTicket, ticketRequesterPhone, updateTicket, supportAttachmentCount, uploadTicketFiles,
+  CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, replyTicket, ticketRequesterPhone, updateTicket, supportAttachmentCount, uploadTicketFiles,
   type TicketDetail, type TicketPriority, type TicketStatus,
 } from "@/lib/supportTickets";
 
@@ -79,7 +79,7 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
               ? <button type="button" disabled={busy} className="rounded-md border border-background-300 px-3 py-1.5 text-sm" onClick={() => void run(() => updateTicket(id, { assign: "none" }))}>Unassign</button>
               : <button type="button" disabled={busy} className="rounded-md border border-background-300 px-3 py-1.5 text-sm" onClick={() => void run(() => updateTicket(id, { assign: "me" }))}>Assign to me</button>}
           </div>
-        ) : data.isRequester && requesterCanClose() && !["resolved", "closed"].includes(t.status) ? (
+        ) : data.isRequester && !["resolved", "closed"].includes(t.status) ? (
           <button type="button" disabled={busy} className="mt-4 rounded-md border border-background-300 px-3 py-1.5 text-sm font-semibold"
             onClick={() => void run(() => updateTicket(id, { status: "resolved" }))}>Mark as resolved</button>
         ) : null}

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { loginUrl } from "@/lib/loginRouting";
-import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 
 /**
  * /agency/accept-invite#t=<token>: the set-password link from an invitation email (INV-LINK, 2026-11-17).
@@ -15,7 +14,7 @@ import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
  */
 type Step = "ready" | "verifying" | "password" | "saving" | "already" | "expired" | "broken";
 const RULES: Array<{ id: string; label: string; ok: (p: string) => boolean }> = [
-  { id: "length", get label() { return `At least ${MIN_PASSWORD_LENGTH} characters`; }, ok: (p) => p.length >= MIN_PASSWORD_LENGTH },
+  { id: "length", label: "At least 10 characters", ok: (p) => p.length >= 10 },
   { id: "letter", label: "A letter", ok: (p) => /[A-Za-z]/.test(p) },
   { id: "number", label: "A number", ok: (p) => /\d/.test(p) },
   { id: "space", label: "No spaces at the start or end", ok: (p) => p === p.trim() },

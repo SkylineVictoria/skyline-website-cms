@@ -1,8 +1,6 @@
 // Document checklist rules shared by DocumentWizard (staff today; the student ApplicationWizard can move onto it later).
 // Pure and browser-free so it is tested offline (scripts/test-staff-registration.ts).
 
-import { hrNumber, onHrRules } from "@/lib/hrRules";
-
 export type ExpiryRule = "required" | "optional" | "none";
 export type ReviewState = "pending" | "approved" | "rejected";
 
@@ -17,9 +15,7 @@ export interface DocumentKind {
   multiple: boolean;
 }
 
-/** Days before expiry a document counts as expiring soon (Business Rule hrms.document_expiring_soon_days; hr.staff_doc_summary reads the same). */
-export let EXPIRING_SOON_DAYS = 30;
-onHrRules(() => { EXPIRING_SOON_DAYS = hrNumber("hrms.document_expiring_soon_days", 30); });
+export const EXPIRING_SOON_DAYS = 30;
 
 /** Today in the browser's calendar, as YYYY-MM-DD. */
 export const todayIso = (now = new Date()): string =>
@@ -30,7 +26,7 @@ export function daysUntil(dateIso: string, today = todayIso()): number {
 }
 
 export type ExpiryState = "none" | "ok" | "soon" | "expired";
-/** Expiring within EXPIRING_SOON_DAYS (or already expired) is flagged, the same window as hr.staff_doc_summary. */
+/** Expiring within 30 days (or already expired) is flagged, the same window as hr.staff_doc_summary. */
 export function expiryState(dateIso: string | null | undefined, today = todayIso()): ExpiryState {
   if (!dateIso) return "none";
   const days = daysUntil(dateIso, today);

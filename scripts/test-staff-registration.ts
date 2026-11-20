@@ -733,7 +733,9 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.deepEqual([sentSig.admin_name, sentSig.admin_position, sentSig.slit_signature_kind, sentSig.slit_signature, sentSig.signed_on], ["Hari Admin", "Chief Executive Officer", "typed", "Hari Admin", signingCore.isoToday()]);
   const p11 = agreementText.filter((t) => t.page === 2 + 11).map((t) => t.text).join(" | ");
   assert.ok(p11.includes("Hari Admin") && p11.includes("Chief Executive Officer") && p11.includes(signingCore.isoToday().split("-").reverse().join("/")), `the SLIT signatory block is filled on the agreement's signature page: ${p11}`);
-  assert.ok(agreementText.some((t) => t.page === 2 + 11 && t.text === "Agent's Fee (Item 4): 25% of tuition fee, GST exclusive"), "the GST choice is printed with the commission");
+  // 2026-11-21 (owner): no extra "Agent's Fee (Item 4)" line; the Item 4 sentence itself reads "... Percentage of tuition fee Excluding GST."
+  assert.ok(agreementText.some((t) => t.page === 2 + 11 && t.text === "Excluding GST. This applies to eligible onshore and offshore"), "the GST choice is in the Item 4 sentence");
+  assert.ok(!agreementText.some((t) => /Agent's Fee \(Item 4\):/.test(t.text)), "the separate Agent's Fee line is gone");
   assert.ok(!JSON.stringify((created[0] as { field_values: Record<string, string> }).field_values).includes("admin_signature\""), "the SLIT signature is not kept in the request's field values");
   assert.equal(rpcs.filter(([name]) => name === "agency_onboarding_create").length, 0, "the draft becomes the application (no second onboarding row)");
 
@@ -805,6 +807,37 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(issue.p_data.admin_name === "Hari Admin" && issue.p_data.admin_witness_name === null && issuedText.some((t) => t.text.includes("Hari Admin")), "the SLIT signatory is printed on the issued agreement; the SLIT witness set before sending is not replaced");
   const issuedMail = mails.find((m) => m.to === contact.email && /Your agent agreement/.test(m.subject))!;
   assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
+});
+
+test("P06 Item 4 (2026-11-21): the GST basis is one word in the sentence, in the page's own Calibri on the original baseline; nothing on the next line; none before the GST choice", async () => {
+  const agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  type P = { key: string; type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; inline?: unknown };
+  const stamp = async (gst: string | null) => {
+    const terms = { commissionPercent: "10", commissionGst: gst };
+    const { printed } = onboarding.resolveFields(agreement.fields, { agent_commission_percent: "10" });
+    const words = onboardingFn.commissionGstWords(agreement.fields, terms);
+    const fields = [...printed, ...(words ? [words] : [])].map((x: P) => ({ recipient_id: null, type: x.type, page: x.page, x: x.x, y: x.y, w: x.w, h: x.h, value: x.value, done: true, label: x.label, inline: (x.inline ?? null) as never }));
+    return { words, bytes: await signingPdf.stampDocument(agreement.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields }) };
+  };
+  for (const [gst, word] of [["inclusive", "Including"], ["exclusive", "Excluding"]] as const) {
+    const { words, bytes } = await stamp(gst);
+    assert.equal(words!.value, `${word} GST. This applies to eligible onshore and offshore`);
+    const text = (await pdfText(bytes)).filter((t) => t.page === 11);
+    const line = text.find((t) => t.text === words!.value)!;
+    assert.ok(line && Math.abs(line.x - 270.5) < 0.6 && Math.abs(line.y - 444.11) < 0.3, `same place and baseline as the words it replaces: ${JSON.stringify(line)}`);
+    assert.ok(text.some((t) => t.text === "10%"), "the percentage stays in its blank");
+    assert.ok(!text.some((t) => /Agent's Fee \(Item 4\):/.test(t.text) || (t.y > 416 && t.y < 441 && /GST/.test(t.text))), "nothing printed on the next lines or the heading");
+    // Written with the page's own Calibri (glyph codes of its subset), after the white cover and the watermark redrawn inside it.
+    const doc = await PdfLib.PDFDocument.load(bytes);
+    const contents = doc.getPage(10).node.Contents();
+    const streams = contents instanceof PdfLib.PDFArray ? contents.asArray().map((r) => doc.context.lookup(r)) : [contents];
+    const last = new TextDecoder("latin1").decode(PdfLib.decodePDFRawStream(streams[streams.length - 1] as never).decode());
+    assert.match(last, /\/C2_0 9\.96 Tf/, "the page's own Calibri at 9.96 pt");
+    assert.match(last, /re\s+W\s+n[\s\S]*\/Im0 Do/, "the watermark is drawn again inside the covered strip");
+  }
+  assert.equal((await stamp(null)).words, null, "an onboarding sent before the GST choice prints nothing");
+  const glyphs = signingPdf.toUnicodeGlyphs("1 beginbfchar\n<0003> <0020>\nendbfchar\n1 beginbfrange\n<0010> <0012> <0041>\nendbfrange");
+  assert.deepEqual([signingPdf.glyphCodes(glyphs, "AB C"), signingPdf.glyphCodes(glyphs, "AZ")], ["001000110003" + "0012", null], "a missing glyph falls back to the stamp's own font");
 });
 
 test("witness signatures (2026-11-20): a drawn signature in any field is a picture, never \"data:image\" text (send, sign and approve stamps)", async () => {

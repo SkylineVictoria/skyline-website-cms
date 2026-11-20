@@ -301,7 +301,9 @@ export type F04AttachmentKind = keyof typeof F04_ATTACHMENTS;
 export const F04_ATTACHMENT_TYPES = ["application/pdf", "image/png", "image/jpeg"] as const;
 export const F04_ATTACHMENT_MAX = 5 * 1024 * 1024;
 
-export interface PlacedField { key: string; type: OnboardingField["type"]; role: OnboardingRole; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string }
+export interface PlacedField { key: string; type: OnboardingField["type"]; role: OnboardingRole; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string;
+  /** Words of the page reprinted in its own font (signing-pdf InlineText): the P06 Item 4 GST basis. */
+  inline?: { font: string; size: number; baseline: number } | null }
 /** A widget rectangle in PDF points, from the page's bottom-left, with the page size. */
 export interface WidgetBox { name: string; option: string | null; page: number; x: number; y: number; width: number; height: number; pageWidth: number; pageHeight: number }
 

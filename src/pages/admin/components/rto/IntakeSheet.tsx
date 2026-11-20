@@ -66,11 +66,11 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
       const d = await rto<IntakeDetail>("intake_get", { intakeId });
       // An intake from the course wizard is not shown until the whole wizard is finished.
       const { data: pend } = await supabase.rpc("rto_intake_wizard", { p_action: "pending", p_data: { courseId: d.intake.courseId } });
-      if (((pend ?? []) as { id: string }[]).some(x => x.id === intakeId)) { setError("This intake is not ready yet. Finish the course wizard (CoE and VoE weekly calendars and daily timetables) first."); return; }
+      if (((pend ?? []) as { id: string }[]).some(x => x.id === intakeId)) { onClose(); return; }
       setDetail(d); setError("");
     }
     catch (e) { setError(e instanceof Error ? e.message : "The intake did not load."); }
-  }, [intakeId]);
+  }, [intakeId, onClose]);
   useEffect(() => { setDetail(null); void load(); }, [load]);
 
   /** Runs a change; the result (an intake) replaces what is shown. Returns it, or null when it failed (the error is shown). */

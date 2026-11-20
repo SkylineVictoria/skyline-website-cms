@@ -1282,6 +1282,11 @@ test("F04 round 3 (2026-11-18): year founded from the ABN's Active-from date (se
   assert.deepEqual(logic.readChoice("Test", logic.POSITIONS), { picked: null, other: "Test" }, "a position not on the list is Other with its text");
   assert.deepEqual(logic.readChoice("Other", logic.POSITIONS), { picked: null, other: "" });
   assert.deepEqual([logic.writeChoice("CEO", null), logic.writeChoice(null, ""), logic.writeChoice(null, "Head of admissions"), logic.writeChoice(null, null)], ["CEO", "Other", "Head of admissions", ""]);
+  // F04 pre-send SLIT signatory position (2026-11-21): the same chips; Other needs its text; the plain text is what is sent and printed.
+  const wizard = read("src/components/signing/F04Wizard.tsx"), presend = read("src/pages/admin/components/F04PresendDialog.tsx");
+  assert.ok(wizard.includes(`<ChoiceChips id="prefill-signatory-position" label="SLIT signatory position" required`) && !wizard.includes(`id="f04-prefill-signatory-position" name="adminPosition"`), "chips, not a text box");
+  assert.ok(presend.includes("readChoice(o.signatory.position, POSITIONS)") && presend.includes("choiceUnnamed(signatory.position)") && presend.includes("adminPosition: signatory.position.trim()"));
+  assert.deepEqual([logic.choiceUnnamed("Other"), logic.choiceUnnamed("Head of admissions"), logic.choiceUnnamed("CEO")], [true, false, false]);
   const contactFields = [field("contact_position", "", true)] as unknown as WizFields;
   const contactStep = (position: string) => logic.f04Problems(logic.F04_STEP.contact, contactFields, { answers: { contact_position: position }, acn: "", marn: "", declarations: {}, step: logic.F04_STEP.contact }).contact_position;
   assert.deepEqual([contactStep(""), contactStep("Other"), contactStep("Head of admissions"), contactStep("Owner")], ["Enter the contact's position.", "Type the position.", undefined, undefined]);

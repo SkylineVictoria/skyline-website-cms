@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import F04Wizard, { type F04PrefillControls } from "@/components/signing/F04Wizard";
-import { answersOf, type F04Draft } from "@/components/signing/f04WizardLogic";
+import { answersOf, choiceUnnamed, readChoice, POSITIONS, type F04Draft } from "@/components/signing/f04WizardLogic";
 import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView, type SlitSignatureInput } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
@@ -36,7 +36,9 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       // The merged application form + agreement blank is made ready in its own call, so Send only stamps it (CPU budget, 2026-11-20).
       void warmPresend().catch(() => undefined);
       setOpened(o); setTerms({ ...o.terms, commissionGst: o.terms.commissionGst ?? "" }); setWitness(o.witness); setMessage(o.message);
-      setSignatory({ ...o.signatory, method: o.signatory.savedSignature ? "saved" : "typed", png: null, save: true });
+      // Position chips (2026-11-21): the admin's saved position selects its chip when it is one (CEO / Director / Manager / Owner), else Other with that text.
+      const saved = readChoice(o.signatory.position, POSITIONS);
+      setSignatory({ ...o.signatory, position: saved.picked ?? saved.other ?? "", method: o.signatory.savedSignature ? "saved" : "typed", png: null, save: true });
       setSavedNote(o.savedAt ? `Draft saved ${new Date(o.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}${o.savedBy ? ` by ${o.savedBy}` : ""}` : null);
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be prepared."); }
@@ -62,7 +64,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   // The SLIT signature as sent: the saved picture, the drawing (saved for next time when ticked), or the signatory's name typed.
   const signatureOf = (): SlitSignatureInput => signatory.method === "saved" ? { kind: "saved" } : signatory.method === "drawn" ? { kind: "drawn", png: signatory.png ?? "", save: signatory.save }
     : { kind: "typed", name: signatory.name.trim() };
-  const signatoryProblem = () => signatory.name.trim().length < 2 ? "Enter the name of the SLIT signatory." : !signatory.position.trim() ? "Enter the position of the SLIT signatory."
+  const signatoryProblem = () => signatory.name.trim().length < 2 ? "Enter the name of the SLIT signatory." : !signatory.position.trim() ? "Choose the position of the SLIT signatory." : choiceUnnamed(signatory.position) ? "Type the SLIT signatory's position (Other)."
     : signatory.method === "drawn" && !signatory.png ? "Draw the SLIT signature, or choose another way to sign." : signatory.method === "saved" && !signatory.savedSignature ? "You have no saved signature: draw one, or type your name." : null;
   // The SLIT witness is both a typed name and a drawn signature, or nothing (the approver can then add it).
   const witnessProblem = () => (witness.name.trim() && !witness.png) ? "The SLIT witness must draw their signature (it cannot be typed), or clear the SLIT witness."

@@ -94,7 +94,8 @@ export function writeChoice(picked: string | null, other: string | null): string
   if (other === null) return "";
   return other.trim() ? other : "Other";
 }
-const choiceUnnamed = (value: string | undefined) => String(value ?? "").trim().toLowerCase() === "other";
+/** "Other" chosen in a ChoiceChips and not typed yet (also used by the F04 pre-send SLIT signatory position). */
+export const choiceUnnamed = (value: string | undefined) => String(value ?? "").trim().toLowerCase() === "other";
 
 /** "I agree to all of the above": every statement ticked, some, or none (the box shows indeterminate for some). */
 export function declarationsState(declarations: Record<string, boolean>): "all" | "some" | "none" {

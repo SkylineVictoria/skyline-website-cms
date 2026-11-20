@@ -14,7 +14,7 @@ import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFOR
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
 import { commissionText, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
-import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice,
+import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice, choiceUnnamed,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
@@ -723,7 +723,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               <p className="text-sm text-foreground-600">Signed for {s.organisation}. Printed on the agreement when you send, dated the day you send; the agency admin sees it and cannot change it.</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <WizardTextField id="f04-prefill-signatory-name" name="adminName" label="SLIT signatory name" required value={s.name} maxLength={150} onChange={(v) => set({ name: v })} testId="f04-prefill-signatory-name" />
-                <WizardTextField id="f04-prefill-signatory-position" name="adminPosition" label="SLIT signatory position" required value={s.position} maxLength={150} placeholder="e.g. Chief Executive Officer" onChange={(v) => set({ position: v })} testId="f04-prefill-signatory-position" />
+                {/* 2026-11-21: the same position chips as the agency contact (CEO / Director / Manager / Owner / Other + text); the value is the printed text. */}
+                <ChoiceChips id="prefill-signatory-position" label="SLIT signatory position" required value={s.position} error={choiceUnnamed(s.position) ? "Type the position." : undefined} onChange={(v) => set({ position: v })} />
               </div>
               <div>
                 <p className="mb-2 text-label font-medium text-foreground-800">SLIT signature<span className="text-primary-600"> *</span></p>
@@ -735,7 +736,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 {s.method === "drawn" && s.png ? <button type="button" className="mb-2 cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => set({ png: null })} data-testid="f04-prefill-signature-redraw">Draw again</button> : null}
               </div>
               <SlitSignatoryBlock testId="f04-prefill-signatory-preview" note="Preview: this is how SLIT's block prints on the agreement."
-                s={{ organisation: s.organisation, name: s.name.trim(), position: s.position.trim(), image, typed: s.method === "typed" ? s.name.trim() || null : null, signedOn: s.signedOn }} />
+                s={{ organisation: s.organisation, name: s.name.trim(), position: choiceUnnamed(s.position) ? "" : s.position.trim(), image, typed: s.method === "typed" ? s.name.trim() || null : null, signedOn: s.signedOn }} />
             </section>;
           })()}
           <section className="space-y-3 border-t border-background-200 pt-5" data-testid="f04-prefill-witness">

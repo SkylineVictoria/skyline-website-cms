@@ -151,7 +151,8 @@ export async function microsoft365Status(env: Env, request: typeof fetch = fetch
       } else await r.body?.cancel();
     } catch { /* reported as unknown */ }
     if (status.sender && !status.sender.found) status.problems.push(`The login emails are sent from ${sender}, which does not exist in Microsoft 365. Create it (a shared mailbox is enough) or change EF_MICROSOFT365_WELCOME_SENDER.`);
-    else if (status.sender && !status.sender.exchangeLicence) status.problems.push(`The login emails are sent from ${sender}, which has no Exchange Online licence. Unless it is a shared mailbox, give it a licence with Exchange (e.g. Office 365 A1 for faculty) in the Microsoft 365 admin centre.`);
+    // A shared mailbox has no licence and its sign-in is blocked: that is fine. Only a sign-in-enabled user without Exchange is a problem.
+    else if (status.sender && !status.sender.exchangeLicence && status.sender.enabled) status.problems.push(`The login emails are sent from ${sender}, which has no Exchange Online licence. Unless it is a shared mailbox, give it a licence with Exchange (e.g. Office 365 A1 for faculty) in the Microsoft 365 admin centre.`);
   } else status.problems.push("No sender mailbox is set for login emails (EF_MICROSOFT365_WELCOME_SENDER).");
   status.ready = Object.values(status.checks).every((c) => c === "ok");
   return status;

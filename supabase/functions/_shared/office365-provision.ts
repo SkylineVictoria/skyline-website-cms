@@ -104,7 +104,8 @@ export const MESSAGES: Record<string, string> = {
   no_licences_available: "No licences of this kind are free. Add seats in the Microsoft 365 admin centre, then try again.",
   microsoft_rejected_user: "Microsoft 365 rejected the new account. Check the domain is verified in Microsoft 365.",
   licence_assignment_failed: "The account was created but the licence could not be assigned. Retry.",
-  welcome_email_failed: "The account was created but the login email could not be sent. Check the sender mailbox, then retry.",
+  welcome_email_failed: "The account was created but the login email could not be sent. Check the sender mailbox, then use Resend login email (it sets a new temporary password).",
+  sender_missing: "The sender mailbox for login emails does not exist in Microsoft 365. Create it (a shared mailbox is enough) or change EF_MICROSOFT365_WELCOME_SENDER.",
   microsoft_unavailable: "Microsoft 365 could not be reached. Retry shortly.",
   staff_plan_invalid: "The staff domain or licence is set to the student one. Check EF_MICROSOFT365_STAFF_DOMAIN / EF_MICROSOFT365_STAFF_SKU.",
   address_in_use: "That email address is already in use in Microsoft 365. Choose another username.",
@@ -223,6 +224,23 @@ export async function addressInUse(graph: Graph, address: string): Promise<boole
   if (!r.ok) { await r.body?.cancel(); throw new Error(graphError(r.status, "microsoft_unavailable")); }
   return ((((await r.json()) as { value?: unknown[] }).value) ?? []).length > 0;
 }
+/**
+ * The login-email sender must exist before anything is created or a password is reset (2026-11-21, owner): a licensed user or a shared
+ * mailbox (a user object too, so User.ReadWrite.All is enough to look it up). null = found.
+ */
+export async function senderProblem(graph: Graph, sender: string): Promise<string | null> {
+  const r = await graph("GET", `/users/${encodeURIComponent(sender)}?$select=id`);
+  if (r.status === 404) { await r.body?.cancel(); return `Login emails are sent from ${sender}, which does not exist in Microsoft 365. Create it (a shared mailbox is enough) or change EF_MICROSOFT365_WELCOME_SENDER, then try again. Nothing was created or changed.`; }
+  await r.body?.cancel();
+  if (!r.ok) throw new Error(graphError(r.status, "microsoft_unavailable"));
+  return null;
+}
+/** "404:ErrorInvalidUser" -> "404 ErrorInvalidUser" for people. */
+const codeText = (c: string) => c.replace(":", " ");
+/** Microsoft's error code in the function log (no addresses, no password). */
+function logWelcomeFailure(action: string, kind: PersonKind, code: string) {
+  console.warn(JSON.stringify({ fn: "student-office365", action, step: "welcome", kind, graphCode: code }));
+}
 /** POST /users refused because the UPN / mail / alias exists (Graph 400 ObjectConflict, "...already exists"). */
 async function isConflict(r: Response): Promise<boolean> {
   if (r.status !== 400 && r.status !== 409) { await r.body?.cancel(); return false; }
@@ -333,6 +351,9 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
   let graph: Graph;
   try { graph = graphFor(ports, await appToken(ports)); } catch (e) { return fail(e); }
   try {
+    // 0. The login can be emailed: the sender mailbox exists (else nothing is created).
+    const noSender = await senderProblem(graph, sender);
+    if (noSender) return { status: 409, body: { code: "sender_missing", sender, error: noSender } };
     // 1. Licence seats first: nothing is created when no seat is free (a retry whose user already has the licence is fine).
     const licence = await seats(graph, plan.sku);
     if (!licence) return { status: 409, body: { error: `The tenant has no ${plan.licenceName} (${plan.sku}) licence.`, code: "licence_not_found" } };
@@ -397,7 +418,7 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
       const what = plan.staff ? "SLIT staff email account" : "student email account";
       const content = `Hello ${nm.given || "there"},\n\nYour ${what} has been created.\n\nEmail: ${upn}\nTemporary password: ${password}\n\nSign in at https://www.office.com. You will be asked to choose a new password the first time you sign in.\n\nIf you did not expect this email, please contact us.`;
       const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "Text", content }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
-      if (m.status !== 202) { welcomeError = await graphCode(m); throw new Error("welcome_email_failed"); }
+      if (m.status !== 202) { welcomeError = await graphCode(m); logWelcomeFailure("create", kind, welcomeError); throw new Error("welcome_email_failed"); }
       await m.body?.cancel();
       welcome = true;
       const f = await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: msUser, p_ok: true, p_error: null, p_sku: plan.sku, p_welcome: true });
@@ -407,7 +428,9 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
       const raw = e instanceof Error ? e.message : ""; const code = MESSAGES[raw] ? raw : "microsoft_unavailable";
       await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: msUser ?? "", p_ok: false, p_error: code, p_sku: "", p_welcome: welcome });
       if (welcomeError) await ports.rpc("o365_step", { p_kind: recordKind(kind), p_person: personId, p_step: "welcome", p_ok: false, p_detail: welcomeError });
-      return { status: code === "microsoft_unavailable" ? 502 : 409, body: { error: code === "address_in_use" ? `${upn} is already in use in Microsoft 365. Choose another username.` : MESSAGES[code], code, email: upn, canRetry: true, ...(welcomeError ? { graphCode: welcomeError } : {}) } };
+      return { status: code === "microsoft_unavailable" ? 502 : 409, body: { error: code === "address_in_use" ? `${upn} is already in use in Microsoft 365. Choose another username.`
+        : code === "welcome_email_failed" && welcomeError ? `${upn} was created, but the login email could not be sent from ${sender} (Microsoft: ${codeText(welcomeError)}). Fix the sender mailbox, then use Resend login email (it sets a new temporary password).`
+        : MESSAGES[code], code, email: upn, canRetry: true, ...(welcomeError ? { graphCode: welcomeError } : {}) } };
     }
   } catch (e) { return fail(e); }
 }
@@ -463,6 +486,9 @@ export async function resend(ports: Ports, kind: PersonKind, personId: string, o
     const graph = graphFor(ports, await appToken(ports));
     const u = await userBy(graph, acct.msUserId);
     if (!u) return { status: 404, body: { error: `${acct.email} no longer exists in Microsoft 365.`, code: "user_missing" } };
+    // The sender first: without it no licence, group or password is changed (the password is only reset when it can be emailed).
+    const noSender = await senderProblem(graph, sender);
+    if (noSender) return { status: 409, body: { code: "sender_missing", sender, error: noSender } };
     const licence = await seats(graph, plan.sku);
     const has = await graph("GET", `/users/${encodeURIComponent(u.id)}/licenseDetails?$select=skuId`);
     if (!has.ok) { await has.body?.cancel(); throw new Error(graphError(has.status, "microsoft_unavailable")); }
@@ -486,8 +512,10 @@ export async function resend(ports: Ports, kind: PersonKind, personId: string, o
     const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "Text", content }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
     if (m.status !== 202) {
       const code = await graphCode(m);
+      logWelcomeFailure("resend", kind, code);
       await ports.rpc("o365_step", { p_kind: rk, p_person: personId, p_step: "welcome", p_ok: false, p_detail: code });
-      return { status: 409, body: { error: MESSAGES.welcome_email_failed, code: "welcome_email_failed", graphCode: code, email: upn } };
+      return { status: 409, body: { code: "welcome_email_failed", graphCode: code, email: upn, passwordReset: true,
+        error: `A new temporary password was set for ${upn}, but the login email could not be sent from ${sender} (Microsoft: ${codeText(code)}). Fix the sender mailbox, then Resend again (it sets another new temporary password).` } };
     }
     await m.body?.cancel();
     await ports.rpc("o365_step", { p_kind: rk, p_person: personId, p_step: "welcome", p_ok: true, p_detail: null });

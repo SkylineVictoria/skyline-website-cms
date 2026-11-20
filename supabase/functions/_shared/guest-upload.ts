@@ -20,7 +20,9 @@ export interface UploadPort {
   remove(documentId: string): Promise<void>;
 }
 
-export type UploadInput = { category: unknown; replaceId?: string | null; name: string; mime: string; bytes: Uint8Array; sha256: string; storagePath: string };
+/** `multiple` / `maxDocuments`: Business Rules admissions.guest_link_multiple_files / admissions.guest_link_upload_cap (today's values when absent). */
+export type UploadInput = { category: unknown; replaceId?: string | null; name: string; mime: string; bytes: Uint8Array; sha256: string; storagePath: string;
+  multiple?: readonly string[]; maxDocuments?: number };
 export type UploadOutcome = { ok: true; documentId: string; queued: boolean } | { ok: false; status: number; error: string };
 
 export async function runGuestUpload(port: UploadPort, input: UploadInput): Promise<UploadOutcome> {
@@ -32,14 +34,14 @@ export async function runGuestUpload(port: UploadPort, input: UploadInput): Prom
   const same = await port.existing(category);
   const duplicate = same.find((doc) => doc.sha256 === input.sha256);
   if (duplicate) return { ok: true, documentId: duplicate.id, queued: false };
-  if ((await port.countAll()) >= MAX_GUEST_DOCUMENTS) return { ok: false, status: 429, error: "Upload limit reached. Please contact your agent." };
+  if ((await port.countAll()) >= (input.maxDocuments ?? MAX_GUEST_DOCUMENTS)) return { ok: false, status: 429, error: "Upload limit reached. Please contact your agent." };
   if (!(await port.store(input.storagePath, input.bytes, input.mime))) return { ok: false, status: 503, error: "The upload didn't finish. Please try again." };
   const documentId = await port.insert({ category, storagePath: input.storagePath, filename: input.name, mime: input.mime, size: input.bytes.length, sha256: input.sha256, passportId: ownership.passportId });
   if (!documentId) { await port.discardObject(input.storagePath); return { ok: false, status: 503, error: "The upload didn't finish. Please try again." }; }
   const job = await port.enqueue(documentId);
   if (job) port.dispatch(job);
   // Replace rules: a single-file step keeps only the new file; the Academic step replaces just the file the student chose to replace.
-  const replace = MULTIPLE_CATEGORIES.includes(category) ? same.filter((doc) => doc.id === input.replaceId) : same;
+  const replace = (input.multiple ?? MULTIPLE_CATEGORIES).includes(category) ? same.filter((doc) => doc.id === input.replaceId) : same;
   for (const old of replace) await port.remove(old.id);
   return { ok: true, documentId, queued: Boolean(job) };
 }

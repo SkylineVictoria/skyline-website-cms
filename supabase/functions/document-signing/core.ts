@@ -15,7 +15,7 @@ import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, fac
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
-import { afterCompletion, ONBOARDING_ACTIONS, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
+import { afterCompletion, ONBOARDING_ACTIONS, onboardingSignRules, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
 
 const HRMS_PLACEHOLDER = new Set(PLACEHOLDERS.map((p) => p.key));
 /** A document template in the sectioned model (TPL-02): a header or footer, or [Variable] tokens. Everything else renders as before. */
@@ -362,7 +362,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if (correction) lockUnflagged(fields, values, correction.flags ?? {});
           const byKey: Record<string, string> = {};
           for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
-          const checked = checkApplicationAnswers(byKey);
+          const signRules = await onboardingSignRules(ports);
+          const checked = checkApplicationAnswers(byKey, { refereeEmailsDistinct: signRules.refereeEmailsDistinct });
           if (checked.error) throw new SigningError(checked.error);
           submission = checkApplicationSubmission(body.application, collectAnswers(fields.map((f) => ({ key: f.key, type: f.type, value: String(values[f.id] ?? f.value ?? "") }))));
           // A correction (2026-11-18): only the fields staff flagged can change; the ACN and the MARN stay as reviewed unless flagged.
@@ -380,11 +381,16 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             if (!combinedPlan.witness?.preset) {
               const w = (body.application as { witness?: { name?: unknown; png?: unknown } } | undefined)?.witness ?? {};
               const witnessName = String(w.name ?? "").replace(/\s+/g, " ").trim().slice(0, 150);
-              if (witnessName.length < 2) throw new SigningError("Enter your witness's full name.");
-              if (typeof w.png !== "string" || !w.png.trim()) throw new SigningError("Ask your witness to draw their signature in the witness box (it cannot be typed).");
-              witness = { name: witnessName, png: w.png };
-              const nameField = fields.find((x) => x.key === WITNESS_NAME_KEY);
-              if (nameField) values[nameField.id] = witnessName;
+              const drawn = typeof w.png === "string" && !!w.png.trim();
+              // Business Rules (agents.agency_witness_on_agreement): an optional witness may be left out entirely; one given needs both.
+              const optional = !(await onboardingSignRules(ports)).agencyWitnessRequired;
+              if (!(optional && !witnessName && !drawn)) {
+                if (witnessName.length < 2) throw new SigningError("Enter your witness's full name.");
+                if (!drawn) throw new SigningError("Ask your witness to draw their signature in the witness box (it cannot be typed).");
+                witness = { name: witnessName, png: w.png };
+                const nameField = fields.find((x) => x.key === WITNESS_NAME_KEY);
+                if (nameField) values[nameField.id] = witnessName;
+              }
             }
           }
         }

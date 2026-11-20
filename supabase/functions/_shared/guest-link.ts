@@ -13,6 +13,14 @@ export const MULTIPLE_CATEGORIES: readonly string[] = ["Academic"];
 /** Steps the student may answer with "I don't have this" (recorded for the agent). */
 export const DECLARABLE: readonly string[] = ["Visa", "English Test", "Academic"];
 export const MAX_GUEST_DOCUMENTS = 30;
+/** Passport is the one document the link requires today (Business Rules admissions.guest_link_required_documents). */
+export const REQUIRED_CATEGORIES: readonly string[] = ["Passport"];
+/** Business Rules list labels -> the categories the link stores. */
+const RULE_CATEGORY: Record<string, string> = { "English test": "English Test", "Academic results": "Academic", "Driving licence": "Driving Licence", "Health insurance": "Health Insurance" };
+export const ruleCategories = (labels: readonly string[]): string[] => labels.map((label) => RULE_CATEGORY[label] ?? label).filter((c) => isGuestCategory(c));
+const RULE_LABEL: Record<string, string> = Object.fromEntries(Object.entries(RULE_CATEGORY).map(([label, category]) => [category, label]));
+/** The categories as the Business Rules lists name them (for the fallbacks). */
+export const ruleLabels = (categories: readonly string[]): string[] => categories.map((category) => RULE_LABEL[category] ?? category);
 
 /** 32 random bytes as unpadded base64url (43 characters), as portal_create_guest_link issues them. */
 export const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -25,7 +33,7 @@ export function tokenHashHex(token: string): Promise<string | null> {
 }
 
 export const isGuestCategory = (value: unknown): value is GuestCategory => typeof value === "string" && (GUEST_CATEGORIES as readonly string[]).includes(value);
-export const isDeclarable = (value: unknown): boolean => typeof value === "string" && DECLARABLE.includes(value);
+export const isDeclarable = (value: unknown, declarable: readonly string[] = DECLARABLE): boolean => typeof value === "string" && declarable.includes(value);
 
 export type FileCheck = { ok: true; name: string; mime: string } | { ok: false; code: "empty" | "too_large" | "type"; found?: string };
 

@@ -11,7 +11,9 @@ import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { createDocumentExtractionProvider } from "../_shared/document-extraction/select.ts";
 import { STAFF_READER_CATEGORY, readerFetch, runStaffExtraction } from "./reader.ts";
-import { MAX_REQUEST_BYTES, handleOnboarding, type DocumentToRead } from "./core.ts";
+import { MAX_REQUEST_BYTES, handleOnboarding, setPasswordMin, type DocumentToRead } from "./core.ts";
+import { setStaffMinimumAge } from "../_shared/validation/staff-onboarding.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
 import { DOCUMENT_SIZE_MESSAGE } from "../_shared/validation/person.ts";
 import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
 import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
@@ -80,6 +82,10 @@ Deno.serve(async (req) => {
   } catch { return json({ error: "The request could not be read." }, 400); }
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  // Business Rules: the staff minimum age (date of birth checks) and the shortest staff password; the fixed values when unreadable.
+  const rules = await loadRules(admin, ["hrms.staff_minimum_age", "auth.password_min_staff"]);
+  setStaffMinimumAge(ruleNumber(rules, "hrms.staff_minimum_age", 14));
+  setPasswordMin(ruleNumber(rules, "auth.password_min_staff", 12));
   // A signed-in person (no link token): the session is verified with Auth; the anon key and expired or forged tokens give no session.
   let session: { userId: string } | null = null;
   const bearer = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");

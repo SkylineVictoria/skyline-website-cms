@@ -58,10 +58,20 @@ export const replyTicket = (id: string, body: string, internal: boolean, attachm
 export const updateTicket = (id: string, change: { status?: TicketStatus; priority?: TicketPriority; assign?: "me" | "none" }) =>
   rpc<TicketRow>("support_ticket_update", { p_ticket: id, p_status: change.status ?? null, p_priority: change.priority ?? null, p_assign: change.assign ?? null }, "The ticket could not be updated.");
 
+export async function supportAttachmentCount(): Promise<number | null> {
+  const key = "support.ticket_attachment_count";
+  const { data, error } = await supabase.rpc("business_rule_values", { p_ids: [key] });
+  const value = data?.[key];
+  return !error && typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 const maxMib = () => ruleNumber("support.ticket_attachment_limit_mib", 10);
 /** Uploads to the private support-attachments bucket under the caller's own folder. */
 export async function uploadTicketFiles(files: File[]): Promise<TicketAttachment[]> {
-  if (files.length > 5) throw new Error("Attach at most 5 files.");
+  if (!files.length) return [];
+  const count = await supportAttachmentCount();
+  if (count === null) throw new Error("The support attachment count is unavailable.");
+  if (files.length > count) throw new Error(`Attach at most ${count} files.`);
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) throw new Error("Sign in again to attach files.");
   const out: TicketAttachment[] = [];

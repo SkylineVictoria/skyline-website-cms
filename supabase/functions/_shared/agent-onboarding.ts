@@ -38,6 +38,16 @@ export const AGENT_ONBOARDING_DOCS: Record<OnboardingDoc, OnboardingDocument> = 
   agreement: { key: "agent_agreement", name: "Agent Agreement", title: "Education Agent Agreement (P06)", sha256: "5ca5213f8d2e95766f7eb8df51d5f408c203ce2270bd441b3e93c08561bc9f88", pages: 13, category: "agency_agreement", file: "agent_agreement_template_blank.pdf" },
   referee: { key: "agent_referee_check_form", name: "Agent Referee Check Form", title: "Agent Referee Check Form (F05)", sha256: "afd78833c524411c1c4544e3bd19025bd5f974c941a5b8658862ce71a64377a1", pages: 1, category: "other", file: "agent_referee_check_form_template_blank.pdf" },
 };
+/** GST on the agent's commission (Item 4, 2026-11-21): chosen by SLIT staff before sending; printed with the percentage everywhere. */
+export const COMMISSION_GST = ["inclusive", "exclusive"] as const;
+export type CommissionGst = typeof COMMISSION_GST[number];
+export const isCommissionGst = (v: unknown): v is CommissionGst => typeof v === "string" && (COMMISSION_GST as readonly string[]).includes(v);
+/** "15% (GST exclusive)"; without a GST choice (onboardings sent before 2026-11-21) just "15%"; nothing at all: "". */
+export function commissionText(percent: number | string | null | undefined, gst: string | null | undefined): string {
+  const p = percent == null ? "" : String(percent).replace(/%/g, "").trim();
+  if (!p) return "";
+  return isCommissionGst(gst) ? `${p}% (GST ${gst})` : `${p}%`;
+}
 /** The agreement runs for two years from its commencement (Item 5). */
 export const AGREEMENT_TERM_YEARS = 2;
 // The signer of the F04 and the P06 is the business's point of contact (2026-11-19); the role key stays "agent" (stored on requests and templates).

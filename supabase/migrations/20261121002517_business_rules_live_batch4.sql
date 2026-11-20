@@ -278,18 +278,18 @@ select public.business_rule_patch_function('public.application_letter_course(enr
   $n$raw := trim_scale(case i.study_load when 'coe' then public.rule_num('lms.coe_weekly_study_hours', 20) else public.rule_num('lms.voe_weekly_study_hours', 40) end)::text;$n$, 1);
 
 do $$
-declare id text; missing text[] := '{}';
+declare k text; missing text[] := '{}';
 begin
-  foreach id in array array['admissions.english_result_valid_years', 'admissions.document_expiry_warning_months', 'admissions.english_test_alternatives',
+  foreach k in array array['admissions.english_result_valid_years', 'admissions.document_expiry_warning_months', 'admissions.english_test_alternatives',
     'admissions.english_minimum_scores', 'admissions.applicant_age_range', 'admissions.application_required_documents', 'admissions.usi_required',
     'admissions.guest_link_required_documents', 'admissions.guest_link_skippable_documents', 'admissions.guest_link_multiple_files',
     'admissions.guest_link_upload_cap', 'admissions.offer_letter_upload_mib', 'admissions.offer_accepted_or_later_states', 'finance.offer_discount_range',
     'agents.commission_range', 'agents.commission_suggested', 'admissions.offer_letter_recipient', 'admissions.offer_accept_in_portal',
     'admissions.offer_accept_portal_roles', 'admissions.offer_unanswered_days', 'admissions.withdrawal_class_removal'] loop
     if not exists (select 1 from public.business_rules r join public.business_rule_versions v on v.rule_id = r.id
-                   where r.scope_key = '' and r.identifier = id and v.state = 'published')
-       or public.rule_value(id, null) is null then
-      missing := missing || id;
+                   where r.scope_key = '' and r.identifier = k and v.state = 'published')
+       or public.rule_value(k, null) is null then
+      missing := missing || k;
     end if;
   end loop;
   if cardinality(missing) > 0 then raise exception 'BUSINESS-RULES-LIVE A: not live: %', missing; end if;

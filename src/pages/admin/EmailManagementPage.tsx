@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import Microsoft365Panel, { Microsoft365Badge } from "@/pages/admin/components/Microsoft365Panel";
 import CreateEmailSection from "@/pages/admin/components/CreateEmailSection";
 import AccountDirectory from "@/pages/admin/components/AccountDirectory";
+import EnrolledWithoutMailbox from "@/pages/admin/components/EnrolledWithoutMailbox";
 import { fetchEmailAudit, useMicrosoft365, type EmailAuditRow } from "@/pages/admin/lib/microsoft365";
 
 /*
@@ -63,7 +64,7 @@ export default function EmailManagementPage() {
       <div><strong>{status.connected ? "Microsoft 365 is connected but not ready." : "Microsoft 365 is not connected."}</strong> {status.problems[0] ?? ""} <Link className="font-semibold underline" to="/admin/email-management?section=settings">See Microsoft 365 Settings</Link></div>
     </div> : null}
 
-    {active === "accounts" && <AccountDirectory create={<Link to="/admin/email-management?section=create" className={button}>Create email</Link>} />}
+    {active === "accounts" && <><EnrolledWithoutMailbox /><AccountDirectory create={<Link to="/admin/email-management?section=create" className={button}>Create email</Link>} /></>}
 
     {active === "create" && <CreateEmailSection />}
 

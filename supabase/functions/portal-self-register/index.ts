@@ -6,6 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { lookupAgencyAbn, normalizeAbn, validateAbn, type AgencyAbnDetails } from "../_shared/validation/abn.ts";
 import { deliverInvite, findAuthUserByEmail } from "../_shared/invite-delivery.ts";
@@ -163,7 +164,9 @@ Deno.serve(async (req) => {
     let claim = false;
     let hasSignIn = false;
     if (password) {
-      if (password.length < 10 || password.length > 72) return json({ error: "Choose a password of 10 to 72 characters." }, 400);
+      // Business Rule auth.password_min_students_agents (10 when unreadable); the page checks the same.
+      const minLength = Math.min(72, Math.max(10, ruleNumber(await loadRules(admin, ["auth.password_min_students_agents"]), "auth.password_min_students_agents", 10)));
+      if (password.length < minLength || password.length > 72) return json({ error: `Choose a password of ${minLength} to 72 characters.` }, 400);
       if (/skyline|slit/i.test(password)) return json({ error: "Please avoid using the organisation name in your password." }, 400);
       const { data: onRecord, error: recordError } = await admin.from("enrollment_students").select("id").ilike("email", email.value.replace(/[\\%_]/g, "\\$&")).limit(1);
       const existing = await findAuthUserByEmail(admin, email.value);

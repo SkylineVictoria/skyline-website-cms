@@ -41,7 +41,16 @@ export const STUDENT_LICENCES: Readonly<Record<string, string>> = {
   "Microsoft 365 A3 for students": "M365EDU_A3_STUDENT", "Microsoft 365 A5 for students": "M365EDU_A5_STUDENT",
 };
 const LICENCE_NAMES: Record<string, string> = Object.fromEntries(Object.entries({ ...STAFF_LICENCES, ...STUDENT_LICENCES }).map(([name, sku]) => [sku, name]));
-export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback"];
+export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback", "office365.email_address_format", "office365.agent_mailbox"];
+/** Business Rule office365.email_address_format: how the address is made from the name (a clash adds a number). */
+export const ADDRESS_FORMATS = ["first.last", "firstlast", "f.last", "first_last", "last.first"] as const;
+export type AddressFormat = (typeof ADDRESS_FORMATS)[number];
+export function addressFormat(rules: RuleValues = {}): AddressFormat {
+  const f = ruleText(rules, "office365.email_address_format", "first.last").trim().toLowerCase();
+  return (ADDRESS_FORMATS as readonly string[]).includes(f) ? f as AddressFormat : "first.last";
+}
+/** Business Rule office365.agent_mailbox: "No mailbox" means no SLIT mailbox is created for an agent. */
+export const agentMailboxOff = (rules: RuleValues = {}) => ruleText(rules, "office365.agent_mailbox", "Staff mailbox at slit.edu.au").trim().toLowerCase() === "no mailbox";
 
 type Env = (name: string) => string | undefined;
 const read = (env: Env, n: string) => (env(n) ?? "").trim();
@@ -61,11 +70,18 @@ export function planFor(kind: PersonKind, env: Env, rules: RuleValues = {}): Pla
 }
 
 export function slug(s: string) { return s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
-/** first.last (accents and symbols dropped), at most 56 characters. */
-export function localPart(fullName: string) {
+/** first.last (or the format chosen in Business Rules; accents and symbols dropped), at most 56 characters. A one-word name is used as it is. */
+export function localPart(fullName: string, format: AddressFormat = "first.last") {
   const p = fullName.trim().split(/\s+/).map(slug).filter(Boolean);
   if (!p.length) return "";
-  return (p.length === 1 ? p[0] : `${p[0]}.${p[p.length - 1]}`).slice(0, 56).replace(/\.+$/, "");
+  const first = p[0], last = p[p.length - 1];
+  const joined = p.length === 1 ? first
+    : format === "firstlast" ? `${first}${last}`
+    : format === "f.last" ? `${first[0]}.${last}`
+    : format === "first_last" ? `${first}_${last}`
+    : format === "last.first" ? `${last}.${first}`
+    : `${first}.${last}`;
+  return joined.slice(0, 56).replace(/[._]+$/, "");
 }
 export function names(fullName: string) { const p = fullName.trim().split(/\s+/).filter(Boolean); return { given: p[0] ?? "", surname: p.length > 1 ? p[p.length - 1] : "" }; }
 export function tempPassword() {
@@ -207,26 +223,27 @@ export async function lookup(ports: Ports, kind: PersonKind, personId: string): 
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   try {
     const graph = graphFor(ports, await appToken(ports));
-    const q = queryFor(person, plan, ports.env);
+    const q = queryFor(person, plan, ports.env, ports.rules);
     const existing = await findExisting(graph, q);
     const licence = await seats(graph, plan.sku);
     const domains = await allowedDomains(graph, plan);
     const created = !!person.account?.msUserId;
-    const free = created || existing.some(certain) || !domains.length ? null : await firstFreeAddress(graph, localPart(person.fullName), plan.domain, existing);
+    const free = created || existing.some(certain) || !domains.length ? null : await firstFreeAddress(graph, localPart(person.fullName, addressFormat(ports.rules)), plan.domain, existing);
     return { status: 200, body: { person: { name: person.fullName, email: person.recordEmail }, plan: { domain: plan.domain, sku: plan.sku, licenceName: plan.licenceName },
       licence: licence ? { total: licence.total, available: licence.available } : null, account: person.account, existing, address: free, domains, groups: groupIds(plan, ports.env).length,
       blocked: !domains.length ? `The domain ${plan.domain} is not verified in Microsoft 365.` : blockedReason(plan, licence, existing, person) } };
   } catch (e) { return fail(e); }
 }
 
-function queryFor(person: Person, plan: Plan, env: Env) {
+function queryFor(person: Person, plan: Plan, env: Env, rules: RuleValues = {}) {
   const domains = [plan.domain, read(env, "EF_MICROSOFT365_STUDENT_DOMAIN").toLowerCase(), (read(env, "EF_MICROSOFT365_STAFF_DOMAIN") || "slit.edu.au").toLowerCase()].filter(Boolean);
   const email = String(person.recordEmail ?? "").toLowerCase().trim();
-  const base = localPart(person.fullName);
+  // The chosen format and first.last (addresses made before the format changed) are both looked up.
+  const bases = [...new Set([localPart(person.fullName, addressFormat(rules)), localPart(person.fullName)])].filter(Boolean);
   return {
     linked: person.account?.msUserId || (person.account?.status === "active" ? person.account.email : null),
     emails: emailRe.test(email) && domains.includes(email.split("@")[1]) ? [email] : [],
-    usernames: base ? [...new Set(domains)].map((d) => `${base}@${d}`) : [],
+    usernames: bases.flatMap((base) => [...new Set(domains)].map((d) => `${base}@${d}`)),
     name: person.fullName,
   };
 }
@@ -256,6 +273,7 @@ function fail(e: unknown): Reply {
 /** Create (or retry a failed attempt), or with dryRun only say what would be created. */
 export async function provision(ports: Ports, kind: PersonKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string } = {}): Promise<Reply> {
   let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
+  if (kind === "agent" && agentMailboxOff(ports.rules)) return { status: 403, body: { error: "Agents do not get a SLIT mailbox (Business Rules › Mailbox for agents).", code: "agent_mailbox_off" } };
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
   if (person.account?.status === "active") return { status: 409, body: { error: `Already has ${person.account.email}.`, code: "already_has", email: person.account.email } };
   // Never a second account: once the Microsoft user exists, only Resend login email (which finishes any missing step).
@@ -278,7 +296,7 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     // 2. An existing mailbox: never a second one.
     let existing: Existing[] = [];
     if (!resuming) {
-      existing = await findExisting(graph, queryFor(person, plan, ports.env));
+      existing = await findExisting(graph, queryFor(person, plan, ports.env, ports.rules));
       const has = existing.find(certain);
       if (has) return { status: 409, body: { error: `Already has ${has.upn}. Link it to this record instead of creating another.`, code: "already_has", existing } };
       if (existing.length && !opts.differentPerson) return { status: 409, body: { code: "possible_match", existing,
@@ -287,8 +305,8 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     if (licence.available <= 0 && !resuming) return { status: 409, body: { code: "no_licences_available",
       error: `No ${plan.licenceName} licences are free (${licence.total} of ${licence.total} in use). Add seats in the Microsoft 365 admin centre, then try again.` } };
     // 3. The address: the earlier attempt's, or the first free first.last[n]@domain.
-    const upn0 = resuming ? person.account!.email : await firstFreeAddress(graph, localPart(person.fullName), domain, existing);
-    if (!upn0) return { status: 409, body: { error: localPart(person.fullName) ? "No free email address was found for this name." : "The name has no letters that can be used in an email address. Edit the name first." } };
+    const upn0 = resuming ? person.account!.email : await firstFreeAddress(graph, localPart(person.fullName, addressFormat(ports.rules)), domain, existing);
+    if (!upn0) return { status: 409, body: { error: localPart(person.fullName, addressFormat(ports.rules)) ? "No free email address was found for this name." : "The name has no letters that can be used in an email address. Edit the name first." } };
     if (opts.dryRun) return { status: 200, body: { dryRun: true, email: upn0, domain: plan.domain, sku: plan.sku, licenceName: plan.licenceName,
       licence: { total: licence.total, available: licence.available }, welcomeTo: mask(personal), existing, resuming } };
     // 4. Reserve, create, licence, email, record.

@@ -7,7 +7,8 @@
 import type { SendOutcome } from "./delivery.ts";
 
 export const CLICKSEND_API = "https://rest.clicksend.com/v3";
-/** Four concatenated GSM-7 segments; longer bodies are cut, never split into separate sends. */
+/** Four concatenated GSM-7 segments; longer bodies are cut, never split into separate sends. The live limit is the Business Rule
+ * comms.sms_max_characters (notification-delivery passes it as maxChars); this is the fallback. */
 export const MAX_SMS_BODY_CHARS = 612;
 
 export interface SmsMessage { deliveryId: string; to: string; body: string; from?: string }
@@ -36,12 +37,12 @@ export function normalizePhoneNumber(input: string): string | null {
 }
 
 /** Plain single-line-safe text: control characters other than newline become spaces, runs collapse, and the body is capped. */
-export function cleanSmsBody(body: string): string {
+export function cleanSmsBody(body: string, maxChars: number = MAX_SMS_BODY_CHARS): string {
   // eslint-disable-next-line no-control-regex -- strip control characters from the body
-  return (body ?? "").replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, MAX_SMS_BODY_CHARS);
+  return (body ?? "").replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, maxChars);
 }
 
-export function createClickSendProvider(options: { username: string; apiKey: string; senderId?: string; fetch?: typeof fetch; timeoutMs?: number }): SmsProvider {
+export function createClickSendProvider(options: { username: string; apiKey: string; senderId?: string; fetch?: typeof fetch; timeoutMs?: number; maxChars?: number }): SmsProvider {
   const call = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 15_000;
   const authorization = `Basic ${btoa(`${options.username}:${options.apiKey}`)}`;
@@ -50,7 +51,7 @@ export function createClickSendProvider(options: { username: string; apiKey: str
     async send(message) {
       const to = normalizePhoneNumber(message.to);
       if (!to) return { kind: "failed", code: "invalid_recipient" };
-      const body = cleanSmsBody(message.body);
+      const body = cleanSmsBody(message.body, options.maxChars);
       if (!body) return { kind: "failed", code: "empty_body" };
       const from = (message.from ?? options.senderId ?? "").trim();
       if (from && !SENDER_ID.test(from)) return { kind: "failed", code: "sender_rejected" };
@@ -99,7 +100,7 @@ export function createMockSmsProvider(script: SendOutcome[] | ((message: SmsMess
 export type SmsProviderSelection = { provider: SmsProvider; unavailable: null } | { provider: null; unavailable: { code: "configuration_unavailable"; variables: string[] } };
 
 /** SMS is on only when EF_NOTIFICATION_SMS_ENABLED is exactly "true" and the ClickSend username and API key are set. Names only in errors. */
-export function selectSmsProvider(config: Record<string, string | undefined>, options: { fetch?: typeof fetch } = {}): SmsProviderSelection {
+export function selectSmsProvider(config: Record<string, string | undefined>, options: { fetch?: typeof fetch; maxChars?: number } = {}): SmsProviderSelection {
   const variables: string[] = [];
   if ((config.EF_NOTIFICATION_SMS_ENABLED ?? "").trim() !== "true") variables.push("EF_NOTIFICATION_SMS_ENABLED");
   if (!(config.EF_CLICKSEND_USERNAME ?? "").trim()) variables.push("EF_CLICKSEND_USERNAME");
@@ -107,7 +108,7 @@ export function selectSmsProvider(config: Record<string, string | undefined>, op
   const senderId = (config.EF_CLICKSEND_SENDER_ID ?? "").trim();
   if (senderId && !SENDER_ID.test(senderId)) variables.push("EF_CLICKSEND_SENDER_ID");
   if (variables.length) return { provider: null, unavailable: { code: "configuration_unavailable", variables } };
-  return { provider: createClickSendProvider({ username: config.EF_CLICKSEND_USERNAME!.trim(), apiKey: config.EF_CLICKSEND_API_KEY!.trim(), senderId: senderId || undefined, fetch: options.fetch }), unavailable: null };
+  return { provider: createClickSendProvider({ username: config.EF_CLICKSEND_USERNAME!.trim(), apiKey: config.EF_CLICKSEND_API_KEY!.trim(), senderId: senderId || undefined, fetch: options.fetch, maxChars: options.maxChars }), unavailable: null };
 }
 
 // ---- dispatch loop ------------------------------------------------------------------------------
@@ -122,18 +123,19 @@ export interface SmsDeliveryPort {
 export interface SmsDispatchSummary { accepted: number; retried: number; failed: number; unknown: number; expired: number; stale: number }
 
 /** True when the text was queued more than 24 hours before `now` (or its queue time cannot be read: it is not sent on a guess). */
-export function smsExpired(createdAt: string | null, now: number): boolean {
+export function smsExpired(createdAt: string | null, now: number, maxAgeMs: number = SMS_MAX_AGE_MS): boolean {
   const queued = createdAt ? Date.parse(createdAt) : NaN;
-  return !Number.isFinite(queued) || now - queued > SMS_MAX_AGE_MS;
+  return !Number.isFinite(queued) || now - queued > maxAgeMs;
 }
 
-export async function dispatchSmsBatch(port: SmsDeliveryPort, provider: SmsProvider, limit: number, now: () => number = Date.now): Promise<SmsDispatchSummary> {
+/** `maxAgeMs`: Business Rule comms.sms_unsent_expiry_hours (24 hours when not given). */
+export async function dispatchSmsBatch(port: SmsDeliveryPort, provider: SmsProvider, limit: number, now: () => number = Date.now, maxAgeMs: number = SMS_MAX_AGE_MS): Promise<SmsDispatchSummary> {
   const summary: SmsDispatchSummary = { accepted: 0, retried: 0, failed: 0, unknown: 0, expired: 0, stale: 0 };
   for (let i = 0; i < limit; i++) {
     const sms = await port.claim();
     if (!sms) break;
     // Never send a text older than 24 hours (the database expires most of them before the claim; this catches one that crossed the line).
-    if (smsExpired(sms.createdAt, now())) {
+    if (smsExpired(sms.createdAt, now(), maxAgeMs)) {
       if (await port.record(sms, "expired", null, "older_than_24h", false, 0)) summary.expired++; else summary.stale++;
       continue;
     }

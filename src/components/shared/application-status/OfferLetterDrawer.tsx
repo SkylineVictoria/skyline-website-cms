@@ -172,7 +172,7 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
   // The lines in the total, as LMS counts them: Business Rules finance.course_total_excluded_default decides which fee types stay out
   // (the initial deposit and OSHC today); tuition always counts (the discount is taken off it). Application or enrolment, whichever the letter uses.
   const totalKeys = (["fees.registration", "fees.material", "fees.oshc", "fees.deposit", usedKeys.has("fees.application") || !usedKeys.has("fees.enrolment") ? "fees.application" : "fees.enrolment"] as const)
-    .filter((key) => includedByDefault(LETTER_FEE_TYPE[key])).concat("fees.tuition");
+    .filter((key) => includedByDefault(LETTER_FEE_TYPE[key])).map(String).concat("fees.tuition");
   const discountOf = (tuition: number | null) => (tuition != null && discountPct > 0 ? Math.round(tuition * discountPct / 100) : 0);
   const sumOf = (get: (k: string) => number | null): number | null => { const tuition = get("fees.tuition"); if (tuition == null) return null; return totalKeys.reduce((s, k) => s + (get(k) ?? 0), 0) - discountOf(tuition); };
   // Other fee lines LMS counts (e.g. "other" lines) that this section does not show: the LMS total less the lines it does show.

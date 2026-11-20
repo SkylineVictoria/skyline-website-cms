@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
 import { publicTenantSelector } from "../_shared/public-tenant.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "",
@@ -285,7 +286,8 @@ Deno.serve(async (request) => {
         if (allowGeneration && tenant === null) {
           const { data: slot } = await admin.rpc(
             "public_assistant_take_generation_slot",
-            { p_daily_limit: 200 },
+            // Business Rule website.assistant_daily_answers (200 when unreadable).
+            { p_daily_limit: Math.max(0, Math.round(ruleNumber(await loadRules(admin, ["website.assistant_daily_answers"]), "website.assistant_daily_answers", 200))) },
           );
           if (slot) {
             try {

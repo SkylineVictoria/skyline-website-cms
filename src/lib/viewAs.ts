@@ -2,14 +2,16 @@
 // chosen real student, agent or staff member (full access; every switch is recorded with the person), then
 // returns to their own admin session. The admin-view-as Edge Function (admins only) hands back a one-time sign-in token for the
 // test account; the admin's own session is kept in this browser while they look around and restored by "Back to admin".
-// The kept session is dropped on any sign-out, when another account is signed in, and after 12 hours.
+// The kept session is dropped on any sign-out, when another account is signed in, and after admin.view_as_hours (12 hours).
 import { supabase } from "@/pages/admin/lib/supabase";
+import { onRules, rulesLoaded, ruleNumber } from "@/lib/businessRules";
 
 export type ViewKind = "student" | "agent" | "staff";
 export const VIEW_LABELS: Record<ViewKind, string> = { student: "Student", agent: "Agent", staff: "Staff" };
 const VIEW_HOME: Record<ViewKind, string> = { student: "/agency/dashboard", agent: "/agency/dashboard", staff: "/staff" };
 const KEY = "skyline.viewAs";
-const MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** How long the kept admin session lasts: Business Rule admin.view_as_hours (12 until the values load). */
+const maxAgeMs = () => Math.min(24, Math.max(1, ruleNumber("admin.view_as_hours", 12))) * 60 * 60 * 1000;
 
 export interface ViewAsState { kind: ViewKind; adminEmail: string; testUserId: string | null; at: number; access: string; refresh: string; personName?: string }
 /** Someone an admin can sign in as. */
@@ -31,10 +33,12 @@ export function readViewAs(): ViewAsState | null {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const v = JSON.parse(raw) as ViewAsState;
-    if (!v || !v.refresh || !v.access || !(v.kind in VIEW_LABELS) || Date.now() - v.at > MAX_AGE_MS) { localStorage.removeItem(KEY); return null; }
+    if (!v || !v.refresh || !v.access || !(v.kind in VIEW_LABELS) || Date.now() - v.at > maxAgeMs()) { localStorage.removeItem(KEY); return null; }
     return v;
   } catch { return null; }
 }
+// Once the Business Rules values load, a kept session older than the rule allows is dropped.
+onRules(() => { if (rulesLoaded()) readViewAs(); });
 export function clearViewAs(): void { try { localStorage.removeItem(KEY); } catch { /* storage unavailable */ } }
 function save(v: ViewAsState): void { localStorage.setItem(KEY, JSON.stringify(v)); }
 

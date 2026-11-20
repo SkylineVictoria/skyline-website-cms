@@ -63,6 +63,52 @@ export const SCREEN_RULES = [
   "admissions.registration_coe_voe_pdf_mib",
   "agents.agent_application_yes_no_fallback",
   "agents.agent_application_attachment_cap_mib",
+  "lms.voe_threshold_weekly_hours",
+  "lms.class_suggestion_preferred_days",
+  "lms.class_suggestion_hours",
+  "lms.manual_placement_default_type",
+  "lms.assessment_assignment_default_days",
+  "agents.agreement_term_years",
+  "agents.agency_witness_on_agreement",
+  "agents.referee_emails_must_differ",
+  "agents.business_approval_waits_for_referees",
+  "agents.slit_witness_on_agreement",
+  "agents.cancelled_abn_business",
+  "agents.signed_copy_upload_max_mb",
+  "admissions.document_expiry_warning_months",
+  "admissions.english_result_valid_years",
+  "admissions.english_test_alternatives",
+  "admissions.english_minimum_scores",
+  "admissions.application_required_documents",
+  "admissions.usi_required",
+  "admissions.offer_accept_in_portal",
+  "admissions.offer_accept_portal_roles",
+  "admissions.applicant_age_range",
+  "admissions.offer_letter_upload_mib",
+  "admissions.offer_unanswered_days",
+  "finance.offer_discount_range",
+  "finance.deposit_automatic_reminder_interval",
+  "finance.deposit_automatic_reminder_cap",
+  "finance.deposit_manual_reminder_cooldown",
+  "agents.commission_range",
+  "agents.commission_suggested",
+  "hrms.employment_types",
+  "hrms.new_job_defaults",
+  "hrms.pay_frequencies",
+  "hrms.pay_date_window",
+  "hrms.staff_offer_link_days",
+  "hrms.staff_document_link_days",
+  "hrms.staff_account_link_days",
+  "hrms.document_expiring_soon_days",
+  "hrms.staff_minimum_age",
+  "auth.password_min_staff",
+  "auth.password_min_students_agents",
+  "comms.notification_extra_recipients_max",
+  "admin.view_as_hours",
+  "support.ticket_categories",
+  "support.ticket_priority_default",
+  "support.requester_can_close",
+  "office365.agent_mailbox",
 ] as const;
 
 let values: Record<string, unknown> = {};
@@ -95,6 +141,10 @@ export function ruleNumber(id: string, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 export const rulesLoaded = () => loaded;
+export function ruleBool(id: string, fallback: boolean): boolean {
+  const v = values[id];
+  return typeof v === "boolean" ? v : fallback;
+}
 export function ruleText(id: string, fallback: string): string {
   const v = values[id];
   return typeof v === "string" && v.trim() ? v : fallback;

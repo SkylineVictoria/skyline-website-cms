@@ -1,5 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
-import { ruleNumber } from "@/lib/businessRules";
+import { ruleBool, ruleList, ruleNumber, ruleText } from "@/lib/businessRules";
 
 /** TKT-01 support tickets. All reads and writes go through the support_* database functions. */
 export type TicketCategory = "enrolment_documents" | "fees_payments" | "course_training" | "other";
@@ -13,6 +13,19 @@ export const CATEGORY_LABEL: Record<TicketCategory, string> = {
   course_training: "Course & training",
   other: "Other",
 };
+/** Categories a new ticket may use (Business Rule support.ticket_categories; support_ticket_create checks the same). */
+export function ticketCategories(): TicketCategory[] {
+  const labels = ruleList("support.ticket_categories", Object.values(CATEGORY_LABEL)).map((l) => l.trim().toLowerCase());
+  const keys = (Object.keys(CATEGORY_LABEL) as TicketCategory[]).filter((k) => labels.includes(CATEGORY_LABEL[k].toLowerCase()));
+  return keys.length ? keys : (Object.keys(CATEGORY_LABEL) as TicketCategory[]);
+}
+/** The priority a new ticket starts at (Business Rule support.ticket_priority_default). */
+export function defaultTicketPriority(): TicketPriority {
+  const p = ruleText("support.ticket_priority_default", "Normal").trim().toLowerCase();
+  return (["low", "normal", "high", "urgent"] as string[]).includes(p) ? p as TicketPriority : "normal";
+}
+/** Whether students and agents may mark their own ticket resolved (Business Rule support.requester_can_close). */
+export const requesterCanClose = () => ruleBool("support.requester_can_close", true);
 export const STATUS_LABEL: Record<TicketStatus, string> = {
   open: "Open", in_progress: "In progress", waiting: "Waiting on requester", resolved: "Resolved", closed: "Closed",
 };

@@ -33,7 +33,9 @@ import { EMPTY_STAFF_DETAILS, STAFF_FIELDS, normalizeStaffField, staffProblems, 
 
 export const LINK_INVALID = "This link is not valid any more. Ask us for a new one.";
 export const NO_OFFER = "There is no offer letter for your account right now.";
-export const PASSWORD_MIN = 12;
+/** The shortest staff password: Business Rule auth.password_min_staff (index.ts sets it from the rule; 12 until then). */
+export let PASSWORD_MIN = 12;
+export function setPasswordMin(n: unknown) { if (typeof n === "number" && Number.isInteger(n) && n >= 12 && n <= PASSWORD_MAX) PASSWORD_MIN = n; }
 export const PASSWORD_MAX = 72;
 export const MAX_DOCUMENT_BYTES = DOCUMENT_MAX_BYTES;
 export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;

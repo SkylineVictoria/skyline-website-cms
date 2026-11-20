@@ -3775,7 +3775,7 @@ test("staff wizard rules: a draft takes blanks, the final check needs everything
   const now = new Date("2026-11-10T03:00:00Z");
   assert.deepEqual(staffRules.staffProblems(details, staffRules.STAFF_FIELDS, false, now), [{ field: "phone", message: "Enter your mobile number." }], "only the mobile may never be blank");
   assert.deepEqual(staffRules.staffProblems({ ...details, first_name: "x".repeat(101), date_of_birth: "2020-01-01", emergency_phone: "0422", passport_number: "12" }, ["first_name", "date_of_birth", "emergency_phone", "passport_number"], false, now), [
-    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 10 and 100 years old." },
+    { field: "first_name", message: "The first name must be 100 characters or fewer." }, { field: "date_of_birth", message: "You must be between 14 and 100 years old." },
     { field: "emergency_phone", message: "Enter the emergency contact's phone number." }, { field: "passport_number", message: "Enter the passport number: 6 to 12 letters and numbers." }]);
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia", address_state: "Punjab" }, false, now), "Choose the state or territory.");
   assert.equal(staffRules.staffFieldProblem("address_state", { ...details, address_country: "Australia" }, false, now), "", "blank is fine in a draft");
@@ -3835,7 +3835,11 @@ test("tax and super rules (option A): the declaration answers and the super choi
 test("onboarding save: checked with the shared rules before the database, answered with the field; stored normalised", async () => {
   let run = linkDeps();
   let r = await onboard.handleOnboarding(linkRequest("save", { patch: { date_of_birth: "2020-01-01" } }), run.deps);
-  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 10 and 100 years old.", "date_of_birth"]);
+  assert.deepEqual([r.status, r.body.error, r.body.field], [400, "You must be between 14 and 100 years old.", "date_of_birth"], "staff minimum age: Business Rule hrms.staff_minimum_age (14)");
+  staffRules.setStaffMinimumAge(16);
+  assert.equal(staffRules.staffFieldProblem("date_of_birth", { ...staffRules.EMPTY_STAFF_DETAILS, date_of_birth: "15/06/2011" }, true, new Date("2026-11-20T00:00:00Z")), "You must be between 16 and 100 years old.", "a changed rule moves the age");
+  assert.equal(staffRules.staffDateOfBirthRange(new Date("2026-11-20T00:00:00Z")).max, "2010-11-20");
+  staffRules.setStaffMinimumAge(14);
   assert.ok(!run.names().includes("hr_svc_onboarding_save"), "nothing invalid reaches the database");
   for (const [patch, field, message] of [
     [{ emergency_phone: "0422 333 444" }, "emergency_phone", "Enter the emergency contact's phone number."],

@@ -444,6 +444,11 @@ export default function LmsCoursesPage() {
               <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
                 className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
                 {editing ? "Done" : "Edit"}</button>
+              {/* The daily timetables, in plain sight (owner, 2026-11-21): the CoE intake's and the VoE intake's weekly classes. */}
+              {(["coe", "voe"] as const).map(load => <button key={load} type="button" disabled={!masterSaved}
+                title={masterSaved ? undefined : "Save the CoE weekly calendar first"} onClick={() => { setMenuOpen(false); void openClasses(selected.id, load); }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:opacity-50">
+                <i className="ri-calendar-schedule-line" aria-hidden="true" />{load === "coe" ? "CoE" : "VoE"} daily timetable</button>)}
               <button type="button" aria-label="More actions" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}
                 className="rounded-lg border border-background-300 px-2.5 py-2 text-foreground-700 hover:bg-background-100"><i className="ri-more-2-fill" aria-hidden="true" /></button>
               {menuOpen ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuOpen(false)} /> : null}

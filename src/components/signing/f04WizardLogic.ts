@@ -1,6 +1,6 @@
 import type { SigningView } from "@/lib/signingApi";
 import { abrYearFounded, acnDigits, acnFromAbn, checkApplicationAnswers, phoneE164, type AbrFacts } from "../../../supabase/functions/_shared/validation/abr";
-import { AGREEMENT_FROM_DECLARATION, composeRegistrationNumber, composeSuburb, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, WITNESS_NAME_KEY, yesNoDefaults,
+import { AGREEMENT_FROM_DECLARATION, composeRegistrationNumber, correctionEditable as sharedCorrectionEditable, composeSuburb, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATIONS, F04_POSITIONS, isPostcodeOnly, splitSuburb, WITNESS_NAME_KEY, yesNoDefaults,
   type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
 
 /*
@@ -143,7 +143,7 @@ export function initialF04(fields: readonly Field[], facts: Partial<AbrFacts> | 
   const base: F04Draft = { answers, acn: /^\d{9}$/.test(acn) ? acn : "", marn: String(prefill?.agent_marn ?? "").trim(), declarations: {}, step: 0 };
   const merged: F04Draft = !draft ? base : {
     answers: { ...answers, ...Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k, v]) => String(v ?? "").trim() || blank(k))) },
-    acn: acnDigits(draft.acn) || base.acn, marn: draft.marn ?? "", declarations: { ...(draft.declarations ?? {}) },
+    acn: acnDigits(draft.acn) || base.acn, marn: draft.marn ?? base.marn, declarations: { ...(draft.declarations ?? {}) },
     step: draftStep(draft) };
   const m = merged.answers;
   if (isPostcodeOnly(m.office_suburb)) m.office_suburb = "";
@@ -270,9 +270,35 @@ export function visibleSteps(mode: F04Mode, flags: Record<string, string> | null
   const steps = new Set(Object.keys(flags ?? {}).map(stepOfKey));
   return [...F04_STEPS.map((_, i) => i).filter((i) => i !== REVIEW_STEP && steps.has(i)), REVIEW_STEP];
 }
-/** In correction mode an answer can change only when flagged (the declaration's name and role are given again). */
-export const correctionEditable = (key: string, flags: Record<string, string> | null | undefined) =>
-  key === "declarant_name" || key === "declarant_role" || correctionFlagged(key, flags);
+/**
+ * In correction mode an answer can change only when flagged (the declaration's name and role are given again; a flagged question's
+ * follow-up box and upload change with it). The same rule as the server (agent-onboarding.ts correctionEditable).
+ */
+export const correctionEditable = (key: string, flags: Record<string, string> | null | undefined) => sharedCorrectionEditable(key, flags);
+/** A correction's problems (2026-11-21): only those of answers that may change, and the declaration's statements. */
+export const correctionScope = (problems: Record<string, string>, flags: Record<string, string> | null | undefined) =>
+  Object.fromEntries(Object.entries(problems).filter(([k]) => k.startsWith("declaration_") || correctionEditable(k, flags)));
+/** A correction's draft (2026-11-21): only the answers that may change (the ACN / MARN only when flagged); what Save sends and what reopens. */
+export function correctionDraft<T extends Partial<F04Draft>>(draft: T, flags: Record<string, string> | null | undefined): T {
+  const answers = Object.fromEntries(Object.entries(draft.answers ?? {}).filter(([k]) => correctionEditable(k, flags)));
+  const out = { ...draft, answers } as T;
+  if (!correctionFlagged("acn", flags)) delete out.acn;
+  if (!correctionFlagged("marn", flags)) delete out.marn;
+  return out;
+}
+/**
+ * The correction page opens with every answer as signed (2026-11-21): a field the request holds no value for (its Yes / No tick boxes are
+ * stored without one) takes the reviewed answer (a question as YES / NO, text by key).
+ */
+export function withSignedAnswers(fields: readonly Field[], answers: Record<string, string> | null | undefined): Field[] {
+  if (!answers) return [...fields];
+  return fields.map((f) => {
+    if (!f.key || String(f.value ?? "").trim()) return f;
+    const group = groupOf(f.key);
+    const value = group ? (String(answers[group.key] ?? "").trim().toUpperCase() === group.answer ? "true" : "") : f.type === "text" ? String(answers[keyOf(f)] ?? "") : "";
+    return value ? { ...f, value } : f;
+  });
+}
 
 /** The answers as the server keeps them (agency_onboarding.answers): text by key, a Yes / No question as YES / NO, the ACN and the MARN. */
 export function answersOf(fields: readonly Field[], state: F04Draft): Record<string, string> {

@@ -14,7 +14,7 @@ import { abrDateWords, checkApplicationAnswers, F04_TITLES, printAcn, YEAR_BEFOR
 import { AU_STATES } from "../../../supabase/functions/_shared/validation/person";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
 import { commissionText, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INTRO, F04_DECLARATIONS, OMARA_REGISTER_URL, printAbn, WITNESS_NAME_KEY, type F04AttachmentKind } from "../../../supabase/functions/_shared/agent-onboarding";
-import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice, choiceUnnamed,
+import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice, choiceUnnamed, correctionDraft, correctionScope, withSignedAnswers,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
 
@@ -259,8 +259,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
   const flags = useMemo(() => (admin ? reviewFlags : correctionFlags) ?? {}, [admin, reviewFlags, correctionFlags]);
   const order = useMemo(() => visibleSteps(mode, flags), [mode, flags]);
-  const opening = useMemo(() => initialF04(fields, facts, view.application?.prefill ?? null, (view.application?.draft ?? null) as Partial<F04Draft> | null, view.recipient.name, (mode === "agent" || mode === "admin-prefill") && ruleText("agents.agent_application_yes_no_fallback", "No") === "No"),
-    [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name, mode]);
+  // A correction (2026-11-21) opens with every answer as signed; a saved draft brings back only the answers that may change.
+  const signedAnswers = correction?.answers ?? null;
+  const opening = useMemo(() => {
+    const draft = (view.application?.draft ?? null) as Partial<F04Draft> | null;
+    return initialF04(mode === "correction" ? withSignedAnswers(fields, signedAnswers) : fields, facts, view.application?.prefill ?? null, draft && mode === "correction" ? correctionDraft(draft, flags) : draft,
+      view.recipient.name, (mode === "agent" || mode === "admin-prefill") && ruleText("agents.agent_application_yes_no_fallback", "No") === "No");
+  }, [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name, mode, signedAnswers, flags]);
   // F04 + P06 signed once (2026-11-20): the agreement's terms and the witness (preset by staff, or typed + drawn here).
   const combined = view.onboarding?.combined === true && !staff;
   const terms = view.onboarding?.agreement ?? null;
@@ -312,7 +317,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const persist = useCallback(async (at: number, force = false) => {
     // Staff review keeps no draft: Save changes writes the answers themselves.
     if (closed.current || staff) return true;
-    const draft = { ...stateRef.current, step: at, stepId: STEPS[at]?.id };
+    // A correction saves only the answers SLIT flagged (the server refuses any other; 2026-11-21).
+    const whole = { ...stateRef.current, step: at, stepId: STEPS[at]?.id };
+    const draft = correcting ? correctionDraft(whole, flags) : whole;
     const json = JSON.stringify(draft);
     if (!force && json === lastSaved.current) return true;
     setSaved("saving");
@@ -321,7 +328,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
       lastSaved.current = json; lastSaveAt.current = Date.now(); setSaved("saved");
       return true;
     } catch { setSaved("error"); return false; }
-  }, [token, staff]);
+  }, [token, staff, correcting, flags]);
   useEffect(() => {
     if (closed.current || staff || JSON.stringify({ ...state, step: stepRef.current }) === lastSaved.current) return;
     const wait = Math.max(AUTOSAVE_PAUSE, lastSaveAt.current + AUTOSAVE_GAP - Date.now());
@@ -329,7 +336,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     return () => window.clearTimeout(timer);
   }, [state, persist, staff]);
 
-  const problems = f04Problems(step, fields, state, attachments, rulesF04);
+  // A correction checks only the flagged answers (and the declaration): the rest is locked as signed (2026-11-21).
+  const scope = (p: Record<string, string>) => correcting ? correctionScope(p, flags) : p;
+  const problems = scope(f04Problems(step, fields, state, attachments, rulesF04));
   const shown = tried.has(step) ? problems : Object.fromEntries(Object.entries(problems).filter(([k]) => touched.has(k)));
   // The agency admin's form (2026-11-21): Next / Sign and submit stay disabled until the step is complete, with what is missing beside them.
   const gated = mode === "agent" || mode === "correction";
@@ -340,7 +349,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     const key = id.slice(4);
     setTouched((t) => t.has(key) ? t : new Set(t).add(key));
   };
-  const allProblems = STEPS.map((_, i) => f04Problems(i, fields, state, attachments, rulesF04));
+  const allProblems = STEPS.map((_, i) => scope(f04Problems(i, fields, state, attachments, rulesF04)));
   const set = (key: string, value: string) => setState((s) => ({ ...s, answers: { ...s.answers, [key]: value } }));
   const setMany = (values: Record<string, string>) => setState((s) => ({ ...s, answers: { ...s.answers, ...values } }));
   const warnings = step === F04_STEP.references ? checkApplicationAnswers({ ref1_contact_name: a.ref1_contact_name ?? "", ref2_contact_name: a.ref2_contact_name ?? "" }).warnings : [];

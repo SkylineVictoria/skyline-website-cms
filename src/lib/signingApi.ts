@@ -135,7 +135,7 @@ export interface SigningView {
     /** 2026-11-19: values with no box of their own (agent_acn), the keys the open filled, the wizard uploads (organisation chart, business profile). */
     prefill?: Record<string, string>; filled?: string[]; attachments?: Record<string, { name: string; size: number; at: string }>;
     /** 2026-11-18: a correction request from SLIT (only the flagged answers can change; the message shows at the top). */
-    correction?: { round: number; message: string | null; flags: Record<string, string> } | null } | null;
+    correction?: { round: number; message: string | null; flags: Record<string, string>; answers?: Record<string, string> } | null } | null;
   // "choice": YES / NO (offer letters: the pre-paid fee), made by the offer flow only, never placed in the editor.
   // `key`: the variable behind the field (agent onboarding); a tick box "<question>:<answer>" answers a question with its siblings.
   fields: Array<{ id: string; type: SignFieldType | "choice"; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string | null; key?: string | null }>;

@@ -462,18 +462,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
     || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
-  const goTo = (index: number) => {
-    const target = Math.max(0, Math.min(index, LAST_STEP));
-    if (passportRequired && target > PASSPORT_STEP) { setStep(PASSPORT_STEP); return; }
-    const missing = firstMissingBefore(target);
-    setStep(missing >= 0 ? missing : target);
-  };
-  useEffect(() => {
-    if (loading) return;
-    if (passportRequired && step > PASSPORT_STEP) { setStep(PASSPORT_STEP); return; }
-    const missing = WIZARD_STEPS.findIndex((item, index) => index < step && item.required && !(item.id === "english" && englishAltMet) && !documents.some((doc) => doc.category === item.category));
-    if (missing >= 0) setStep(missing);
-  }, [loading, passportRequired, step, documents, englishAltMet]);
+  // Steps never block each other: Next always moves on, and missing documents are only noted on their own step.
+  const goTo = (index: number) => setStep(Math.max(0, Math.min(index, LAST_STEP)));
 
   /** Saves how the English requirement is met, then moves on from the English step. */
   const nextFromEnglish = async () => {

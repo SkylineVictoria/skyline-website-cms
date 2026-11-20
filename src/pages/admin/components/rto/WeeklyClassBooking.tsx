@@ -7,6 +7,7 @@
 // again on save (intake_class_times triggers, class_sessions_no_clash).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
+import { onRules, ruleNumber, ruleObject, weekdayIndex } from "@/lib/businessRules";
 import { roomAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
 import { loadCourseNeed, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
@@ -18,8 +19,29 @@ type Row = { key: string; weekday: number; type: SessionType; roomId: string; tr
 type Hours = { avail: AvailabilityRow[]; uses: RoomUse[] };
 const TYPES: { id: SessionType; label: string }[] = [{ id: "theory", label: "Theory" }, { id: "practical", label: "Practical" }, { id: "assessment", label: "Assessment" }];
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const TIMES = Array.from({ length: 31 }, (_, i) => { const m = 7 * 60 + i * 30; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; });
-const TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map(weekday => ({ weekday, start: "09:00", end: "22:00" }));
+// Nothing below is typed in here: the times, the trainer fallback, the class length and the usual start times are Business Rules
+// (Administration › Business Rules: lms.class_suggestion_hours, lms.class_setup_availability_fallback, lms.class_block_hours,
+// lms.class_preferred_start_times). The numbers here are only what the screen uses until the rules have loaded.
+const toTimeStr = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+let EARLIEST = 7 * 60, LATEST = 22 * 60;
+let TIMES = Array.from({ length: Math.floor((LATEST - EARLIEST) / 30) + 1 }, (_, i) => toTimeStr(EARLIEST + i * 30));
+let BLOCK_HOURS = 4;
+let PREF_STARTS = ["09:00", "14:00"];
+let TRAINER_DEFAULT: AvailabilityRow[] = [0, 1, 2, 3, 4, 5, 6].map(weekday => ({ weekday, start: "09:00", end: "22:00" }));
+onRules(() => {
+  const hm = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):(00|30)$|^24:00$/.test(v) ? v : null);
+  const h = ruleObject("lms.class_suggestion_hours", { earliest: "07:00" as unknown, latest: "22:00" as unknown });
+  const e = hm(h.earliest), l = hm(h.latest);
+  const em = e ? Number(e.slice(0, 2)) * 60 + Number(e.slice(3)) : 7 * 60, lm = l ? Number(l.slice(0, 2)) * 60 + Number(l.slice(3)) : 22 * 60;
+  [EARLIEST, LATEST] = em < lm ? [em, lm] : [7 * 60, 22 * 60];
+  TIMES = Array.from({ length: Math.floor((LATEST - EARLIEST) / 30) + 1 }, (_, i) => toTimeStr(EARLIEST + i * 30));
+  BLOCK_HOURS = Math.min(8, Math.max(1, Math.round(ruleNumber("lms.class_block_hours", 4))));
+  const st = ruleObject("lms.class_preferred_start_times", { first: "09:00" as unknown, second: "14:00" as unknown });
+  PREF_STARTS = [hm(st.first), hm(st.second)].filter((x): x is string => !!x);
+  const f = ruleObject("lms.class_setup_availability_fallback", { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as unknown, start: "09:00", end: "22:00" });
+  const days = (Array.isArray(f.days) ? f.days : []).map(d => weekdayIndex(String(d))).filter(d => d >= 0);
+  TRAINER_DEFAULT = days.map(weekday => ({ weekday, start: String(f.start), end: String(f.end) }));
+});
 const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
 const minTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const clock = (t: string) => { const m = toMin(t), h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}${mm ? `:${String(mm).padStart(2, "0")}` : ""} ${h >= 12 ? "pm" : "am"}`; };
@@ -30,7 +52,8 @@ const filled = (r: Row) => !!(r.roomId || r.trainerId || r.start || r.end);
 const hoursOf = (r: Row) => (r.start && r.end && toMin(r.end) > toMin(r.start) ? (toMin(r.end) - toMin(r.start)) / 60 : 0);
 /** Hours a week of each kind, split like the units' hours (40 / 40 / 20 when the units have none). */
 function splitHours(total: number, need: CourseNeed | null): Record<SessionType, number> {
-  const base = need && need.total > 0 ? need : { theory: 40, practical: 40, assessment: 20, total: 100 };
+  const pct = ruleObject("lms.unit_hours_split", { theoryPercent: 40, practicalPercent: 40, assessmentPercent: 20 });
+  const base = need && need.total > 0 ? need : { theory: Number(pct.theoryPercent), practical: Number(pct.practicalPercent), assessment: Number(pct.assessmentPercent), total: Number(pct.theoryPercent) + Number(pct.practicalPercent) + Number(pct.assessmentPercent) };
   const theory = Math.round((total * base.theory) / base.total), practical = Math.min(total - theory, Math.round((total * base.practical) / base.total));
   return { theory, practical, assessment: Math.max(0, total - theory - practical) };
 }
@@ -169,20 +192,26 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const autoDone = useRef(false);
   const roomsFor = (t: SessionType) => rooms.filter(r => t === "assessment" || r.kind === t);
   const autoFill = () => {
-    // THE RULES (owner, 2026-11-21: "fill the form without mistakes"). Every class written here passes the same check (`problem`) that blocks booking:
-    //  1. Hours: CoE 20 h a week, VoE 40 h, shared between Theory, Practical and Assessment like the course's unit hours (40 / 40 / 20 when unset).
-    //  2. Monday to Friday only; classes of 4 hours (then 3, 2 or 1 h to fill the rest or when 4 do not fit), at most 6 h a day for CoE and 8 h for VoE;
-    //     the day with fewest hours first.
-    //  3. Times tried in order: 9:00 and 14:00, then every half hour from 7:00 to 18:00; a time is used only when it is free.
+    // THE RULES (owner, 2026-11-21: "fill the form without mistakes"). Every class written here passes the same check (`problem`) that blocks booking,
+    // and every number comes from Business Rules (none is typed into this screen):
+    //  1. Hours a week: lms.coe_weekly_study_hours / lms.voe_weekly_study_hours (20 / 40 today), shared between Theory, Practical and Assessment like
+    //     the course's unit hours (lms.unit_hours_split when the units have none).
+    //  2. Days: lms.class_suggestion_preferred_days a week (5 today: Monday to Friday); classes of lms.class_block_hours (4 today), then shorter to fill the
+    //     rest; at most lms.class_suggested_day_cap hours a day (8 today); the day with fewest hours first.
+    //  3. Times: lms.class_preferred_start_times first (9:00, 14:00 today), then every half hour between lms.class_suggestion_hours (7:00 to 22:00 today);
+    //     a time is used only when it is free.
     //  4. A class needs a room of its kind (Theory room, Practical room; Assessment any) that is open then, not used by another intake and not used by
-    //     another class of this week, and a trainer who is available then, not teaching another intake and not in another class of this week.
-    //  5. The same room and the same trainer are kept through the week when they are free; otherwise the next free one is used (biggest room first).
+    //     another class of this week, and a trainer who is available then (lms.class_setup_availability_fallback when none is set), not teaching another
+    //     intake and not in another class of this week.
+    //  5. The same room and trainer are kept through the week when free; otherwise the next free one (biggest room first).
     //  6. If no free time, room and trainer exist for the rest of the hours, nothing is written for them: the banner says how many hours are left.
     const target0 = target;
     const sp = splitHours(target0, need);
     const left: Record<SessionType, number> = { theory: sp.theory, practical: sp.practical, assessment: sp.assessment };
-    const cap = load === "voe" ? 8 : 6;
-    const starts = [...new Set(["09:00", "14:00", ...TIMES.slice(0, -1).filter(t => toMin(t) <= 18 * 60)])];
+    const cap = ruleNumber("lms.class_suggested_day_cap", 8);
+    const dayCount = Math.min(7, Math.max(1, Math.round(ruleNumber("lms.class_suggestion_preferred_days", 5))));
+    const workDays = Array.from({ length: dayCount }, (_, i) => i + 1);
+    const starts = [...new Set([...PREF_STARTS, ...TIMES.slice(0, -1)])];
     const built: Row[] = [];
     const lastRoom: Partial<Record<SessionType, string>> = {};
     let lastTrainer = "";
@@ -191,12 +220,12 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const kinds: SessionType[] = ["theory", "practical", "assessment"];
     const usable = (t: SessionType) => roomsFor(t).length > 0;
     const place = (kind: SessionType, hours: number): number => {
-      for (const len of [4, 3, 2, 1]) {
+      for (const len of [BLOCK_HOURS, ...[3, 2, 1].filter(x => x < BLOCK_HOURS)]) {
         if (len > hours) continue;
         const L = len;
-        const days = [1, 2, 3, 4, 5].filter(d => dayHours(d) + L <= cap).sort((x, y) => dayHours(x) - dayHours(y) || x - y);
+        const days = workDays.filter(d => dayHours(d) + L <= cap).sort((x, y) => dayHours(x) - dayHours(y) || x - y);
         for (const weekday of days) for (const start of starts) {
-          if (toMin(start) + L * 60 > 22 * 60) continue;
+          if (toMin(start) + L * 60 > LATEST) continue;
           const end = minTime(toMin(start) + L * 60);
           const proto: Row = { key: `r${++seq}`, weekday, type: kind, roomId: "", trainerId: "", start, end };
           const roomOrder = [...roomsFor(kind)].sort((a, b) => Number(b.id === lastRoom[kind]) - Number(a.id === lastRoom[kind]) || (b.capacity ?? 0) - (a.capacity ?? 0));
@@ -226,7 +255,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     setRows([1, 2, 3, 4, 5, 6, 7].flatMap(day => { const mine = built.filter(r => r.weekday === day); return mine.length ? mine : [blank(day)]; }));
     setDone(null);
     setAutoNote(got >= target0
-      ? `Filled in for you: ${got} of ${target0} h, Monday to Friday, every class on a time when its room and trainer are free. Change anything you like, then book the week.`
+      ? `Filled in for you: ${got} of ${target0} h, every class on a time when its room and trainer are free (rules: Administration › Business Rules). Change anything you like, then book the week.`
       : `Filled in ${got} of ${target0} h. For the other ${target0 - got} h no free time, room and trainer exist Monday to Friday (add a room or a trainer, or free one up); nothing was guessed.`);
   };
   const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);

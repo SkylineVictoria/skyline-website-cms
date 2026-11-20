@@ -353,7 +353,9 @@ export async function loadClassSessions(batchId: string | null, from: string, to
 }
 /** CoE intakes have 20 class hours a week, VoE intakes 40. */
 export type StudyLoad = "coe" | "voe";
+/** Class hours a week of a CoE and a VoE student: Business Rules lms.coe_weekly_study_hours / lms.voe_weekly_study_hours (20 and 40 until loaded). */
 export const LOAD_HOURS: Record<StudyLoad, number> = { coe: 20, voe: 40 };
+onRules(() => { LOAD_HOURS.coe = ruleNumber("lms.coe_weekly_study_hours", 20); LOAD_HOURS.voe = ruleNumber("lms.voe_weekly_study_hours", 40); });
 export const LOAD_LABEL: Record<StudyLoad, string> = { coe: "CoE · 20 hours a week", voe: "VoE · 40 hours a week" };
 onRules(() => {
   LOAD_HOURS.coe = ruleNumber("lms.coe_weekly_study_hours", 20);

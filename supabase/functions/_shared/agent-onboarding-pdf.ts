@@ -44,12 +44,14 @@ export async function readBlankTemplate(doc: OnboardingDoc, bytes: Uint8Array): 
 }
 
 /** One document from several: the pages of each, in order. */
-export async function mergePdfs(parts: Uint8Array[]): Promise<Uint8Array> {
+export async function mergePdfs(parts: Uint8Array[], edit?: (doc: PDFDocument) => void): Promise<Uint8Array> {
   const out = await PDFDocument.create();
   for (const bytes of parts) {
     const source = await PDFDocument.load(bytes, { updateMetadata: false });
     for (const page of await out.copyPages(source, source.getPageIndices())) out.addPage(page);
   }
+  // A change to the merged pages before the one save (2026-11-21: the P06 Item 4 words removed); written in full, nothing old kept.
+  edit?.(out);
   return await out.save({ useObjectStreams: false });
 }
 

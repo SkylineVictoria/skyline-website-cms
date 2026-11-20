@@ -13,7 +13,7 @@ import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
 import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
-import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, CORRECTION_ALWAYS_EDITABLE, correctionFlagged, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
+import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, correctionDraftProblem, correctionEditable, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, onboardingSignRules, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
 
@@ -92,16 +92,30 @@ export const ONBOARDING_SYSTEM_KEYS: ReadonlySet<string> = new Set(["agent_appli
 export const ONBOARDING_NOT_HERE = "This is an agent onboarding document (application form, agreement or referee check): the business onboarding sends it. Choose another document.";
 export const F04_NOT_HERE ="The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
 /** An open correction of an F04 request (agency_onboarding_correction_of): the flagged answers and the reviewed ACN / MARN. */
-export interface F04Correction { round: number; message?: string | null; flags: Record<string, string>; acn?: string; marn?: string }
-/** A correction is signed: every field staff did not flag keeps the value it was sent with (the declaration's name and role are given again). */
-export function lockUnflagged(fields: ReadonlyArray<{ id: string; type: string; key?: string | null; value?: string | null }>, values: Record<string, unknown>, flags: Record<string, string>): void {
+export interface F04Correction { round: number; message?: string | null; flags: Record<string, string>; acn?: string; marn?: string;
+  /** The reviewed answers the correction was sent with (agency_onboarding.answers, 2026-11-21): a Yes / No question as YES / NO. */
+  answers?: Record<string, unknown> | null }
+/**
+ * A correction is signed: every field staff did not flag keeps the value it was sent with (the declaration's name and role are given again).
+ * A Yes / No tick box keeps the reviewed answer (2026-11-21): the request's tick boxes are stored without a value, so the box reads the
+ * reviewed answers (YES / NO) instead; before this every unflagged Yes / No question was signed unticked.
+ */
+export function lockUnflagged(fields: ReadonlyArray<{ id: string; type: string; key?: string | null; value?: string | null }>, values: Record<string, unknown>, flags: Record<string, string>,
+  reviewed: Record<string, unknown> = {}): void {
   for (const f of fields) {
     if (!f.key || (f.type !== "text" && f.type !== "checkbox")) continue;
     const key = answerKey(f.key);
-    if (key === "agent_registration_number" || (CORRECTION_ALWAYS_EDITABLE as readonly string[]).includes(key) || correctionFlagged(key, flags)) continue;
-    values[f.id] = f.type === "checkbox" ? (f.value === "true" ? "true" : "false") : String(f.value ?? "");
+    if (key === "agent_registration_number" || correctionEditable(key, flags)) continue;
+    if (f.type === "checkbox") {
+      const group = groupOf(f.key);
+      const held = group ? String(reviewed[group.key] ?? "").trim().toUpperCase() : "";
+      values[f.id] = held && group ? (held === group.answer ? "true" : "false") : (f.value === "true" ? "true" : "false");
+    } else values[f.id] = String(f.value ?? "");
   }
 }
+/** The reviewed answers a correction page shows (text values only, as the agency signed them). */
+const signedAnswers = (answers: Record<string, unknown> | null | undefined) =>
+  Object.fromEntries(Object.entries(answers ?? {}).filter(([k, v]) => typeof v === "string" && /^[a-z][a-z0-9_]{0,60}$/.test(k)).map(([k, v]) => [k, String(v).slice(0, 2000)]));
 
 const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 /**
@@ -277,6 +291,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (record.state === "signed" || record.recipient?.state === "signed") throw new SigningError("This form is already signed.");
         const draft = body.draft && typeof body.draft === "object" && !Array.isArray(body.draft) ? body.draft : null;
         if (!draft || JSON.stringify(draft).length > DRAFT_MAX) throw new SigningError("The draft could not be saved: it is too large.");
+        // A correction (2026-11-21): the page saves only the flagged answers; anything else is refused by name.
+        const open = await ports.serviceRpc("agency_onboarding_correction_of", { p_request: record.id }).catch(() => null) as F04Correction | null;
+        if (open) { const refused = correctionDraftProblem(draft as Record<string, unknown>, open.flags ?? {}); if (refused) throw new SigningError(refused); }
         const saved = await ports.serviceRpc("agency_onboarding_draft_save", { p_request: record.id, p_recipient: record.recipient.id, p_draft: draft });
         return { saved: true, savedAt: saved };
       }
@@ -298,6 +315,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         waitingApplication();
         const kind = String(body.kind ?? "");
         if (!(kind in F04_ATTACHMENTS)) throw new SigningError("Say which file this is.");
+        const open = await ports.serviceRpc!("agency_onboarding_correction_of", { p_request: record.id }).catch(() => null) as F04Correction | null;
+        if (open && !correctionEditable(`attach_${kind}`, open.flags ?? {})) throw new SigningError("Only the answers SLIT asked you to correct can be changed: this file was not flagged.");
         if (action === "attachment_remove") {
           await ports.serviceRpc!("agency_onboarding_attachment_remove", { p_request: record.id, p_recipient: record.recipient.id, p_kind: kind });
           return { removed: true, kind };
@@ -362,7 +381,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           }
           // A correction request: every field staff did not flag keeps the reviewed value it was sent with (the page shows it read-only).
           const correction = ports.serviceRpc ? await ports.serviceRpc("agency_onboarding_correction_of", { p_request: record.id }).catch(() => null) as F04Correction | null : null;
-          if (correction) lockUnflagged(fields, values, correction.flags ?? {});
+          if (correction) lockUnflagged(fields, values, correction.flags ?? {}, correction.answers ?? {});
           const byKey: Record<string, string> = {};
           for (const f of fields) if (f.type === "text" && f.key) byKey[f.key] = String(values[f.id] ?? f.value ?? "").trim();
           const signRules = await onboardingSignRules(ports);
@@ -504,7 +523,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       // ABN) and the business record, server side, and returned filled; a value already there is never overwritten. The ACN has no box of
       // its own: it is returned as application.prefill.agent_acn.
       let application: { draft: unknown; facts: unknown; savedAt: string | null; prefill: Record<string, string>; filled: string[]; attachments: Record<string, unknown>;
-        correction?: { round: number; message: string | null; flags: Record<string, string> } | null } | null = null;
+        correction?: { round: number; message: string | null; flags: Record<string, string>; answers: Record<string, string> } | null } | null = null;
       let fields = (record.fields ?? []) as LinkField[];
       if (isApplication(record) && !done && ports.serviceRpc) {
         try {
@@ -542,7 +561,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           if (!correction) await ports.serviceRpc("agency_onboarding_record_fill", { p_request: record.id, p_values: acn ? { agent_acn: acnDigits(acn) } : {} }).catch(() => undefined);
           if (correction) { prefill.agent_acn = correction.acn ? acnDigits(correction.acn) : ""; prefill.agent_marn = correction.marn ?? ""; }
           application = { draft: wizard?.draft ?? null, facts, savedAt: wizard?.saved_at ?? null, prefill, filled: Object.keys(fill), attachments: wizard?.attachments ?? {},
-            correction: correction ? { round: correction.round, message: correction.message ?? null, flags: correction.flags ?? {} } : null };
+            correction: correction ? { round: correction.round, message: correction.message ?? null, flags: correction.flags ?? {}, answers: signedAnswers(correction.answers) } : null };
         } catch { application = { draft: null, facts: null, savedAt: null, prefill: {}, filled: [], attachments: {} }; }
       }
       const path = done ? record.signed_path : record.current_path ?? record.original_path;

@@ -303,7 +303,7 @@ export const F04_ATTACHMENT_MAX = 5 * 1024 * 1024;
 
 export interface PlacedField { key: string; type: OnboardingField["type"]; role: OnboardingRole; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value: string;
   /** Words of the page reprinted in its own font (signing-pdf InlineText): the P06 Item 4 GST basis. */
-  inline?: { font: string; size: number; baseline: number } | null }
+  inline?: { font: string; size: number; baseline: number; redactFrom?: string | null } | null }
 /** A widget rectangle in PDF points, from the page's bottom-left, with the page size. */
 export interface WidgetBox { name: string; option: string | null; page: number; x: number; y: number; width: number; height: number; pageWidth: number; pageHeight: number }
 
@@ -421,6 +421,34 @@ export function correctionFlagged(key: string, flags: Record<string, unknown> | 
   return /^office_/.test(key) && Object.prototype.hasOwnProperty.call(flags, "office_address");
 }
 export const CORRECTION_ALWAYS_EDITABLE = ["declarant_name", "declarant_role"] as const;
+/** A flagged Yes / No question's follow-up box changes with it (2026-11-21); so does its upload (attach_<kind>). */
+export const CORRECTION_FOLLOW_UPS: Readonly<Record<string, string>> = { litigation_involved: "litigation_details", eatc_completed: "eatc_details", works_with_sub_agents: "sub_agent_names" };
+const CORRECTION_UPLOADS: Readonly<Record<string, string>> = { org_chart: "org_chart_attached", business_profile: "business_profile_attached" };
+/**
+ * In a correction (2026-11-21) an answer can change only when SLIT flagged it: the flagged key (one office flag covers the office address),
+ * the follow-up box or upload of a flagged question, and the declaration's name and role (given again). One rule for the page, the draft
+ * save and the signature.
+ */
+export function correctionEditable(key: string, flags: Record<string, unknown> | null | undefined): boolean {
+  if ((CORRECTION_ALWAYS_EDITABLE as readonly string[]).includes(key) || correctionFlagged(key, flags)) return true;
+  const question = Object.keys(CORRECTION_FOLLOW_UPS).find((q) => CORRECTION_FOLLOW_UPS[q] === key);
+  if (question && correctionFlagged(question, flags)) return true;
+  const upload = /^attach_(.+)$/.exec(key)?.[1];
+  return !!upload && !!CORRECTION_UPLOADS[upload] && correctionFlagged(CORRECTION_UPLOADS[upload], flags);
+}
+/**
+ * A correction's saved draft (2026-11-21): only answers that may change. Null when it is fine, else the message naming what is refused
+ * (an unflagged answer, or the ACN / MARN when they were not flagged).
+ */
+export function correctionDraftProblem(draft: Record<string, unknown>, flags: Record<string, unknown> | null | undefined): string | null {
+  const answers = draft.answers && typeof draft.answers === "object" && !Array.isArray(draft.answers) ? draft.answers as Record<string, unknown> : {};
+  const locked = Object.keys(answers).filter((k) => !correctionEditable(k, flags));
+  if (String(draft.acn ?? "").trim() && !correctionFlagged("acn", flags)) locked.push("acn");
+  if (String(draft.marn ?? "").trim() && !correctionFlagged("marn", flags)) locked.push("marn");
+  if (!locked.length) return null;
+  const names = locked.slice(0, 6).map((k) => k === "acn" ? "ACN" : k === "marn" ? "MARN" : (AGENT_ONBOARDING_FIELDS[k]?.label ?? k.replace(/_/g, " ")));
+  return `Only the answers SLIT asked you to correct can be changed. Not saved: ${names.join(", ")}${locked.length > 6 ? ` and ${locked.length - 6} more` : ""}.`;
+}
 
 /** The agent's witness on the agreement: a typed name and a DRAWN signature (never a field the signer types a signature into). */
 export const WITNESS_NAME_KEY = "agent_witness_name", WITNESS_SIGNATURE_KEY = "agent_witness_signature";

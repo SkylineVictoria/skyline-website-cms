@@ -809,35 +809,125 @@ test("sign once (2026-11-20): staff pre-fill the F04 and the agreement terms; Se
   assert.ok(issuedMail && issuedMail.attachments?.length === 1 && /Agent Agreement\.pdf$/.test(issuedMail.attachments[0].name), "the completed agreement is emailed to the agency admin");
 });
 
-test("P06 Item 4 (2026-11-21): the GST basis is one word in the sentence, in the page's own Calibri on the original baseline; nothing on the next line; none before the GST choice", async () => {
+test("P06 Item 4 (2026-11-21): the GST words are redacted from the text (no copy of \"Including/Excluding\" left in any stream), the chosen basis printed in the page's own Calibri on the original baseline", async () => {
   const agreement = await onboardingPdf.readBlankTemplate("agreement", blankBytes("agreement"));
+  const form = await onboardingPdf.readBlankTemplate("form", blankBytes("form"));
+  const redact = await load.import<typeof import("../supabase/functions/_shared/pdf-redact.ts")>("../supabase/functions/_shared/pdf-redact.ts");
   type P = { key: string; type: string; page: number; x: number; y: number; w: number; h: number; value: string; label: string; inline?: unknown };
-  const stamp = async (gst: string | null) => {
-    const terms = { commissionPercent: "10", commissionGst: gst };
+  const formPages = onboarding.AGENT_ONBOARDING_DOCS.form.pages;
+  // The merged blank as Send caches it: the words removed once, in a full save.
+  let redacted = false;
+  const merged = await onboardingPdf.mergePdfs([form.flattened, agreement.flattened], (doc) => {
+    redacted = redact.redactLineFrom(doc, doc.getPages()[formPages + onboardingFn.ITEM4_PAGE - 1], { baseline: onboardingFn.ITEM4_BASELINE, from: onboardingFn.ITEM4_REDACT_FROM });
+  });
+  assert.ok(redacted, "the blank's Item 4 words are found and removed");
+  /** How many streams of the file still hold the glyphs of "Including/Excluding" (kerning between strings ignored). */
+  const leftovers = async (bytes: Uint8Array, pageIndex: number) => {
+    const doc = await PdfLib.PDFDocument.load(bytes);
+    const fonts = doc.getPages()[pageIndex].node.Resources()!.lookup(PdfLib.PDFName.of("Font"), PdfLib.PDFDict);
+    let codes = "";
+    for (const [, ref] of fonts.entries()) {
+      const f = doc.context.lookup(ref, PdfLib.PDFDict);
+      if (String(f.get(PdfLib.PDFName.of("BaseFont"))).endsWith("+Calibri")) codes = signingPdf.glyphCodes(signingPdf.toUnicodeGlyphs(new TextDecoder("latin1").decode(PdfLib.decodePDFRawStream(doc.context.lookup(f.get(PdfLib.PDFName.of("ToUnicode"))) as never).decode())), "Including/Excluding") ?? "";
+    }
+    assert.equal(codes.length, 19 * 4, "every glyph is in the page's Calibri");
+    let hits = 0;
+    for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+      if (!(obj instanceof PdfLib.PDFRawStream)) continue;
+      let text = ""; try { text = new TextDecoder("latin1").decode(PdfLib.decodePDFRawStream(obj).decode()); } catch { continue; }
+      if ([...text.matchAll(/<([0-9A-Fa-f]+)>/g)].map((m) => m[1].toUpperCase()).join("").includes(codes)) hits++;
+    }
+    return hits;
+  };
+  assert.equal(await leftovers(agreement.flattened, 10), 1, "control: the blank holds the words in one stream");
+  assert.equal(await leftovers(merged, formPages + 10), 0, "the cached blank holds no copy of them");
+  const stamp = async (original: Uint8Array, gst: string | null, page = formPages + 11) => {
     const { printed } = onboarding.resolveFields(agreement.fields, { agent_commission_percent: "10" });
-    const words = onboardingFn.commissionGstWords(agreement.fields, terms);
-    const fields = [...printed, ...(words ? [words] : [])].map((x: P) => ({ recipient_id: null, type: x.type, page: x.page, x: x.x, y: x.y, w: x.w, h: x.h, value: x.value, done: true, label: x.label, inline: (x.inline ?? null) as never }));
-    return { words, bytes: await signingPdf.stampDocument(agreement.flattened, { reference: "", title: "t", recipients: [], incremental: true, fields }) };
+    const words = onboardingFn.commissionGstWords(agreement.fields, { commissionPercent: "10", commissionGst: gst });
+    const fields = [...printed, ...(words ? [words] : [])].map((x: P) => ({ recipient_id: null, type: x.type, page: x.page + page - 11, x: x.x, y: x.y, w: x.w, h: x.h, value: x.value, done: true, label: x.label, inline: (x.inline ?? null) as never }));
+    return { words, bytes: await signingPdf.stampDocument(original, { reference: "", title: "t", recipients: [], incremental: true, fields }) };
   };
   for (const [gst, word] of [["inclusive", "Including"], ["exclusive", "Excluding"]] as const) {
-    const { words, bytes } = await stamp(gst);
+    const { words, bytes } = await stamp(merged, gst);
     assert.equal(words!.value, `${word} GST. This applies to eligible onshore and offshore`);
-    const text = (await pdfText(bytes)).filter((t) => t.page === 11);
+    const all = await pdfText(bytes);
+    const text = all.filter((t) => t.page === formPages + 11);
     const line = text.find((t) => t.text === words!.value)!;
     assert.ok(line && Math.abs(line.x - 270.5) < 0.6 && Math.abs(line.y - 444.11) < 0.3, `same place and baseline as the words it replaces: ${JSON.stringify(line)}`);
+    assert.ok(text.some((t) => t.text === "________Percentage of tuition fee"), "the sentence's start is untouched");
     assert.ok(text.some((t) => t.text === "10%"), "the percentage stays in its blank");
+    assert.ok(!all.some((t) => t.text.includes("Including/Excluding")), "copy / search finds only the chosen basis");
     assert.ok(!text.some((t) => /Agent's Fee \(Item 4\):/.test(t.text) || (t.y > 416 && t.y < 441 && /GST/.test(t.text))), "nothing printed on the next lines or the heading");
-    // Written with the page's own Calibri (glyph codes of its subset), after the white cover and the watermark redrawn inside it.
+    assert.equal(await leftovers(bytes, formPages + 10), 0, "no stream of the sent PDF holds the removed words");
     const doc = await PdfLib.PDFDocument.load(bytes);
-    const contents = doc.getPage(10).node.Contents();
+    const contents = doc.getPage(formPages + 10).node.Contents();
     const streams = contents instanceof PdfLib.PDFArray ? contents.asArray().map((r) => doc.context.lookup(r)) : [contents];
     const last = new TextDecoder("latin1").decode(PdfLib.decodePDFRawStream(streams[streams.length - 1] as never).decode());
     assert.match(last, /\/C2_0 9\.96 Tf/, "the page's own Calibri at 9.96 pt");
-    assert.match(last, /re\s+W\s+n[\s\S]*\/Im0 Do/, "the watermark is drawn again inside the covered strip");
+    assert.ok(!/ re\s+f\b/.test(last) && !/\bW\s+n\b/.test(last), "no white box and no clipped redraw: the words are gone, not covered");
   }
-  assert.equal((await stamp(null)).words, null, "an onboarding sent before the GST choice prints nothing");
+  // The same removal at stamp time when a blank still has the words (cached before this change): the sent page text is clean too.
+  const late = await stamp(agreement.flattened, "exclusive", 11);
+  assert.ok(!(await pdfText(late.bytes)).some((t) => t.text.includes("Including/Excluding")), "removed at stamp time from an older blank");
+  // An onboarding sent before the GST choice (corrected now) prints the blank's own words again: the line is never left short.
+  assert.equal((await stamp(merged, null)).words!.value, "Including/Excluding GST. This applies to eligible onshore and offshore");
   const glyphs = signingPdf.toUnicodeGlyphs("1 beginbfchar\n<0003> <0020>\nendbfchar\n1 beginbfrange\n<0010> <0012> <0041>\nendbfrange");
   assert.deepEqual([signingPdf.glyphCodes(glyphs, "AB C"), signingPdf.glyphCodes(glyphs, "AZ")], ["001000110003" + "0012", null], "a missing glyph falls back to the stamp's own font");
+  assert.ok(read("supabase/functions/document-signing/onboarding.ts").includes("agreement.sourceHash.slice(0, 16)}:i4r1`"), "blanks cached before the redaction are not reused");
+});
+
+test("Send-back correction (2026-11-21): every signed answer loads (Yes / No from the reviewed answers), only flagged answers are checked, saved and changed; re-sign keeps the rest as signed (one flag and several)", async () => {
+  const logic = await load.import<typeof import("../src/components/signing/f04WizardLogic.ts")>("../src/components/signing/f04WizardLogic.ts");
+  // As production stored SLIT-2026-000060: tick boxes without a value, text values kept; the reviewed answers hold YES / NO.
+  const f = (key: string, type: string, value: string | null = null, required = false) => ({ id: `f-${key}`, key, type, value, required, label: key, page: 1, x: 0, y: 0, w: 0, h: 0 });
+  const fields = [f("agent_legal_entity", "text", "PURVA", true), f("contact_email", "text", "pat@example.test", true), f("org_chart_attached:YES", "checkbox", null, true), f("org_chart_attached:NO", "checkbox", null, true),
+    f("litigation_involved:YES", "checkbox", null, true), f("litigation_involved:NO", "checkbox", null, true), f("litigation_details", "text"), f("eatc_completed:YES", "checkbox", null, true), f("eatc_completed:NO", "checkbox", null, true),
+    f("staff_count", "text"), f("popular_courses", "text"), f("ref1_email", "text", "same@example.test", true), f("ref2_email", "text", "same@example.test", true), f("declarant_name", "text", "Pat Lee", true), f("declarant_role", "text", "CEO", true)];
+  const reviewed = { agent_legal_entity: "PURVA", contact_email: "pat@example.test", org_chart_attached: "NO", litigation_involved: "NO", eatc_completed: "NO", staff_count: "12", popular_courses: "Diploma of IT",
+    ref1_email: "same@example.test", ref2_email: "same@example.test", declarant_name: "Pat Lee", declarant_role: "CEO" };
+  type WizField = Parameters<typeof logic.f04Problems>[1][number];
+  const wizFields = fields as unknown as WizField[];
+  for (const flags of [{ org_chart_attached: "" }, { org_chart_attached: "Attach the chart", litigation_involved: "Explain the dispute", staff_count: "" }] as Array<Record<string, string>>) {
+    const several = Object.keys(flags).length > 1;
+    // 1. The page opens with every signed answer, Yes / No included (they were blank: "Choose Yes or No").
+    const opened = logic.initialF04(logic.withSignedAnswers(wizFields, reviewed), null, null, null);
+    assert.deepEqual([opened.answers.org_chart_attached, opened.answers.litigation_involved, opened.answers.eatc_completed, opened.answers.staff_count, opened.answers.popular_courses],
+      ["NO", "NO", "NO", "12", "Diploma of IT"], "every answer as signed");
+    // 2. Only flagged answers are checked: the unflagged Yes / No questions and the duplicate reference emails do not block Next / Sign.
+    const all = { ...logic.f04Problems(logic.F04_STEP.agency, wizFields, opened), ...logic.f04Problems(logic.F04_STEP.references, wizFields, opened) };
+    const blank = { ...opened, answers: { ...opened.answers, eatc_completed: "", ref2_email: "same@example.test" } };
+    const unscoped = { ...logic.f04Problems(logic.F04_STEP.agency, wizFields, blank), ...logic.f04Problems(logic.F04_STEP.references, wizFields, blank) };
+    assert.ok(Object.keys(unscoped).includes("eatc_completed") && Object.keys(unscoped).includes("ref2_email"), "without the scope these would block");
+    assert.deepEqual(logic.correctionScope(unscoped, flags), {}, "a correction checks only the flagged answers");
+    assert.deepEqual(Object.keys(logic.correctionScope(all, flags)), [], "the opened answers are complete");
+    // A flagged question answered Yes needs its follow-up / upload; that is checked.
+    const yes = { ...opened, answers: { ...opened.answers, org_chart_attached: "YES", ...(several ? { litigation_involved: "YES" } : {}) } };
+    const needed = Object.keys(logic.correctionScope(logic.f04Problems(logic.F04_STEP.agency, wizFields, yes, {}), flags)).sort();
+    assert.deepEqual(needed, several ? ["attach_org_chart", "litigation_details"] : ["attach_org_chart"]);
+    // 3. Save sends only the flagged answers (with the follow-up and the declarant), and the server accepts exactly that.
+    const draft = logic.correctionDraft({ ...yes, answers: { ...yes.answers, litigation_details: "A 2019 contract dispute, settled" }, step: 3 }, flags);
+    assert.deepEqual(Object.keys(draft.answers!).sort(), (several ? ["declarant_name", "declarant_role", "litigation_details", "litigation_involved", "org_chart_attached", "staff_count"] : ["declarant_name", "declarant_role", "org_chart_attached"]).sort());
+    assert.ok(!("acn" in draft) && !("marn" in draft), "the ACN / MARN only when flagged");
+    assert.equal(onboarding.correctionDraftProblem(draft as Record<string, unknown>, flags), null, "the server accepts the flagged answers");
+    assert.match(String(onboarding.correctionDraftProblem({ answers: { org_chart_attached: "YES", contact_email: "new@example.test", eatc_completed: "YES" } }, flags)),
+      /^Only the answers SLIT asked you to correct can be changed\. Not saved: .*(Contact email|contact email).*$/, "an unflagged answer is refused by name");
+    assert.match(String(onboarding.correctionDraftProblem({ answers: {}, acn: "004028077" }, flags)), /Not saved: ACN/);
+    assert.equal(onboarding.correctionEditable("attach_org_chart", flags), true, "the flagged question's upload");
+    assert.equal(onboarding.correctionEditable("attach_business_profile", flags), false);
+    // 4. Re-sign: whatever the page posts, every unflagged answer is signed as reviewed (Yes / No ticks from the reviewed answers).
+    const posted: Record<string, unknown> = Object.fromEntries(fields.map((x) => [x.id, x.type === "checkbox" ? "false" : "changed"]));
+    posted["f-org_chart_attached:YES"] = "true"; if (several) { posted["f-litigation_involved:YES"] = "true"; posted["f-litigation_details"] = "A 2019 contract dispute, settled"; posted["f-staff_count"] = "14"; }
+    signingCore.lockUnflagged(fields, posted, flags, reviewed);
+    assert.deepEqual([posted["f-eatc_completed:NO"], posted["f-eatc_completed:YES"], posted["f-contact_email"], posted["f-agent_legal_entity"], posted["f-org_chart_attached:YES"]],
+      ["true", "false", "pat@example.test", "PURVA", "true"], "unflagged as reviewed (No stays ticked); the flagged answer as corrected");
+    assert.deepEqual([posted["f-litigation_involved:NO"], posted["f-litigation_involved:YES"], posted["f-litigation_details"], posted["f-staff_count"], posted["f-declarant_name"]],
+      several ? ["false", "true", "A 2019 contract dispute, settled", "14", "changed"] : ["true", "false", "", "", "changed"], several ? "every flagged answer as corrected" : "litigation as reviewed");
+  }
+  // Wiring: the page uses the scope and the draft filter; the server checks the draft and uploads; the stage fix is a migration.
+  const wizard = read("src/components/signing/F04Wizard.tsx"), core = read("supabase/functions/document-signing/core.ts"), sql = read("supabase/migrations/20261121022517_onboarding_correction_answers.sql");
+  assert.ok(wizard.includes("correctionScope(p, flags)") && wizard.includes("withSignedAnswers(fields, signedAnswers)") && wizard.includes("correcting ? correctionDraft(whole, flags) : whole"));
+  assert.ok(core.includes("correctionDraftProblem(draft as Record<string, unknown>, open.flags ?? {})") && core.includes("correctionEditable(`attach_${kind}`") && core.includes("lockUnflagged(fields, values, correction.flags ?? {}, correction.answers ?? {})"));
+  assert.ok(sql.includes("'answers', coalesce(o.answers, '{}'::jsonb)") && sql.includes("o.stage not in (''application_sent'', ''correction_requested'')"), "the save / upload stage fix");
 });
 
 test("witness signatures (2026-11-20): a drawn signature in any field is a picture, never \"data:image\" text (send, sign and approve stamps)", async () => {

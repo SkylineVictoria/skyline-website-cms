@@ -78,9 +78,15 @@ async function context(ports: Ports, graph: Graph, caller: string, withAdmins: b
     studentDomain: low(read(ports, "EF_MICROSOFT365_STUDENT_DOMAIN")), sender: low(read(ports, "EF_MICROSOFT365_WELCOME_SENDER")), caller: low(caller) };
 }
 function personOf(ctx: Context, u: GUser): Person | null { return ctx.people.get(low(u.userPrincipalName)) ?? (u.mail ? ctx.people.get(low(u.mail)) ?? null : null); }
-/** A shared mailbox: sign-in blocked and nobody in Skyline (the login-email sender always). */
+/**
+ * A shared mailbox: the login-email sender always; otherwise sign-in blocked, nobody in Skyline and NOT on the student domain (a blocked
+ * @student account is a former student, listed as a student with sign-in blocked). Exact detection would need MailboxSettings.Read
+ * (mailboxSettings.userPurpose) per account; this rule errs on the safe side (protected from licence removal).
+ */
 function isShared(ctx: Context, u: GUser, person: Person | null): boolean {
-  return low(u.userPrincipalName) === ctx.sender || low(u.mail) === ctx.sender || (u.accountEnabled === false && !person);
+  if (low(u.userPrincipalName) === ctx.sender || low(u.mail) === ctx.sender) return true;
+  const studentDomain = !!ctx.studentDomain && low(u.userPrincipalName).endsWith("@" + ctx.studentDomain);
+  return u.accountEnabled === false && !person && !studentDomain;
 }
 const isSelf = (ctx: Context, u: GUser) => !!ctx.caller && (low(u.userPrincipalName) === ctx.caller || low(u.mail) === ctx.caller);
 

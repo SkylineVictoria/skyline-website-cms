@@ -1520,6 +1520,79 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
 });
 
 const prov = await load.import<typeof import("../supabase/functions/_shared/office365-provision.ts")>("../supabase/functions/_shared/office365-provision.ts");
+const dir = await load.import<typeof import("../supabase/functions/_shared/office365-directory.ts")>("../supabase/functions/_shared/office365-directory.ts");
+test("Account directory (2026-11-21): guests out, shared apart, Skyline people linked; licence removal never for self, admins or shared; admin roles unreadable refuses all", async () => {
+  const ENV: Record<string, string> = { EF_MICROSOFT365_CLIENT_ID: "c", EF_MICROSOFT365_CLIENT_SECRET: "s", EF_MICROSOFT365_TENANT_ID: "t", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", EF_MICROSOFT365_WELCOME_SENDER: "noreply@slit.edu.au" };
+  const STU = "stu-sku", FAC = "fac-sku";
+  const u = (id: string, upn: string, o: Record<string, unknown> = {}) => ({ id, userPrincipalName: upn, mail: upn, displayName: upn.split("@")[0], accountEnabled: true, userType: "Member", assignedLicenses: [], assignedPlans: [], usageLocation: "AU", ...o });
+  const ids = Array.from({ length: 9 }, (_, i) => `aaaaaaaa-0000-4000-8000-00000000000${i}`);
+  const users = [
+    u(ids[0], "asha.patel@student.slit.edu.au", { assignedLicenses: [{ skuId: STU }], assignedPlans: [{ service: "exchange", capabilityStatus: "Enabled" }] }),
+    u(ids[1], "sam.lee@slit.edu.au", { assignedLicenses: [{ skuId: FAC }], assignedPlans: [{ service: "exchange", capabilityStatus: "Enabled" }] }),
+    u(ids[2], "it.admin@slit.edu.au", { assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[3], "global.admin@slit.edu.au", { assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[4], "noreply@slit.edu.au", { accountEnabled: false }),
+    u(ids[5], "visitor_gmail.com#EXT#@slit.onmicrosoft.com", { userType: "Guest" }),
+    u(ids[6], "subscriptions@slit.edu.au", { accountEnabled: false, assignedLicenses: [{ skuId: FAC }] }),
+    u(ids[7], "new.student@student.slit.edu.au", { usageLocation: null }),
+    // A former student: sign-in blocked, still licensed, nobody in Skyline: a student (blocked), never a shared mailbox.
+    u(ids[8], "old.student@student.slit.edu.au", { accountEnabled: false, assignedLicenses: [{ skuId: STU }] }),
+  ];
+  const run = (opts: { rolesStatus?: number } = {}) => {
+    const calls: string[] = []; const rpcs: Array<[string, Record<string, unknown>]> = [];
+    const request = (async (input: string | URL, init?: RequestInit) => {
+      const url = decodeURIComponent(String(input)), method = init?.method ?? "GET"; calls.push(`${method} ${url.replace("https://graph.microsoft.com/v1.0", "")}`);
+      if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "tok" }));
+      if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: [{ skuId: STU, skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 425 }, consumedUnits: 333 },
+        { skuId: FAC, skuPartNumber: "STANDARDWOFFPACK_FACULTY", prepaidUnits: { enabled: 45 }, consumedUnits: 25 }, { skuId: "flow", skuPartNumber: "FLOW_FREE", prepaidUnits: { enabled: 1000000 }, consumedUnits: 2 }] }));
+      if (url.includes("/directoryRoles")) return opts.rolesStatus ? new Response("{}", { status: opts.rolesStatus }) : new Response(JSON.stringify({ value: [{ members: [{ id: ids[3] }] }] }));
+      if (url.includes("/users?$select")) return new Response(JSON.stringify({ value: users }));
+      const m = /\/users\/([^?/]+)(\/assignLicense)?/.exec(url);
+      if (m && method === "GET") { const x = users.find((y) => y.id === m[1]); return x ? new Response(JSON.stringify(x)) : new Response("{}", { status: 404 }); }
+      if (m && (method === "POST" || method === "PATCH")) return new Response("{}", { status: 200 });
+      throw new Error(`unexpected ${method} ${url}`);
+    }) as typeof fetch;
+    const rpc = async (name: string, args: Record<string, unknown>) => { rpcs.push([name, args]);
+      if (name === "o365_directory_people") return { data: [{ email: "asha.patel@student.slit.edu.au", kind: "student", id: "s1", name: "Asha Patel", source: "account" }, { email: "sam.lee@slit.edu.au", kind: "trainer", id: "p1", name: "Sam Lee", source: "record" }], error: null };
+      return { data: 1, error: null }; };
+    dir.resetDirectoryCache();
+    return { ports: { env: (n: string) => ENV[n], fetch: request, rpc } as unknown as import("../supabase/functions/_shared/office365-provision.ts").Ports, calls, rpcs };
+  };
+  const w = run();
+  const page = await dir.directoryList(w.ports, "IT.Admin@slit.edu.au", {});
+  const rows = page.body.rows as Array<{ upn: string; type: string; canRemove: boolean; removeBlocked: string | null; person: { id: string } | null; assign: { name: string } | null }>;
+  const byUpn = (x: string) => rows.find((r) => r.upn === x)!;
+  assert.deepEqual([page.body.counts, rows.length], [{ accounts: 8, activeMailboxes: 2, byType: { student: 3, employee: 0, trainer: 1, agent: 0, not_linked: 2, shared: 2 } }, 6], "guests left out, shared under their own filter");
+  assert.ok(!rows.some((r) => r.upn.includes("#EXT#")) && !rows.some((r) => r.type === "shared"));
+  assert.deepEqual([byUpn("asha.patel@student.slit.edu.au").person?.id, byUpn("asha.patel@student.slit.edu.au").canRemove, byUpn("sam.lee@slit.edu.au").type], ["s1", true, "trainer"]);
+  assert.deepEqual([byUpn("it.admin@slit.edu.au").removeBlocked, byUpn("global.admin@slit.edu.au").removeBlocked], ["Your own account", "Has an admin role"]);
+  assert.deepEqual([byUpn("new.student@student.slit.edu.au").type, byUpn("new.student@student.slit.edu.au").assign?.name], ["student", "A1 for students"], "student domain: the student licence only");
+  assert.deepEqual([byUpn("old.student@student.slit.edu.au").type, byUpn("old.student@student.slit.edu.au").canRemove], ["student", true], "a blocked former student is a student whose licence can be removed");
+  const shared = await dir.directoryList(run().ports, "it.admin@slit.edu.au", { type: "shared" });
+  assert.deepEqual((shared.body.rows as Array<{ upn: string; canRemove: boolean }>).map((r) => [r.upn, r.canRemove]), [["noreply@slit.edu.au", false], ["subscriptions@slit.edu.au", false]]);
+  // Remove: only the allowed one changes; every account answered and logged (refused ones too); other licences untouched.
+  const wr = run();
+  const removed = await dir.licenceRemove(wr.ports, "it.admin@slit.edu.au", [ids[0], ids[2], ids[3], ids[6]]);
+  assert.deepEqual([removed.body.removed, removed.body.refused], [1, 3]);
+  assert.deepEqual(wr.calls.filter((c) => c.startsWith("POST /users")), [`POST /users/${ids[0]}/assignLicense`]);
+  assert.deepEqual(wr.rpcs.filter(([n]) => n === "email_account_audit_add").map(([, a]) => [a.p_upn, a.p_result]),
+    [["asha.patel@student.slit.edu.au", "ok"], ["it.admin@slit.edu.au", "refused"], ["global.admin@slit.edu.au", "refused"], ["subscriptions@slit.edu.au", "refused"]]);
+  assert.deepEqual(wr.rpcs.find(([n]) => n === "o365_licence_record")?.[1], { p_upn: "asha.patel@student.slit.edu.au", p_sku: null });
+  // Admin roles unreadable (no RoleManagement.Read.Directory): nothing removed, the exact permission named.
+  const wn = run({ rolesStatus: 403 });
+  const none = await dir.licenceRemove(wn.ports, "it.admin@slit.edu.au", [ids[0]]);
+  assert.deepEqual([none.status, none.body.code, wn.calls.filter((c) => c.startsWith("POST") && !c.includes("login.")).length], [409, "admin_roles_unreadable", 0]);
+  assert.match(String(none.body.error), /RoleManagement\.Read\.Directory/);
+  // Assign: the person's type decides (student domain: student licence); usage location set first when missing.
+  const wa = run();
+  const assigned = await dir.licenceAssign(wa.ports, "it.admin@slit.edu.au", ids[7]);
+  assert.deepEqual([assigned.status, assigned.body.licence], [200, "A1 for students"]);
+  assert.deepEqual(wa.calls.filter((c) => /^(POST|PATCH) /.test(c) && !c.includes("login.")), [`PATCH /users/${ids[7]}`, `POST /users/${ids[7]}/assignLicense`]);
+  assert.equal((await dir.licenceAssign(run().ports, "it.admin@slit.edu.au", ids[4])).status, 409, "a shared mailbox gets no licence");
+  // The card counts only the two Skyline licences (never FLOW_FREE and other free / trial SKUs).
+  const page2 = read("src/pages/admin/components/AccountDirectory.tsx");
+  assert.ok(page2.includes("(student?.available ?? 0) + (staff?.available ?? 0)") && page2.includes("They lose Outlook and Office apps. Their mailbox is kept for 30 days"));
+});
 test("Create Email for staff (2026-11-20): staff domain and faculty licence, existing mailbox found first, number only for a different person, dry run writes nothing", async () => {
   const ENV: Record<string, string> = { EF_MICROSOFT365_CLIENT_ID: "c", EF_MICROSOFT365_CLIENT_SECRET: "s", EF_MICROSOFT365_TENANT_ID: "t", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", EF_MICROSOFT365_WELCOME_SENDER: "admin@slit.edu.au" };
   // 1 and 2: domain and licence by person type; a staff plan can never be the student one.

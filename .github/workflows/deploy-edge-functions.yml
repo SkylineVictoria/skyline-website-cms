@@ -39,7 +39,8 @@ jobs:
           for f in ${FUNCTIONS}; do
             if ! [[ "$f" =~ ^[a-z0-9-]+$ ]] || [ ! -f "supabase/functions/$f/index.ts" ]; then echo "Unknown function: $f"; exit 1; fi
             flags=""
-            if [ "$f" = "staff-register" ]; then flags="--no-verify-jwt"; fi
+            # Public endpoints (verify_jwt = false in supabase/config.toml) keep JWT off; every other function keeps it on.
+            case "$f" in staff-register|staff-onboarding|portal-self-register|public-assistant|public-assistant-index|portal-invite-activate|portal-document-extract|integrations-webhook) flags="--no-verify-jwt" ;; esac
             echo "::group::Deploy $f"
             supabase functions deploy "$f" --project-ref "${PROJECT_REF}" --use-api --yes ${flags}
             echo "::endgroup::"

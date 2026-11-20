@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Microsoft365Checklist } from "@/pages/admin/components/Microsoft365Panel";
-import { checkOffice365Address, createOffice365, fetchEmailPeople, linkOffice365, lookupOffice365, Office365Refusal, resendOffice365, useMicrosoft365,
-  usernameProblem, type EmailPerson, type MailboxKind, type Office365Existing, type Office365Lookup } from "@/pages/admin/lib/microsoft365";
+import { checkOffice365Address, createOffice365, fetchEmailPeople, linkOffice365, lookupOffice365, Office365Refusal, refreshMicrosoft365, resendOffice365, senderBlock,
+  useMicrosoft365, usernameProblem, type EmailPerson, type MailboxKind, type Office365Existing, type Office365Lookup } from "@/pages/admin/lib/microsoft365";
 import { formatSignedAt } from "@/lib/signedTime";
 import { ruleText } from "@/lib/businessRules";
 
@@ -95,8 +95,10 @@ export default function CreateEmailSection() {
     return () => { live = false; clearTimeout(timer); };
   }, [editable, problem, username, domain, kind, status?.connected]);
   const addressOk = !problem && avail.state === "available" && avail.address === typed;
-  const canCreate = !!status?.ready && !!look && !look.blocked && !has && !created && (!possible.length || differentPerson) && !!domain && addressOk && !busy;
-  const why = !status?.ready ? "Microsoft 365 is not ready" : !person ? "Choose a person" : !look ? "Checking Microsoft 365…" : look.blocked ?? (has ? `Already has ${has}` : possible.length && !differentPerson ? "Link the existing account, or confirm it is a different person"
+  // The login-email sender must exist (2026-11-21): nothing is created or reset when the login could not be emailed.
+  const noSender = senderBlock(status);
+  const canCreate = !!status?.ready && !noSender && !!look && !look.blocked && !has && !created && (!possible.length || differentPerson) && !!domain && addressOk && !busy;
+  const why = !status?.ready ? "Microsoft 365 is not ready" : noSender ? "The login email sender mailbox is missing" : !person ? "Choose a person" : !look ? "Checking Microsoft 365…" : look.blocked ?? (has ? `Already has ${has}` : possible.length && !differentPerson ? "Link the existing account, or confirm it is a different person"
     : problem ?? (avail.state === "checking" ? "Checking the address…" : avail.state === "taken" ? "That address is already in use" : avail.state === "error" ? avail.text : undefined));
 
   const create = async () => {
@@ -159,7 +161,7 @@ export default function CreateEmailSection() {
             <span>Set a new temporary password for {created.email} and email it to {person?.email ?? "the person"}?</span>
             <button type="button" onClick={() => void resendLogin()} disabled={!!busy} className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" data-testid="email-resend-yes">{busy === "resend" ? "Sending…" : "Yes, resend"}</button>
             <button type="button" onClick={() => setResendConfirm(false)} disabled={!!busy} className={button}>Cancel</button></div>
-            : <button type="button" className="mt-3 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!!busy || !status?.connected} onClick={() => setResendConfirm(true)} data-testid="email-resend">Resend login email</button>}
+            : <button type="button" className="mt-3 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!!busy || !status?.connected || !!noSender} title={noSender ?? undefined} onClick={() => setResendConfirm(true)} data-testid="email-resend">Resend login email</button>}
         </div> : null}
         {look && has ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" data-testid="email-already-has">
           <p className="font-medium">Already has {has}</p>
@@ -201,6 +203,9 @@ export default function CreateEmailSection() {
           <p className="rounded-lg border border-background-200 bg-background-50 px-3 py-2.5 text-sm" data-testid="email-licence">
             {look ? <>{look.plan.licenceName} ({look.plan.sku}): {look.licence ? `${look.licence.available} of ${look.licence.total} free` : "not in the tenant"}</>
               : kind === "student" ? "Office 365 A1 for students" : "Office 365 A1 for faculty"}</p></div>
+        {noSender ? <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800" data-testid="email-sender-missing">
+          <span className="min-w-0 flex-1">{noSender}</span>
+          <button type="button" className={button + " bg-white py-1"} onClick={() => void refreshMicrosoft365()} data-testid="email-sender-recheck">Check again</button></div> : null}
         {look?.blocked && !has ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800" data-testid="email-blocked">{look.blocked}</p> : null}
         {result ? <p role={result.tone === "error" ? "alert" : "status"} className={`rounded-md border p-3 text-sm ${result.tone === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`} data-testid="email-result">{result.text}</p> : null}
         {created ? null : confirming && person ? <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="email-confirm">

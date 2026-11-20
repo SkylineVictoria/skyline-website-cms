@@ -15,6 +15,8 @@ export interface Microsoft365Status {
   consent: { granted: string[]; missing: string[]; welcomeEmail: boolean };
   domains: Array<{ name: string; verified: boolean; found: boolean }>;
   licences: Array<{ sku: string; available: number; total: number; student: boolean; staff?: boolean }>;
+  /** The login-email sender (EF_MICROSOFT365_WELCOME_SENDER): found in the tenant? null = not set or not checked. */
+  sender?: { address: string; found: boolean; enabled: boolean; exchangeLicence: boolean; plans: string[] } | null;
   problems: string[]; checkedAt: string;
 }
 export type PersonType = "student" | "employee" | "trainer" | "agent";
@@ -97,7 +99,22 @@ export function m365Checklist(s: Microsoft365Status | null): Array<{ key: string
       detail: !s?.connected ? "Needs the connection" : s.consent.missing.length ? `Missing: ${s.consent.missing.join(", ")}` : `Granted: ${s.consent.granted.join(", ")}` },
     { key: "licence", label: "Available licence", state: s?.checks.licence ?? "not_checked",
       detail: !s?.connected ? "Needs the connection" : student ? `${student.sku}: ${student.available} of ${student.total} free` : s.licences.length ? "No student licence in the tenant" : "No licences found" },
+    { key: "sender", label: "Login email sender", state: senderState(s),
+      detail: !s?.connected ? "Needs the connection" : !s.sender ? "Not set (EF_MICROSOFT365_WELCOME_SENDER)"
+        : !s.sender.found ? `${s.sender.address} does not exist in Microsoft 365`
+        : s.sender.exchangeLicence ? `${s.sender.address}: mailbox found` : !s.sender.enabled ? `${s.sender.address}: shared mailbox found` : `${s.sender.address}: found, but no Exchange licence` },
   ];
+}
+/** The sender's check: ok when the mailbox exists (a licensed user, or a shared mailbox with sign-in blocked). */
+function senderState(s: Microsoft365Status | null): CheckState {
+  if (!s?.connected) return "not_checked";
+  if (!s.sender) return "missing";
+  if (!s.sender.found) return "failed";
+  return s.sender.exchangeLicence || !s.sender.enabled ? "ok" : "missing";
+}
+/** Create Email and the student page refuse to create while the sender mailbox is missing (nothing could be emailed). */
+export function senderBlock(s: Microsoft365Status | null): string | null {
+  return s?.connected && s.sender && !s.sender.found ? `Login emails are sent from ${s.sender.address}, which does not exist in Microsoft 365. Create it (a shared mailbox is enough), then press Check again.` : null;
 }
 export const m365Label = (s: Microsoft365Status | null, loading: boolean) => loading && !s ? "Checking…" : !s ? "Not checked" : s.ready ? "Connected" : s.connected ? "Needs attention" : "Not connected";
 

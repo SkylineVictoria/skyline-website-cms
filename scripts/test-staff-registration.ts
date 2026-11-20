@@ -1513,7 +1513,7 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   // A fake tenant: users, seats; every call recorded.
   type U = { id: string; userPrincipalName: string; mail: string | null; displayName: string };
   let mailFails = false;
-  let groupMails: string[] = []; let postConflict = false; let claimKeepsOld = false;
+  let groupMails: string[] = []; let postConflict = false; let claimKeepsOld = false; let senderExists = true;
   const world =(users: U[], faculty = { enabled: 45, consumed: 25 }) => {
     const calls: string[] = []; const rpcs: string[] = []; const steps: string[] = [];
     const request = (async (input: string | URL, init?: RequestInit) => {
@@ -1524,6 +1524,7 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
       if (url.includes("/members/$ref")) return new Response(null, { status: 204 });
       if (url.includes("/subscribedSkus")) return new Response(JSON.stringify({ value: [{ skuId: "stu", skuPartNumber: "STANDARDWOFFPACK_STUDENT", prepaidUnits: { enabled: 425 }, consumedUnits: 332 },
         { skuId: "fac", skuPartNumber: "STANDARDWOFFPACK_FACULTY", prepaidUnits: { enabled: faculty.enabled }, consumedUnits: faculty.consumed }, { skuId: "apps", skuPartNumber: "OFFICESUBSCRIPTION_FACULTY", prepaidUnits: { enabled: 7 }, consumedUnits: 6 }] }));
+      if (method === "GET" && url.includes("/users/admin@slit.edu.au?$select=id")) return senderExists ? new Response(JSON.stringify({ id: "sender" })) : new Response(JSON.stringify({ error: { code: "Request_ResourceNotFound" } }), { status: 404 });
       const m = /\/users\/([^?/]+)\?/.exec(url);
       if (m && method === "GET") { const u = users.find((x) => x.id === m[1] || x.userPrincipalName === m[1]); return u ? new Response(JSON.stringify(u)) : new Response("{}", { status: 404 }); }
       if (url.includes("/users?$filter=")) {
@@ -1691,6 +1692,30 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   assert.ok(!/id="email-name" readOnly /.test(sec2) && sec2.includes("readOnly={!editable}") && sec2.includes("checkOffice365Address(") && !sec2.includes("graph.microsoft.com")
     && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username })")
     && sec2.includes("Suggested from the person's name. You can change it. Only the tenant's verified domains are offered."), "editable username on Create Email");
+
+  // Login email sender (2026-11-21). Missing sender: nothing created, no password reset, a clear message naming it.
+  senderExists = false;
+  const ws1 = world([]); const noSend = await prov.provision(ws1.ports, "employee", STAFF);
+  assert.deepEqual([noSend.status, noSend.body.code, writes(ws1.calls), ws1.rpcs], [409, "sender_missing", [], ["staff_o365_prepare"]]);
+  assert.match(String(noSend.body.error), /^Login emails are sent from admin@slit\.edu\.au, which does not exist in Microsoft 365\..*Nothing was created or changed\.$/);
+  const ws2 = world([existingUser]); ws2.person.account = wc.person.account;
+  const noSendResend = await prov.resend(ws2.ports, "employee", STAFF);
+  assert.deepEqual([noSendResend.body.code, writes(ws2.calls), ws2.steps], ["sender_missing", [], []], "resend: no licence, group or password change without a sender");
+  senderExists = true;
+  // The sender exists but sending fails: the messages name the sender and Microsoft's code; resend says the password was reset.
+  mailFails = true;
+  const wm = world([]); const madeNoMail = await prov.provision(wm.ports, "employee", STAFF);
+  const wm2 = world([existingUser]); wm2.person.account = wc.person.account; const resendNoMail = await prov.resend(wm2.ports, "employee", STAFF);
+  mailFails = false;
+  assert.equal(madeNoMail.body.error, "asha.patel@slit.edu.au was created, but the login email could not be sent from admin@slit.edu.au (Microsoft: 404 MailboxNotEnabledForRESTAPI). Fix the sender mailbox, then use Resend login email (it sets a new temporary password).");
+  assert.deepEqual([resendNoMail.body.passwordReset, resendNoMail.body.error], [true, "A new temporary password was set for asha.patel@slit.edu.au, but the login email could not be sent from admin@slit.edu.au (Microsoft: 404 MailboxNotEnabledForRESTAPI). Fix the sender mailbox, then Resend again (it sets another new temporary password)."]);
+  assert.ok(read("supabase/functions/_shared/office365-provision.ts").includes('console.warn(JSON.stringify({ fn: "student-office365", action, step: "welcome", kind, graphCode: code }))'), "Microsoft's code in the function log, no addresses");
+  // The screens: Create / Resend blocked while the sender is missing; the student page resends (never creates) once the account exists.
+  const lib = read("src/pages/admin/lib/microsoft365.ts"), panel = read("src/pages/admin/components/StudentOffice365Panel.tsx"), sec3 = read("src/pages/admin/components/CreateEmailSection.tsx");
+  assert.ok(lib.includes('{ key: "sender", label: "Login email sender"') && lib.includes("export function senderBlock(") && sec3.includes("const noSender = senderBlock(status);")
+    && sec3.includes("!!status?.ready && !noSender &&") && sec3.includes('data-testid="email-sender-missing"'), "Create Email: sender in the checklist, Create blocked without it");
+  assert.ok(panel.includes('resendOffice365("student", studentId)') && panel.includes("const created = !!account?.msUserId && !account.linked && !active;") && panel.includes("Set a new temporary password for"), "student page: Resend login email after the account exists");
+  assert.ok(read("supabase/functions/_shared/microsoft365.ts").includes("!status.sender.exchangeLicence && status.sender.enabled"), "a shared mailbox (sign-in blocked, no licence) is not a problem");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

@@ -53,6 +53,13 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const [error, setError] = useState("");
   const [done, setDone] = useState<GenerateResult | null>(null);
   const target = LOAD_HOURS[load];
+  const [roomsBusy, setRoomsBusy] = useState(false);
+  /** Rooms again after one was added in Locations & rooms (the + Add room link opens it in a new tab). */
+  const reloadRooms = async () => {
+    setRoomsBusy(true);
+    try { setLocations(await rtoFlow<LocationRooms[]>("locations_rooms")); } catch (e) { setError(e instanceof Error ? e.message : "The rooms could not be read."); }
+    finally { setRoomsBusy(false); }
+  };
 
   useEffect(() => {
     let live = true;
@@ -185,6 +192,13 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
       {TYPES.map(t => { const h = byType(t.id); return <span key={t.id} className={h === split[t.id] ? "text-green-800" : "text-foreground-700"}>{t.label} <b>{h}</b> / {split[t.id]} h</span>; })}
       <span className={"ml-auto font-semibold " + (total === target ? "text-green-800" : total > target ? "text-red-700" : "text-foreground-900")}>Total {total} / {target} h</span>
     </div>
+    {canEdit ? <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+      <span className="text-foreground-500">{rooms.length} room{rooms.length === 1 ? "" : "s"} · {staff.length} trainer{staff.length === 1 ? "" : "s"}</span>
+      <a href="/admin/lms/locations" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100">
+        <i className="ri-add-line" aria-hidden="true" />Add room</a>
+      <button type="button" disabled={roomsBusy} onClick={() => void reloadRooms()} className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">
+        <i className={roomsBusy ? "ri-loader-4-line animate-spin" : "ri-refresh-line"} aria-hidden="true" />Reload rooms</button>
+    </div> : null}
     {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
     {clashLines.length ? <ul role="alert" className="list-disc rounded-lg border border-red-200 bg-red-50 py-2 pl-8 pr-3 text-sm text-red-700">{clashLines.map(c => <li key={c}>{c}</li>)}</ul> : null}
     {done ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Week booked: rooms, trainers and class times saved, and the dated classes made.</p> : null}

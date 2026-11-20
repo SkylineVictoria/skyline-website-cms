@@ -68,8 +68,12 @@ export function dateOfBirthRange(today: Date = new Date()): { min: string; max: 
   return { min: iso(DOB_OLDEST_YEARS), max: iso(DOB_YOUNGEST_YEARS) };
 }
 
-/** DD/MM/YYYY (or YYYY-MM-DD) to an ISO date; null when it is not a real date or not 10 to 100 years ago. */
-export function parseDateOfBirth(raw: string, today: Date = new Date()): string | null {
+/** The allowed age, in whole years (an applicant's comes from Business Rules admissions.applicant_age_range). */
+export interface AgeRange { min: number; max: number }
+export const DEFAULT_AGE_RANGE: AgeRange = { min: DOB_YOUNGEST_YEARS, max: DOB_OLDEST_YEARS };
+
+/** DD/MM/YYYY (or YYYY-MM-DD) to an ISO date; null when it is not a real date or not 10 to 100 years ago (or the range given). */
+export function parseDateOfBirth(raw: string, today: Date = new Date(), range: AgeRange = DEFAULT_AGE_RANGE): string | null {
   const text = raw.trim();
   let year: number, month: number, day: number;
   const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
@@ -79,22 +83,22 @@ export function parseDateOfBirth(raw: string, today: Date = new Date()): string 
   else return null;
   const date = new Date(Date.UTC(year, month - 1, day));
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  const youngest = new Date(Date.UTC(today.getUTCFullYear() - DOB_YOUNGEST_YEARS, today.getUTCMonth(), today.getUTCDate()));
-  const oldest = new Date(Date.UTC(today.getUTCFullYear() - DOB_OLDEST_YEARS, today.getUTCMonth(), today.getUTCDate()));
+  const youngest = new Date(Date.UTC(today.getUTCFullYear() - range.min, today.getUTCMonth(), today.getUTCDate()));
+  const oldest = new Date(Date.UTC(today.getUTCFullYear() - range.max, today.getUTCMonth(), today.getUTCDate()));
   if (date > youngest || date < oldest) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export function dateOfBirthProblem(raw: string, today: Date = new Date()): string {
+export function dateOfBirthProblem(raw: string, today: Date = new Date(), range: AgeRange = DEFAULT_AGE_RANGE): string {
   const text = raw.trim();
   if (!text) return "Enter your date of birth.";
-  if (parseDateOfBirth(text, today)) return "";
+  if (parseDateOfBirth(text, today, range)) return "";
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
   const [year, month, day] = iso ? [+iso[1], +iso[2], +iso[3]] : dmy ? [+dmy[3], +dmy[2], +dmy[1]] : [0, 0, 0];
   const date = new Date(Date.UTC(year, month - 1, day));
   const real = year > 0 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-  return real ? "You must be between 10 and 100 years old." : "Enter a real date of birth.";
+  return real ? `You must be between ${range.min} and ${range.max} years old.` : "Enter a real date of birth.";
 }
 
 /* ---------------------------------------------------------- emergency contact */

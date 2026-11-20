@@ -124,7 +124,19 @@ export interface ApplicationRow {
 }
 
 /** Migration 116: students per student status (the search and business/agent filters apply; the status tab does not). */
-export interface StudentCounts { all: number; active: number; inactive: number }
+export interface StudentCounts { all: number; active: number; inactive: number;
+  /** 2026-11-21: by portal access (within the enrolment filter) and by enrolment stage (within the access filter). */
+  access?: Record<"all" | PortalAccess, number>; enrolment?: Partial<Record<EnrolmentStage, number>> }
+
+/** Portal access (2026-11-21): whether the student can use the portal, never whether they are enrolled. */
+export type PortalAccess = "not_invited" | "invited" | "active" | "disabled";
+export const PORTAL_ACCESS_LABEL: Record<PortalAccess, string> = { not_invited: "Not invited", invited: "Invited", active: "Active", disabled: "Disabled" };
+/** Enrolment, derived from the student's applications (the most advanced one); nothing is set by hand. */
+export type EnrolmentStage = "none" | "applicant" | "offer_issued" | "offer_accepted" | "deposit_paid" | "enrolled" | "withdrawn";
+export const ENROLMENT_LABEL: Record<EnrolmentStage, string> = { none: "No application", applicant: "Applicant", offer_issued: "Offer issued", offer_accepted: "Offer accepted",
+  deposit_paid: "Deposit paid", enrolled: "Enrolled (CoE issued)", withdrawn: "Withdrawn / rejected" };
+export const ENROLMENT_ORDER: EnrolmentStage[] = ["applicant", "offer_issued", "offer_accepted", "deposit_paid", "enrolled", "withdrawn", "none"];
+export interface StudentEnrolment { stage: EnrolmentStage; label: string; applicationId: string | null; reference: string | null; status: string | null; course: string | null }
 
 /** A student's sign-in (migration 118): none, invited (expired after 7 days), active, or disabled. */
 export interface StudentLogin {
@@ -160,6 +172,8 @@ export interface StudentRow {
   login?: StudentLogin;
   /** Migration 112: Active, or Inactive (Disabled: every application of the student is locked). */
   status?: "Active" | "Inactive";
+  /** 2026-11-21: portal access and enrolment, derived by the database. */
+  portalAccess?: PortalAccess; enrolment?: StudentEnrolment;
 }
 
 export interface StudentApplication {
@@ -286,10 +300,10 @@ export const listPendingRegistrations = () =>
   call<PendingRegistration[]>("admin_registration_list", {}, "We could not load the registrations waiting for review.");
 
 /** Students, optionally filtered by the student's own status (a value from the backend's student status list). */
-export const listStudents = (f: { search?: string; status?: string; studentStatus?: string; businessId?: string | null; agentId?: string | null; limit: number; offset: number }) =>
+export const listStudents = (f: { search?: string; status?: string; studentStatus?: string; access?: PortalAccess | ""; enrolment?: EnrolmentStage | ""; businessId?: string | null; agentId?: string | null; limit: number; offset: number }) =>
   call<{ total: number; counts?: StudentCounts; rows: StudentRow[] }>("admin_students_list", {
     p_search: f.search ?? "", p_status: f.status ?? "", p_business: f.businessId ?? null, p_agent: f.agentId ?? null, p_limit: f.limit, p_offset: f.offset,
-    p_student_status: f.studentStatus ?? "",
+    p_student_status: f.studentStatus ?? "", p_access: f.access ?? "", p_enrolment: f.enrolment ?? "",
   }, "We could not load students. Please try again.");
 
 export const getStudent = (id: string) => call<StudentDetail | null>("admin_student_detail", { p_student: id }, "We could not load this student.");

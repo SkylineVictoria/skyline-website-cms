@@ -3,6 +3,7 @@ import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/component
 import { useToast } from "@/pages/admin/components/toastContext";
 import { updateStudent, type StudentRow } from "@/pages/admin/lib/businessData";
 import { listAgentsOfBusiness, type BusinessAgentOption } from "@/pages/agency/lib/portalApplications";
+import { invokePortalUsers } from "@/pages/agency/lib/portalData";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { validateEmail } from "@/pages/agency/lib/userValidation";
 import EmailField from "@/components/identity/EmailField";
@@ -57,7 +58,17 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
         fullName: fullName.trim(), email: cleanEmail, mobile: mobile.trim(), dateOfBirth, passportNumber: passportNumber.trim(),
         nationality: nationality.trim(), agentId: agentId || null,
       });
-      push(`${fullName.trim() || cleanEmail} saved.`);
+      // 2026-11-21: a new email reaches everything still pending (applications, offer letters, signing links, queued emails) in the
+      // database; a student with a portal login also gets the Supabase change-email flow (confirmation to the new address, notice to the old).
+      const emailChanged = cleanEmail !== (student.email ?? "").trim().toLowerCase();
+      let note = "";
+      if (emailChanged && student.login?.profileId) {
+        try {
+          const r = await invokePortalUsers({ action: "student_email_change", studentId: student.id }) as { changed?: boolean; confirmationSent?: boolean; warning?: string };
+          note = r.warning ? ` ${r.warning}` : r.changed ? ` A confirmation link was sent to ${cleanEmail}; they sign in with the new email once they open it (their previous address was told).` : "";
+        } catch (e) { note = ` The student record was saved, but their sign-in email could not be changed: ${e instanceof Error ? e.message : "try again"}.`; }
+      }
+      push(`${fullName.trim() || cleanEmail} saved.${emailChanged ? " Emails still to be sent (offer letter, signing and payment links, reminders) now go to the new address." : ""}${note}`);
       onSaved();
       onClose();
     } catch (e) {

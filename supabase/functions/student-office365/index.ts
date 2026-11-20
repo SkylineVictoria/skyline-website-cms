@@ -6,7 +6,9 @@
 //   m365_status {}                           -> the one Microsoft 365 status (Email Management and Connections; read-only Graph calls)
 //   people { personType, q }                 -> Create Email "Existing person" list (email_mgmt_people)
 //   lookup { personType, personId }          -> existing Microsoft 365 accounts for the person, the address, the licence and its free seats
-//   create { personType, personId, dryRun?, differentPerson? } -> create (or with dryRun: every check, nothing written or created)
+//   check_address { personType, username, domain } -> Create Email's live check: format, verified domain, free in Microsoft 365 (read-only)
+//   create { personType, personId, dryRun?, differentPerson?, domain?, username? } -> create (username used exactly, checked again);
+//                                             with dryRun: every check, nothing written or created
 //   link { personType, personId, msUserId }  -> link an existing Microsoft 365 account to the record (o365_link)
 //   resend { personType, personId, dryRun? } -> new temporary password + login email for an account already created (never a second account)
 //   groups {}                                -> the tenant's groups (for the owner to map to person types)
@@ -18,7 +20,7 @@
 // Organization.Read.All, Domain.Read.All, Mail.Send.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
-import { KINDS, LICENCE_RULE_IDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
+import { checkAddress, KINDS, LICENCE_RULE_IDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
 import { loadRules } from '../_shared/business-rules.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
@@ -42,10 +44,16 @@ Deno.serve(async(req:Request)=>{
   const action=String(body.action??'');
   // Business Rules: the licence used when EF_MICROSOFT365_*_SKU is not set (office365.*_license_fallback).
   const ports:Ports={env:(n)=>Deno.env.get(n),fetch,rpc:(name,args)=>caller.rpc(name,args),rules:await loadRules(caller,LICENCE_RULE_IDS)};
-  if(action==='m365_status'||action==='people'||action==='groups'){
+  if(action==='m365_status'||action==='people'||action==='groups'||action==='check_address'){
    const gate=await caller.rpc('admin_business_require');
    if(gate.error)return json({error:gate.error.code==='42501'?'Administrator access required.':'Access could not be checked.'},gate.error.code==='42501'?403:500);
    if(action==='groups'){const g=await listGroups(ports);return json(g.body,g.status);}
+   if(action==='check_address'){
+    const k=String(body.personType??'') as PersonKind;
+    if(!KINDS.includes(k))return json({error:'Choose Student, Employee, Trainer or Agent.'},400);
+    const c=await checkAddress(ports,k,String(body.username??'').slice(0,100),String(body.domain??'').slice(0,100));
+    return json(c.body,c.status);
+   }
    if(action==='people'){
     const r=await caller.rpc('email_mgmt_people',{p_type:String(body.personType??''),p_query:String(body.q??'').slice(0,80)});
     if(r.error)return json({error:r.error.code==='22023'?r.error.message:'The people could not be loaded.'},r.error.code==='22023'?400:500);
@@ -75,7 +83,7 @@ Deno.serve(async(req:Request)=>{
   const r=action==='lookup'?await lookup(ports,kind,personId)
    :action==='resend'?await resend(ports,kind,personId,{dryRun:body.dryRun===true})
    :action==='link'?await link(ports,kind,personId,String(body.msUserId??''))
-   :await provision(ports,kind,personId,{dryRun:body.dryRun===true,differentPerson:body.differentPerson===true,domain:typeof body.domain==='string'?body.domain.slice(0,100):undefined});
+   :await provision(ports,kind,personId,{dryRun:body.dryRun===true,differentPerson:body.differentPerson===true,domain:typeof body.domain==='string'?body.domain.slice(0,100):undefined,username:typeof body.username==='string'?body.username.slice(0,100):undefined});
   return json(r.body,r.status);
  }catch{return json({error:'The request could not be completed. Retry.'},500);}
 });

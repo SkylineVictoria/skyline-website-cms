@@ -12,6 +12,10 @@
  * (first.last on our domains) and their name. A linked / work-email match means they already have a mailbox: nothing is created, the
  * screen offers to link it. A username / name match may be someone else: the administrator says "link" or "different person"; only for a
  * different person does the address get a number. Licence seats are checked BEFORE the user is created.
+ * Username (2026-11-21, owner): Create Email suggests the address from the name but the administrator may change the part before the @.
+ * create { username } uses it exactly (never regenerated): the same format check as the screen (usernameProblem), then the address must be
+ * free in Microsoft 365 (addressInUse: users by UPN / mail / proxy address, which covers shared mailboxes, and groups when the app may read
+ * them); a clash found only by POST /users (race) answers address_in_use. check_address is the screen's live check (read-only).
  * dryRun: every check, the address and the licence that would be used; no database write and no Microsoft POST / PATCH.
  * The temporary password is never stored or returned.
  */
@@ -103,7 +107,20 @@ export const MESSAGES: Record<string, string> = {
   welcome_email_failed: "The account was created but the login email could not be sent. Check the sender mailbox, then retry.",
   microsoft_unavailable: "Microsoft 365 could not be reached. Retry shortly.",
   staff_plan_invalid: "The staff domain or licence is set to the student one. Check EF_MICROSOFT365_STAFF_DOMAIN / EF_MICROSOFT365_STAFF_SKU.",
+  address_in_use: "That email address is already in use in Microsoft 365. Choose another username.",
 };
+
+/** The username (part before the @) rules, the same on the Create Email screen (src/pages/admin/lib/microsoft365.ts). null = fine. */
+export function usernameProblem(raw: string): string | null {
+  const u = raw.trim().toLowerCase();
+  if (!u) return "Enter a username.";
+  if (u.length > 64) return "Use at most 64 characters.";
+  if (/\s/.test(u)) return "No spaces.";
+  if (!/^[a-z0-9._-]+$/.test(u)) return "Use only letters, numbers, dots, hyphens and underscores.";
+  if (u.startsWith(".") || u.endsWith(".")) return "It cannot start or end with a dot.";
+  if (u.includes("..")) return "No two dots in a row.";
+  return null;
+}
 
 export interface Existing { id: string; upn: string; mail: string | null; displayName: string; enabled: boolean; match: "linked" | "email" | "username" | "name" }
 export interface Steps { accountCreatedAt: string | null; licenceAssignedAt: string | null; groupsAddedAt: string | null; groupsError: string | null; welcomeSentAt: string | null; welcomeError: string | null }
@@ -192,9 +209,24 @@ export async function findExisting(graph: Graph, q: { linked?: string | null; em
 }
 export const certain = (e: Existing) => e.match === "linked" || e.match === "email";
 
-async function addressTaken(graph: Graph, upn: string) {
-  if (await userBy(graph, upn)) return true;
-  return (await usersWhere(graph, `proxyAddresses/any(x:x eq 'smtp:${quote(upn)}')`)).length > 0;
+/**
+ * Is the address used anywhere in the tenant? A user (incl. shared mailboxes) by UPN, mail or proxy address, then a group by mail or proxy
+ * address. Groups need Group.Read.All; without it (401 / 403) only users are checked, and POST /users still refuses a clash.
+ */
+export async function addressInUse(graph: Graph, address: string): Promise<boolean> {
+  const a = address.trim().toLowerCase();
+  if (await userBy(graph, a)) return true;
+  const q = quote(a);
+  if ((await usersWhere(graph, `userPrincipalName eq '${q}' or mail eq '${q}' or proxyAddresses/any(p:p eq 'smtp:${q}')`)).length) return true;
+  const r = await graph("GET", `/groups?$filter=${encodeURIComponent(`mail eq '${q}' or proxyAddresses/any(p:p eq 'smtp:${q}')`)}&$count=true&$top=1&$select=id`, undefined, { ConsistencyLevel: "eventual" });
+  if (r.status === 401 || r.status === 403) { await r.body?.cancel(); return false; }
+  if (!r.ok) { await r.body?.cancel(); throw new Error(graphError(r.status, "microsoft_unavailable")); }
+  return ((((await r.json()) as { value?: unknown[] }).value) ?? []).length > 0;
+}
+/** POST /users refused because the UPN / mail / alias exists (Graph 400 ObjectConflict, "...already exists"). */
+async function isConflict(r: Response): Promise<boolean> {
+  if (r.status !== 400 && r.status !== 409) { await r.body?.cancel(); return false; }
+  try { return /ObjectConflict|already exists/i.test(await r.text()); } catch { return false; }
 }
 async function seats(graph: Graph, sku: string) {
   const r = await graph("GET", "/subscribedSkus?$select=skuId,skuPartNumber,prepaidUnits,consumedUnits");
@@ -252,7 +284,7 @@ async function firstFreeAddress(graph: Graph, base: string, domain: string, exis
   for (let n = 1; n <= 30; n++) {
     const upn = `${n === 1 ? base : base + n}@${domain}`;
     if (existing.some((e) => e.upn === upn || e.mail === upn)) continue;
-    if (!(await addressTaken(graph, upn))) return upn;
+    if (!(await addressInUse(graph, upn))) return upn;
   }
   return null;
 }
@@ -270,8 +302,23 @@ function fail(e: unknown): Reply {
   return { status: code === "microsoft_not_configured" ? 503 : code === "microsoft_unavailable" ? 502 : 409, body: { error: MESSAGES[code], code } };
 }
 
-/** Create (or retry a failed attempt), or with dryRun only say what would be created. */
-export async function provision(ports: Ports, kind: PersonKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string } = {}): Promise<Reply> {
+/** Create Email's live check of the address the administrator typed: format, a verified domain of this person type, free in Microsoft 365. */
+export async function checkAddress(ports: Ports, kind: PersonKind, username: string, domainIn: string): Promise<Reply> {
+  let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
+  const u = username.trim().toLowerCase(), problem = usernameProblem(u);
+  if (problem) return { status: 200, body: { available: false, code: "username_invalid", reason: problem } };
+  try {
+    const graph = graphFor(ports, await appToken(ports));
+    const domains = await allowedDomains(graph, plan), domain = domainIn.trim().toLowerCase();
+    if (!domains.includes(domain)) return { status: 400, body: { code: "domain_not_allowed", error: domains.length ? `A ${kind} account uses @${domains.join(" / @")} only.` : `The domain ${plan.domain} is not verified in Microsoft 365.` } };
+    const address = `${u}@${domain}`;
+    const taken = await addressInUse(graph, address);
+    return { status: 200, body: { available: !taken, address, ...(taken ? { code: "address_in_use", reason: "Already in use" } : {}) } };
+  } catch (e) { return fail(e); }
+}
+
+/** Create (or retry a failed attempt), or with dryRun only say what would be created. `username`: the part typed on Create Email, used exactly. */
+export async function provision(ports: Ports, kind: PersonKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string; username?: string } = {}): Promise<Reply> {
   let plan: Plan; try { plan = planFor(kind, ports.env, ports.rules); } catch (e) { return fail(e); }
   if (kind === "agent" && agentMailboxOff(ports.rules)) return { status: 403, body: { error: "Agents do not get a SLIT mailbox (Business Rules › Mailbox for agents).", code: "agent_mailbox_off" } };
   const person = await prepare(ports, kind, personId); if (isReply(person)) return person;
@@ -293,6 +340,9 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     const domains = await allowedDomains(graph, plan);
     const domain = (opts.domain ?? plan.domain).toLowerCase();
     if (!domains.includes(domain)) return { status: 400, body: { code: "domain_not_allowed", error: domains.length ? `A ${kind} account uses @${domains.join(" / @")} only.` : `The domain ${plan.domain} is not verified in Microsoft 365.` } };
+    const wanted = opts.username === undefined ? null : opts.username.trim().toLowerCase();
+    const problem = wanted === null ? null : usernameProblem(wanted);
+    if (problem) return { status: 400, body: { code: "username_invalid", error: problem } };
     // 2. An existing mailbox: never a second one.
     let existing: Existing[] = [];
     if (!resuming) {
@@ -304,8 +354,10 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     }
     if (licence.available <= 0 && !resuming) return { status: 409, body: { code: "no_licences_available",
       error: `No ${plan.licenceName} licences are free (${licence.total} of ${licence.total} in use). Add seats in the Microsoft 365 admin centre, then try again.` } };
-    // 3. The address: the earlier attempt's, or the first free first.last[n]@domain.
-    const upn0 = resuming ? person.account!.email : await firstFreeAddress(graph, localPart(person.fullName, addressFormat(ports.rules)), domain, existing);
+    // 3. The address: the username typed on Create Email exactly (checked free again here), else the earlier attempt's, else the first
+    //    free first.last[n]@domain.
+    const upn0 = wanted !== null ? `${wanted}@${domain}` : resuming ? person.account!.email : await firstFreeAddress(graph, localPart(person.fullName, addressFormat(ports.rules)), domain, existing);
+    if (wanted !== null && await addressInUse(graph, upn0!)) return { status: 409, body: { code: "address_in_use", email: upn0, error: `${upn0} is already in use in Microsoft 365. Choose another username.` } };
     if (!upn0) return { status: 409, body: { error: localPart(person.fullName, addressFormat(ports.rules)) ? "No free email address was found for this name." : "The name has no letters that can be used in an email address. Edit the name first." } };
     if (opts.dryRun) return { status: 200, body: { dryRun: true, email: upn0, domain: plan.domain, sku: plan.sku, licenceName: plan.licenceName,
       licence: { total: licence.total, available: licence.available }, welcomeTo: mask(personal), existing, resuming } };
@@ -314,14 +366,19 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     const c = await ports.rpc(set.claim, { [set.key]: personId, p_upn: upn0 });
     if (c.error) return { status: 409, body: { error: c.error.code === "23505" ? "Already has an Office 365 email." : c.error.code === "55P03" ? "Creation is already in progress. Wait a moment and reload." : "The address could not be reserved." } };
     const claim = c.data as { conflict?: boolean; upn: string; msUserId: string | null };
-    if (claim.conflict) return { status: 409, body: { error: "That address was just taken. Try again." } };
+    if (claim.conflict) return { status: 409, body: { code: "address_in_use", email: upn0, error: `${upn0} is already reserved for another SLIT person. Choose another username.` } };
+    // A failed earlier attempt keeps its reserved address unless the claim takes the new one (migration 20261121003517); never use another.
+    if (wanted !== null && claim.upn !== upn0) {
+      await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: claim.msUserId ?? "", p_ok: false, p_error: "address_in_use", p_sku: "", p_welcome: false });
+      return { status: 409, body: { code: "address_reserved", email: claim.upn, error: `An earlier attempt reserved ${claim.upn}. Use that username, or try again once the database update is released.` } };
+    }
     const upn = claim.upn; let msUser = claim.msUserId; let welcome = false; let welcomeError = "";
     try {
       const password = tempPassword(), nm = names(person.fullName), usage = read(ports.env, "EF_MICROSOFT365_USAGE_LOCATION") || "AU";
       if (!msUser) {
         const r = await graph("POST", "/users", { accountEnabled: true, displayName: person.fullName.trim().slice(0, 256), ...(nm.given ? { givenName: nm.given.slice(0, 64) } : {}), ...(nm.surname ? { surname: nm.surname.slice(0, 64) } : {}),
           mailNickname: upn.split("@")[0], userPrincipalName: upn, usageLocation: usage, passwordProfile: { forceChangePasswordNextSignIn: true, password } });
-        if (!r.ok) { await r.body?.cancel(); throw new Error(graphError(r.status, "microsoft_rejected_user")); }
+        if (!r.ok) throw new Error(await isConflict(r) ? "address_in_use" : graphError(r.status, "microsoft_rejected_user"));
         msUser = (await r.json()).id;
       } else {
         const r = await graph("PATCH", `/users/${encodeURIComponent(msUser)}`, { accountEnabled: true, usageLocation: usage, passwordProfile: { forceChangePasswordNextSignIn: true, password } });
@@ -350,7 +407,7 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
       const raw = e instanceof Error ? e.message : ""; const code = MESSAGES[raw] ? raw : "microsoft_unavailable";
       await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: msUser ?? "", p_ok: false, p_error: code, p_sku: "", p_welcome: welcome });
       if (welcomeError) await ports.rpc("o365_step", { p_kind: recordKind(kind), p_person: personId, p_step: "welcome", p_ok: false, p_detail: welcomeError });
-      return { status: code === "microsoft_unavailable" ? 502 : 409, body: { error: MESSAGES[code], code, email: upn, canRetry: true, ...(welcomeError ? { graphCode: welcomeError } : {}) } };
+      return { status: code === "microsoft_unavailable" ? 502 : 409, body: { error: code === "address_in_use" ? `${upn} is already in use in Microsoft 365. Choose another username.` : MESSAGES[code], code, email: upn, canRetry: true, ...(welcomeError ? { graphCode: welcomeError } : {}) } };
     }
   } catch (e) { return fail(e); }
 }

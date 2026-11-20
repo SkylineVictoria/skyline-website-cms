@@ -308,6 +308,17 @@ export default function LmsCoursesPage() {
     if (id === "master" && masterSaved === false) setWizard({ courseId: selected.id, step: "master" });
     else if (id === "voe" && masterSaved && voeSaved === false) setWizard({ courseId: selected.id, step: "voe" });
     else if (id === "voe" && masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
+    else if (id === "coeDaily" || id === "voeDaily") {
+      // The daily timetable opens straight away (it needs the CoE weekly calendar first).
+      if (masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
+      else void openClasses(selected.id, id === "coeDaily" ? "coe" : "voe");
+    }
+  };
+  /** The top button while the wizard is unfinished: carries on with the wizard at the CoE daily timetable (owner, 2026-11-21). */
+  const finishWithWizard = () => {
+    if (!selected) return;
+    if (masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); return; }
+    setTab("coeDaily"); void openClasses(selected.id, "coe");
   };
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;
@@ -322,7 +333,11 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" }] as const;
+  // The daily timetables sit next to the weekly calendars (owner, 2026-11-21): CoE weekly, VoE weekly, CoE daily, VoE daily.
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" },
+    { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const;
+  /** The wizard is unfinished until both weekly calendars are saved and the weekly classes are booked. */
+  const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   const pane: Pane = tab === "master" || tab === "voe" || tab === "prereq" || tab === "coeDaily" || tab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
@@ -441,27 +456,22 @@ export default function LmsCoursesPage() {
             </div>
             {canEdit ? <div className="relative flex items-center gap-2">
               {editing ? <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : savedAt ? "Saved " + savedAt : "Changes save automatically"}</span> : null}
-              <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
-                className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
-                {editing ? "Done" : "Edit"}</button>
-              {/* The daily timetables, in plain sight (owner, 2026-11-21): the CoE intake's and the VoE intake's weekly classes. */}
-              {(["coe", "voe"] as const).map(load => <button key={load} type="button" disabled={!masterSaved}
-                title={masterSaved ? undefined : "Save the CoE weekly calendar first"} onClick={() => { setMenuOpen(false); void openClasses(selected.id, load); }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:opacity-50">
-                <i className="ri-calendar-schedule-line" aria-hidden="true" />{load === "coe" ? "CoE" : "VoE"} daily timetable</button>)}
+              {wizardUnfinished && !editing
+                ? <button type="button" onClick={() => { setMenuOpen(false); finishWithWizard(); }} disabled={!detail}
+                  title="Carries on with the course wizard: the CoE daily timetable opens, filled in for you"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+                  <i className="ri-magic-line" aria-hidden="true" />Finish with wizard</button>
+                : <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
+                  className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
+                  {editing ? "Done" : "Edit"}</button>}
               <button type="button" aria-label="More actions" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}
                 className="rounded-lg border border-background-300 px-2.5 py-2 text-foreground-700 hover:bg-background-100"><i className="ri-more-2-fill" aria-hidden="true" /></button>
               {menuOpen ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuOpen(false)} /> : null}
               {menuOpen ? <div className="absolute right-0 top-11 z-20 w-64 overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
                 <button type="button" className={menuItem} disabled={syncing || saving} onClick={() => { setMenuOpen(false); void sync(); }}>
                   <i className="ri-refresh-line" aria-hidden="true" />Sync with Training.gov.au and CRICOS</button>
-                {/* The daily timetables (weekly classes of the CoE and the VoE intake), any time after the CoE weekly calendar. */}
-                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
-                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "coe"); }}>
-                  <i className="ri-calendar-schedule-line" aria-hidden="true" />CoE daily timetable</button>
-                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
-                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "voe"); }}>
-                  <i className="ri-calendar-schedule-line" aria-hidden="true" />VoE daily timetable</button>
+                {wizardUnfinished ? <button type="button" className={menuItem} disabled={!detail} onClick={() => { setMenuOpen(false); setEditing(true); }}>
+                  <i className="ri-edit-line" aria-hidden="true" />Edit course details</button> : null}
                 <button type="button" className={menuItem} disabled={saving || !detail || (!selected.isActive && setupStep !== "done")}
                   title={!selected.isActive && setupStep !== "done" ? "Finish the new course wizard first." : undefined}
                   onClick={() => { setMenuOpen(false); void save("course_save", { isActive: !selected.isActive }); }}>
@@ -527,6 +537,14 @@ export default function LmsCoursesPage() {
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
               {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} onDaily={() => void openClasses(selected.id, "coe")} /> : null}
+              {(tab === "coeDaily" || tab === "voeDaily") && selected ? <div className="space-y-3 rounded-lg border border-background-200 bg-background-50 p-5">
+                <h3 className="font-heading text-lg font-bold text-foreground-950">{tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</h3>
+                <p className="text-sm text-foreground-600">The week's classes for {tab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. It opens filled in for you from the course's hours, the rooms and the trainers who are free; change anything, then book the week.</p>
+                {masterSaved === false ? <p className="text-sm font-semibold text-amber-800">Save the CoE weekly calendar first.</p> : null}
+                <button type="button" disabled={!canEdit || masterSaved === false} onClick={() => void openClasses(selected.id, tab === "coeDaily" ? "coe" : "voe")}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+                  <i className="ri-calendar-schedule-line" aria-hidden="true" />Open the {tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</button>
+              </div> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}

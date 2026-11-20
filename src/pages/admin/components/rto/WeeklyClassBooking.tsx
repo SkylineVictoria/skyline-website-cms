@@ -5,7 +5,7 @@
 // (rto_class_sessions_generate). A CoE intake books 20 hours a week, a VoE intake 40 (one screen each in course setup).
 // The room must be open then (Bookings › Availability) and not used by another intake; the trainer likewise; the server checks
 // again on save (intake_class_times triggers, class_sessions_no_clash).
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { roomAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
 import { loadCourseNeed, type CourseNeed } from "@/pages/admin/lib/coursePlan";
@@ -94,10 +94,10 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const elsewhere = (uses: RoomUse[], weekday: number, s: number, e: number) => uses.some(u => u.intakeId !== intakeId && u.weekday === weekday % 7 && toMin(u.startTime) < e && toMin(u.endTime) > s
     && (!dates || ((!u.endDate || u.endDate >= dates.startDate) && (!dates.endDate || u.startDate <= dates.endDate))));
   /** Why a room cannot take this row's class ("" when it is free). The same room can be used again the same day at other times. */
-  const roomBusy = (roomId: string, r: Row): string => {
+  const roomBusy = (roomId: string, r: Row, list: Row[] = rows): string => {
     if (!r.start || !r.end || toMin(r.end) <= toMin(r.start)) return "";
     const s = toMin(r.start), e = toMin(r.end);
-    const mine = rows.find(o => o !== r && o.roomId === roomId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
+    const mine = list.find(o => o !== r && o.roomId === roomId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (mine) return `booked ${clock(mine.start)} – ${clock(mine.end)}`;
     const h = roomHours[roomId];
     if (h && h.avail.length && !covers(h.avail, r.weekday, s, e)) return "closed then";
@@ -105,9 +105,9 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     return "";
   };
   /** Why a trainer cannot take this row's class ("" when free): another class here then, not available, or another intake. */
-  const trainerBusy = (trainerId: string, r: Row, s = r.start ? toMin(r.start) : -1, e = r.end ? toMin(r.end) : -1): string => {
+  const trainerBusy = (trainerId: string, r: Row, s = r.start ? toMin(r.start) : -1, e = r.end ? toMin(r.end) : -1, list: Row[] = rows): string => {
     if (s < 0 || e <= s) return "";
-    const mine = rows.find(o => o !== r && o.trainerId === trainerId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
+    const mine = list.find(o => o !== r && o.trainerId === trainerId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (mine) return `booked ${clock(mine.start)} – ${clock(mine.end)}`;
     const h = trainerHours[trainerId];
     if (h && !covers(h.avail.length ? h.avail : TRAINER_DEFAULT, r.weekday, s, e)) return "not available then";
@@ -162,6 +162,56 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     : clashLines.length ? "Fix the clash first." : total > target ? `${total} h is more than the ${target} h a week ${load === "coe" ? "CoE" : "VoE"} allows.`
     : total < target ? `${total} of ${target} h booked: add ${target - total} h more.` : "";
 
+  // ---- Auto-fill (owner, 2026-11-21): the week is laid out for you. Monday to Friday in 4-hour classes (CoE: one a day, VoE: morning and
+  // afternoon), kinds shared out like the units' hours, then a room and a trainer that are free for each class. Change anything after.
+  const [autoNote, setAutoNote] = useState("");
+  const [showWeekend, setShowWeekend] = useState(false);
+  const autoDone = useRef(false);
+  const roomsFor = (t: SessionType) => rooms.filter(r => t === "assessment" || r.kind === t);
+  const autoFill = () => {
+    const block = 4;
+    const starts = load === "voe" ? ["09:00", "14:00"] : ["09:00"];
+    const slots = [1, 2, 3, 4, 5].flatMap(weekday => starts.map(start => ({ weekday, start, end: minTime(toMin(start) + block * 60) })));
+    const sp = splitHours(target, need);
+    const count: Record<SessionType, number> = { theory: Math.round(sp.theory / block), practical: Math.round(sp.practical / block), assessment: Math.round(sp.assessment / block) };
+    const order: SessionType[] = ["theory", "practical", "assessment"];
+    let sum = count.theory + count.practical + count.assessment;
+    while (sum > slots.length) { const big = order.reduce((a, b) => (count[b] > count[a] ? b : a)); count[big]--; sum--; }
+    while (sum < slots.length) { count.theory++; sum++; }
+    const kinds: SessionType[] = order.flatMap(t => Array<SessionType>(count[t]).fill(t));
+    const built: Row[] = [];
+    const lastRoom: Partial<Record<SessionType, string>> = {};
+    let lastTrainer = "";
+    let missing = 0;
+    slots.forEach((sl, i) => {
+      let type = kinds[i] ?? "theory";
+      if (!roomsFor(type).length && roomsFor("theory").length) type = "theory";
+      const proto: Row = { key: `r${++seq}`, weekday: sl.weekday, type, roomId: "", trainerId: "", start: sl.start, end: sl.end };
+      const free = roomsFor(type).filter(x => !roomBusy(x.id, proto, built));
+      const room = free.find(x => x.id === lastRoom[type]) ?? [...free].sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
+      const ms = toMin(sl.start), me = toMin(sl.end);
+      const able = staff.filter(x => !trainerBusy(x.id, proto, ms, me, built));
+      const trainer = able.find(x => x.id === lastTrainer) ?? able[0];
+      if (room) lastRoom[type] = room.id;
+      if (trainer) lastTrainer = trainer.id;
+      if (!room || !trainer) missing++;
+      built.push({ ...proto, roomId: room?.id ?? "", trainerId: trainer?.id ?? "" });
+    });
+    setRows([...built, blank(6), blank(7)]);
+    setDone(null);
+    setAutoNote(missing ? `Filled in Monday to Friday. ${missing} class${missing === 1 ? "" : "es"} still need a room or a trainer: none is free then (add a room, or pick one).`
+      : `Filled in for you: ${load === "coe" ? "CoE" : "VoE"} Monday to Friday, ${total0(built)} h a week, rooms and trainers that are free. Change anything you like, then book the week.`);
+  };
+  const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);
+  // A week that was never booked fills itself once the rooms' and trainers' open hours are read.
+  const hoursReady = rooms.length > 0 && staff.length > 0 && rooms.every(r => roomHours[r.id]) && staff.every(x => trainerHours[x.id]);
+  useEffect(() => {
+    if (autoDone.current || !canEdit || !detail || !hoursReady) return;
+    if ((detail.batches[0]?.sessions ?? []).length || rows.some(filled)) { autoDone.current = true; return; }
+    autoDone.current = true; autoFill();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when everything it needs has loaded
+  }, [hoursReady, detail, canEdit]);
+
   const set = (key: string, patch: Partial<Row>) => { setRows(list => list.map(r => (r.key === key ? { ...r, ...patch } : r))); setDone(null); };
   const addClass = (weekday: number) => setRows(list => { const at = list.map(r => r.weekday).lastIndexOf(weekday); const next = [...list]; next.splice(at + 1, 0, blank(weekday)); return next; });
   const remove = (r: Row) => setRows(list => (list.filter(x => x.weekday === r.weekday).length > 1 ? list.filter(x => x.key !== r.key) : list.map(x => (x.key === r.key ? blank(r.weekday) : x))));
@@ -185,7 +235,8 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   };
 
   if (!detail) return <p className="text-sm text-foreground-500">{error || "Loading the intake…"}</p>;
-  const roomsFor = (t: SessionType) => rooms.filter(r => t === "assessment" || r.kind === t);
+  // Saturday and Sunday stay out of the way unless they have a class or are asked for.
+  const vis = rows.filter(r => r.weekday <= 5 || showWeekend || filled(r));
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-background-200 bg-background-100/60 px-3 py-2 text-sm">
       <span className="rounded-full bg-primary-50 px-2 py-0.5 text-xs font-semibold text-primary-800">{load === "coe" ? "CoE" : "VoE"} · {target} h a week</span>
@@ -193,6 +244,11 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
       <span className={"ml-auto font-semibold " + (total === target ? "text-green-800" : total > target ? "text-red-700" : "text-foreground-900")}>Total {total} / {target} h</span>
     </div>
     {canEdit ? <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+      <button type="button" disabled={busy || !hoursReady} onClick={() => { if (rows.some(filled) && !window.confirm("Replace the week with an automatic one?")) return; autoFill(); }}
+        className="inline-flex items-center gap-1 rounded-md bg-primary-600 px-2.5 py-1 font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+        <i className="ri-magic-line" aria-hidden="true" />Auto-fill the week</button>
+      <button type="button" disabled={busy} onClick={() => { setRows([1, 2, 3, 4, 5, 6, 7].map(blank)); setAutoNote(""); setDone(null); }}
+        className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Clear the week</button>
       <span className="text-foreground-500">{rooms.length} room{rooms.length === 1 ? "" : "s"} · {staff.length} trainer{staff.length === 1 ? "" : "s"}</span>
       <a href="/admin/lms/locations" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 font-semibold text-foreground-800 hover:bg-background-100">
         <i className="ri-add-line" aria-hidden="true" />Add room</a>
@@ -200,15 +256,16 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
         <i className={roomsBusy ? "ri-loader-4-line animate-spin" : "ri-refresh-line"} aria-hidden="true" />Reload rooms</button>
     </div> : null}
     {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
+    {autoNote ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800"><i className="ri-magic-line mr-1" aria-hidden="true" />{autoNote}</p> : null}
     {clashLines.length ? <ul role="alert" className="list-disc rounded-lg border border-red-200 bg-red-50 py-2 pl-8 pr-3 text-sm text-red-700">{clashLines.map(c => <li key={c}>{c}</li>)}</ul> : null}
     {done ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Week booked: rooms, trainers and class times saved, and the dated classes made.</p> : null}
 
     <div className="overflow-x-auto rounded-lg border border-background-200">
       <table className="w-full min-w-[900px] text-sm">
         <thead className="bg-background-100"><tr><th className={th}>Day</th><th className={th}>Kind</th><th className={th}>Room</th><th className={th}>Trainer</th><th className={th}>Start</th><th className={th}>End</th><th className={th + " text-right"}>Hours</th><th className={th}><span className="sr-only">Actions</span></th></tr></thead>
-        <tbody>{rows.map((r, i) => {
-          const first = i === 0 || rows[i - 1].weekday !== r.weekday;
-          const last = i === rows.length - 1 || rows[i + 1].weekday !== r.weekday;
+        <tbody>{vis.map((r, i) => {
+          const first = i === 0 || vis[i - 1].weekday !== r.weekday;
+          const last = i === vis.length - 1 || vis[i + 1].weekday !== r.weekday;
           const msg = problem(r);
           const roomList = roomsFor(r.type);
           return <tr key={r.key} className={(first ? "border-t border-background-200 " : "") + "align-top"}>
@@ -237,6 +294,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
         })}</tbody>
       </table>
     </div>
+    {canEdit && !showWeekend && !rows.some(r => r.weekday > 5 && filled(r)) ? <button type="button" onClick={() => setShowWeekend(true)} className="text-xs font-semibold text-primary-700 hover:underline">+ Add Saturday or Sunday classes</button> : null}
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">{footerStart}</div>
       <div className="flex items-center gap-3">

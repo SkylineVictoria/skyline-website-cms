@@ -66,6 +66,8 @@ export const SCREEN_RULES = [
   "lms.voe_threshold_weekly_hours",
   "lms.class_suggestion_preferred_days",
   "lms.class_suggestion_hours",
+  "lms.class_block_hours",
+  "lms.class_preferred_start_times",
   "lms.manual_placement_default_type",
   "lms.assessment_assignment_default_days",
   "agents.agreement_term_years",

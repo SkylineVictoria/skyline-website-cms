@@ -22,6 +22,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
 import { checkAddress, KINDS, LICENCE_RULE_IDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
 import { loadRules } from '../_shared/business-rules.ts';
+import { directoryList, licenceAssign, licenceRemove } from '../_shared/office365-directory.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,15 +40,20 @@ Deno.serve(async(req:Request)=>{
   const caller=createClient(url,anon,{global:{headers:{Authorization:authorization,...(req.headers.get('x-tenant-domain')?{'x-tenant-domain':req.headers.get('x-tenant-domain')!}:{})}},auth:{persistSession:false,autoRefreshToken:false}});
   const {data:user,error:userError}=await caller.auth.getUser();
   if(userError||!user.user)return json({error:'Sign in required.'},401);
-  const raw=await req.text();if(raw.length>2000)return json({error:'Request too large.'},413);
+  const raw=await req.text();if(raw.length>4000)return json({error:'Request too large.'},413); // 4000: a bulk licence removal carries up to 50 account ids
   let body:Record<string,unknown>;try{body=JSON.parse(raw);}catch{return json({error:'Invalid JSON.'},400);}
   const action=String(body.action??'');
   // Business Rules: the licence used when EF_MICROSOFT365_*_SKU is not set (office365.*_license_fallback).
   const ports:Ports={env:(n)=>Deno.env.get(n),fetch,rpc:(name,args)=>caller.rpc(name,args),rules:await loadRules(caller,LICENCE_RULE_IDS)};
-  if(action==='m365_status'||action==='people'||action==='groups'||action==='check_address'){
+  if(action==='m365_status'||action==='people'||action==='groups'||action==='check_address'||action==='directory'||action==='licence_remove'||action==='licence_assign'){
    const gate=await caller.rpc('admin_business_require');
    if(gate.error)return json({error:gate.error.code==='42501'?'Administrator access required.':'Access could not be checked.'},gate.error.code==='42501'?403:500);
    if(action==='groups'){const g=await listGroups(ports);return json(g.body,g.status);}
+   // Account directory (2026-11-21): the tenant's users, and licence assign / remove (the caller's own account is never touched).
+   const me=String(user.user.email??'');
+   if(action==='directory'){const d=await directoryList(ports,me,{search:String(body.q??'').slice(0,120),type:String(body.type??''),status:String(body.status??''),page:Number(body.page)||1});return json(d.body,d.status);}
+   if(action==='licence_remove'){const d=await licenceRemove(ports,me,body.userIds);return json(d.body,d.status);}
+   if(action==='licence_assign'){const d=await licenceAssign(ports,me,body.userId);return json(d.body,d.status);}
    if(action==='check_address'){
     const k=String(body.personType??'') as PersonKind;
     if(!KINDS.includes(k))return json({error:'Choose Student, Employee, Trainer or Agent.'},400);

@@ -44,7 +44,7 @@ export const STUDENT_LICENCES: Readonly<Record<string, string>> = {
   "Office 365 A3 for students": "ENTERPRISEPACKPLUS_STUDENT", "Office 365 A5 for students": "ENTERPRISEPREMIUM_STUDENT",
   "Microsoft 365 A3 for students": "M365EDU_A3_STUDENT", "Microsoft 365 A5 for students": "M365EDU_A5_STUDENT",
 };
-const LICENCE_NAMES: Record<string, string> = Object.fromEntries(Object.entries({ ...STAFF_LICENCES, ...STUDENT_LICENCES }).map(([name, sku]) => [sku, name]));
+export const LICENCE_NAMES: Record<string, string> = Object.fromEntries(Object.entries({ ...STAFF_LICENCES, ...STUDENT_LICENCES }).map(([name, sku]) => [sku, name]));
 export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback", "office365.email_address_format", "office365.agent_mailbox"];
 /** Business Rule office365.email_address_format: how the address is made from the name (a clash adds a number). */
 export const ADDRESS_FORMATS = ["first.last", "firstlast", "f.last", "first_last", "last.first"] as const;
@@ -138,9 +138,9 @@ const RPC = {
 const rpcSet = (kind: PersonKind) => RPC[recordKind(kind)];
 const emailRe = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 const mask = (email: string) => { const [u, d] = email.split("@"); return d ? `${u.slice(0, 2)}${"*".repeat(Math.max(1, u.length - 2))}@${d}` : ""; };
-function graphError(status: number, fallback: string) { return status === 401 || status === 403 ? "microsoft_permission_missing" : status >= 500 || status === 429 ? "microsoft_unavailable" : fallback; }
+export function graphError(status: number, fallback: string) { return status === 401 || status === 403 ? "microsoft_permission_missing" : status >= 500 || status === 429 ? "microsoft_unavailable" : fallback; }
 
-async function appToken(ports: Ports) {
+export async function appToken(ports: Ports) {
   const env = ports.env;
   if (!read(env, "EF_MICROSOFT365_CLIENT_ID") || !read(env, "EF_MICROSOFT365_CLIENT_SECRET") || !read(env, "EF_MICROSOFT365_TENANT_ID")) throw new Error("microsoft_not_configured");
   const r = await ports.fetch(`https://login.microsoftonline.com/${encodeURIComponent(read(env, "EF_MICROSOFT365_TENANT_ID"))}/oauth2/v2.0/token`, {
@@ -150,11 +150,11 @@ async function appToken(ports: Ports) {
   const t = await r.json(); if (typeof t.access_token !== "string") throw new Error("microsoft_auth_failed");
   return t.access_token as string;
 }
-function graphFor(ports: Ports, token: string) {
+export function graphFor(ports: Ports, token: string) {
   return (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => ports.fetch(GRAPH + path, {
     method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extra }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20000), redirect: "error" });
 }
-type Graph = ReturnType<typeof graphFor>;
+export type Graph = ReturnType<typeof graphFor>;
 const SELECT = "$select=id,userPrincipalName,mail,displayName,accountEnabled";
 type GraphUser = { id: string; userPrincipalName: string; mail: string | null; displayName: string; accountEnabled?: boolean };
 const toExisting = (u: GraphUser, match: Existing["match"]): Existing => ({ id: u.id, upn: String(u.userPrincipalName).toLowerCase(), mail: u.mail ? String(u.mail).toLowerCase() : null, displayName: u.displayName ?? "", enabled: u.accountEnabled !== false, match });
@@ -315,7 +315,7 @@ function blockedReason(plan: Plan, licence: { total: number; available: number }
   if (licence.available <= 0) return `No ${plan.licenceName} licences are free (${licence.total} of ${licence.total} in use). Add seats in the Microsoft 365 admin centre, then try again.`;
   return null;
 }
-function fail(e: unknown): Reply {
+export function fail(e: unknown): Reply {
   const raw = e instanceof Error ? e.message : ""; const code = MESSAGES[raw] ? raw : "microsoft_unavailable";
   return { status: code === "microsoft_not_configured" ? 503 : code === "microsoft_unavailable" ? 502 : 409, body: { error: MESSAGES[code], code } };
 }

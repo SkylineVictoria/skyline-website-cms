@@ -15,10 +15,12 @@ const RATES = [10, 15, 20, 25, 30, 35, 40];
 const th = "px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground-500";
 const weeksLabel = (days: number) => { const w = Math.round((days / 7) * 10) / 10; return Number.isInteger(w) ? String(w) : w.toFixed(1); };
 
-export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep, backStep, inline = false, onSavedChange }: {
+export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep, backStep, inline = false, onSavedChange, dailyStep }: {
   course: { id: string; code: string }; stepLabel?: string; onClose: () => void;
   /** Shown in the course's VoE Weekly Calendar tab instead of a dialog (owner, 2026-11-20). */
   inline?: boolean; onSavedChange?: () => void;
+  /** After the VoE weekly calendar (owner, 2026-11-21): the daily timetables wizard (CoE weekly classes, then VoE). */
+  dailyStep?: { label: string; onClick: () => void };
   nextStep?: { label: string; onClick: () => void }; backStep?: { label: string; onClick: () => void };
 }) {
   const [master, setMaster] = useState<Master | null>(null);
@@ -87,6 +89,10 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
       <div className="flex gap-2">
         {backStep ? <Button variant="outline" icon="ri-arrow-left-line" onClick={backStep.onClick}>{backStep.label}</Button> : null}
         {missing && nextStep ? <Button variant="outline" onClick={nextStep.onClick}>Finish without saving VoE</Button> : null}
+        {nextStep && dailyStep ? <Button variant="outline" icon="ri-calendar-check-line" disabled={busy || !!bad.length || !plan || missing}
+          onClick={() => void save().then(ok => { if (ok) dailyStep.onClick(); })}>Save and next: daily timetables</Button> : null}
+        {!nextStep && dailyStep ? <Button variant="outline" icon="ri-calendar-check-line" disabled={busy || !savedAt || dirty}
+          title={!savedAt || dirty ? "Save the VoE calendar first" : undefined} onClick={dailyStep.onClick}>{dailyStep.label}</Button> : null}
         {nextStep
           ? <Button icon="ri-save-line" disabled={busy || !!bad.length || !plan || missing} onClick={() => void save().then(ok => { if (ok) nextStep.onClick(); })}>{busy ? "Saving…" : nextStep.label}</Button>
           : <>{inline ? null : <Button variant="outline" disabled={busy} onClick={onClose}>Close</Button>}
@@ -159,9 +165,10 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
 
 /** Course › VoE Weekly Calendar: the saved VoE calendar in short, and the editor. */
 /** Course › VoE Weekly Calendar: the VoE screen itself (Automatic / Manual, hours, dates, week by week), saved from here. */
-export function VoeTab({ course, canEdit }: { course: { id: string; code: string }; canEdit: boolean }) {
+export function VoeTab({ course, canEdit, onDaily }: { course: { id: string; code: string }; canEdit: boolean; onDaily?: () => void }) {
   return <div className="space-y-2">
     {canEdit ? null : <p className="text-xs text-foreground-500">Only an RTO Manager can save changes to the VoE weekly calendar.</p>}
-    <VoeCalendarEditor course={course} inline onClose={() => undefined} />
+    <VoeCalendarEditor course={course} inline onClose={() => undefined}
+      dailyStep={canEdit && onDaily ? { label: "Daily timetables (CoE and VoE)", onClick: onDaily } : undefined} />
   </div>;
 }

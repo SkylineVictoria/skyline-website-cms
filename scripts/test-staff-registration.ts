@@ -273,6 +273,21 @@ test("document PDF: the header and footer repeat on every page with the right pa
   assert.deepEqual([literal.fields.length, (await pdfText(literal.bytes)).some((t) => t.text.includes("[Guardian Name]"))], [0, true]);
 });
 
+test("Mark as enrolled (2026-11-21): only from CoE / VoE issued in the menu and the database; the mailbox step reuses Create Email and never blocks enrolment", () => {
+  const menu = read("src/components/shared/application-status/TakeActionMenu.tsx"), dialog = read("src/components/shared/application-status/EnrolMailboxDialog.tsx");
+  const form = read("src/pages/admin/components/CreateEmailSection.tsx"), list = read("src/pages/admin/components/EnrolledWithoutMailbox.tsx"), fn = read("supabase/functions/student-office365/index.ts");
+  const sql = read("supabase/migrations/20261121051517_enrolled_guard_and_mailbox.sql");
+  // Earlier statuses: shown disabled with the reason; after Enrol succeeds (the status is saved) the mailbox step opens.
+  assert.ok(menu.includes('const BEFORE_COE = ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted"]') && menu.includes('aria-disabled="true" title="Issue the CoE/VoE first"'));
+  assert.ok(menu.includes("onDone={(result) => { changed(result); setMailbox(true); }}") && menu.includes("<EnrolMailboxDialog applicationId={application.id} studentId={application.studentId}"));
+  // The same Create Email form, Student and the linked profile locked, the outcome logged on the application; Skip logs and closes.
+  assert.ok(dialog.includes('<CreateEmailForm initialKind="student" personId={studentId}') && dialog.includes("locked applicationId={applicationId}") && dialog.includes('logApplicationMailbox(applicationId, "skipped"'));
+  assert.ok(form.includes("export default function CreateEmailSection() {") && form.includes("return <CreateEmailForm />;") && form.includes("disabled={locked || !status?.connected"));
+  assert.ok(fn.includes("caller.rpc('application_mailbox_log'") && fn.includes("body.dryRun!==true") && list.includes("<EnrolMailboxDialog"));
+  // The database: Enrolled only from CoE / VoE issued (or Undo back to it), never inserted as Enrolled, no "-> Enrolled" transition from elsewhere.
+  assert.ok(sql.includes("before insert or update of status on public.enrollment_applications") && sql.includes("if old.status = 'enrolled' or old.status = 'coe_issued' then return new; end if;")
+    && sql.includes("check (to_status is distinct from 'enrolled' or from_status = 'coe_issued')") && sql.includes("if p_outcome = 'created' and (m.student_id is null or m.ms_user_id is null)"));
+});
 test("offer letter ADMIN USE ONLY: boxes are drawn (never \"?\"), ACCEPTED ticked at signing, Yes + date only on the payment copy", async () => {
   const layout = await load.import<typeof import("../src/lib/offerSigningLayout.ts")>("../src/lib/offerSigningLayout.ts");
   const td = (t: string) => `<td style="border:1px solid #808080"><p>${t}</p></td>`;
@@ -1685,7 +1700,7 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
   assert.ok(blocked.problems.some((p) => /student\.slit\.edu\.au is in Microsoft 365 but not verified/.test(p)) && blocked.problems.some((p) => /No STANDARDWOFFPACK_STUDENT seats are free/.test(p)));
   // The screens: no hard-coded status; one shared check; Microsoft 365 first on Connections; named "connection verified" messages.
   const page = read("src/pages/admin/EmailManagementPage.tsx"), connections = read("src/pages/admin/integrations/ConnectionsPage.tsx"), fn = read("supabase/functions/student-office365/index.ts"), adminFn = read("supabase/functions/integrations-admin/index.ts");
-  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind)"), "Email Management reads the live status and loads people");
+  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind, personQuery)"), "Email Management reads the live status and loads people");
   assert.ok(connections.includes("Number(b.connector_id === M365) - Number(a.connector_id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
   assert.ok(fn.includes("action==='m365_status'||action==='people'") && fn.includes("caller.rpc('admin_business_require')") && adminFn.includes("c.connector_id==='microsoft365'") && adminFn.includes("microsoft365Status("), "both functions use the one check");
   const sql = read("supabase/migrations/20261120163517_email_management_people.sql").replace(/\r\n/g, "\n");
@@ -1995,7 +2010,7 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   // The screen: editable, live checks through the Edge Function, Use suggested, the helper text.
   const sec2 = read("src/pages/admin/components/CreateEmailSection.tsx");
   assert.ok(!/id="email-name" readOnly /.test(sec2) && sec2.includes("readOnly={!editable}") && sec2.includes("checkOffice365Address(") && !sec2.includes("graph.microsoft.com")
-    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username })")
+    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username, ...(applicationId ? { applicationId } : {}) })")
     && sec2.includes("Suggested from the person's name. You can change it. Only the tenant's verified domains are offered."), "editable username on Create Email");
 
   // Login email sender (2026-11-21). Missing sender: nothing created, no password reset, a clear message naming it.

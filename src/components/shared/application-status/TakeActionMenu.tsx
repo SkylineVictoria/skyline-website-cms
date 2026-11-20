@@ -4,6 +4,7 @@ import { ConfirmDialog } from "./ActionDrawer";
 import OfferLetterDrawer, { type OfferApplication } from "./OfferLetterDrawer";
 import { FinalBadge, StatusConfigError } from "./StatusBadge";
 import { CoeVoeDrawer, EnrolDialog, ReasonDialog, type StatusResult } from "./StatusDialogs";
+import EnrolMailboxDialog from "./EnrolMailboxDialog";
 import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
@@ -13,6 +14,15 @@ import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { prepareOfferResend } from "@/lib/offerSigningLayout";
 
 type Variant = "menu" | "row";
+/** The statuses before CoE / VoE issued: "Mark as enrolled" shows there, disabled. */
+const BEFORE_COE = ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted"];
+const enrolLaterItem = (action: StatusAction) => (
+  <div key="enrol-later" role="menuitem" aria-disabled="true" title="Issue the CoE/VoE first" data-testid="enrol-disabled" data-action={action.action}
+    className="flex w-full cursor-not-allowed items-start gap-2 px-3 py-2 text-left text-sm text-foreground-400">
+    <i className={`${action.icon || "ri-graduation-cap-line"} text-base leading-none`} aria-hidden="true" />
+    <span>{action.label}<span className="block text-xs">Issue the CoE/VoE first</span></span>
+  </div>
+);
 
 /**
  * The staff actions of one application, from the database's transitions for the current status and the user's role
@@ -50,6 +60,11 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const actions = getAllowedActions(workflow, application.status);
   const primary = variant === "row" ? actions.find((a) => a.primary) : undefined;
   const listed = primary ? actions.filter((a) => a !== primary) : actions;
+  // "Mark as enrolled" before CoE / VoE issued (owner 2026-11-21): shown disabled with the reason, for whoever may enrol (the database
+  // refuses it too: application_enrolled_guard).
+  const enrolAction = getAllowedActions(workflow, "coe_issued").find((a) => a.kind === "enrol");
+  const enrolLater = enrolAction && BEFORE_COE.includes(application.status) ? enrolAction : null;
+  const [mailbox, setMailbox] = useState(false);
   const dialogApp = { id: application.id, reference: application.reference, studentName: application.studentName };
 
   useEffect(() => {
@@ -74,7 +89,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const toggle = () => {
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
-      const needed = 8 + listed.length * 40;
+      const needed = 8 + (listed.length + (enrolLater ? 1 : 0)) * 40;
       const below = window.innerHeight - rect.bottom;
       const left = align === "right" ? rect.right : rect.left;
       setPlace(below < needed && rect.top > below ? { bottom: window.innerHeight - rect.top + 4, left } : { top: rect.bottom + 4, left });
@@ -155,7 +170,10 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
         <div ref={menuRef} role="menu" aria-label="Actions" data-testid="take-action-menu"
           style={{ position: "fixed", ...(place.bottom !== undefined ? { bottom: place.bottom } : { top: place.top }), ...(align === "right" ? { right: window.innerWidth - place.left } : { left: place.left }) }}
           className="fade-in z-[86] min-w-[13rem] overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
-          {listed.map((action, index) => item(action, index, listed))}
+          {listed.map((action, index) => <span key={action.action}>
+            {enrolLater && action.tone === "danger" && (index === 0 || listed[index - 1].tone !== "danger") ? enrolLaterItem(enrolLater) : null}
+            {item(action, index, listed)}</span>)}
+          {enrolLater && !listed.some((a) => a.tone === "danger") ? enrolLaterItem(enrolLater) : null}
         </div>,
         document.body,
       ) : null}
@@ -166,7 +184,9 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
       ) : null}
       {active?.kind === "coe" ? <CoeVoeDrawer application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
       {active && active.kind === "status" && active.requiresReason ? <ReasonDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
-      {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={(result) => { changed(result); setMailbox(true); }} /> : null}
+      {mailbox ? <EnrolMailboxDialog applicationId={application.id} studentId={application.studentId} studentName={application.studentName} reference={application.reference}
+        onClose={() => setMailbox(false)} /> : null}
       {active && !["offer_letter", "coe"].includes(active.kind) && !(active.kind === "status" && active.requiresReason) && !isEnrol(active) ? (
         <ConfirmDialog title={`${active.label}?`} confirmLabel={active.label} tone={active.tone === "danger" ? "danger" : "primary"} busy={busy} onClose={close} onConfirm={() => void runSimple()}
           body={active.kind === "resend_offer" ? "The same offer letter is emailed again, with a new link for the student to review and sign it. Earlier links stop working." : active.kind === "reminder" ? "The student or agent is emailed what this application still needs."

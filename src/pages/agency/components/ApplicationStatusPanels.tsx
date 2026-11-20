@@ -265,6 +265,7 @@ export function OfferLettersList({ applicationId, refreshKey }: { applicationId:
             {letter.prepaidMore ? <span className="text-xs text-foreground-500">Pays more than the pre-paid fee: {letter.prepaidMore}</span> : null}
             <button type="button" onClick={() => void openOfferLetter(letter.id).catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">View</button>
             {letter.hasSigned ? <button type="button" data-testid="offer-letter-signed" onClick={() => void openOfferLetterFile(letter.id, "signed").catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Signed copy</button> : null}
+            {letter.hasPaymentCopy ? <button type="button" data-testid="offer-letter-payment-copy" onClick={() => void openOfferLetterFile(letter.id, "payment_confirmed").catch((e: Error) => setError(e.message))} className="cursor-pointer text-xs font-medium text-foreground-700 underline underline-offset-2 hover:text-primary-700">Payment-confirmed copy</button> : null}
           </li>
         ))}
       </ul>

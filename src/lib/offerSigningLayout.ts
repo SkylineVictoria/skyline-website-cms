@@ -1,4 +1,5 @@
-import { supabase } from "@/pages/admin/lib/supabase";
+// The Supabase client is loaded only by the two functions that store a layout, so the layout logic also runs in the Node tests.
+const client = async () => (await import("@/pages/admin/lib/supabase")).supabase;
 
 /**
  * Where the student signs an offer letter, found in the letter's own text (the template letter and an uploaded PDF alike): initials on
@@ -6,7 +7,34 @@ import { supabase } from "@/pages/admin/lib/supabase";
  * "Date" below it, and the YES / NO answer after "I elect to pay more ... pre-paid fee". Boxes are fractions of the page from its top-left
  * corner (the hr.sign_fields convention). Without a signature block, the signature, date and answer go near the end of the last page.
  */
-export interface OfferLayoutField { type: "initials" | "signature" | "date" | "choice"; page: number; x: number; y: number; w: number; h: number; label: string }
+export interface OfferLayoutField { type: "initials" | "signature" | "date" | "choice" | "checkbox" | "text"; page: number; x: number; y: number; w: number; h: number; label: string }
+/** Where the letter's renderer drew its tick boxes and left table cells empty (document-pdf.ts PlacedBox / PlacedBlank). */
+export interface LetterPlaces {
+  boxes: ReadonlyArray<{ shape: string; page: number; x: number; y: number; w: number; h: number; before: string }>;
+  blanks: ReadonlyArray<{ page: number; x: number; y: number; w: number; h: number; before: string }>;
+}
+
+/**
+ * The ADMIN USE ONLY table of the SLIT letter: automatic fields (hr.sign_auto_key) on the boxes the renderer drew. The system fills them
+ * when the student signs ("Offer accepted" ticked; "Payment made" and "Payment date" only when the deposit is already paid) and the
+ * payment-confirmed copy ticks Yes and prints the date (document-signing offer_payment_copy). DEFERRED, DECLINED and No get no field:
+ * no outcome of the system ticks them, so they always print as empty boxes.
+ */
+export function adminTableFields(placed: LetterPlaces | null | undefined): OfferLayoutField[] {
+  if (!placed) return [];
+  const empty = (b: { shape: string }) => b.shape === "box";
+  const accepted = placed.boxes.filter((b) => empty(b) && /\bACCEPTED$/i.test(b.before.trim())).at(-1);
+  const yes = placed.boxes.filter((b) => empty(b) && /\bPayment\s+made:?\s+Yes$/i.test(b.before.trim())).at(-1);
+  const date = placed.blanks.filter((b) => /\bPayment\s+made:?\s+Yes\s+No\s+Date:?$/i.test(b.before.trim())).at(-1);
+  const at = (type: OfferLayoutField["type"], label: string, b: { page: number; x: number; y: number; w: number; h: number }): OfferLayoutField =>
+    ({ type, label, page: b.page, x: +clamp(b.x).toFixed(5), y: +clamp(b.y).toFixed(5), w: +Math.min(b.w, 1 - b.x).toFixed(5), h: +Math.min(b.h, 1 - b.y).toFixed(5) });
+  const fields: OfferLayoutField[] = [];
+  if (accepted) fields.push(at("checkbox", "Offer accepted", accepted));
+  if (yes) fields.push(at("checkbox", "Payment made", yes));
+  // The date on the first line of the empty cell after "Date:" (4 pt in from its left edge, one line of about 13 pt high).
+  if (date) fields.push(at("text", "Payment date", { page: date.page, x: date.x + 4 / 595.28, y: date.y + 4 / 841.89, w: Math.max(date.w - 8 / 595.28, 0.02), h: 13 / 841.89 }));
+  return fields;
+}
 interface Item { str: string; x: number; top: number; bottom: number; right: number; page: number; W: number; H: number }
 
 const CHOICE_LABEL = "I elect to pay more than the required pre-paid fee";
@@ -20,7 +48,7 @@ const box = (type: OfferLayoutField["type"], page: number, W: number, H: number,
   return { type, page, x: +fx.toFixed(5), y: +fy.toFixed(5), w: +Math.min(w / W, 1 - fx).toFixed(5), h: +Math.min(h / H, 1 - fy).toFixed(5), label };
 };
 
-export async function findOfferSigningLayout(bytes: Uint8Array): Promise<OfferLayoutField[]> {
+export async function findOfferSigningLayout(bytes: Uint8Array, placed?: LetterPlaces | null): Promise<OfferLayoutField[]> {
   const [pdf, worker] = await Promise.all([import("pdfjs-dist/legacy/build/pdf.mjs"), import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")]);
   pdf.GlobalWorkerOptions.workerSrc = worker.default;
   const task = pdf.getDocument({ data: bytes.slice() });
@@ -87,7 +115,7 @@ export async function findOfferSigningLayout(bytes: Uint8Array): Promise<OfferLa
       fields.push(box("signature", n, W, H, W * 0.35, H * 0.75, 220, 48, "Student signature"));
       fields.push(box("date", n, W, H, W * 0.35, H * 0.82, 120, 15, "Date"));
     }
-    return fields;
+    return [...fields, ...adminTableFields(placed)];
   } finally {
     await task.destroy().catch(() => undefined);
   }
@@ -96,6 +124,7 @@ export async function findOfferSigningLayout(bytes: Uint8Array): Promise<OfferLa
 /** Before Resend offer letter: the current letter's signing places (a letter issued before online signing has none yet). */
 export async function prepareOfferResend(applicationId: string): Promise<void> {
   try {
+    const supabase = await client();
     const current = await supabase.rpc("portal_offer_letter_current", { p_application: applicationId });
     const id = (current.data as { id?: string } | null)?.id;
     if (current.error || !id) return;
@@ -106,10 +135,15 @@ export async function prepareOfferResend(applicationId: string): Promise<void> {
   } catch { /* the defaults are used */ }
 }
 
-/** Stores where the student signs this letter (before the email is sent); a failure only means the default places are used. */
-export async function saveOfferSigningLayout(letterId: string, bytes: Uint8Array): Promise<boolean> {
+/**
+ * Stores where the student signs this letter (before the email is sent); a failure only means the default places are used. `placed`
+ * (the boxes of a letter made from a template) adds the ADMIN USE ONLY fields; a resend without it keeps those already stored
+ * (portal_offer_letter_sign_layout).
+ */
+export async function saveOfferSigningLayout(letterId: string, bytes: Uint8Array, placed?: LetterPlaces | null): Promise<boolean> {
   try {
-    const layout = await findOfferSigningLayout(bytes);
+    const layout = await findOfferSigningLayout(bytes, placed);
+    const supabase = await client();
     const { error } = await supabase.rpc("portal_offer_letter_sign_layout", { p_letter: letterId, p_layout: layout });
     if (error) throw new Error(error.message);
     return true;

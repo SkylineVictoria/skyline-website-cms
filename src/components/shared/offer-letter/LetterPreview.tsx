@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import PdfPages from "@/components/signing/PdfPages";
 import { buildLetterPdf, type LetterPdfInput } from "@/lib/offerLetters";
+import type { LetterPlaces } from "@/lib/offerSigningLayout";
 import { baseKey, courseIndexOf, letterKeys, type LetterValue, type LetterVariable, type ManualFill } from "../../../../supabase/functions/_shared/letter-variables";
 
-export interface BuiltLetter { bytes: Uint8Array; pages: number; missing: string[]; marks: Array<{ key: string; page: number; x: number; y: number; w: number; h: number }> }
+export interface BuiltLetter {
+  bytes: Uint8Array; pages: number; missing: string[]; marks: Array<{ key: string; page: number; x: number; y: number; w: number; h: number }>;
+  /** Where the tick boxes and empty table cells printed (the ADMIN USE ONLY fields are placed on them: offerSigningLayout.ts). */
+  placed?: LetterPlaces;
+}
 
 /**
  * The letter as it will be sent: the PDF made in the browser from the template and the values (A4, header and footer on every page,
@@ -25,7 +30,7 @@ export default function LetterPreview({ input, onBuilt, onMark, testId = "letter
     const timer = window.setTimeout(() => {
       void buildLetterPdf(input).then((made) => {
         if (cancelled) return;
-        const next = { bytes: made.bytes, pages: made.pages, missing: made.missing, marks: made.marks };
+        const next = { bytes: made.bytes, pages: made.pages, missing: made.missing, marks: made.marks, placed: { boxes: made.boxes, blanks: made.blanks } };
         setLetter(next); setError(""); built.current?.(next, "");
       }, (e: Error) => {
         if (cancelled) return;

@@ -261,18 +261,18 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
     setFinalCheck(false);
     setBusy("send"); setError("");
     try {
-      let issued: { id: string; bytes: Uint8Array } | null = null;
+      let issued: { id: string; bytes: Uint8Array; placed?: BuiltLetter["placed"] } | null = null;
       if (mode === "upload" && file) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         issued = { id: (await issueOfferLetter({ applicationId: application.id, source: "upload", fileName: file.name, contentBase64: toBase64(bytes), templateId: null, message: message.trim(), overrideNote: needsOverride ? override.trim() : "" })).id, bytes };
       } else if (template && letter) {
         issued = { id: (await issueTemplateLetter({ applicationId: application.id, templateId: template.id, templateVersion: template.version, fileName, contentBase64: toBase64(letter.bytes),
-          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "", payment: depositInput() })).id, bytes: letter.bytes };
+          manual: handFilled, conditions, message: message.trim(), overrideNote: needsOverride ? override.trim() : "", payment: depositInput() })).id, bytes: letter.bytes, placed: letter.placed };
       }
       if (ccOn) await sendCc(application.id, "offer_letter_issued", cc);
       // The student signs online: where (initials, signature, date, YES / NO) is read from the letter and stored before the email goes
       // (the notification worker waits for it, up to 3 minutes).
-      if (issued) await saveOfferSigningLayout(issued.id, issued.bytes);
+      if (issued) await saveOfferSigningLayout(issued.id, issued.bytes, issued.placed);
       onSent();
     } catch (e) { setError(e instanceof Error ? e.message : "The offer letter could not be sent."); setBusy(""); }
   };

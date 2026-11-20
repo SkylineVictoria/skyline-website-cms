@@ -614,8 +614,8 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
   const { printed, recipient } = resolveFields(placed, agreementValues);
   const nameBox = placed.find((f) => f.key === WITNESS_NAME_KEY) ?? null, signatureBox = placed.find((f) => f.key === WITNESS_SIGNATURE_KEY) ?? null;
   const print: PlacedField[] = [...printed];
-  const gstLine = commissionGstLine(placed, input.terms);
-  if (gstLine) print.push(gstLine);
+  const gstWords = commissionGstWords(placed, input.terms);
+  if (gstWords) print.push(gstWords);
   if (input.agentWitness) {
     if (nameBox) print.push({ ...nameBox, value: input.agentWitness.name });
     if (signatureBox) print.push({ ...signatureBox, type: "signature", value: `data:image/png;base64,${input.agentWitness.png}` });
@@ -629,7 +629,7 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
   const timer = stepTimer("onboarding_build_combined");
   const pdf = await signingPdfModule(); timer.lap("pdf_modules");
   const bytes = stamped.length ? await pdf.stampDocument(merged, { reference: "", title: input.title, recipients: [], incremental: true,
-    fields: stamped.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label })) }) : merged;
+    fields: stamped.map((f) => ({ recipient_id: null, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, value: f.value, done: true, label: f.label, inline: f.inline ?? null })) }) : merged;
   timer.lap("stamp"); timer.done({ fields: stamped.length, bytes: bytes.length });
   const role = signerRole("form").key;
   // The stored field values never keep the SLIT signature picture (as before: the request's own copy of the agreement has it).
@@ -638,19 +638,25 @@ async function buildCombined(ctx: OnboardingContext, input: { form: OnboardingTe
     witnessBox: !input.agentWitness && signatureBox ? { page: signatureBox.page + formPages, x: signatureBox.x, y: signatureBox.y, w: signatureBox.w, h: signatureBox.h } : null };
 }
 
+/** The rest of the P06 Item 4 line after "Percentage of tuition fee ", as the blank prints it with the GST basis left open. */
+export const ITEM4_LINE_TAIL = "GST. This applies to eligible onshore and offshore";
 /**
- * Item 4 with its GST choice on the agreement (2026-11-21). The percentage box is a short blank before "Percentage of tuition fee
- * Including/Excluding GST" (36 pt wide), so the full term is printed on the free line directly under the Item 4 paragraph, right of
- * the "COMMISSION ELIGIBILITY" heading: "Agent's Fee (Item 4): 15% of tuition fee, GST exclusive". Placed from the percentage box
- * (P06 v2 blank, A4: box 127-163 x 442-454 pt; the line 300-557 x 417-428 pt). No GST choice (sent before 2026-11-21): nothing.
+ * Item 4 with its GST choice on the agreement (2026-11-21, owner): the sentence reads "10% Percentage of tuition fee Including GST." (or
+ * Excluding); "Including/Excluding" is never printed on a generated agreement. The words from "Including/Excluding" to the end of that
+ * line are covered in white and reprinted with the chosen word in the page's own font (Calibri 9.96 pt, same baseline), so the line
+ * closes up with no gap and nothing moves onto the next line or the "COMMISSION ELIGIBILITY" heading. The percentage stays in its blank.
+ * P06 v2 blank, page 11 (A4): the blank's underscores 123.9-163.7 pt on baseline 444.11 (the box 126.6-162.5 x 442.25-454.28), "Including" from
+ * 270.49 pt, the line ends at 559.3 pt; next line's baseline 431.87, the line above 456.24. Placed from the percentage box, so a shifted
+ * page moves it with the box. No GST choice (sent before 2026-11-21): nothing, as before.
  */
-export function commissionGstLine(placed: PlacedField[], terms: { commissionPercent: string; commissionGst?: string | null }): PlacedField | null {
+export function commissionGstWords(placed: PlacedField[], terms: { commissionPercent: string; commissionGst?: string | null }): PlacedField | null {
   const box = placed.find((f) => f.key === "agent_commission_percent");
   const pct = String(terms.commissionPercent ?? "").replace(/%/g, "").trim();
   if (!box || !pct || !isCommissionGst(terms.commissionGst)) return null;
-  const W = 595.28, H = 841.89;
-  return { ...box, key: "agent_commission_gst", type: "text", role: "sender", required: false, label: "Commission with GST",
-    x: 300 / W, w: 257 / W, y: box.y + (454 - 428) / H, h: 11 / H, value: `Agent's Fee (Item 4): ${pct}% of tuition fee, GST ${terms.commissionGst}` };
+  const W = 595.28, H = 841.89, boxTop = 454.28, coverTop = 453.4, coverBottom = 441.2, baseline = 444.11;
+  return { ...box, key: "agent_commission_gst", type: "text", role: "sender", required: false, label: "Commission GST basis",
+    x: 270.49 / W, w: (561.8 - 270.49) / W, y: box.y + (boxTop - coverTop) / H, h: (coverTop - coverBottom) / H,
+    value: `${terms.commissionGst === "inclusive" ? "Including" : "Excluding"} ${ITEM4_LINE_TAIL}`, inline: { font: "Calibri", size: 9.96, baseline: baseline - coverBottom } };
 }
 
 /** Send to point of contact: the draft is saved, the combined request made and emailed. */

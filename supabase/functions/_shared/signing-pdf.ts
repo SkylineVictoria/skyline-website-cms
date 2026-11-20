@@ -1,14 +1,25 @@
 // Documents & Signatures: the signed PDF and the completion certificate (SIGN-02). Runtime-neutral (Deno function and the offline tests
 // run the same code; pdf-lib comes from the function's import map or node_modules). Everything is drawn from the ORIGINAL document every
 // time somebody signs, so a signed copy never depends on an earlier signed copy. The PDFs exist only in memory here; nothing is logged.
-import { degrees, PDFDict, PDFName, PDFRef, rgb, type PDFDocument, type PDFFont, type PDFPage } from "pdf-lib";
+import { beginText, clip, concatTransformationMatrix, decodePDFRawStream, degrees, drawObject, endPath, endText, moveText, PDFArray, PDFDict, PDFHexString, PDFName, PDFOperator, PDFOperatorNames,
+  PDFRawStream, PDFRef, popGraphicsState, pushGraphicsState, rectangle, rgb, setFillingRgbColor, setFontAndSize, setGraphicsState, type PDFDocument, type PDFFont, type PDFPage } from "pdf-lib";
 import { PdfWriter, textOf, textWidth, type ImageData, type Row } from "./notification/pdf-layout.ts";
 import { formatDateTime } from "./notification/submission-pdf.ts";
 import { paletteOf } from "./offer-letter-pdf.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
 import { initialsOf } from "./signing.ts";
 
-export interface StampField { id?: string; recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; value: string | null; done: boolean; label?: string | null }
+export interface StampField { id?: string; recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; value: string | null; done: boolean; label?: string | null;
+  /** Words of the page itself reprinted (2026-11-21, P06 Item 4): see InlineText. */
+  inline?: InlineText | null }
+/**
+ * Reprint part of a line of the original (the agreement's "Including/Excluding GST" made one word): the field's box is covered in white,
+ * the page's own watermark picture (a Watermark artifact: gs, cm, image Do) is drawn again inside that box so the background stays whole,
+ * then the value is written with the page's OWN embedded font whose name ends with `font` (e.g. "Calibri", a Type0 Identity-H subset;
+ * every glyph must be in it) at `size` pt, its baseline `baseline` pt above the box's bottom, from the box's left edge. When the font or
+ * a glyph is not there: the stamp's regular font at the same size and place.
+ */
+export interface InlineText { font: string; size: number; baseline: number }
 export interface StampSigner {
   id: string; name: string; email: string; role: string; order?: number; required?: boolean; state: string; signer_name?: string | null; signed_at?: string | null;
   signature_kind?: string | null; signature_image?: string | null; viewed_at?: string | null; sent_at?: string | null; ip?: string | null; user_agent?: string | null;
@@ -103,6 +114,22 @@ export async function stampDocument(original: Uint8Array | readonly Uint8Array[]
     touched.add(field.page - 1);
     const { width: W, height: H } = page.getSize();
     const box = { x: field.x * W, y: H - (field.y + field.h) * H, w: field.w * W, h: field.h * H };
+    if (field.inline) {
+      const value = String(field.value ?? "").trim();
+      if (!value) continue;
+      page.drawRectangle({ x: box.x, y: box.y, width: box.w, height: box.h, color: rgb(1, 1, 1) });
+      const mark = pageWatermark(pdf, page);
+      if (mark) page.pushOperators(pushGraphicsState(), rectangle(box.x, box.y, box.w, box.h), clip(), endPath(), ...(mark.gs ? [setGraphicsState(mark.gs)] : []),
+        concatTransformationMatrix(...mark.matrix), drawObject(mark.image), popGraphicsState());
+      const own = pageFont(pdf, page, field.inline.font);
+      const hex = own ? glyphCodes(own.glyphs, value) : null;
+      const y = box.y + field.inline.baseline;
+      if (own && hex) {
+        page.pushOperators(pushGraphicsState(), beginText(), setFillingRgbColor(0, 0, 0), setFontAndSize(own.name, field.inline.size), moveText(box.x, y),
+          PDFOperator.of(PDFOperatorNames.ShowText, [PDFHexString.of(hex)]), endText(), popGraphicsState());
+      } else page.drawText(writer.clean(value), { x: box.x, y, size: field.inline.size, font: writer.regular, color: rgb(0, 0, 0) });
+      continue;
+    }
     const signer = field.recipient_id ? signers.get(field.recipient_id) : null;
     // A drawn signature as a value is always a picture, whatever the field's type (2026-11-20: the witness boxes are "text" fields in the
     // installed agreement template and printed "data:image/png;base64,..." as text). Never written out as text.
@@ -168,6 +195,62 @@ export async function stampDocument(original: Uint8Array | readonly Uint8Array[]
   } else pdf.removePage(pdf.getPageCount() - 1);
   pdf.setSubject(`Signed electronically. Reference ${input.reference}`.replace(/[^\x20-\x7e]/g, "?"));
   return await writer.save({ objectStreams: false });
+}
+
+/**
+ * A Type0 (Identity-H) font of the page whose name ends with the family asked ("ABCDEF+Calibri" for "Calibri", never "Calibri,Bold"),
+ * with the glyph code of every character its ToUnicode map names. Null when the page has none.
+ */
+function pageFont(pdf: PDFDocument, page: PDFPage, family: string): { name: string; glyphs: Map<string, string> } | null {
+  try {
+    const fonts = page.node.Resources()?.lookup(PDFName.of("Font"));
+    if (!(fonts instanceof PDFDict)) return null;
+    for (const [key, ref] of fonts.entries()) {
+      const font = pdf.context.lookup(ref);
+      if (!(font instanceof PDFDict)) continue;
+      const base = String(font.get(PDFName.of("BaseFont")) ?? "").replace(/^\//, "");
+      if (String(font.get(PDFName.of("Subtype"))) !== "/Type0" || String(font.get(PDFName.of("Encoding"))) !== "/Identity-H") continue;
+      if (base !== family && !base.endsWith(`+${family}`)) continue;
+      const map = pdf.context.lookup(font.get(PDFName.of("ToUnicode")));
+      if (!(map instanceof PDFRawStream)) continue;
+      return { name: key.asString().replace(/^\//, ""), glyphs: toUnicodeGlyphs(new TextDecoder("latin1").decode(decodePDFRawStream(map).decode())) };
+    }
+  } catch { /* an unreadable font: the stamp's own font instead */ }
+  return null;
+}
+/** The page's watermark as its content draws it: [/GS gs] a b c d e f cm /Im Do inside a /Watermark artifact. Null when there is none. */
+function pageWatermark(pdf: PDFDocument, page: PDFPage): { gs: string | null; matrix: [number, number, number, number, number, number]; image: string } | null {
+  try {
+    const contents = page.node.Contents();
+    const streams = contents instanceof PDFArray ? contents.asArray().map((r) => pdf.context.lookup(r)) : [contents];
+    let text = "";
+    for (const s of streams) if (s instanceof PDFRawStream) text += new TextDecoder("latin1").decode(decodePDFRawStream(s).decode());
+    const at = text.indexOf("/Watermark");
+    if (at < 0) return null;
+    const m = /q\s+(?:\/(\S+)\s+gs\s+)?(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+cm\s+\/(\S+)\s+Do\s+Q/.exec(text.slice(at, at + 600));
+    if (!m) return null;
+    return { gs: m[1] ?? null, matrix: [Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), Number(m[7])], image: m[8] };
+  } catch { return null; }
+}
+/** A ToUnicode CMap read backwards: character -> 4-digit glyph code (bfchar and bfrange, single characters only). */
+export function toUnicodeGlyphs(cmap: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const put = (code: number, unicode: number) => { const ch = String.fromCodePoint(unicode); if (!out.has(ch)) out.set(ch, code.toString(16).padStart(4, "0").toUpperCase()); };
+  for (const block of cmap.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) for (const m of block[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]{4})>/g)) put(parseInt(m[1], 16), parseInt(m[2], 16));
+  for (const block of cmap.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+    for (const m of block[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(<([0-9a-fA-F]{4})>|\[([^\]]*)\])/g)) {
+      const lo = parseInt(m[1], 16), hi = parseInt(m[2], 16);
+      if (m[4]) for (let c = lo; c <= hi; c++) put(c, parseInt(m[4], 16) + c - lo);
+      else [...m[5].matchAll(/<([0-9a-fA-F]{4})>/g)].forEach((u, i) => { if (lo + i <= hi) put(lo + i, parseInt(u[1], 16)); });
+    }
+  }
+  return out;
+}
+/** The text as glyph codes of the page's font, or null when one character is not in it. */
+export function glyphCodes(glyphs: Map<string, string>, text: string): string | null {
+  let hex = "";
+  for (const ch of text) { const code = glyphs.get(ch); if (!code) return null; hex += code; }
+  return hex;
 }
 
 /** The byte offset of the original's last cross-reference TABLE (startxref), or null when it ends otherwise (an xref stream, no startxref). */

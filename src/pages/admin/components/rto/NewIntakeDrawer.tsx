@@ -27,7 +27,7 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: `the next free ${dayName}` };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create" }: {
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create", requireFinished = true }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
@@ -42,8 +42,19 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   title?: string;
   /** The Create button's words (the new course wizard goes on to the class timing). */
   createLabel?: string;
+  /** Only courses whose wizard is finished (weekly and daily calendars, CoE and VoE) can get a new intake; the course wizard itself turns this off. */
+  requireFinished?: boolean;
 }) {
   const [chosen, setChosen] = useState(courseId ?? "");
+  const [finishedIds, setFinishedIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!open || !requireFinished) return;
+    let live = true;
+    void supabase.rpc("course_wizard_finished_ids").then(({ data }) => { if (live) setFinishedIds((data ?? []) as string[]); });
+    return () => { live = false; };
+  }, [open, requireFinished]);
+  const finished = (id: string) => !requireFinished || (finishedIds?.includes(id) ?? false);
+  const unfinished = requireFinished && finishedIds !== null && !!chosen && !finishedIds.includes(chosen);
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
   const [start, setStart] = useState("");
@@ -91,7 +102,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   // With a master the dates are the master's: several intakes share them, and term breaks are already in the master.
   const inBreak = master ? undefined : breaks.find((b) => start >= b.startDate && start <= b.endDate);
   const clash = !master && start && taken.has(start);
-  const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak || (!!master && !name.trim())
+  const blocked = !!busy || unfinished || (requireFinished && finishedIds === null) || !chosen || !start || !load || !!clash || !!inBreak || (!!master && !name.trim())
     || (requireUnitSchedule && (course?.course.id !== chosen || !units.length));
 
   const create = async (addBatch: boolean) => {
@@ -113,11 +124,12 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
         {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & set up classes"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
+      {unfinished ? <ErrorNote text="This course's wizard is not finished yet. Finish it first: CoE and VoE weekly calendars and CoE and VoE daily timetables. Then you can add intakes." /> : null}
       {courseId ? null : (
         <Field label="Course" required>
           <Select value={chosen} onChange={(e) => { setChosen(e.target.value); setTouched(false); if (requireUnitSchedule) setStart(""); }}>
             <option value="">Choose a course</option>
-            {courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+            {courses.filter((c) => finished(c.id)).map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </Select>
         </Field>
       )}

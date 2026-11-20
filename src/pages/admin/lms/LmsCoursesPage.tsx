@@ -389,7 +389,7 @@ export default function LmsCoursesPage() {
         // Next: the daily timetables, the CoE intake's weekly classes then the VoE intake's (owner, 2026-11-21); or finish here.
         nextStep={{ label: "Save and next: CoE daily timetable", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }}
         dailyStep={{ label: "Save and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
-    {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
+    {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open requireFinished={false} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
       allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
       onClose={() => setWizard(null)}
       onCreated={d => { setWizard({ courseId: wizard.courseId, step: "classes", intakeId: d.intake.id }); setReloadKey(k => k + 1); }} /> : null}

@@ -1,6 +1,7 @@
 // One intake in a sheet from the right (its address ends in #<intake id>): Overview · Timeline · Class setup · Students · Assessments.
 // The intake is the class group (room, seats, trainers, weekly class times). Changes save as they are made, with Undo on the toast.
 import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { Link } from "react-router-dom";
 import { Badge, Button, ConfirmDialog, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -61,7 +62,13 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
   }, [groupKey]);
 
   const load = useCallback(async () => {
-    try { setDetail(await rto<IntakeDetail>("intake_get", { intakeId })); setError(""); }
+    try {
+      const d = await rto<IntakeDetail>("intake_get", { intakeId });
+      // An intake from the course wizard is not shown until the whole wizard is finished.
+      const { data: pend } = await supabase.rpc("rto_intake_wizard", { p_action: "pending", p_data: { courseId: d.intake.courseId } });
+      if (((pend ?? []) as { id: string }[]).some(x => x.id === intakeId)) { setError("This intake is not ready yet. Finish the course wizard (CoE and VoE weekly calendars and daily timetables) first."); return; }
+      setDetail(d); setError("");
+    }
     catch (e) { setError(e instanceof Error ? e.message : "The intake did not load."); }
   }, [intakeId]);
   useEffect(() => { setDetail(null); void load(); }, [load]);

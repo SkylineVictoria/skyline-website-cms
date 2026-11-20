@@ -84,7 +84,30 @@ export function usernameProblem(raw: string): string | null {
 export const resendOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean } = {}) =>
   callWithBody<{ ok?: true; email: string; welcomeSent?: boolean; welcomeTo?: string; dryRun?: true }>({ action: "resend", personType, personId, ...opts });
 export const linkOffice365 = (personType: MailboxKind, personId: string, msUserId: string) => callWithBody<{ ok: true; email: string }>({ action: "link", personType, personId, msUserId });
-export const fetchEmailPeople = (personType: PersonType, q = "") => call<{ people: EmailPerson[] }>({ action: "people", personType, q }).then((r) => r.people ?? []);
+/** Account directory (2026-11-21): one Microsoft 365 user as student-office365 `directory` gives it. */
+export type DirectoryType = "student" | "employee" | "trainer" | "agent" | "not_linked" | "shared";
+export interface DirectoryRow {
+  id: string; name: string; upn: string; mail: string | null; enabled: boolean; type: DirectoryType;
+  person: { kind: "student" | "employee" | "trainer" | "agent"; id: string; name: string } | null;
+  licences: Array<{ sku: string; name: string; skyline: boolean }>; exchange: boolean; admin: boolean | null; self: boolean; createdAt: string | null;
+  canRemove: boolean; removeBlocked: string | null; assign: { sku: string; name: string } | null;
+}
+export interface DirectoryPage {
+  rows: DirectoryRow[]; total: number; page: number; pageSize: number; pages: number;
+  counts: { accounts: number; activeMailboxes: number; byType: Record<DirectoryType, number> };
+  adminRolesReadable: boolean; adminRolePermission: string;
+}
+export const fetchDirectory = (q: { q?: string; type?: string; status?: string; page?: number }) => callWithBody<DirectoryPage>({ action: "directory", ...q });
+export const removeLicences = (userIds: string[]) =>
+  callWithBody<{ results: Array<{ id: string; upn: string; ok: boolean; error?: string; removed?: string[] }>; removed: number; refused: number }>({ action: "licence_remove", userIds });
+export const assignLicence = (userId: string) => callWithBody<{ ok: true; upn: string; licence: string }>({ action: "licence_assign", userId });
+export interface EmailAuditRow { id: number; at: string; actor: string; action: "licence_assigned" | "licence_removed"; account: string; sku: string | null; licence: string | null; result: "ok" | "refused" | "failed"; detail: Record<string, unknown> }
+export async function fetchEmailAudit(): Promise<EmailAuditRow[]> {
+  const { data, error } = await supabase.rpc("email_account_audit_list", { p_limit: 200 });
+  if (error) throw new Error(error.message || "The audit log could not be loaded.");
+  return (data as EmailAuditRow[] | null) ?? [];
+}
+export const fetchEmailPeople =(personType: PersonType, q = "") => call<{ people: EmailPerson[] }>({ action: "people", personType, q }).then((r) => r.people ?? []);
 
 /** The checklist both screens show, in the order to fix things. */
 export function m365Checklist(s: Microsoft365Status | null): Array<{ key: string; label: string; state: CheckState; detail: string }> {

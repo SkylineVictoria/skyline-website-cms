@@ -219,11 +219,8 @@ export default function ApplicationWorkspace({
   useEffect(() => {
     let live = true;
     void (async () => {
-      const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
-      const choices = me
-        ? (await rto<RtoCourse[]>("course_list")).filter(c => c.code?.trim() && c.name?.trim())
-          .map(c => ({ label: staffCourseLabel(c), row: { courseId: c.id, code: c.code, title: c.name, variant: c.variantLabel ?? c.duration ?? "" } }))
-        : (await listInstitutionCourses()).map(row => ({ label: `${row.code} - ${row.title}`, row }));
+      // Staff, agents and students all see the same list: only courses with an active intake on offer.
+      const choices = (await listInstitutionCourses()).map(row => ({ label: `${row.code} - ${row.title}`, row }));
       if (live) setCourseChoices(choices);
     })().catch(e => { if (live) { setCourseChoices([]); setSaveError(e instanceof Error ? e.message : "The courses could not be loaded."); } });
     return () => { live = false; };

@@ -28,7 +28,7 @@ export const signingNameValid = (value: unknown): value is string => typeof valu
 // ---------------------------------------------------------------------------------------------------------------- second stage (SIGN-02)
 export const SIGN_FIELD_TYPES = ["signature", "initials", "date", "name", "text", "checkbox"] as const;
 export type SignFieldType = typeof SIGN_FIELD_TYPES[number];
-export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student" | "employee" | "agent" | "any" }> = {
+export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student" | "employee" | "agent" | "agency" | "any" }> = {
   enrolment_agreement: { label: "Enrolment agreement", audience: "student" }, consent_form: { label: "Consent form", audience: "student" },
   fee_agreement: { label: "Fee agreement", audience: "student" }, employment_contract: { label: "Employment contract", audience: "employee" },
   offer_letter: { label: "Offer letter", audience: "employee" }, hr_declaration: { label: "HR declaration", audience: "employee" },
@@ -39,7 +39,10 @@ export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student
   student_offer_letter: { label: "Letter of Offer (student)", audience: "student" },
 };
 /** The variables each kind of record fills by itself (hr.sign_subject); anything else is typed by the administrator. */
-export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent", string[]> = {
+export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent" | "agency", string[]> = {
+  // A business (2026-11-21, "Used for: Agency"): hr.sign_subject 'agency'; commission with its GST choice from the business's onboarding.
+  agency: ["agency.name", "agency.legal_name", "agency.abn", "agency.acn", "agency.address", "agency.email", "agency.phone", "agency.contact_name", "agency.contact_email",
+    "agency.commission", "agency.commission_percent", "agency.commission_gst", "current_date"],
   student: ["student.first_name", "student.last_name", "student.full_name", "student.email", "student.phone", "student.address", "student.date_of_birth", "student.passport_number",
     "student.nationality", "course.name", "course.code", "course.fees", "course.duration", "course.cricos", "current_date"],
   employee: ["employee.name", "employee.first_name", "employee.last_name", "employee.email", "employee.phone", "employee.address", "employee.position", "employee.department",

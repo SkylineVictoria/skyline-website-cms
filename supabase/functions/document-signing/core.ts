@@ -87,7 +87,10 @@ export function abrCache(ports: Pick<SigningPorts, "serviceRpc">): AbrCache | nu
 
 /** The Agent Application Form's template: sent by itself (Add business, corrections), never from "Send a document to sign". */
 export const F04_SYSTEM_KEY = "agent_application_form";
-export const F04_NOT_HERE = "The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
+/** The agent onboarding blanks (F04, P06, F05): sent by the business onboarding flow only, never from New signing request. */
+export const ONBOARDING_SYSTEM_KEYS: ReadonlySet<string> = new Set(["agent_application_form", "agent_agreement", "agent_referee_check_form"]);
+export const ONBOARDING_NOT_HERE = "This is an agent onboarding document (application form, agreement or referee check): the business onboarding sends it. Choose another document.";
+export const F04_NOT_HERE ="The Agent Application Form is sent automatically when a business is added (and back to its agency admin for corrections). Choose another document.";
 /** An open correction of an F04 request (agency_onboarding_correction_of): the flagged answers and the reviewed ACN / MARN. */
 export interface F04Correction { round: number; message?: string | null; flags: Record<string, string>; acn?: string; marn?: string }
 /** A correction is signed: every field staff did not flag keeps the value it was sent with (the declaration's name and role are given again). */
@@ -705,6 +708,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         if (!template) throw new SigningError("Choose a saved template or upload a PDF.");
         // 2026-11-18: the Agent Application Form goes by itself when a business is added (and back to its agency admin for corrections).
         if ((template as { system_key?: string | null }).system_key === F04_SYSTEM_KEY) throw new SigningError(F04_NOT_HERE);
+        // 2026-11-21: the agreement (P06) and the referee check (F05) too: the onboarding sends them itself (its own create path).
+        if (ONBOARDING_SYSTEM_KEYS.has(String((template as { system_key?: string | null }).system_key ?? ""))) throw new SigningError(ONBOARDING_NOT_HERE);
         // The record's own values first, then what the administrator typed (a correction wins), and the two first-stage names.
         values = { current_date: signingToday(), ...(subject?.values ?? {}), ...(typeof body.values === "object" && body.values ? body.values : {}), full_name: recipients[0].name, email: recipients[0].email };
         const made = await templateDocument(template, values, false, body.text, body.html);

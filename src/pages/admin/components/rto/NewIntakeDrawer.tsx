@@ -109,7 +109,7 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
     if (blocked) return;
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "", ...(master ? { name: name.trim() } : {}) });
+      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, ...(requireFinished ? {} : { wizard: true }), campus: course?.course.campus ?? "", ...(master ? { name: name.trim() } : {}) });
       // VoE: 40 hours a week, so the unit timeline is laid out again at twice the CoE rate.
       if (load === "voe") { await setIntakeLoad(out.intake.id, "voe"); out = await rto<IntakeDetail>("intake_get", { intakeId: out.intake.id }); }
       onCreated(out, addBatch);

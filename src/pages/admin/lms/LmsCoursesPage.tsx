@@ -149,7 +149,7 @@ export default function LmsCoursesPage() {
       if (!master?.saved || !master.startDate) { setWizard({ courseId, step: "intake" }); return; }
       const course = await rto<CourseDetail>("course_get", { courseId });
       const name = nameFor(courseId) ?? intakeDefaultName(course.course.code, load ?? "coe", master.startDate, course.intakes.map(i => i.customName || i.name));
-      const out = await rto<IntakeDetail>("intake_save", { courseId, startDate: master.startDate, status: "open", generate: true, campus: course.course.campus ?? "", name });
+      const out = await rto<IntakeDetail>("intake_save", { courseId, startDate: master.startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
       if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
       // Hidden until the whole wizard (weekly and daily timetables, CoE and VoE) is finished.
       await supabase.rpc("rto_intake_wizard", { p_action: "mark", p_data: { intakeId: out.intake.id } });

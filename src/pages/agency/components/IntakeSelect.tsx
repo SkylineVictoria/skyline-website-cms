@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { intakeKey, openIntakes, type OpenIntake } from "@/pages/agency/lib/intakes";
+import { supabase } from "@/pages/admin/lib/supabase";
 
 export const NO_INTAKES_MESSAGE = "This course has no open intakes at the moment, so the application cannot be submitted for it yet. Contact admissions, or choose another course.";
 export const FALLBACK_MESSAGE = "No intake dates are published for this course yet: choose the month you would like to start. Admissions will confirm the date.";
@@ -9,6 +10,54 @@ export const ADD_INTAKE_VALUE = "__add_intake__";
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 /** What the dropdown shows: the intake's start and end dates ("19 Jan 2027 – 9 Nov 2029"); a fallback month keeps its month name. */
 const intakeDates = (i: OpenIntake) => (i.fallback || !i.startDate ? i.display : i.endDate ? `${day(i.startDate)} – ${day(i.endDate)}` : `Starts ${day(i.startDate)}`);
+
+interface CalendarUnit { unitCode: string; unitName: string; unitType: string | null; startDate: string; endDate: string | null; hours: number | null }
+
+/** Read-only calendar of the chosen intake: every unit with its dates, month by month; the date the student joins is marked. */
+function IntakeCalendar({ intakeId, joinDate }: { intakeId: string; joinDate?: string }) {
+  const [open, setOpen] = useState(false);
+  const [units, setUnits] = useState<CalendarUnit[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setUnits(null); setFailed(false); setOpen(false); }, [intakeId]);
+  useEffect(() => {
+    if (!open || units) return;
+    let live = true;
+    void supabase.rpc("intake_unit_calendar", { p_intake: intakeId }).then(({ data, error }) => {
+      if (!live) return;
+      if (error) setFailed(true); else setUnits((data ?? []) as CalendarUnit[]);
+    });
+    return () => { live = false; };
+  }, [open, units, intakeId]);
+  const months = new Map<string, CalendarUnit[]>();
+  for (const u of units ?? []) { const k = u.startDate.slice(0, 7); months.set(k, [...(months.get(k) ?? []), u]); }
+  const monthName = (k: string) => new Date(`${k}-01T00:00:00Z`).toLocaleDateString("en-AU", { month: "long", year: "numeric", timeZone: "UTC" });
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen(o => !o)} className="text-xs font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-calendar-toggle">
+        {open ? "Hide the full calendar" : "View the full calendar"}
+      </button>
+      {open ? (
+        <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-background-200 bg-background-50 p-3 text-sm" data-testid="intake-calendar">
+          {failed ? <p className="text-primary-700">The calendar could not be loaded.</p> : !units ? <p className="text-foreground-500">Loading…</p>
+            : units.length === 0 ? <p className="text-foreground-500">No unit dates are published for this intake yet.</p>
+            : [...months].map(([k, list]) => (
+              <div key={k} className="mb-3 last:mb-0">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">{monthName(k)}</p>
+                <ul className="space-y-1">
+                  {list.map(u => (
+                    <li key={`${u.unitCode}-${u.startDate}`} className={`flex flex-wrap justify-between gap-x-3 rounded px-2 py-1 ${joinDate === u.startDate ? "bg-primary-50 font-medium text-primary-800" : "text-foreground-700"}`}>
+                      <span>{u.unitCode} {u.unitName}{joinDate === u.startDate ? " · you start here" : ""}</span>
+                      <span className="text-foreground-500">{day(u.startDate)}{u.endDate ? ` – ${day(u.endDate)}` : ""}{u.hours ? ` · ${u.hours} h` : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The intake dropdown of the enrolment form (INT-01): the open intakes of the chosen course, loaded from the database, or, for a
@@ -52,6 +101,7 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
         {help}
         {none && addable ? <> <button type="button" onClick={onAdd} className="font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-add-button">Add new intake</button></> : null}
       </p>
+      {(() => { const chosen = intakes.find((i) => keyOf(i) === value); return chosen?.id ? <IntakeCalendar intakeId={chosen.id} joinDate={chosen.joinDate} /> : null; })()}
     </div>
   );
 }

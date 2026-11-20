@@ -236,7 +236,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
         const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
         if (me) {
-          const list = await rto<RtoCourse[]>("course_list").catch(() => null);
+          // Only courses with an active intake on offer (the same list agents and students get).
+          const offeredIds = new Set((await listInstitutionCourses().catch(() => [])).map((row) => row.courseId));
+          const list = (await rto<RtoCourse[]>("course_list").catch(() => null))?.filter((c) => offeredIds.has(c.id)) ?? null;
           if (active) {
             setRtoManager(Boolean(me.rtoManager));
             if (list) setStaffCourses(list.filter((c) => c.code?.trim() && c.name?.trim()));

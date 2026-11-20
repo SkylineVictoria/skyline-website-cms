@@ -30,8 +30,11 @@ const needsApplication = (t: SigningTemplate) => t.category === LETTER_CATEGORY;
  * Prepare a signing request: a template (its variables filled from the chosen student, employee or agent) or a ready-made PDF, one or more
  * recipients in order, the signing order, expiry, reminders and a message. It is saved as a draft; nothing is emailed until it is sent.
  */
-export default function ComposeRequest({ templates, preset, onClose, onCreated, onOfferSent }: {
-  templates: SigningTemplate[]; preset?: SubjectPreset; onClose: () => void;
+export default function ComposeRequest({ templates, templatesLoading = false, preset, onClose, onCreated, onOfferSent }: {
+  templates: SigningTemplate[];
+  /** The page is still loading its templates: "Loading templates…", never the empty-state message. */
+  templatesLoading?: boolean;
+  preset?: SubjectPreset; onClose: () => void;
   /** `warning`: the request exists, but something after it (changing its payment) failed. */
   onCreated: (request: SigningRequest, warning?: string) => void;
   /** An offer letter prepared from an application was sent (the offer flow made the request); without it the dialog just closes. */
@@ -142,7 +145,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated, 
     application={{ id: application.id, reference: application.reference, studentName: subject?.name ?? preset?.name ?? "", studentId: subjectId,
       course: application.courses[0] ? { title: application.courses[0].title, code: application.courses[0].code } : null, intake: application.intake }}
     onClose={() => setOfferOpen(false)} onSent={() => { if (onOfferSent) onOfferSent(`Offer letter for ${application.reference || "the application"} sent.`); else onClose(); }} />;
-  const noTemplates = source === "template" && usable.length === 0;
+  const noTemplates = source === "template" && usable.length === 0 && !templatesLoading;
   return <Modal open title="New signing request" width="max-w-4xl" onClose={() => { if (!busy) onClose(); }}
     footer={fromApplication ? <Button disabled={!application} data-testid="compose-from-application" onClick={() => setOfferOpen(true)}>Prepare the letter from this application</Button>
       : <>{source === "template" && template && <Button variant="outline" disabled={busy} onClick={() => void run(async () => setPreview(pdfBytes(copyText !== null
@@ -165,7 +168,7 @@ export default function ComposeRequest({ templates, preset, onClose, onCreated, 
         <label className="flex items-center gap-2"><input type="radio" checked={source === "upload"} onChange={() => { setSource("upload"); setPeople(people.length ? people : [person(1)]); }} /> One-time sign (upload PDF)</label></div>
       {source === "template" ? <>
         <Field label="Template" required><Select value={templateId} disabled={noTemplates} onChange={(e) => setTemplateId(e.target.value)} data-testid="compose-template">
-          <option value="">{noTemplates ? "No active templates" : "Choose a template"}</option>
+          <option value="">{templatesLoading && !usable.length ? "Loading templates…" : noTemplates ? "No active templates" : "Choose a template"}</option>
           {usable.map((t) => { const locked = needsApplication(t) && !(subjectType === "student" && subjectId);
             return <option key={t.id} value={t.id} disabled={locked}>{t.name} ({SIGN_CATEGORIES[t.category]?.label ?? t.category}){locked ? " — Choose a student first" : ""}</option>; })}</Select></Field>
         {noTemplates ? <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="compose-no-templates">

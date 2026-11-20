@@ -1474,7 +1474,7 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
   const env = (over: Record<string, string> = {}) => (n: string) => ({ EF_MICROSOFT365_CLIENT_ID: "00000000-aaaa-bbbb-cccc-000000001234", EF_MICROSOFT365_CLIENT_SECRET: SECRET,
     EF_MICROSOFT365_TENANT_ID: "tenant-1", EF_MICROSOFT365_STUDENT_DOMAIN: "student.slit.edu.au", ...over } as Record<string, string>)[n];
   const jwt = (roles: string[]) => `h.${btoa(JSON.stringify({ roles })).replace(/=+$/, "")}.sig`;
-  const ALL = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "Mail.Send"];
+  const ALL = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "RoleManagement.Read.Directory", "Mail.Send"];
   const graph = (o: { roles?: string[]; token?: Response; domains?: Array<{ id: string; isVerified: boolean }>; skus?: unknown[]; domainStatus?: number }) => {
     const calls: string[] = [];
     const request = (async (input: string | URL, init?: RequestInit) => {
@@ -1496,8 +1496,8 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
   assert.ok(!JSON.stringify(ready).includes(SECRET) && !JSON.stringify(ready).includes("h.ey"), "no secret or token in the result");
   // Missing admin consent: the token's roles say exactly which application permissions to add.
   const partial = await m365.microsoft365Status(env(), graph({ roles: ["User.ReadWrite.All", "Organization.Read.All"], domainStatus: 403 }).request);
-  assert.deepEqual([partial.ready, partial.checks.consent, partial.consent.missing], [false, "missing", ["LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All"]]);
-  assert.match(partial.problems[0], /Admin consent is missing for: LicenseAssignment\.ReadWrite\.All, Domain\.Read\.All, User-PasswordProfile\.ReadWrite\.All\. In Entra > App registrations/);
+  assert.deepEqual([partial.ready, partial.checks.consent, partial.consent.missing], [false, "missing", ["LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "RoleManagement.Read.Directory"]]);
+  assert.match(partial.problems[0], /Admin consent is missing for: LicenseAssignment\.ReadWrite\.All, Domain\.Read\.All, User-PasswordProfile\.ReadWrite\.All, RoleManagement\.Read\.Directory\. In Entra > App registrations/);
   assert.equal(partial.checks.domain, "missing", "without Domain.Read.All the organization's verified domains are used: the student domain is not listed there");
   // A wrong / expired secret: plain advice, never Microsoft's text.
   const bad = await m365.microsoft365Status(env(), graph({ token: new Response(JSON.stringify({ error: "invalid_client", error_codes: [7000215], error_description: "AADSTS7000215: Invalid client secret provided. Trace" }), { status: 401 }) }).request);

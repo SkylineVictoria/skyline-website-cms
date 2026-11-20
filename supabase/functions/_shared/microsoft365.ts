@@ -15,8 +15,9 @@ export const GRAPH = "https://graph.microsoft.com/v1.0";
 /**
  * Application permissions Email Management needs (owner's list) and the one the welcome email needs. User-PasswordProfile.ReadWrite.All
  * (2026-11-21): Resend login email sets a new temporary password on an existing account (User.ReadWrite.All only covers creating one).
+ * RoleManagement.Read.Directory (2026-11-21): the Account directory checks that an account holds no admin role before removing a licence.
  */
-export const REQUIRED_ROLES = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All"] as const;
+export const REQUIRED_ROLES = ["User.ReadWrite.All", "Organization.Read.All", "LicenseAssignment.ReadWrite.All", "Domain.Read.All", "User-PasswordProfile.ReadWrite.All", "RoleManagement.Read.Directory"] as const;
 export const WELCOME_ROLE = "Mail.Send";
 /** SLIT's own email domain, always checked. */
 export const SLIT_DOMAIN = "slit.edu.au";

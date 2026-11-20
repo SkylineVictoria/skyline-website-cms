@@ -13,7 +13,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
   course: Pick<RtoCourse, "id" | "code" | "name">;
   onClose: () => void;
   onSaved: () => void;
-  /** New course wizard: "Step 3 of 7 · Hours" in the title. */
+  /** New course wizard: "Step 3 of 5 · Hours" in the title. */
   stepLabel?: string;
   /** New course wizard: hours are required, and the one button saves them and goes to this step. */
   nextStep?: { label: string; onClick: () => void };

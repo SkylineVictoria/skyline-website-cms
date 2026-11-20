@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { shortDate } from "@/pages/admin/lib/rto";
+import MasterCyclesPanel, { FillSchoolBreaksButton } from "./MasterCyclesPanel";
+import { COE_HOURS, CyclesUnavailable, cyclesCall, fixedWeeks, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
 
 interface Row {
   unitId: string; code: string; name: string; unitType: string; hours: number | null; weeks: number;
@@ -16,7 +18,6 @@ interface Master {
   /** The cycle on screen (the master repeats), the next one when it has been created, and whether it is time to create it. */
   cycle?: number; next?: { cycle: number; startDate: string; endDate: string } | null; nextDue?: boolean;
 }
-interface NextCycle { cycle: number; startDate: string; endDate: string; created: boolean; rows: { unitId: string; code: string; name: string; weeks: number; startDate: string; endDate: string }[]; breaks: Break[] }
 
 async function call(action: "get" | "preview" | "save", data: Record<string, unknown>): Promise<Master> {
   const { data: out, error } = await supabase.rpc("rto_master_timetable", { p_action: action, p_data: data });
@@ -25,6 +26,29 @@ async function call(action: "get" | "preview" | "save", data: Record<string, unk
 }
 const days = (from: string, to: string) => Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000) + 1;
 const weeksLabel = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
+/** Does unit `a` need unit `b` first (b is one of a's prerequisites)? */
+const needs = (a: Row | undefined, b: Row | undefined) => !!a && !!b && a.prerequisites.some(code => code.trim().toUpperCase() === b.code.trim().toUpperCase());
+/** Is this unit a prerequisite of any other unit on the course? */
+const isPrereq = (row: Row | undefined, all: Iterable<Row>) => !!row && [...all].some(other => other !== row && needs(other, row));
+/**
+ * Weekly Calendar order (owner, 2026-11-20: "we teach all prereqs first before starting the course"): every unit that is a
+ * prerequisite of another unit comes first, as one block, then the rest of the course. Inside each block a unit still follows
+ * the units it needs. Stable: units keep their order otherwise; a loop is left as it is.
+ */
+function prerequisitesFirst(order: { unitId: string; weeks: number }[], rows: Map<string, Row>) {
+  const sortBlock = (block: typeof order) => {
+    const left = [...block];
+    const out: typeof order = [];
+    while (left.length) {
+      const i = left.findIndex(item => !left.some(other => other !== item && needs(rows.get(item.unitId), rows.get(other.unitId))));
+      out.push(...left.splice(i < 0 ? 0 : i, 1));
+    }
+    return out;
+  };
+  const all = [...rows.values()];
+  const prereqs = order.filter(item => isPrereq(rows.get(item.unitId), all));
+  return [...sortBlock(prereqs), ...sortBlock(order.filter(item => !prereqs.includes(item)))];
+}
 const input = "rounded-lg border border-background-300 bg-background-50 px-2 py-1.5 text-sm";
 const th = "px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground-500";
 
@@ -36,7 +60,9 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [nextCycle, setNextCycle] = useState<NextCycle | null>(null);
+  // Qualification cycles (all scheduled at once): saved with the master timetable.
+  const [cycles, setCycles] = useState(1);
+  const [plan, setPlan] = useState<CyclePlan | null>(null);
   const [breakDraft, setBreakDraft] = useState<{ label: string; startDate: string; endDate: string } | null>(null);
   const request = useRef(0);
 
@@ -44,13 +70,6 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
     setMaster(data);
     setOrder(data.rows.map(row => ({ unitId: row.unitId, weeks: Number(row.weeks) })));
   };
-  const load = useCallback(async () => {
-    setError("");
-    try { const data = await call("get", { courseId }); apply(data); setStart(data.startDate ?? ""); setDirty(false); }
-    catch (e) { setError(e instanceof Error ? e.message : "The master timetable could not be loaded."); }
-  }, [courseId]);
-  useEffect(() => { void load(); }, [load]);
-
   /** Ask the server for the dates of the order on screen (nothing is saved). */
   const preview = useCallback(async (nextStart: string, nextOrder: { unitId: string; weeks: number }[]) => {
     const mine = ++request.current;
@@ -59,40 +78,65 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
       if (mine === request.current) { setMaster(current => ({ ...data, saved: current?.saved ?? false })); setError(""); }
     } catch (e) { if (mine === request.current) setError(e instanceof Error ? e.message : "The dates could not be calculated."); }
   }, [courseId]);
+  const load = useCallback(async () => {
+    setError("");
+    try {
+      const data = await call("get", { courseId }); apply(data); setStart(data.startDate ?? ""); setDirty(false);
+      const cyclePlan = await cyclesCall("get", { courseId }).catch(() => null);
+      if (cyclePlan) { setPlan(cyclePlan); setCycles(cyclePlan.cyclesPlanned); }
+      // A unit listed before one of its prerequisites is moved after it; staff save to keep the new order.
+      const current = data.rows.map(row => ({ unitId: row.unitId, weeks: Number(row.weeks) }));
+      // Weeks are fixed at SLIT hours ÷ 20 (CoE, owner 2026-11-20), and the prerequisite units come first.
+      const sorted = prerequisitesFirst(data.rows.map(row => ({ unitId: row.unitId, weeks: fixedWeeks(row.hours, Number(row.weeks)) })), new Map(data.rows.map(row => [row.unitId, row])));
+      const moved = sorted.some((item, i) => item.unitId !== current[i].unitId);
+      const reweeked = sorted.some(item => item.weeks !== current.find(row => row.unitId === item.unitId)?.weeks);
+      if (moved || reweeked) {
+        setOrder(sorted); setDirty(true);
+        setNotice([moved ? "Prerequisite units were moved to the start of the course." : "", reweeked ? `Unit weeks were set to their SLIT hours ÷ ${COE_HOURS}.` : "", "Save to keep this."].filter(Boolean).join(" "));
+        if (sorted.every(row => row.weeks > 0)) void preview(data.startDate ?? "", sorted);
+      }
+    }
+    catch (e) { setError(e instanceof Error ? e.message : "The master timetable could not be loaded."); }
+  }, [courseId, preview]);
+  useEffect(() => { void load(); }, [load]);
+
   const change = (nextStart: string, nextOrder: { unitId: string; weeks: number }[]) => {
     setStart(nextStart); setOrder(nextOrder); setDirty(true); setNotice("");
     if (nextOrder.every(row => row.weeks > 0)) void preview(nextStart, nextOrder);
   };
+  // A unit cannot go above a unit it needs, nor below a unit that needs it.
+  // Nor can a prerequisite unit go below a unit that is not one (all prerequisites are taught first).
+  const moveBlocked = (index: number, by: -1 | 1) => {
+    const to = index + by;
+    if (to < 0 || to >= order.length) return true;
+    const self = byId.get(order[index].unitId), other = byId.get(order[to].unitId);
+    const [upper, lower] = by < 0 ? [other, self] : [self, other];
+    return needs(upper, lower) || (isPrereq(upper, byId.values()) && !isPrereq(lower, byId.values()));
+  };
   const move = (index: number, by: -1 | 1) => {
     const to = index + by;
-    if (to < 0 || to >= order.length) return;
+    if (moveBlocked(index, by)) return;
     const next = [...order]; [next[index], next[to]] = [next[to], next[index]];
     change(start, next);
   };
-  const setWeeks = (index: number, value: string) => {
-    const weeks = Number(value);
-    change(start, order.map((row, i) => i === index ? { ...row, weeks: Number.isFinite(weeks) ? weeks : 0 } : row));
-  };
+
 
   const save = async () => {
     if (busy || !master?.canEdit) return;
     setBusy(true); setError(""); setNotice("");
-    try { const data = await call("save", { courseId, startDate: start, rows: order }); apply(data); setDirty(false); setNotice("Master timetable saved."); onSaved?.(); }
+    try {
+      const data = await call("save", { courseId, startDate: start, rows: order }); apply(data);
+      // Saving keeps only the current cycle: the later ones are built again for the cycles chosen (and the term breaks now).
+      let note = "Master timetable saved.";
+      try { setPlan(await cyclesCall("set", { courseId, cycles })); }
+      catch (e) { if (!(e instanceof CyclesUnavailable)) throw e; note += " " + e.message; }
+      setDirty(false); setNotice(note); onSaved?.();
+    }
     catch (e) { setError(e instanceof Error ? e.message : "The master timetable was not saved."); }
     finally { setBusy(false); }
   };
 
-  /** The next cycle as it would be with the term breaks entered so far (nothing is saved), or create it. */
-  const next = async (create: boolean) => {
-    if (busy) return;
-    if (create && !window.confirm("Create the next cycle with these dates? Check that every term break for that period has been added first.")) return;
-    setBusy(true); setError(""); setNotice("");
-    const { data, error: e } = await supabase.rpc("rto_master_timetable", { p_action: create ? "next_create" : "next_preview", p_data: { courseId } });
-    setBusy(false);
-    if (e) { setError(e.message); return; }
-    setNextCycle(data as NextCycle);
-    if (create) { setNotice("The next cycle is created. Intakes move onto it when the current cycle ends."); await load(); }
-  };
+
 
   const breakProblem = !breakDraft ? "" : !breakDraft.label.trim() ? "Enter a name." : !breakDraft.startDate || !breakDraft.endDate ? "Enter the first and last day."
     : breakDraft.endDate < breakDraft.startDate ? "The last day must be on or after the first day." : "";
@@ -138,10 +182,6 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
   const orderedRows = order.map(item => byId.get(item.unitId));
   const need = Math.max(0, ...orderedRows.map((row, index) => row ? perWeek(row, index) ?? 0 : 0));
   /** Every unit's weeks from its hours at a weekly rate (20 hours a week: 40 hours = 2 weeks), rounded up to whole weeks. */
-  const fitWeeks = (rate: number) => change(start, order.map(item => {
-    const hours = byId.get(item.unitId)?.hours;
-    return hours ? { ...item, weeks: Math.max(1, Math.ceil(hours / rate)) } : item;
-  }));
   const blocked = busy || !start || !order.length || order.some(row => !(row.weeks > 0)) || master.problems.length > 0;
 
   const small = "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-foreground-700 hover:bg-background-100 disabled:opacity-50";
@@ -165,10 +205,10 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
       </div> : null}
     </div>
     {canEdit ? <div className="flex flex-wrap items-center gap-1">
-      <button type="button" disabled={busy || !order.length} onClick={() => fitWeeks(20)} title="Sets every unit's weeks from its classroom hours at 20 hours a week (40 hours = 2 weeks)" className={small}>
-        <i className="ri-scales-3-line" aria-hidden="true" />Weeks from hours (20 a week)</button>
       <button type="button" disabled={busy} onClick={() => setBreakDraft({ label: "Term break", startDate: "", endDate: "" })} className={small}>
         <i className="ri-calendar-close-line" aria-hidden="true" />Add term break</button>
+      {canEdit ? <FillSchoolBreaksButton courseId={courseId} from={start} to={planTill(start, master.endDate, cycles, plan).till} disabled={busy}
+        onAdded={async () => { setDirty(true); setNotice("Term breaks added: save to move the dates past them."); if (order.every(row => row.weeks > 0)) await preview(start, order); }} /> : null}
       {!start ? <span className="ml-2 text-xs text-foreground-500">Enter the start date: every unit gets its dates. Add term breaks first.</span> : null}
     </div> : null}
 
@@ -214,41 +254,20 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
             {line.row.prerequisites.length ? <span className="mt-0.5 block text-xs text-foreground-500"><i className="ri-git-merge-line mr-1" aria-hidden="true" />After {line.row.prerequisites.join(", ")}</span> : null}
           </td>
           <td className="px-2 py-2.5 text-right tabular-nums">{line.row.hours ?? "—"}</td>
-          <td className="px-2 py-2 text-right">{canEdit ? <input type="number" min={0.5} max={104} step={0.5} aria-label={`Classroom weeks for ${line.row.code}`} disabled={busy}
-            className={input + " w-16 py-1 text-right " + (order[line.index]?.weeks > 0 ? "" : "border-red-400")} value={order[line.index]?.weeks || ""} onChange={e => setWeeks(line.index, e.target.value)} />
-            : weeksLabel(Number(line.row.weeks))}</td>
+          <td className="px-2 py-2 text-right">{weeksLabel(order[line.index]?.weeks ?? Number(line.row.weeks))}</td>
           <td className={"px-2 py-2.5 text-right tabular-nums " + ((perWeek(line.row, line.index) ?? 0) > 40 ? "font-semibold text-red-700" : "text-foreground-700")}>{perWeek(line.row, line.index)?.toFixed(1).replace(/\.0$/, "") ?? "—"}</td>
           <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.startDate ? shortDate(line.row.startDate) : "—"}</td>
           <td className="whitespace-nowrap px-2 py-2.5 font-medium text-foreground-950">{line.row.endDate ? shortDate(line.row.endDate) : "—"}</td>
           {canEdit ? <td className="whitespace-nowrap px-2 py-2 text-right">
-            <button type="button" disabled={busy || line.index === 0} onClick={() => move(line.index, -1)} aria-label={`Move ${line.row.code} up`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-up-line" aria-hidden="true" /></button>
-            <button type="button" disabled={busy || line.index === order.length - 1} onClick={() => move(line.index, 1)} aria-label={`Move ${line.row.code} down`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-down-line" aria-hidden="true" /></button>
+            <button type="button" disabled={busy || moveBlocked(line.index, -1)} title={line.index > 0 && moveBlocked(line.index, -1) ? "Prerequisite units are taught first, and a unit stays after the units it needs." : undefined} onClick={() => move(line.index, -1)} aria-label={`Move ${line.row.code} up`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-up-line" aria-hidden="true" /></button>
+            <button type="button" disabled={busy || moveBlocked(line.index, 1)} title={line.index < order.length - 1 && moveBlocked(line.index, 1) ? "Prerequisite units are taught first, and a unit stays after the units it needs." : undefined} onClick={() => move(line.index, 1)} aria-label={`Move ${line.row.code} down`} className="rounded p-1 text-foreground-700 hover:bg-background-200 disabled:opacity-30"><i className="ri-arrow-down-line" aria-hidden="true" /></button>
           </td> : null}
         </tr>)}</tbody>
       </table>
     </div>}
-    {master.saved && !dirty ? <section aria-label="Next cycle" className={"rounded-lg border p-3 " + (master.nextDue ? "border-amber-300 bg-amber-50" : "border-background-200")}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0 text-sm">
-          <h4 className="font-semibold text-foreground-950">Next cycle{master.cycle ? ` (cycle ${master.cycle + 1})` : ""}</h4>
-          {master.next ? <p className="text-foreground-700">Created: {shortDate(master.next.startDate)} to {shortDate(master.next.endDate)}. The intakes move onto it when this cycle ends{master.endDate ? ` (${shortDate(master.endDate)})` : ""}.</p>
-            : <p className={master.nextDue ? "text-amber-900" : "text-foreground-700"}>{master.nextDue ? "This cycle ends within three months. " : ""}When this cycle ends the units start again. Add the term breaks for that period above, then create the next cycle; the system does not create it by itself.</p>}
-        </div>
-        {!master.next ? <div className="flex gap-2">
-          <button type="button" disabled={busy} onClick={() => void next(false)} className="rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50">Preview dates</button>
-          {canEdit ? <button type="button" disabled={busy} onClick={() => void next(true)} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Create the next cycle</button> : null}
-        </div> : null}
-      </div>
-      {nextCycle && !master.next ? <div className="mt-2 overflow-x-auto"><table className="w-full min-w-[520px] text-sm">
-        <thead><tr><th className={th}>Unit</th><th className={th + " text-right"}>Weeks</th><th className={th}>Start date</th><th className={th}>End date</th></tr></thead>
-        <tbody>{nextCycle.rows.map(row => <tr key={row.unitId} className="border-t border-background-200">
-          <td className="px-2 py-1.5"><b>{row.code}</b> <span className="text-foreground-700">{row.name}</span></td><td className="px-2 py-1.5 text-right">{weeksLabel(Number(row.weeks))}</td>
-          <td className="whitespace-nowrap px-2 py-1.5">{shortDate(row.startDate)}</td><td className="whitespace-nowrap px-2 py-1.5">{shortDate(row.endDate)}</td></tr>)}</tbody>
-      </table>
-        <p className="mt-1 text-xs text-foreground-600">{nextCycle.breaks.length ? `Term breaks in this period: ${nextCycle.breaks.map(item => `${item.label} (${shortDate(item.startDate)} to ${shortDate(item.endDate)})`).join("; ")}.` : "No term break has been entered for this period yet."}</p>
-      </div> : null}
-    </section> : null}
+    <MasterCyclesPanel cycles={cycles} onCycles={value => { setCycles(value); setDirty(true); setNotice(""); }} start={start} cycleEnd={master.endDate} plan={plan}
+      canEdit={canEdit} busy={busy} />
     <p className="text-xs text-foreground-500">Units run one after another in whole 7-day weeks, weekends included; days inside a term break are not counted. A unit marked * needs the units in the Pre-requisite column first.
-      Changing weeks here does not change the unit itself. Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > 40 ? " (more than 40 hours a week cannot be timetabled: give the unit more weeks)" : ""}.</p>
+      Every open intake of the course follows these dates, and an intake's class times must give at least the most hours a week shown above{need > 40 ? " (more than 40 hours a week cannot be timetabled: give the unit more weeks)" : ""}.</p>
   </div>;
 }

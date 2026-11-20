@@ -11,6 +11,7 @@ import { useUiPrefs, type Density } from "@/pages/admin/lib/uiPrefs";
 import { VIEW_LABELS, type ViewKind } from "@/lib/viewAs";
 import ViewAsPicker from "@/components/base/ViewAsPicker";
 import CommPopup from "@/pages/admin/components/CommPopup";
+import MasterTimetableDue from "@/pages/admin/components/MasterTimetableDue";
 
 /** Form and text pages read better at a set width; tables, timelines and boards use the full width. */
 const NARROW = [/^\/admin\/(settings|institution|set-password|seo|contact|navigation|footer)\/?$/, /^\/admin\/integrations\/(settings|credentials|add)\/?$/];
@@ -134,6 +135,8 @@ export default function AdminLayout() {
 
             <div className="relative flex items-center gap-2">
               {user.role === "Admin" ? <CommPopup /> : null}
+              {/* Weekly: courses whose last scheduled cycle ends within a year. */}
+              {user.role === "Admin" ? <MasterTimetableDue weeklyPopup /> : null}
               <button
                 type="button"
                 onClick={() => setUserMenu((v) => !v)}

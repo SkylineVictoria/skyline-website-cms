@@ -3,7 +3,7 @@
 // intake. The late joiners' (prerequisite) class setup stays below it.
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { DAYS, rto, shortDate, type BatchSession, type IntakeDetail, type RtoIntake, type StaffOption } from "@/pages/admin/lib/rto";
+import { DAYS, loadIntakeLoads, rto, shortDate, type BatchSession, type IntakeDetail, type RtoIntake, type StaffOption, type StudyLoad } from "@/pages/admin/lib/rto";
 import PrerequisiteClassTab from "./PrerequisiteClassTab";
 import BatchCourseCalendar from "./BatchCourseCalendar";
 
@@ -90,4 +90,21 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
       <div className="border-t border-background-200 p-4"><PrerequisiteClassTab courseId={courseId} canEdit={canEdit} /></div>
     </details>
   </div>;
+}
+
+/** Course › CoE Daily Timetable / VoE Daily Timetable (owner, 2026-11-20): the timetable booked in course setup for the course's
+ *  CoE intakes, or for its VoE intakes (the intake's study load says which). */
+export function DailyTimetableTab({ courseId, intakes, canEdit, load }: { courseId: string; intakes: RtoIntake[]; canEdit: boolean; load: StudyLoad }) {
+  const [loads, setLoads] = useState<Record<string, StudyLoad> | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadIntakeLoads(courseId).then(m => { if (live) setLoads(m); }).catch(() => { if (live) setLoads({}); });
+    return () => { live = false; };
+  }, [courseId, intakes.length]);
+  if (!loads) return <p className="text-sm text-foreground-500">Loading the timetables…</p>;
+  const mine = intakes.filter(i => (loads[i.id] ?? "coe") === load);
+  const name = load === "coe" ? "CoE" : "VoE";
+  if (!mine.some(i => i.status !== "closed")) return <p className="rounded-lg border border-background-200 bg-background-100/60 px-3 py-4 text-sm text-foreground-600">
+    No open {name} intake yet. Finish course setup ({name} weekly classes) to book its daily timetable.</p>;
+  return <CourseWeeklyTimetable courseId={courseId} intakes={mine} canEdit={canEdit} />;
 }

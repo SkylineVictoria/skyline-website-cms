@@ -8,6 +8,8 @@ import { join } from "node:path";
 import writeXlsxFile from "write-excel-file/node";
 import { readSheet } from "read-excel-file/node";
 import { holidayDate, parseCsv, parseHolidaySheet, HOLIDAY_TEMPLATE_HEADER } from "../src/lib/holidayImport";
+import { courseStartFor, courseStartForEnd, cyclesUntil, teachingDays, voeLayout, voeWeeks } from "../src/pages/admin/lib/masterDates";
+import { fetchVicTerms, newBreaks, parseVicTerms, schoolBreaks, termsUntil } from "../src/pages/admin/lib/schoolTerms";
 import { completeVictorianDays, normaliseVicName, parseDataGovRecords, parseNagerRows, pickDataGovResource, runSync, type FetchJson } from "../supabase/functions/holiday-sync/core";
 
 let passed = 0;
@@ -142,4 +144,97 @@ await check("runSync: data.gov.au first, Nager.Date when the year is missing, fa
   assert.match(down.error!, /^2026: data\.gov\.au: .*\| 2027: /);
   assert.equal(Object.keys(down.years).length, 2);
 });
-console.log(`holiday import + sync core: ${passed}/11 passed`);
+// Term breaks from the Victorian school calendar (Important Dates open data; one row per term start / end day).
+const VIC_TERMS = [
+  ["Term 1 2029 -Start date", "30/01/2029"], ["Term 1 2029 -End date", "29/03/2029"], ["Term 2 2029 - Start date", "16/04/2029"],
+  ["Term 2 2029 - End date", "29/06/2029"], ["Term 3 2029 - Start date", "16/07/2029"], ["Term 3 2029-End date", "21/09/2029"],
+  ["Term 4 2029 -Start date", "8/10/2029"], ["Term 4  2029 End date", "21/12/2029"], ["Term 1 2030 - Start date", "29/01/2030"],
+  ["Term 1 2030 - End date", "5/04/2030"], ["Term 2 2030 - Start date", "23/04/2030"], ["Term 2 2030 - End date", "28/06/2030"],
+  ["Term 3 2030 - Start date", "15/07/2030"], ["Term 3 2030 - End date", "20/09/2030"], ["Term 4 2030 - Start date", "7/10/2030"],
+  ["Term 4 2030 - End date", "20/12/2030"], ["Term 3 2020 - End date", "18/09/2020"], ["Term 3 2020 - End date", "11/09/2020"],
+].map(([name, important_date]) => ({ dateType: "SCHOOL_TERM", name, important_date }));
+await check("school terms: parsed from the dataset names, a term listed twice keeps its latest end", () => {
+  const terms = parseVicTerms([...VIC_TERMS, { dateType: "PUBLIC_HOLIDAY", name: "Term 1 2030 - Start date", important_date: "1/01/2030" }]);
+  assert.equal(terms.length, 8); // Term 3 2020 has no start date: left out
+  assert.deepEqual(terms[0], { year: 2029, term: 1, start: "2029-01-30", end: "2029-03-29" });
+  assert.equal(terms.at(-1)!.end, "2030-12-20");
+});
+await check("school breaks: Monday to Sunday between terms; later years predicted by whole weeks", () => {
+  const terms = parseVicTerms(VIC_TERMS);
+  const breaks = schoolBreaks(terms, "2029-01-01", "2031-12-31");
+  assert.deepEqual(breaks[0], { label: "Term 1 break 2029", startDate: "2029-04-02", endDate: "2029-04-15", predicted: false });
+  assert.deepEqual(breaks.find(b => b.label.startsWith("Summer break 2029")), { label: "Summer break 2029–30", startDate: "2029-12-24", endDate: "2030-01-27", predicted: false });
+  const summer30 = breaks.find(b => b.label.startsWith("Summer break 2030"))!;
+  assert.equal(summer30.predicted, true);
+  assert.match(summer30.label, /predicted: check/);
+  assert.equal(summer30.startDate, "2030-12-23");
+  const predicted = termsUntil(terms, 2031).filter(t => t.predicted);
+  assert.equal(predicted.length, 4);
+  assert.ok(predicted.every(t => new Date(t.start + "T00:00:00Z").getUTCDay() === new Date(terms.find(x => x.term === t.term && x.year === 2030)!.start + "T00:00:00Z").getUTCDay()));
+  for (const b of breaks) { assert.equal(new Date(b.startDate + "T00:00:00Z").getUTCDay(), 1); assert.equal(new Date(b.endDate + "T00:00:00Z").getUTCDay(), 0); }
+});
+await check("school breaks: breaks already entered are kept, overlapping ones skipped", () => {
+  const breaks = schoolBreaks(parseVicTerms(VIC_TERMS), "2029-01-01", "2030-12-31");
+  const kept = newBreaks(breaks, [{ startDate: "2029-12-20", endDate: "2030-01-20" }]);
+  assert.equal(kept.length, breaks.length - 1);
+  assert.ok(!kept.some(b => b.label.startsWith("Summer break 2029")));
+});
+await check("school terms: fetch uses the SCHOOL_TERM filter and refuses an empty or failed answer", async () => {
+  let asked = "";
+  const ok = (async (url: string) => { asked = url; return new Response(JSON.stringify({ success: true, result: { records: VIC_TERMS } })); }) as typeof fetch;
+  assert.equal((await fetchVicTerms(ok)).length, 8);
+  assert.match(decodeURIComponent(asked), /resource_id=caaa47de-8626-46a6-aa28-3d948c15c5d9.*"dateType":"SCHOOL_TERM"/);
+  await assert.rejects(fetchVicTerms((async () => new Response("{}", { status: 503 })) as typeof fetch), /HTTP 503/);
+  await assert.rejects(fetchVicTerms((async () => new Response(JSON.stringify({ success: true, result: { records: [] } }))) as typeof fetch), /no school terms/);
+});
+await check("master dates: a unit's chosen start or end date gives the course start (weeks fixed, breaks skipped)", () => {
+  const breaks = [["2026-12-21", "2027-01-17"], ["2027-03-29", "2027-04-11"]];
+  const isBreak = (d: string) => breaks.some(([a, b]) => d >= a && d <= b);
+  const next = (d: string) => new Date(Date.parse(d + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+  // public.course_master_layout, forwards.
+  const layout = (start: string, weeks: number[]) => { let d = start; return weeks.map(w => { let left = teachingDays(w), from = ""; for (;;) { if (!isBreak(d)) { from ||= d; if (--left === 0) break; } d = next(d); } const out = { from, to: d }; d = next(d); return out; }); };
+  const weeks = [3, 1, 5, 0.5, 4.5];
+  for (const [index, date] of [[2, "2027-01-18"], [4, "2027-04-12"], [1, "2026-12-07"], [0, "2026-11-02"]] as const) {
+    assert.equal(layout(courseStartFor(date, index, weeks, isBreak), weeks)[index].from, date, `start of unit ${index}`);
+  }
+  for (const [index, date] of [[2, "2027-02-14"], [3, "2027-04-15"]] as const) {
+    assert.equal(layout(courseStartForEnd(date, index, weeks, isBreak), weeks)[index].to, date, `end of unit ${index}`);
+  }
+  const endOf = (cycles: number) => new Date(Date.parse("2026-11-01T00:00:00Z") + (cycles * 546 - 1) * 86400000).toISOString().slice(0, 10);
+  assert.equal(cyclesUntil("2026-11-01", endOf(6), 546), 6); // the last day of cycle 6
+  assert.equal(cyclesUntil("2026-11-01", next(endOf(6)), 546), 7); // one day more needs a 7th cycle
+  assert.equal(cyclesUntil("2026-11-01", "2027-01-01", 546), 1);
+});
+await check("VoE calendar, manual: two units at once, never over 40 h a week, prerequisites first", () => {
+  const isBreak = (d: string) => d >= "2026-12-21" && d <= "2027-01-17";
+  const u = (code: string, hours: number, rate: number, prerequisites: string[] = []) => ({ unitId: code, code, hours, rate, prerequisites });
+  const plan = voeLayout([u("WHS", 20, 20), u("CA2002", 96, 20), u("CA3007", 60, 20, ["WHS"]), u("CA2011", 16, 20)], "2026-11-02", isBreak, "manual");
+  const at = (code: string) => plan.rows.find(r => r.code === code)!;
+  assert.equal(at("WHS").startDate, "2026-11-02");
+  assert.equal(at("CA2002").startDate, "2026-11-02"); // 20 h + 20 h
+  assert.ok(at("CA3007").startDate > at("WHS").endDate); // waits for its prerequisite
+  assert.ok(voeWeeks(plan, "2026-11-02", isBreak).every(w => w.ok));
+  // 30 h + 20 h = 50 h is blocked: the 20 h unit waits; 20 h + 15 h = 35 h runs together.
+  const p2 = voeLayout([u("A", 60, 30), u("B", 40, 20), u("C", 30, 15)], "2027-02-01", isBreak, "manual");
+  const a = p2.rows.find(r => r.code === "A")!, b = p2.rows.find(r => r.code === "B")!, c = p2.rows.find(r => r.code === "C")!;
+  assert.ok(b.startDate > a.endDate, "30 h + 20 h never together");
+  assert.ok(c.startDate > a.endDate, "30 h + 15 h = 45 h never together");
+  assert.ok(c.startDate <= b.endDate && b.startDate <= c.endDate, "20 h + 15 h = 35 h together");
+  assert.ok(voeWeeks(p2, "2027-02-01", isBreak).every(w => w.ok && w.total <= 40));
+  // Term breaks are skipped.
+  assert.ok(voeLayout([u("X", 100, 20)], "2026-12-07", isBreak, "manual").rows[0].endDate > "2027-01-17");
+});
+await check("VoE calendar, automatic: every week 40 h, one unit at 40 h or two at 20 h + 20 h", () => {
+  const none = () => false;
+  const u = (code: string, hours: number, prerequisites: string[] = []) => ({ unitId: code, code, hours, rate: 20, prerequisites });
+  const solo = voeLayout([u("A", 80)], "2027-02-01", none, "automatic");
+  assert.deepEqual([solo.rows[0].rates, solo.rows[0].days], [[40], 14]); // 80 h at 40 h a week: 2 weeks
+  const pair = voeLayout([u("A", 40), u("B", 40)], "2027-02-01", none, "automatic");
+  assert.deepEqual(pair.rows.map(r => [r.rates, r.days]), [[[20], 14], [[20], 14]]); // 20 h + 20 h: both 2 weeks
+  // B needs A: A runs alone at 40 h, then B alone at 40 h; C runs beside A at 20 h + 20 h.
+  const chain = voeLayout([u("A", 40), u("B", 40, ["A"]), u("C", 20)], "2027-02-01", none, "automatic");
+  const weeks = voeWeeks(chain, "2027-02-01", none);
+  assert.ok(weeks.every(w => w.ok && w.total === 40), weeks.map(w => w.total).join(","));
+  assert.ok(chain.rows.find(r => r.code === "B")!.startDate > chain.rows.find(r => r.code === "A")!.endDate);
+});
+console.log(`holiday import + sync core + school terms + master dates + VoE: ${passed}/18 passed`);

@@ -206,8 +206,8 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
   const invalid = imported.filter(item => !/^[A-Z][A-Z0-9]{4,19}$/.test(item));
   if (invalid.length) throw new ImportError(`Not a unit code: ${invalid.join(", ")}.`, 422);
 
-  type Row = { id: string; code: string; sort: number | null; is_active: boolean; unit_type: string | null; prerequisite_ids: string[] | null; tga_prerequisites: string | null };
-  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active,unit_type,prerequisite_ids,tga_prerequisites").eq("course_id", courseId);
+  type Row = { id: string; code: string; sort: number | null; is_active: boolean; unit_type: string | null; prerequisite_ids: string[] | null; tga_prerequisites: string | null; tga_synced_at: string | null };
+  const { data: units } = await db.from("cms_course_units").select("id,code,sort,is_active,unit_type,prerequisite_ids,tga_prerequisites,tga_synced_at").eq("course_id", courseId);
   const existing = new Map(((units ?? []) as Row[]).map(unit => [unit.code.trim().toUpperCase(), unit]));
 
   // Electives switched off in the same save (a unit changed for another). Core units stay; a unit another active unit needs stays.
@@ -290,7 +290,10 @@ export async function addUnits(db: SupabaseClient, tenantId: string | null, cour
     const { error } = await db.from("cms_course_units").insert(inserted);
     if (error) return reply({ error: "The units could not be added." }, 500);
   }
-  const content = await fillUnitContent(db, [...activate, ...inserted].map(unit => ({ id: unit.id, code: unit.code })));
+  // Units already on the course that were never read from training.gov.au (the core units a new course starts with) are read
+  // too (owner, 2026-11-20: CPC30326's core units had no prerequisites, so the Weekly Calendar could not put CPCCWHS2001 first).
+  const unread = [...existing.values()].filter(unit => unit.is_active && !unit.tga_synced_at && !remove.includes(unit.code.trim().toUpperCase()));
+  const content = await fillUnitContent(db, [...new Map([...activate, ...inserted, ...unread].map(unit => [unit.id, { id: unit.id, code: unit.code }])).values()]);
   return reply({ courseId, code, added: inserted.length, activated: activate.length,
     alreadyOn: wanted.length + imported.length - inserted.length - activate.length, imported: summaries.size,
     rulesComplete: check.complete, removed: remove.length, ...content });

@@ -30,7 +30,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <MasterTimetableDue />
+      <MasterTimetableDue banner />
       <PageHeader
         title={`Welcome back, ${user?.name.split(" ")[0] ?? "there"}`}
         description="What needs your attention today, then the website at a glance."

@@ -1513,7 +1513,8 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   // A fake tenant: users, seats; every call recorded.
   type U = { id: string; userPrincipalName: string; mail: string | null; displayName: string };
   let mailFails = false;
-  const world = (users: U[], faculty = { enabled: 45, consumed: 25 }) => {
+  let groupMails: string[] = []; let postConflict = false; let claimKeepsOld = false;
+  const world =(users: U[], faculty = { enabled: 45, consumed: 25 }) => {
     const calls: string[] = []; const rpcs: string[] = []; const steps: string[] = [];
     const request = (async (input: string | URL, init?: RequestInit) => {
       const url = decodeURIComponent(String(input)), method = init?.method ?? "GET"; calls.push(`${method} ${url.replace("https://graph.microsoft.com/v1.0", "")}`);
@@ -1529,7 +1530,10 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
         const name = /displayName eq '(.+?)'/.exec(url)?.[1]?.replace(/''/g, "'"); const smtp = /smtp:(.+?)'/.exec(url)?.[1];
         return new Response(JSON.stringify({ value: users.filter((u) => (name && u.displayName === name) || (smtp && (u.mail === smtp || u.userPrincipalName === smtp))) }));
       }
-      if (method === "POST" && url.endsWith("/users")) return new Response(JSON.stringify({ id: "new-user" }), { status: 201 });
+      if (url.includes("/groups?$filter=")) { const smtp = /smtp:(.+?)'/.exec(url)?.[1]; return new Response(JSON.stringify({ value: groupMails.filter((g) => g === smtp).map((g) => ({ id: g })) })); }
+      if (method === "POST" && url.endsWith("/users")) return postConflict
+        ? new Response(JSON.stringify({ error: { code: "Request_BadRequest", message: "Another object with the same value for property userPrincipalName already exists.", details: [{ code: "ObjectConflict" }] } }), { status: 400 })
+        : new Response(JSON.stringify({ id: "new-user" }), { status: 201 });
       if (url.includes("/licenseDetails")) return new Response(JSON.stringify({ value: [] }));
       if (url.includes("/assignLicense")) return new Response("{}");
       if (url.includes("/sendMail")) return mailFails ? new Response(JSON.stringify({ error: { code: "MailboxNotEnabledForRESTAPI", message: "The mailbox is either inactive, soft-deleted, or is hosted on-premise." } }), { status: 404 }) : new Response(null, { status: 202 });
@@ -1538,7 +1542,7 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
     const person = { fullName: "Asha Patel", recordEmail: "asha.personal@example.test", trainer: true, account: null as null | Record<string, unknown> };
     const rpc = async (name: string, args: Record<string, unknown>) => { rpcs.push(name);
       if (name.endsWith("_prepare")) return { data: person, error: null };
-      if (name.endsWith("_claim")) return { data: { conflict: false, upn: args.p_upn, msUserId: null }, error: null };
+      if (name.endsWith("_claim")) return { data: { conflict: false, upn: claimKeepsOld && person.account ? person.account.email : args.p_upn, msUserId: null }, error: null };
       if (name.endsWith("_finish") || name === "o365_link" || name === "o365_step") { steps.push(`${args.p_step ?? name}:${args.p_ok ?? ""}:${args.p_detail ?? ""}`); return { data: {}, error: null }; }
       throw new Error(name); };
     const ports = { env: (n: string) => ENV[n], fetch: request, rpc } as unknown as import("../supabase/functions/_shared/office365-provision.ts").Ports;
@@ -1634,6 +1638,59 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   assert.deepEqual([prov.groupIds(prov.planFor("employee", (n) => ENV[n]), (n) => ENV[n]), prov.groupIds(prov.planFor("student", (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n]), (n) => ({ ...ENV, EF_MICROSOFT365_GROUPS_STUDENT: "11111111-2222-4333-8444-555555555555, nope" } as Record<string, string>)[n])],
     [[], ["11111111-2222-4333-8444-555555555555"]]);
   assert.ok(section.includes('data-testid="email-resend"') && section.includes('data-testid="email-domain"') && section.includes("{created ? null : confirming"), "Resend replaces Create once the account exists; the domain dropdown");
+
+  // Editable username (2026-11-21). The format rules, identical on the screen and the server.
+  for (const bad of ["", "   ", "a b", ".asha", "asha.", "asha..patel", "x".repeat(65), "asha+patel", "asha@patel", "äsha"]) assert.ok(prov.usernameProblem(bad), `refused: ${JSON.stringify(bad)}`);
+  for (const good of ["asha.patel", "a_patel-2", "x".repeat(64), " Asha.Patel "]) assert.equal(prov.usernameProblem(good), null, good);
+  const fnText = (file: string) => /export function usernameProblem[\s\S]*?\n}\r?\n/.exec(read(file))?.[0].replace(/\r\n/g, "\n");
+  assert.ok(fnText("src/pages/admin/lib/microsoft365.ts") && fnText("src/pages/admin/lib/microsoft365.ts") === fnText("supabase/functions/_shared/office365-provision.ts"), "one rule set on screen and server");
+  // The live check: free, taken by a user (UPN / mail / proxy address), taken by a group, bad format, a domain not offered.
+  const taken: U = { id: "aaaaaaaa-0000-4000-8000-0000000000bb", userPrincipalName: "office@slit.edu.au", mail: "office@slit.edu.au", displayName: "Office" };
+  groupMails = ["staffroom@slit.edu.au"];
+  const ca = (u: string, d = "slit.edu.au", users: U[] = [taken]) => prov.checkAddress(world(users).ports, "employee", u, d);
+  assert.deepEqual((await ca("Asha.Patel")).body, { available: true, address: "asha.patel@slit.edu.au" });
+  assert.deepEqual([(await ca("office")).body.available, (await ca("office")).body.code], [false, "address_in_use"], "a user's address");
+  assert.equal((await ca("staffroom")).body.available, false, "a group's address");
+  assert.deepEqual([(await ca("asha..patel")).body.available, (await ca("asha..patel")).body.code], [false, "username_invalid"]);
+  assert.deepEqual([(await ca("asha", "student.slit.edu.au")).status, (await ca("asha", "student.slit.edu.au")).body.code], [400, "domain_not_allowed"]);
+  const checkWorld = world([taken]); await prov.checkAddress(checkWorld.ports, "employee", "asha", "slit.edu.au");
+  assert.ok(checkWorld.calls.some((c) => c.includes("userPrincipalName eq 'asha@slit.edu.au' or mail eq 'asha@slit.edu.au' or proxyAddresses/any(p:p eq 'smtp:asha@slit.edu.au')")), "one Graph filter: UPN, mail, proxy address");
+  assert.deepEqual([writes(checkWorld.calls), checkWorld.rpcs], [[], []], "the check writes nothing");
+  // Create uses the typed username exactly (never regenerated, no number even for a namesake confirmed as a different person).
+  const wu = world([namesake]);
+  assert.equal((await prov.provision(wu.ports, "employee", STAFF, { dryRun: true, differentPerson: true, username: " Asha.P " })).body.email, "asha.p@slit.edu.au");
+  const wuMade = world([]);
+  const madeU = await prov.provision(wuMade.ports, "employee", STAFF, { username: "a.patel" });
+  assert.deepEqual([madeU.status, madeU.body.email], [200, "a.patel@slit.edu.au"]);
+  // Checked again on the server: bad format, taken by a user or a group -> refused before anything is reserved or created.
+  for (const [u, code] of [["a..patel", "username_invalid"], ["office", "address_in_use"], ["staffroom", "address_in_use"]] as const) {
+    const wx = world([taken]); const r = await prov.provision(wx.ports, "employee", STAFF, { username: u });
+    assert.deepEqual([r.body.code, writes(wx.calls), wx.rpcs], [code, [], ["staff_o365_prepare"]], u);
+  }
+  // Race: free when checked, taken by the time POST /users runs -> a clear "already in use" error, the attempt recorded as failed.
+  postConflict = true;
+  const wrace = world([]); const race = await prov.provision(wrace.ports, "employee", STAFF, { username: "late.comer" });
+  postConflict = false;
+  assert.deepEqual([race.status, race.body.code, race.body.email], [409, "address_in_use", "late.comer@slit.edu.au"]);
+  assert.match(String(race.body.error), /^late\.comer@slit\.edu\.au is already in use in Microsoft 365\. Choose another username\.$/);
+  assert.ok(wrace.steps.some((s) => s.startsWith("staff_o365_finish:")), "the failed attempt recorded");
+  // A failed earlier attempt whose reserved address the database would not change: refused, nothing created under another address.
+  claimKeepsOld = true;
+  const wold = world([]); wold.person.account = { email: "asha.patel@slit.edu.au", status: "failed", lastError: "address_in_use", welcomeSentAt: null, msUserId: null };
+  const kept = await prov.provision(wold.ports, "employee", STAFF, { username: "asha.p" });
+  claimKeepsOld = false; groupMails = [];
+  assert.deepEqual([kept.body.code, writes(wold.calls)], ["address_reserved", []]);
+  // The claim takes the submitted address for a row without a Microsoft user (all three record types), never for one with a user.
+  const claimSql = read("supabase/migrations/20261121003517_o365_claim_submitted_upn.sql").replace(/\r\n/g, "\n");
+  for (const t of ["student", "staff", "agent"]) assert.ok(claimSql.includes(`create or replace function public.${t}_o365_claim(`) && claimSql.includes(`update public.${t}_office365_accounts set upn = v_upn where ${t}_id = p_${t};`), t);
+  assert.equal(claimSql.split("if a.ms_user_id is null and v_upn <> '' and v_upn <> a.upn then").length - 1, 3);
+  assert.equal(claimSql.split("check (upn ~ '^[a-z0-9_-]([a-z0-9._-]{0,62}[a-z0-9_-])?@[a-z0-9.-]+$' and strpos(split_part(upn, '@', 1), '..') = 0)").length - 1, 3,
+    "every account table holds the username rules: a-z 0-9 . _ -, no leading / trailing / double dot, at most 64 before the @");
+  // The screen: editable, live checks through the Edge Function, Use suggested, the helper text.
+  const sec2 = read("src/pages/admin/components/CreateEmailSection.tsx");
+  assert.ok(!/id="email-name" readOnly /.test(sec2) && sec2.includes("readOnly={!editable}") && sec2.includes("checkOffice365Address(") && !sec2.includes("graph.microsoft.com")
+    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username })")
+    && sec2.includes("Suggested from the person's name. You can change it. Only the tenant's verified domains are offered."), "editable username on Create Email");
 });
 
 /* ------------------------------------------------------------------ phone normalisation */

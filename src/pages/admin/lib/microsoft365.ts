@@ -59,8 +59,25 @@ async function callWithBody<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 export const lookupOffice365 = (personType: MailboxKind, personId: string) => callWithBody<Office365Lookup>({ action: "lookup", personType, personId });
-export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string } = {}) =>
+export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string; username?: string } = {}) =>
   callWithBody<Office365CreateReply>({ action: "create", personType, personId, ...opts });
+/** Create Email's live check (read-only): is username@domain free in Microsoft 365 (users, shared mailboxes, groups)? */
+export const checkOffice365Address = (personType: MailboxKind, username: string, domain: string) =>
+  callWithBody<{ available: boolean; address?: string; code?: string; reason?: string }>({ action: "check_address", personType, username, domain });
+/**
+ * The username (part before the @) rules; the same as usernameProblem in supabase/functions/_shared/office365-provision.ts, which
+ * checks again on create. null = fine.
+ */
+export function usernameProblem(raw: string): string | null {
+  const u = raw.trim().toLowerCase();
+  if (!u) return "Enter a username.";
+  if (u.length > 64) return "Use at most 64 characters.";
+  if (/\s/.test(u)) return "No spaces.";
+  if (!/^[a-z0-9._-]+$/.test(u)) return "Use only letters, numbers, dots, hyphens and underscores.";
+  if (u.startsWith(".") || u.endsWith(".")) return "It cannot start or end with a dot.";
+  if (u.includes("..")) return "No two dots in a row.";
+  return null;
+}
 /** Resend login email: a new temporary password (change at next sign-in), any missing licence / group step finished; never a second account. */
 export const resendOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean } = {}) =>
   callWithBody<{ ok?: true; email: string; welcomeSent?: boolean; welcomeTo?: string; dryRun?: true }>({ action: "resend", personType, personId, ...opts });

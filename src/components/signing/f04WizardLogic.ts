@@ -177,7 +177,8 @@ export function f04Values(fields: readonly Field[], state: F04Draft): Record<str
 }
 
 /** The problems of one step (key -> message). Required fields come from the form's own fields; follow-ups only when their answer is Yes. */
-export function f04Problems(step: number, fields: readonly Field[], state: F04Draft, attachments: Partial<Record<F04AttachmentKind, unknown>> = {}): Record<string, string> {
+export function f04Problems(step: number, fields: readonly Field[], state: F04Draft, attachments: Partial<Record<F04AttachmentKind, unknown>> = {},
+  options: { refereeEmailsDistinct?: boolean } = {}): Record<string, string> {
   const p: Record<string, string> = {};
   const a = state.answers;
   const field = (key: string) => fields.some((f) => keyOf(f) === key);
@@ -224,7 +225,7 @@ export function f04Problems(step: number, fields: readonly Field[], state: F04Dr
       if (!blank(`ref${n}_phone`) && !phoneE164(a[`ref${n}_phone`])) p[`ref${n}_phone`] = "Enter a full phone number with its country code.";
     }
     if (!Object.keys(p).length) {
-      const checked = checkApplicationAnswers({ ...a });
+      const checked = checkApplicationAnswers({ ...a }, options);
       if (checked.error) {
         const which = /reference 1/i.test(checked.error) ? "ref1" : "ref2";
         p[/phone/i.test(checked.error) ? `${which}_phone` : /name/i.test(checked.error) ? `${which}_contact_name` : `${which}_email`] = checked.error;

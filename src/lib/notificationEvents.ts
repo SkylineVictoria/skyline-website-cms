@@ -1,3 +1,6 @@
+// hrRules: the lazily loaded rule getters (this file is also loaded by the offline tests).
+import { hrNumber, onHrRules } from "./hrRules";
+
 /** Per-event notification recipient settings: pure parsing and validation shared by the admin UI. The database validates again (notification_event_check). */
 
 export const NOTIFICATION_EVENTS = ["application_submitted", "application_status_changed", "offer_accepted", "coe_voe_issued"] as const;
@@ -12,7 +15,9 @@ export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventKey, { title: st
 
 export interface EventSettings { recipients: string[]; notifyAgent: boolean; notifyAgencyAdmins: boolean; notifyStudent: boolean }
 
-export const MAX_EVENT_RECIPIENTS = 20;
+/** Business Rule comms.notification_extra_recipients_max (20 until the values load); notification_event_check reads the same. */
+export let MAX_EVENT_RECIPIENTS = 20;
+onHrRules(() => { MAX_EVENT_RECIPIENTS = hrNumber("comms.notification_extra_recipients_max", 20); });
 const EMAIL = /^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/;
 // eslint-disable-next-line no-control-regex -- control characters are never valid in an address
 const CONTROL = /[\u0000-\u001f\u007f]/;

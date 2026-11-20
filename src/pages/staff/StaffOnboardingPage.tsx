@@ -16,9 +16,9 @@ import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, 
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
 import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
-import { bankProblems, bsbBank, dateOfBirthRange, formatBsb, type Address, type BankDetails, type BankProblems } from "../../../supabase/functions/_shared/validation/person";
+import { bankProblems, bsbBank, formatBsb, type Address, type BankDetails, type BankProblems } from "../../../supabase/functions/_shared/validation/person";
 import {
-  SUPER_CHOICE, SUPER_CHOICE_LABEL, TAX_RESIDENCY, TAX_RESIDENCY_LABEL, normalizeStaffField, staffFieldProblem, staffProblems, superFundNeeded,
+  SUPER_CHOICE, SUPER_CHOICE_LABEL, TAX_RESIDENCY, TAX_RESIDENCY_LABEL, normalizeStaffField, staffDateOfBirthRange, staffFieldProblem, staffProblems, superFundNeeded,
   type StaffDetails, type StaffField, type StaffTextField,
 } from "../../../supabase/functions/_shared/validation/staff-onboarding";
 
@@ -441,7 +441,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
       );
     }
     if (current.id === "prefill") {
-      const range = dateOfBirthRange();
+      const range = staffDateOfBirthRange();
       const visaShown = citizen !== true || documents.some((d) => d.category === "Visa");
       const dated = documents.filter((d) => kinds.some((k) => k.category === d.category && k.expiry !== "none"));
       const stillReading = documents.filter(isBeingRead);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
+import { EMPLOYMENT_TYPE_LABEL, STAFF_EMPLOYMENT_TYPES, typeOptions } from "@/lib/jobs";
 import { STAFF_LOCATIONS_PATH } from "@/pages/admin/lib/staffRoutes";
 import { adminListStaff, adminSavePayDetails, type OnboardingPayDetails, type PayDetailsForm, type StaffListRow, type StaffOnboarding } from "@/lib/staffApi";
 import { payDetailsProblems, type PayDetailsInput } from "@/lib/staffStatus";
@@ -60,7 +61,7 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
         <div className="grid gap-3 sm:grid-cols-2">
           <div><Field label="Position (job title)" required><TextInput maxLength={150} value={form.jobTitle} onChange={(ev) => patch({ jobTitle: ev.target.value })} aria-invalid={Boolean(problems.jobTitle)} data-testid="pay-job-title" /></Field>{problem("jobTitle")}</div>
           <div><Field label="Job type" required><Select value={form.employmentType} onChange={(ev) => patch({ employmentType: ev.target.value as PayDetailsForm["employmentType"] })} aria-invalid={Boolean(problems.employmentType)} data-testid="pay-employment-type">
-            <option value="">Choose…</option><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="contract">Contract</option>
+            <option value="">Choose…</option>{typeOptions(STAFF_EMPLOYMENT_TYPES, form.employmentType).map((t) => <option key={t} value={t}>{EMPLOYMENT_TYPE_LABEL[t as keyof typeof EMPLOYMENT_TYPE_LABEL] ?? t}</option>)}
           </Select></Field>{problem("employmentType")}</div>
           <div><Field label="Work location" required hint={current.locations.length === 0 ? "No locations yet: add one under HRMS › Locations." : undefined}>
             <Select value={form.locationId} onChange={(ev) => patch({ locationId: ev.target.value })} aria-invalid={Boolean(problems.locationId)} data-testid="pay-location">

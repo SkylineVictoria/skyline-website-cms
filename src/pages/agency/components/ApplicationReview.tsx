@@ -7,6 +7,7 @@ import type { DraftValues } from "@/lib/applicationDraft";
 import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
+import "@/pages/agency/lib/admissionsRules"; // Business Rules: expiry warning months, English result validity
 import { qualificationDetail, qualificationTitle, submittedQualifications, type Qualification } from "@/pages/agency/lib/qualifications";
 
 export interface ConsentState {

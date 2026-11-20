@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { hrNumber } from "@/lib/hrRules";
 import { Link } from "react-router-dom";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
 import { StaffAdminError, staffAdminActions, type StaffAdminResult } from "@/lib/staffApi";
@@ -161,7 +162,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
               {resend ? null : <li>{source === "template"
                 ? <>The letter is made from <strong>{letterTemplate?.name}</strong>{edited ? <> <strong>with your edits</strong></> : null} and saved as a PDF against {name}, exactly as previewed. Editing the template later does not change it{edited ? "; the template itself was not changed by your edits" : ""}.</>
                 : <>The PDF <strong>{file?.name}</strong> is checked and saved against {name}.</>}</li>}
-              <li>A login is created for them if they do not have one. The link lets them choose their own password; it works once, for 7 days. No password is emailed.</li>
+              <li>A login is created for them if they do not have one. The link lets them choose their own password; it works once, for {hrNumber("hrms.staff_account_link_days", 7)} days. No password is emailed.</li>
               <li>Until they are Active they can only see and sign their offer letter and see their own documents.</li>
               <li>If the email cannot be sent, nothing is changed and no login is left behind.</li>
             </ul>

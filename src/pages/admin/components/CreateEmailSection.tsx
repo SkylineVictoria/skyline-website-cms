@@ -3,6 +3,7 @@ import { Microsoft365Checklist } from "@/pages/admin/components/Microsoft365Pane
 import { createOffice365, fetchEmailPeople, linkOffice365, lookupOffice365, Office365Refusal, resendOffice365, useMicrosoft365,
   type EmailPerson, type MailboxKind, type Office365Existing, type Office365Lookup } from "@/pages/admin/lib/microsoft365";
 import { formatSignedAt } from "@/lib/signedTime";
+import { ruleText } from "@/lib/businessRules";
 
 /*
  * Administration > Email Management > Create Email (owner 2026-11-20).
@@ -20,6 +21,8 @@ const field = "w-full rounded-lg border border-background-300 bg-white px-3 py-2
 const muted = "text-sm text-foreground-600";
 const button = "rounded-lg border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100 disabled:opacity-50";
 const KIND_LABEL: Record<MailboxKind, string> = { student: "Student", employee: "Employee", trainer: "Trainer", agent: "Agent" };
+/** Business Rule office365.agent_mailbox: "No mailbox" hides Agent here (student-office365 refuses it too). */
+const agentMailboxOffered = () => ruleText("office365.agent_mailbox", "Staff mailbox at slit.edu.au").trim().toLowerCase() !== "no mailbox";
 const MATCH_LABEL: Record<Office365Existing["match"], string> = { linked: "linked to this record", email: "the email on this record", username: "same username", name: "same name" };
 const certain = (e: Office365Existing) => e.match === "linked" || e.match === "email";
 
@@ -96,7 +99,7 @@ export default function CreateEmailSection() {
       <div className="mt-6 space-y-5">
         <div><label htmlFor="person-type" className="mb-2 block text-sm font-medium">Person type</label>
           <select id="person-type" className={field} value={kind} onChange={(e) => { setKind(e.target.value as MailboxKind); setResult(null); }} data-testid="email-kind">
-            {(Object.keys(KIND_LABEL) as MailboxKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</select>
+            {(Object.keys(KIND_LABEL) as MailboxKind[]).filter((k) => k !== "agent" || agentMailboxOffered()).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</select>
           <p className="mt-2 text-xs text-foreground-500">{kind === "student" ? "Student accounts: @student.slit.edu.au with Office 365 A1 for students." : "Staff accounts (employees, trainers, agents): @slit.edu.au with Office 365 A1 for faculty."}</p></div>
         <div><label htmlFor="person-record" className="mb-2 block text-sm font-medium">Existing person</label>
           <select id="person-record" disabled={!status?.connected || !people?.length} className={field + " disabled:opacity-60"} value={personId} onChange={(e) => { setPersonId(e.target.value); setResult(null); }} data-testid="email-person">

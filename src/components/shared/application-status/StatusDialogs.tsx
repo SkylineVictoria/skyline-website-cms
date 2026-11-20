@@ -9,6 +9,10 @@ import { letterValues, toBase64 } from "@/lib/offerLetters";
 import { changeApplicationStatus, issueCoeVoe, offerLetterRecipient, type OfferRecipient } from "@/pages/agency/lib/portalApplications";
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
+import { ruleNumber } from "@/lib/businessRules";
+
+/** Business Rules admissions.registration_coe_voe_pdf_mib (3 MB today), never above the 3 MB the database stores. */
+const coeMaxMib = () => Math.min(3, ruleNumber("admissions.registration_coe_voe_pdf_mib", 3));
 
 const INPUT = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 export interface DialogApplication { id: string; reference: string; studentName: string }
@@ -172,7 +176,7 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
     setError("");
     if (!picked) return;
     if (!/\.pdf$/i.test(picked.name) && picked.type !== "application/pdf") { setError("Upload the CoE / VoE as a PDF."); return; }
-    if (picked.size > 3 * 1024 * 1024) { setError("The PDF must be 3 MB or smaller."); return; }
+    if (picked.size > coeMaxMib() * 1024 * 1024) { setError(`The PDF must be ${coeMaxMib()} MB or smaller.`); return; }
     setFile(picked);
   };
   const ready = Boolean(number.trim() && issueDate && file) && !busy;
@@ -209,7 +213,7 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
         </div>
         {file ? (
           <DocumentRow filename={file.name} pill={{ text: "Ready", tone: "ready" }} actions={<RowAction title="Remove" icon="ri-delete-bin-line" label={`Remove ${file.name}`} onClick={() => setFile(null)} />} />
-        ) : <Dropzone id="coe-upload" label="Choose the CoE / VoE PDF or drop it here" hint="PDF · max 3 MB" accept=".pdf,application/pdf" onFiles={pick} testId="coe-dropzone" />}
+        ) : <Dropzone id="coe-upload" label="Choose the CoE / VoE PDF or drop it here" hint={`PDF · max ${coeMaxMib()} MB`} accept=".pdf,application/pdf" onFiles={pick} testId="coe-dropzone" />}
         <div>
           <label htmlFor="coe-note" className={`${FORM_LABEL} mb-1 block`}>Note (optional)</label>
           <textarea id="coe-note" rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} className={INPUT} />

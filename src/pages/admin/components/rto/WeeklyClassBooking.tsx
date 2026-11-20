@@ -140,8 +140,11 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   /** Can this row's class run from s to e (minutes)? Not over another class of the day, and its room and trainer free then. */
   const slotFree = (r: Row, s: number, e: number) => {
     if (rows.some(o => o !== r && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s)) return false;
-    if (r.trainerId && trainerBusy(r.trainerId, r, s, e)) return false;
-    if (r.roomId && roomBusy(r.roomId, { ...r, start: minTime(s), end: minTime(e) })) return false;
+    const at = { ...r, start: minTime(s), end: minTime(e) };
+    // With a room (or trainer) chosen it must be open / available then; with none chosen, at least one of its kind must be.
+    const roomsHere = roomsFor(r.type);
+    if (r.roomId ? roomBusy(r.roomId, at) : roomsHere.length > 0 && !roomsHere.some(x => !roomBusy(x.id, at))) return false;
+    if (r.trainerId ? trainerBusy(r.trainerId, r, s, e) : staff.length > 0 && !staff.some(x => !trainerBusy(x.id, r, s, e))) return false;
     return true;
   };
   /** What is wrong with a row ("" when it can be booked; an empty row is fine: no class). */
@@ -330,17 +333,17 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
               onChange={e => { const type = e.target.value as SessionType; set(r.key, { type, roomId: roomsFor(type).some(x => x.id === r.roomId) ? r.roomId : "" }); }}>
               {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></td>
             <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: room`} className={field + " w-52"} value={r.roomId} disabled={!canEdit || busy} onChange={e => set(r.key, { roomId: e.target.value })}>
-              <option value="">{roomList.length ? "Room…" : `No ${r.type} room`}</option>{roomList.map(x => { const why = roomBusy(x.id, r);
-                return <option key={x.id} value={x.id} disabled={!!why && x.id !== r.roomId}>{x.label}{why ? ` — ${why}` : r.start && r.end ? " — free" : ""}</option>; })}</select></td>
+              <option value="">{roomList.length ? "Room…" : `No ${r.type} room`}</option>{roomList.filter(x => x.id === r.roomId || !roomBusy(x.id, r)).map(x =>
+                <option key={x.id} value={x.id}>{x.label}</option>)}</select></td>
             <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: trainer`} className={field + " w-44"} value={r.trainerId} disabled={!canEdit || busy} onChange={e => set(r.key, { trainerId: e.target.value })}>
-              <option value="">Trainer…</option>{staff.map(x => { const why = trainerBusy(x.id, r);
-                return <option key={x.id} value={x.id} disabled={!!why && x.id !== r.trainerId}>{x.name}{why ? ` — ${why}` : r.start && r.end ? " — free" : ""}</option>; })}</select></td>
+              <option value="">Trainer…</option>{staff.filter(x => x.id === r.trainerId || !trainerBusy(x.id, r)).map(x =>
+                <option key={x.id} value={x.id}>{x.name}</option>)}</select></td>
             <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: start`} className={field} value={r.start} disabled={!canEdit || busy} onChange={e => set(r.key, { start: e.target.value })}>
-              <option value="">—</option>{TIMES.slice(0, -1).map(t => { const s0 = toMin(t); const ok = slotFree(r, s0, s0 + 30);
-                return <option key={t} value={t} disabled={!ok && t !== r.start}>{clock(t)}{ok ? "" : " — taken"}</option>; })}</select></td>
+              <option value="">—</option>{TIMES.slice(0, -1).filter(t => t === r.start || slotFree(r, toMin(t), toMin(t) + 30)).map(t =>
+                <option key={t} value={t}>{clock(t)}</option>)}</select></td>
             <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: end`} className={field} value={r.end} disabled={!canEdit || busy} onChange={e => set(r.key, { end: e.target.value })}>
-              <option value="">—</option>{TIMES.filter(t => !r.start || toMin(t) > toMin(r.start)).map(t => { const ok = !r.start || slotFree(r, toMin(r.start), toMin(t));
-                return <option key={t} value={t} disabled={!ok && t !== r.end}>{clock(t)}{ok ? "" : " — taken"}</option>; })}</select>
+              <option value="">—</option>{TIMES.filter(t => t === r.end || (!r.start ? slotFree(r, toMin(t) - 30, toMin(t)) : toMin(t) > toMin(r.start) && slotFree(r, toMin(r.start), toMin(t)))).map(t =>
+                <option key={t} value={t}>{clock(t)}</option>)}</select>
               {msg ? <span role="alert" className="mt-0.5 block max-w-[260px] text-xs font-semibold text-red-700">{msg}</span> : null}</td>
             <td className="px-2 py-1.5 text-right tabular-nums">{hoursOf(r) || ""}</td>
             <td className="whitespace-nowrap px-2 py-1.5 text-right">{canEdit ? <>

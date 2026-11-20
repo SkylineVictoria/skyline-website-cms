@@ -133,7 +133,9 @@ export default function LmsCoursesPage() {
   const openClasses = async (courseId: string, load: StudyLoad) => {
     try {
       const [course, loads] = await Promise.all([rto<CourseDetail>("course_get", { courseId }), loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>))]);
-      const open = course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
+      const { data: pend } = await supabase.rpc("rto_intake_wizard", { p_action: "pending", p_data: { courseId } });
+      const pending = ((pend ?? []) as { id: string; load: string }[]).find(i => (i.load === "voe" ? "voe" : "coe") === load);
+      const open = pending ?? course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
       if (open) setWizard({ courseId, step: "classes", intakeId: open.id, load });
       else await startIntake(courseId, load);
     } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
@@ -149,6 +151,8 @@ export default function LmsCoursesPage() {
       const name = nameFor(courseId) ?? intakeDefaultName(course.course.code, load ?? "coe", master.startDate, course.intakes.map(i => i.customName || i.name));
       const out = await rto<IntakeDetail>("intake_save", { courseId, startDate: master.startDate, status: "open", generate: true, campus: course.course.campus ?? "", name });
       if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
+      // Hidden until the whole wizard (weekly and daily timetables, CoE and VoE) is finished.
+      await supabase.rpc("rto_intake_wizard", { p_action: "mark", p_data: { intakeId: out.intake.id } });
       setWizard({ courseId, step: "classes", intakeId: out.intake.id, load: load ?? "coe" });
     } catch (e) {
       setDetailError(e instanceof Error ? e.message : "The intake was not created.");
@@ -402,7 +406,8 @@ export default function LmsCoursesPage() {
       onSaved={() => {
         setReloadKey(k => k + 1);
         if (wizard.load !== "voe") { void openClasses(wizard.courseId, "voe"); return; }
-        const id = wizard.intakeId; setWizard(null); navigate(`/admin/lms/intakes#${id}`);
+        const id = wizard.intakeId; setWizard(null);
+        void supabase.rpc("rto_intake_wizard", { p_action: "finish", p_data: { courseId: wizard.courseId } }).then(() => { setReloadKey(k => k + 1); navigate(`/admin/lms/intakes#${id}`); });
       }} /> : null}
     {selected ? <DangerDialog open={deleteOpen} title={`Delete ${selected.code}?`} intro={selected.name} busy={saving} error={deleteError}
       items={[

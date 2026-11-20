@@ -815,11 +815,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ) : (
               current.id === "english" ? (
                 <button type="button" onClick={() => void nextFromEnglish()}
-                  disabled={(englishAlt ? !englishAltMet : !hasFile) || locked || slowHere.length > 0 || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
+                  disabled={locked || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
                   {savingEnglish ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
                 </button>
               ) : (
-                <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
+                <button type="button" onClick={() => goTo(step + 1)} disabled={locked || pending.some((item) => !item.error)} className={primaryClass}>
                   Next
                   <i className="ri-arrow-right-line" aria-hidden="true" />
                 </button>

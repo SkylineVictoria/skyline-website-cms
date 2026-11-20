@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { onRules, ruleNumber, ruleObject, weekdayIndex } from "@/lib/businessRules";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { roomAvailability, trainerAvailability, type AvailabilityRow, type RoomUse } from "@/lib/bookingApi";
 import { loadCourseNeed, type CourseNeed } from "@/pages/admin/lib/coursePlan";
 import {
@@ -17,6 +18,9 @@ import {
 
 type Row = { key: string; weekday: number; type: SessionType; roomId: string; trainerId: string; start: string; end: string };
 type Hours = { avail: AvailabilityRow[]; uses: RoomUse[] };
+/** A day and time a trainer or room is already used by another intake's dated classes (the prerequisite class too), from rto_intake_busy_windows. */
+type Busy = { weekday: number; start: string; end: string; day: string; intake: string; course: string };
+type BusyMap = { trainers: Record<string, Busy[]>; rooms: Record<string, Busy[]> };
 const TYPES: { id: SessionType; label: string }[] = [{ id: "theory", label: "Theory" }, { id: "practical", label: "Practical" }, { id: "assessment", label: "Assessment" }];
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 // Nothing below is typed in here: the times, the trainer fallback, the class length and the usual start times are Business Rules
@@ -70,6 +74,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const [need, setNeed] = useState<CourseNeed | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [roomHours, setRoomHours] = useState<Record<string, Hours>>({});
+  const [busyWin, setBusyWin] = useState<BusyMap | null>(null);
   const [trainerHours, setTrainerHours] = useState<Record<string, Hours>>({});
   const [clashes, setClashes] = useState<Clash[]>([]);
   const [busy, setBusy] = useState(false);
@@ -96,6 +101,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
         setRows([1, 2, 3, 4, 5, 6, 7].flatMap(day => { const mine = saved.filter(r => r.weekday === day).sort((a, b) => a.start.localeCompare(b.start)); return mine.length ? mine : [blank(day)]; }));
       }).catch(e => { if (live) setError(e instanceof Error ? e.message : "The intake did not load."); });
     void loadCourseNeed(courseId).then(n => { if (live) setNeed(n); }).catch(() => undefined);
+    void supabase.rpc("rto_intake_busy_windows", { p_intake: intakeId }).then(({ data }) => { if (live) setBusyWin((data as BusyMap | null) ?? { trainers: {}, rooms: {} }); });
     return () => { live = false; };
   }, [intakeId, courseId]);
 
@@ -116,6 +122,9 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const dates = detail?.intake ?? null;
   const elsewhere = (uses: RoomUse[], weekday: number, s: number, e: number) => uses.some(u => u.intakeId !== intakeId && u.weekday === weekday % 7 && toMin(u.startTime) < e && toMin(u.endTime) > s
     && (!dates || ((!u.endDate || u.endDate >= dates.startDate) && (!dates.endDate || u.startDate <= dates.endDate))));
+  /** Another intake's dated class (or the prerequisite class) on this weekday and time, for a trainer or a room: the booking would fail on that date. */
+  const datedBusy = (list: Busy[] | undefined, weekday: number, s: number, e: number) => (list ?? []).find(w => w.weekday === weekday && toMin(w.start) < e && toMin(w.end) > s);
+  const busyText = (w: Busy) => `${w.course} class on ${new Date(w.day + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}, ${w.start}–${w.end}`;
   /** Why a room cannot take this row's class ("" when it is free). The same room can be used again the same day at other times. */
   const roomBusy = (roomId: string, r: Row, list: Row[] = rows): string => {
     if (!r.start || !r.end || toMin(r.end) <= toMin(r.start)) return "";
@@ -125,6 +134,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const h = roomHours[roomId];
     if (h && h.avail.length && !covers(h.avail, r.weekday, s, e)) return "closed then";
     if (h && elsewhere(h.uses, r.weekday, s, e)) return "another intake then";
+    if (datedBusy(busyWin?.rooms[roomId], r.weekday, s, e)) return "used by another class then";
     return "";
   };
   /** Why a trainer cannot take this row's class ("" when free): another class here then, not available, or another intake. */
@@ -135,6 +145,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const h = trainerHours[trainerId];
     if (h && !covers(h.avail.length ? h.avail : TRAINER_DEFAULT, r.weekday, s, e)) return "not available then";
     if (h && elsewhere(h.uses, r.weekday, s, e)) return "teaching another intake";
+    if (datedBusy(busyWin?.trainers[trainerId], r.weekday, s, e)) return "teaching another class then";
     return "";
   };
   /** Can this row's class run from s to e (minutes)? Not over another class of the day, and its room and trainer free then. */
@@ -161,9 +172,13 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const rh = roomHours[r.roomId];
     if (rh && rh.avail.length && !covers(rh.avail, r.weekday, s, e)) return `The room is not open on ${day} ${clock(r.start)} – ${clock(r.end)} (Bookings › Availability).`;
     if (rh && elsewhere(rh.uses, r.weekday, s, e)) return `Another intake uses the room on ${day} then.`;
+    const rb = datedBusy(busyWin?.rooms[r.roomId], r.weekday, s, e);
+    if (rb) return `The room is used on ${day} then: ${busyText(rb)}.`;
     const tr = trainerHours[r.trainerId];
     if (tr && !covers(tr.avail.length ? tr.avail : TRAINER_DEFAULT, r.weekday, s, e)) return `The trainer is not available on ${day} ${clock(r.start)} – ${clock(r.end)}.`;
     if (tr && elsewhere(tr.uses, r.weekday, s, e)) return `The trainer teaches another intake on ${day} then.`;
+    const tb = datedBusy(busyWin?.trainers[r.trainerId], r.weekday, s, e);
+    if (tb) return `The trainer already teaches on ${day} then: ${busyText(tb)}.`;
     return "";
   };
 
@@ -263,7 +278,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   };
   const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);
   // A week that was never booked fills itself once the rooms' and trainers' open hours are read.
-  const hoursReady = rooms.length > 0 && staff.length > 0 && rooms.every(r => roomHours[r.id]) && staff.every(x => trainerHours[x.id]);
+  const hoursReady = !!busyWin && rooms.length > 0 && staff.length > 0 && rooms.every(r => roomHours[r.id]) && staff.every(x => trainerHours[x.id]);
   useEffect(() => {
     if (autoDone.current || !canEdit || !detail || !hoursReady) return;
     if ((detail.batches[0]?.sessions ?? []).length || rows.some(filled)) { autoDone.current = true; return; }
@@ -286,7 +301,13 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
       const seats = used.map(id => rooms.find(r => r.id === id)?.capacity ?? null);
       const capacity = seats.length && seats.every(Boolean) ? String(Math.min(...(seats as number[]))) : "";
       const out = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: detail?.batches[0]?.id ?? null, intakeId, sessions, capacity, trainerIds: [...new Set(sessions.map(s => s.trainerId))] });
-      const made = await generateClassSessions(out.batchId);
+      let made: GenerateResult;
+      try { made = await generateClassSessions(out.batchId); }
+      catch (g) {
+        setDetail(out);
+        setError(`The week's times are saved, but the dated classes could not be made: ${g instanceof Error ? g.message : "error"} Change that class's trainer, room or time (the lists show only free ones) and book again.`);
+        return;
+      }
       setDetail(out); setDone(made);
       onSaved?.(made);
     } catch (e) { setError(e instanceof Error ? e.message : "The week was not booked."); }

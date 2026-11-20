@@ -26,6 +26,7 @@ const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satu
 // Nothing below is typed in here: the times, the trainer fallback, the class length and the usual start times are Business Rules
 // (Administration › Business Rules: lms.class_suggestion_hours, lms.class_setup_availability_fallback, lms.class_block_hours,
 // lms.class_preferred_start_times). The numbers here are only what the screen uses until the rules have loaded.
+const isTestAccount = (email: string | undefined) => /@blackhole\.postmarkapp\.com$/i.test(email ?? "");
 const toTimeStr = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 let EARLIEST = 7 * 60, LATEST = 22 * 60;
 let TIMES = Array.from({ length: Math.floor((LATEST - EARLIEST) / 30) + 1 }, (_, i) => toTimeStr(EARLIEST + i * 30));
@@ -247,7 +248,8 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
           const end = minTime(toMin(start) + L * 60);
           const proto: Row = { key: `r${++seq}`, weekday, type: kind, roomId: "", trainerId: "", start, end };
           const roomOrder = [...roomsFor(kind)].sort((a, b) => Number(b.id === lastRoom[kind]) - Number(a.id === lastRoom[kind]) || (b.capacity ?? 0) - (a.capacity ?? 0));
-          const trainerOrder = [...staff].sort((a, b) => Number(b.id === lastTrainer) - Number(a.id === lastTrainer));
+          // Real trainers first; a test account (a mailbox that goes nowhere) only when no real trainer is free; then the one used last.
+          const trainerOrder = [...staff].sort((a, b) => Number(isTestAccount(a.email)) - Number(isTestAccount(b.email)) || Number(b.id === lastTrainer) - Number(a.id === lastTrainer));
           for (const room of roomOrder) for (const trainer of trainerOrder) {
             const row = { ...proto, roomId: room.id, trainerId: trainer.id };
             if (problem(row, built)) continue;
@@ -272,9 +274,22 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     built.sort((x, y) => x.weekday - y.weekday || x.start.localeCompare(y.start));
     setRows([1, 2, 3, 4, 5, 6, 7].flatMap(day => { const mine = built.filter(r => r.weekday === day); return mine.length ? mine : [blank(day)]; }));
     setDone(null);
+    const testUsed = built.filter(r => isTestAccount(staff.find(x => x.id === r.trainerId)?.email)).length;
+    // Why hours are left: for each day with less than its share, who is busy and why (the first free hour of the morning and the afternoon).
+    const why: string[] = [];
+    if (got < target0) {
+      const share = target0 / dayCount;
+      for (const d of workDays.filter(x => dayHours(x) < share)) {
+        const lines = staff.map(t => {
+          const reason = [PREF_STARTS[0] ?? "09:00", PREF_STARTS[1] ?? "14:00"].map(st => trainerBusy(t.id, { key: "p", weekday: d, type: "theory", roomId: "", trainerId: t.id, start: st, end: minTime(toMin(st) + BLOCK_HOURS * 60) }, toMin(st), toMin(st) + BLOCK_HOURS * 60, built)).find(Boolean);
+          return reason ? `${t.name} ${reason}` : null;
+        }).filter(Boolean);
+        why.push(`${DAY_NAMES[d - 1]}: ${lines.length ? lines.join("; ") : "no free room"}`);
+      }
+    }
     setAutoNote(got >= target0
-      ? `Filled in for you: ${got} of ${target0} h, every class on a time when its room and trainer are free (rules: Administration › Business Rules). Change anything you like, then book the week.`
-      : `Filled in ${got} of ${target0} h. For the other ${target0 - got} h no free time, room and trainer exist Monday to Friday (add a room or a trainer, or free one up); nothing was guessed.`);
+      ? `Filled in for you: ${got} of ${target0} h, every class on a time when its room and trainer are free (rules: Administration › Business Rules).${testUsed ? ` ${testUsed} class${testUsed === 1 ? "" : "es"} use a test account as trainer because no real trainer was free then: pick a real trainer when one is available.` : ""} Change anything you like, then book the week.`
+      : `Filled in ${got} of ${target0} h. For the other ${target0 - got} h no free time, room and trainer exist. ${why.join(" · ")}. Free a trainer (move or cancel that class, or add the trainer's hours in Bookings › Availability) or add a trainer, then press Auto-fill again; nothing was guessed.`);
   };
   const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);
   // A week that was never booked fills itself once the rooms' and trainers' open hours are read.

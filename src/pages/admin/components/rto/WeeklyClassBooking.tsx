@@ -122,7 +122,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     return true;
   };
   /** What is wrong with a row ("" when it can be booked; an empty row is fine: no class). */
-  const problem = (r: Row): string => {
+  const problem = (r: Row, list: Row[] = rows): string => {
     if (!filled(r)) return "";
     if (!r.start || !r.end) return "Pick the start and end time.";
     const s = toMin(r.start), e = toMin(r.end);
@@ -130,7 +130,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     if (!r.roomId) return "Pick a room.";
     if (!r.trainerId) return "Pick a trainer.";
     const day = DAY_NAMES[r.weekday - 1];
-    const same = rows.find(o => o !== r && filled(o) && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
+    const same = list.find(o => o !== r && filled(o) && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (same) return `Overlaps the other class on ${day} (${clock(same.start)} – ${clock(same.end)}).`;
     const rh = roomHours[r.roomId];
     if (rh && rh.avail.length && !covers(rh.avail, r.weekday, s, e)) return `The room is not open on ${day} ${clock(r.start)} – ${clock(r.end)} (Bookings › Availability).`;
@@ -169,38 +169,65 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   const autoDone = useRef(false);
   const roomsFor = (t: SessionType) => rooms.filter(r => t === "assessment" || r.kind === t);
   const autoFill = () => {
-    const block = 4;
-    const starts = load === "voe" ? ["09:00", "14:00"] : ["09:00"];
-    const slots = [1, 2, 3, 4, 5].flatMap(weekday => starts.map(start => ({ weekday, start, end: minTime(toMin(start) + block * 60) })));
-    const sp = splitHours(target, need);
-    const count: Record<SessionType, number> = { theory: Math.round(sp.theory / block), practical: Math.round(sp.practical / block), assessment: Math.round(sp.assessment / block) };
-    const order: SessionType[] = ["theory", "practical", "assessment"];
-    let sum = count.theory + count.practical + count.assessment;
-    while (sum > slots.length) { const big = order.reduce((a, b) => (count[b] > count[a] ? b : a)); count[big]--; sum--; }
-    while (sum < slots.length) { count.theory++; sum++; }
-    const kinds: SessionType[] = order.flatMap(t => Array<SessionType>(count[t]).fill(t));
+    // THE RULES (owner, 2026-11-21: "fill the form without mistakes"). Every class written here passes the same check (`problem`) that blocks booking:
+    //  1. Hours: CoE 20 h a week, VoE 40 h, shared between Theory, Practical and Assessment like the course's unit hours (40 / 40 / 20 when unset).
+    //  2. Monday to Friday only; classes of 4 hours (then 3, 2 or 1 h to fill the rest or when 4 do not fit), at most 6 h a day for CoE and 8 h for VoE;
+    //     the day with fewest hours first.
+    //  3. Times tried in order: 9:00 and 14:00, then every half hour from 7:00 to 18:00; a time is used only when it is free.
+    //  4. A class needs a room of its kind (Theory room, Practical room; Assessment any) that is open then, not used by another intake and not used by
+    //     another class of this week, and a trainer who is available then, not teaching another intake and not in another class of this week.
+    //  5. The same room and the same trainer are kept through the week when they are free; otherwise the next free one is used (biggest room first).
+    //  6. If no free time, room and trainer exist for the rest of the hours, nothing is written for them: the banner says how many hours are left.
+    const target0 = target;
+    const sp = splitHours(target0, need);
+    const left: Record<SessionType, number> = { theory: sp.theory, practical: sp.practical, assessment: sp.assessment };
+    const cap = load === "voe" ? 8 : 6;
+    const starts = [...new Set(["09:00", "14:00", ...TIMES.slice(0, -1).filter(t => toMin(t) <= 18 * 60)])];
     const built: Row[] = [];
     const lastRoom: Partial<Record<SessionType, string>> = {};
     let lastTrainer = "";
-    let missing = 0;
-    slots.forEach((sl, i) => {
-      let type = kinds[i] ?? "theory";
-      if (!roomsFor(type).length && roomsFor("theory").length) type = "theory";
-      const proto: Row = { key: `r${++seq}`, weekday: sl.weekday, type, roomId: "", trainerId: "", start: sl.start, end: sl.end };
-      const free = roomsFor(type).filter(x => !roomBusy(x.id, proto, built));
-      const room = free.find(x => x.id === lastRoom[type]) ?? [...free].sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
-      const ms = toMin(sl.start), me = toMin(sl.end);
-      const able = staff.filter(x => !trainerBusy(x.id, proto, ms, me, built));
-      const trainer = able.find(x => x.id === lastTrainer) ?? able[0];
-      if (room) lastRoom[type] = room.id;
-      if (trainer) lastTrainer = trainer.id;
-      if (!room || !trainer) missing++;
-      built.push({ ...proto, roomId: room?.id ?? "", trainerId: trainer?.id ?? "" });
-    });
-    setRows([...built, blank(6), blank(7)]);
+    const dayHours = (d: number) => built.filter(r => r.weekday === d).reduce((x, r) => x + hoursOf(r), 0);
+    // Which kind is placed next: the one with the most hours still to place (theory first on a tie).
+    const kinds: SessionType[] = ["theory", "practical", "assessment"];
+    const usable = (t: SessionType) => roomsFor(t).length > 0;
+    const place = (kind: SessionType, hours: number): number => {
+      for (const len of [4, 3, 2, 1]) {
+        if (len > hours) continue;
+        const L = len;
+        const days = [1, 2, 3, 4, 5].filter(d => dayHours(d) + L <= cap).sort((x, y) => dayHours(x) - dayHours(y) || x - y);
+        for (const weekday of days) for (const start of starts) {
+          if (toMin(start) + L * 60 > 22 * 60) continue;
+          const end = minTime(toMin(start) + L * 60);
+          const proto: Row = { key: `r${++seq}`, weekday, type: kind, roomId: "", trainerId: "", start, end };
+          const roomOrder = [...roomsFor(kind)].sort((a, b) => Number(b.id === lastRoom[kind]) - Number(a.id === lastRoom[kind]) || (b.capacity ?? 0) - (a.capacity ?? 0));
+          const trainerOrder = [...staff].sort((a, b) => Number(b.id === lastTrainer) - Number(a.id === lastTrainer));
+          for (const room of roomOrder) for (const trainer of trainerOrder) {
+            const row = { ...proto, roomId: room.id, trainerId: trainer.id };
+            if (problem(row, built)) continue;
+            built.push(row); lastRoom[kind] = room.id; lastTrainer = trainer.id;
+            return L;
+          }
+        }
+      }
+      return 0;
+    };
+    let guard = 0;
+    while (guard++ < 40) {
+      const next = kinds.filter(k => left[k] >= 1 && usable(k)).sort((a, b) => left[b] - left[a])[0];
+      if (!next) break;
+      const placed = place(next, left[next]);
+      if (!placed) { left[next] = 0; continue; }
+      left[next] -= placed;
+    }
+    // A kind with no room of its own (no Practical room) falls back to Theory hours in a Theory room.
+    for (const k of kinds) if (left[k] >= 1 && !usable(k) && usable("theory")) { let h = left[k]; left[k] = 0; while (h >= 1) { const p = place("theory", h); if (!p) break; h -= p; } left.theory += h; }
+    const got = total0(built);
+    built.sort((x, y) => x.weekday - y.weekday || x.start.localeCompare(y.start));
+    setRows([1, 2, 3, 4, 5, 6, 7].flatMap(day => { const mine = built.filter(r => r.weekday === day); return mine.length ? mine : [blank(day)]; }));
     setDone(null);
-    setAutoNote(missing ? `Filled in Monday to Friday. ${missing} class${missing === 1 ? "" : "es"} still need a room or a trainer: none is free then (add a room, or pick one).`
-      : `Filled in for you: ${load === "coe" ? "CoE" : "VoE"} Monday to Friday, ${total0(built)} h a week, rooms and trainers that are free. Change anything you like, then book the week.`);
+    setAutoNote(got >= target0
+      ? `Filled in for you: ${got} of ${target0} h, Monday to Friday, every class on a time when its room and trainer are free. Change anything you like, then book the week.`
+      : `Filled in ${got} of ${target0} h. For the other ${target0 - got} h no free time, room and trainer exist Monday to Friday (add a room or a trainer, or free one up); nothing was guessed.`);
   };
   const total0 = (list: Row[]) => list.reduce((s, r) => s + hoursOf(r), 0);
   // A week that was never booked fills itself once the rooms' and trainers' open hours are read.
